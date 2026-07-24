@@ -282,9 +282,9 @@ export default function Composer({
                 ? imageModels.length === 0
                   ? "Get an image model in Models → Image first"
                   : "Describe an image to create…"
-                : "Message Nexus  ·  paste or drop an image"
+                : "Message Poiesis  ·  paste or drop an image"
             }
-            aria-label={imageMode ? "Describe an image to create" : "Message Nexus"}
+            aria-label={imageMode ? "Describe an image to create" : "Message Poiesis"}
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onPaste={onPaste}

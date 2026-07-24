@@ -133,7 +133,7 @@ export default function Apps() {
       <div className="surface-inner">
         <h1>Apps</h1>
         <p className="lede">
-          Connect apps and services so Nexus can act on your behalf. Nexus speaks the open{" "}
+          Connect apps and services so Poiesis can act on your behalf. Poiesis speaks the open{" "}
           <strong>Model Context Protocol</strong> — paste a server link to connect, and its tools
           become available to the assistant when you turn tools on in a chat.
         </p>

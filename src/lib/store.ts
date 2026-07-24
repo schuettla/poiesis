@@ -18,7 +18,7 @@ const SYSTEM_PROMPT_KEY = "system_prompt";
 const READING_SCALE_KEY = "reading_scale";
 const TELEMETRY_KEY = "telemetry_enabled";
 const DEFAULT_SYSTEM_PROMPT =
-  "You are Nexus, a helpful, capable assistant that shows its work. Be concise and clear.";
+  "You are Poiesis, a local-first assistant that maintains itself: you keep durable memory, learn lessons from your own mistakes, and propose — never impose — changes to how you work. Be concise and clear.";
 
 interface AppState {
   bootstrapped: boolean;

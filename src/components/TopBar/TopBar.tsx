@@ -38,7 +38,7 @@ function EngineStatus() {
 export default function TopBar() {
   return (
     <div className="topbar">
-      <div className="brand">Nexus</div>
+      <div className="brand">Poiesis</div>
       <div className="topbar-right">
         <EngineStatus />
         <ModelPicker />

@@ -120,7 +120,7 @@ export default function Engine() {
       <div className="surface-inner">
         <h1>Engine</h1>
         <p className="lede">
-          Nexus runs open models on your PC with local engines that download automatically and are
+          Poiesis runs open models on your PC with local engines that download automatically and are
           matched to your hardware — the <strong>llama.cpp</strong> engine for chat, and the{" "}
           <strong>stable-diffusion.cpp</strong> engine for images.
         </p>
@@ -253,7 +253,7 @@ export default function Engine() {
             {update && (
               <span className="update-note">
                 {update.update_available
-                  ? `A newer build (${update.latest}) is available. Nexus pins a tested build (${update.current}) for stability.`
+                  ? `A newer build (${update.latest}) is available. Poiesis pins a tested build (${update.current}) for stability.`
                   : `You’re on the latest tested build (${update.current}).`}
               </span>
             )}

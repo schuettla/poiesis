@@ -1,3 +1,6 @@
+> Project renamed to Poiesis (2026-07); internal identifiers still say nexus
+> by design. See `docs/POIESIS_PLAN.md` for the current master plan.
+
 # Project Nexus — Implementation Plan
 
 A local-first, agentic desktop LLM app for Windows. Tauri (Rust) shell + React/TypeScript

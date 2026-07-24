@@ -1,3 +1,7 @@
+> Project renamed to Poiesis (2026-07); internal identifiers still say nexus
+> by design. Phase 10 entries below are superseded by `docs/POIESIS_PLAN.md`
+> and should eventually be regenerated from it.
+
 # Project Nexus — Task List
 
 Granular, checkable tasks per phase. IDs in parentheses trace to PRD requirements.
