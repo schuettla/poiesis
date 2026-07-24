@@ -1,0 +1,87 @@
+/* Side panel slides in from the right; full-height overlay on narrow windows
+   (§5.3, §5.5). Calm, not alarmist. */
+.side-panel {
+  position: fixed;
+  top: 48px;
+  right: 0;
+  bottom: 0;
+  width: 360px;
+  background: var(--paper);
+  border-left: 1px solid var(--paper-edge-2);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.08);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  animation: slide-in 0.18s ease;
+}
+@keyframes slide-in {
+  from {
+    transform: translateX(12px);
+    opacity: 0;
+  }
+}
+.side-panel-inner {
+  padding: 28px 26px;
+}
+.permission-eyebrow {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 10px;
+}
+.permission-summary {
+  font-family: var(--font-serif);
+  font-size: 18px;
+  line-height: 1.5;
+  color: var(--ink);
+  margin: 0 0 10px;
+}
+.permission-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin: 0 0 22px;
+  word-break: break-all;
+}
+.permission-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.permission-btn {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  text-align: left;
+  background: none;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  cursor: pointer;
+  color: var(--ink);
+}
+.permission-btn:hover {
+  border-color: var(--ink-faint);
+}
+.permission-btn.primary {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+.permission-btn.deny {
+  color: var(--danger);
+}
+.permission-queue {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-faint);
+  margin-top: 16px;
+}
+
+@media (max-width: 720px) {
+  .side-panel {
+    width: 100%;
+    top: 48px;
+  }
+}

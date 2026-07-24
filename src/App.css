@@ -1,0 +1,23 @@
+/* App shell grid — mirrors the mockup: 232px rail + fluid main,
+   48px topbar spanning the full width. */
+.app {
+  display: grid;
+  grid-template-columns: 232px 1fr;
+  grid-template-rows: 48px 1fr;
+  height: 100vh;
+}
+
+/* The chat/route surfaces occupy the second column, second row. The topbar
+   and rail handle their own grid placement. */
+
+/* Manual icon-only collapse (rail toggle). */
+.app.rail-collapsed {
+  grid-template-columns: 60px 1fr;
+}
+
+/* Responsive: narrow the rail gracefully on a smaller window (§5.5). */
+@media (max-width: 900px) {
+  .app:not(.rail-collapsed) {
+    grid-template-columns: 188px 1fr;
+  }
+}

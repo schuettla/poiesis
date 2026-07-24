@@ -1,0 +1,74 @@
+/* The chat body occupies the main grid cell (col 2, row 2): a flex row holding
+   the reading column and, when open, the Canvas panel (CHT-6). The composer
+   spans full width below. */
+.chat-body {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+.main {
+  flex: 1;
+  position: relative;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  padding: 28px 24px 0;
+  min-width: 0;
+}
+
+/* Canvas panel takes the right portion of the chat body when open. */
+.canvas-panel {
+  flex: 0 0 46%;
+  max-width: 640px;
+}
+
+/* Reopen affordance shown when artifacts exist but the panel is closed. */
+.canvas-reopen {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-muted);
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: 12px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.canvas-reopen:hover {
+  border-color: var(--ink-faint);
+  color: var(--ink);
+}
+
+.conversation {
+  width: 100%;
+  max-width: 700px;
+}
+
+.composer-wrap {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
+/* empty state — invites action rather than apologizes (§5.6) */
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 50vh;
+}
+.empty-line {
+  font-family: var(--font-serif);
+  font-size: var(--fs-display);
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .main {
+    grid-column: 2;
+  }
+}

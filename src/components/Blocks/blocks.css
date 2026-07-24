@@ -1,0 +1,437 @@
+/* Workspace blocks (Generative UI) — paper machinery: hairline rules, mono
+   labels, sans data, no shadows or fills. Tokens only (see styles/tokens.css). */
+
+.block {
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  background: var(--paper);
+  margin: 14px 0;
+  animation: block-in var(--t-fast);
+}
+
+@keyframes block-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--paper-edge);
+}
+.block-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.block-kind {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.block-body {
+  padding: 14px 16px;
+}
+.block-foot {
+  padding: 8px 16px;
+  border-top: 1px solid var(--paper-edge);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+/* ---- comparison ---- */
+.cmp-scroll {
+  overflow-x: auto;
+}
+.cmp-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+}
+.cmp-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  text-align: left;
+  font-weight: 400;
+  padding: 4px 12px 8px 0;
+}
+.cmp-row {
+  cursor: pointer;
+  border-top: 1px solid var(--paper-edge);
+}
+.cmp-row:hover {
+  background: color-mix(in srgb, var(--paper-edge) 40%, transparent);
+}
+.cmp-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px 8px 0;
+  white-space: nowrap;
+}
+.cmp-optname {
+  color: var(--ink);
+  font-weight: 500;
+}
+.cmp-val {
+  padding: 8px 12px 8px 0;
+  color: var(--ink-muted);
+}
+.cmp-pin {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--ink-faint);
+  font-size: 13px;
+  padding: 0;
+  line-height: 1;
+}
+.cmp-pin.on {
+  color: var(--ink);
+}
+.cmp-pin:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.cmp-rec {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ok);
+}
+.cmp-detail-row td {
+  padding: 0 16px 10px 0;
+}
+.cmp-detail {
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+
+/* ---- collection ---- */
+.col-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.col-chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink-faint);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.col-chip.on {
+  color: var(--ink);
+  border-color: var(--ink);
+}
+.col-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.col-item {
+  padding: 8px 0;
+  border-top: 1px solid var(--paper-edge);
+}
+.col-item:first-child {
+  border-top: none;
+}
+.col-main {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.col-choose {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  font-weight: 500;
+  color: var(--ink);
+  text-align: left;
+}
+.col-choose:hover {
+  text-decoration: underline;
+}
+.col-sub {
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+.col-link {
+  margin-left: auto;
+  color: var(--ink-faint);
+  text-decoration: none;
+}
+.col-tags {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin-top: 2px;
+}
+
+/* ---- plan ---- */
+.plan-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.plan-step {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+}
+.plan-dot {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--ink-faint);
+}
+.plan-dot:disabled {
+  cursor: default;
+}
+.plan-step.done .plan-dot {
+  color: var(--ok);
+}
+.plan-step.doing .plan-dot {
+  color: var(--ink);
+  animation: plan-pulse 1.6s ease-in-out infinite;
+}
+.plan-step.blocked .plan-dot {
+  color: var(--danger);
+}
+@keyframes plan-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+.plan-label {
+  font-size: var(--fs-ui-lg);
+  color: var(--ink);
+}
+.plan-step.done .plan-label {
+  color: var(--ink-muted);
+}
+.plan-detail {
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  margin-left: auto;
+}
+
+/* ---- form ---- */
+.form-fields {
+  display: grid;
+  gap: 12px;
+}
+.form-field {
+  display: grid;
+  grid-template-columns: 40% 1fr;
+  align-items: center;
+  gap: 12px;
+}
+.form-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.form-req {
+  color: var(--danger);
+}
+.form-input,
+.form-select {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  width: 100%;
+}
+.form-frozen {
+  font-size: var(--fs-ui-lg);
+  color: var(--ink);
+}
+.form-multi {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.form-multi-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+.form-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+}
+.form-submit {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  background: var(--ink);
+  color: var(--paper);
+  border: none;
+  border-radius: var(--radius);
+  padding: 7px 16px;
+  cursor: pointer;
+}
+.form-submit:disabled {
+  background: none;
+  color: var(--ink-faint);
+  border: 1px solid var(--paper-edge-2);
+  cursor: default;
+}
+
+/* ---- progress ---- */
+.prog-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.prog-track {
+  flex: 1;
+  height: 4px;
+  background: var(--paper-edge);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.prog-fill {
+  height: 100%;
+  background: var(--ink);
+  transition: width var(--t-fast);
+}
+.prog-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.prog-done {
+  font-family: var(--font-mono);
+  font-size: var(--fs-ui);
+  color: var(--ok);
+}
+.prog-error {
+  color: var(--danger);
+}
+
+/* ---- document ---- */
+.doc-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.doc-desc {
+  font-family: var(--font-serif);
+  font-size: var(--fs-ui-lg);
+  color: var(--ink);
+}
+.doc-open {
+  margin-left: auto;
+  border: none;
+  background: none;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--local);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* ---- raw fallback ---- */
+.block-raw summary {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.block-raw pre {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-muted);
+  overflow-x: auto;
+  margin-top: 8px;
+}
+
+/* ---- action chip (Phase B, in user turns) ---- */
+.block-action-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 1px 8px;
+  margin-top: 4px;
+}
+
+/* ---- session strip (Phase C) ---- */
+.session-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-muted);
+  padding: 6px 0 12px;
+  border-bottom: 1px solid var(--paper-edge);
+  margin-bottom: 12px;
+}
+.session-label {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.session-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.session-clear {
+  border: none;
+  background: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+}
+.session-clear:hover {
+  color: var(--danger);
+}

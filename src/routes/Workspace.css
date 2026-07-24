@@ -1,0 +1,174 @@
+/* Workspace view — decoupled from the chat stream. One column: the composed
+   interface (canvas) with a single input at the foot and the agent's latest
+   reply as a status line. The transcript is an optional read-only log drawer.
+   Paper/ink tokens only. */
+
+.workspace-body {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---- primary pane ---- */
+.ws-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ws-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 32px 10px;
+}
+.ws-head .session-strip {
+  margin: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.ws-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--ink);
+  border: 1px solid var(--ink-faint);
+  border-radius: var(--radius);
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.ws-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-log-toggle {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--ink-faint);
+  background: none;
+  border: 1px solid var(--paper-edge);
+  border-radius: var(--radius);
+  padding: 3px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ws-log-toggle:hover,
+.ws-log-toggle[aria-pressed="true"] {
+  color: var(--ink-muted);
+  border-color: var(--ink-faint);
+}
+
+/* The canvas: whatever interface the agent composed, front and center. */
+.ws-canvas {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 32px 32px;
+  min-height: 0;
+}
+
+.ws-block {
+  max-width: 760px;
+}
+.ws-empty {
+  max-width: 480px;
+  margin-top: 15vh;
+}
+.ws-empty .empty-line {
+  font-family: var(--font-serif);
+  font-size: var(--fs-display);
+  color: var(--ink);
+  margin: 0 0 8px;
+}
+.ws-empty-hint {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  color: var(--ink-muted);
+  line-height: 1.5;
+}
+
+/* ---- foot: status line + the one input ---- */
+.ws-foot {
+  border-top: 1px solid var(--paper-edge);
+  padding: 10px 32px 16px;
+}
+.ws-status {
+  font-family: var(--font-serif);
+  font-size: var(--fs-ui-lg);
+  color: var(--ink-muted);
+  margin: 0 0 8px;
+  max-width: var(--measure);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ws-pending {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin: 0 0 6px;
+}
+.ws-foot .composer-wrap {
+  padding: 0;
+}
+.ws-foot .composer-col {
+  max-width: var(--measure);
+  margin: 0;
+}
+
+/* ---- log drawer (read-only record, hidden by default) ---- */
+.ws-log {
+  flex: 0 0 340px;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--paper-edge);
+  min-height: 0;
+  background: var(--paper);
+}
+.ws-turns {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 18px;
+}
+/* Tighter type than the reading column — this is a record, not the page. */
+.ws-turns .run-text {
+  font-size: calc(var(--fs-reading) * 0.82);
+}
+.ws-turns .turn-user .body {
+  font-size: var(--fs-ui-lg);
+}
+.ws-empty-line {
+  font-family: var(--font-serif);
+  font-size: var(--fs-ui-lg);
+  color: var(--ink-muted);
+}
+
+/* Narrow window: the log overlays instead of squeezing the canvas. */
+@media (max-width: 980px) {
+  .ws-log {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: min(340px, 85vw);
+    box-shadow: none;
+    border-left: 1px solid var(--paper-edge);
+    z-index: 4;
+  }
+  .workspace-body {
+    position: relative;
+  }
+}

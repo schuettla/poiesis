@@ -1,0 +1,204 @@
+.composer-wrap {
+  position: sticky;
+  bottom: 0;
+  background: linear-gradient(to bottom, transparent, var(--paper) 28%);
+  padding: 18px 24px 26px;
+}
+.composer-wrap.drag-over .composer {
+  border-top-color: var(--local);
+}
+.composer-wrap.drag-over::after {
+  content: "Drop image to attach";
+  position: absolute;
+  inset: 8px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--local);
+  background: color-mix(in srgb, var(--paper) 86%, var(--local));
+  border: 1px dashed var(--local);
+  border-radius: var(--radius);
+  pointer-events: none;
+}
+
+.composer-col {
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+.composer {
+  border-top: 1px solid var(--paper-edge-2);
+  padding-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.attachment-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 10px;
+}
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-muted);
+  background: var(--paper-edge);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: 12px;
+  padding: 4px 6px 4px 10px;
+}
+.attachment-kind {
+  color: var(--ink-faint);
+}
+.attachment-remove {
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.attachment-remove:hover {
+  color: var(--ink);
+}
+
+.composer input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  font-family: var(--font-sans);
+  font-size: 14.5px;
+  color: var(--ink);
+  padding: 6px 0;
+}
+.composer input::placeholder {
+  color: var(--ink-faint);
+}
+
+.composer .icon-btn {
+  background: none;
+  border: 1px solid var(--paper-edge-2);
+  color: var(--ink-muted);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.composer .icon-btn:hover {
+  border-color: var(--ink-faint);
+  color: var(--ink);
+}
+.composer .tools-toggle.on {
+  background: var(--paper-edge);
+  border-color: var(--ink-faint);
+  color: var(--ink);
+}
+
+.composer .persona-picker {
+  height: 28px;
+  max-width: 150px;
+  background: none;
+  border: 1px solid var(--paper-edge-2);
+  color: var(--ink-muted);
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  padding: 0 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.composer .persona-picker:hover {
+  border-color: var(--ink-faint);
+  color: var(--ink);
+}
+
+.composer .send {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+.composer .send:hover {
+  color: var(--paper);
+}
+
+/* ---- modes drop-up menu (workspace / tools / create image) ---- */
+.composer-menu-wrap {
+  position: relative;
+  display: flex;
+}
+.composer-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+}
+.composer-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 10;
+  min-width: 300px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge);
+  border-radius: var(--radius);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.composer-menu-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--ink);
+  font-size: var(--fs-ui);
+}
+.composer-menu-item:hover {
+  background: var(--paper-edge);
+}
+.composer-menu-item:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.composer-menu-item:disabled:hover {
+  background: none;
+}
+.composer-menu-item .mi-icon {
+  color: var(--ink-muted);
+  width: 18px;
+  text-align: center;
+}
+.composer-menu-item .mi-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.composer-menu-item .mi-hint {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.composer-menu-item .mi-check {
+  font-family: var(--font-mono);
+  color: var(--ink);
+  width: 14px;
+}
