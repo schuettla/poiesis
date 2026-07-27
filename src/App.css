@@ -1,9 +1,26 @@
-/* App shell grid — mirrors the mockup: 232px rail + fluid main,
-   48px topbar spanning the full width. */
+/* The dock width is a *registered* custom property, so the browser knows it is
+   a length and can interpolate it. An unregistered `--dock-w` would snap between
+   values, which is why show/hide has to animate through this and not through a
+   plain variable. */
+@property --dock-w {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 340px;
+}
+
+/* App shell grid — mirrors the mockup: 232px rail + fluid main + the Workbench
+   dock on the right, 48px topbar spanning the full width. The conversation
+   column is `1fr`, so whatever the dock gives up it immediately takes. */
 .app {
   display: grid;
-  grid-template-columns: 232px 1fr;
-  grid-template-rows: 48px 1fr;
+  grid-template-columns: 232px 1fr var(--dock-w);
+  transition: --dock-w var(--t-mode);
+  /* Row 3 is explicit (not left implicit) so that "grid-row: 2 / -1" on the
+     rail and the full-height routes actually reaches it — negative grid line
+     indices only resolve against the *explicit* grid, not implicit tracks
+     the composer would otherwise add on its own. Auto-collapses to 0 in any
+     view that doesn't place something there. */
+  grid-template-rows: 48px 1fr auto;
   height: 100vh;
 }
 
@@ -12,12 +29,25 @@
 
 /* Manual icon-only collapse (rail toggle). */
 .app.rail-collapsed {
-  grid-template-columns: 60px 1fr;
+  grid-template-columns: 60px 1fr var(--dock-w);
+}
+
+/* While dragging the divider the width is already following the pointer;
+   easing it as well would make it lag behind the cursor. */
+.app.dock-dragging {
+  transition: none;
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* Routes other than chat have no Workbench at all — nothing to animate. */
+.app.no-dock {
+  transition: none;
 }
 
 /* Responsive: narrow the rail gracefully on a smaller window (§5.5). */
 @media (max-width: 900px) {
   .app:not(.rail-collapsed) {
-    grid-template-columns: 188px 1fr;
+    grid-template-columns: 188px 1fr var(--dock-w);
   }
 }

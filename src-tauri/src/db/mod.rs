@@ -12,7 +12,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -46,6 +46,12 @@ pub struct Conversation {
     /// When this conversation was last reflected on (REF-2). `None` means the
     /// agent hasn't yet tried to learn anything from it.
     pub reflected_at: Option<i64>,
+    /// The real folder on disk this conversation works in, if one is attached.
+    /// Everything the file tools do resolves against it.
+    pub folder_path: Option<String>,
+    /// How much the agent may do inside `folder_path`: "read-only" | "confirm"
+    /// | "auto". Reads are always silent; this governs writes and deletes.
+    pub folder_trust: String,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -155,6 +161,25 @@ pub struct Artifact {
     pub kind: String,
     pub content: String,
     pub created_at: i64,
+    /// Where this artifact was materialised in the working folder, if the user
+    /// ever saved it. Once set, the Workbench stops listing it as "made in this
+    /// chat" and shows the real file in the tree instead.
+    pub saved_path: Option<String>,
+}
+
+/// One reversible file operation. Recorded before the bytes change, so undo can
+/// put them back. `blob_path` is `None` when the file did not exist before —
+/// undoing that entry deletes the created file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrashEntry {
+    pub id: String,
+    pub conversation_id: String,
+    pub op: String,
+    pub path: String,
+    pub prev_path: Option<String>,
+    pub blob_path: Option<String>,
+    pub created_at: i64,
+    pub undone: bool,
 }
 
 /// A typed, interactive workspace block (Generative UI) rendered inline in an
@@ -319,6 +344,20 @@ impl Db {
             Self::add_column(&conn, "conversations", "summary_upto_message_id", "TEXT")?;
             Self::add_column(&conn, "conversations", "reflected_at", "INTEGER")?;
         }
+        if current < 6 {
+            // v6 (Working folder): a conversation can attach one real folder on
+            // disk plus a trust level governing what the agent may do inside it.
+            // The `file_trash` table is created by SCHEMA above.
+            Self::add_column(&conn, "conversations", "folder_path", "TEXT")?;
+            Self::add_column(
+                &conn,
+                "conversations",
+                "folder_trust",
+                "TEXT NOT NULL DEFAULT 'confirm'",
+            )?;
+            // Artifacts remember where they were materialised on disk, if ever.
+            Self::add_column(&conn, "artifacts", "saved_path", "TEXT")?;
+        }
         if current < SCHEMA_VERSION {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -388,6 +427,8 @@ impl Db {
             summary: None,
             summary_upto_message_id: None,
             reflected_at: None,
+            folder_path: None,
+            folder_trust: "confirm".to_string(),
             created_at: ts,
             updated_at: ts,
         })
@@ -403,11 +444,48 @@ impl Db {
         Ok(())
     }
 
+    // ---- working folder ----
+
+    /// Attach (or, with `None`, detach) the real folder this conversation works
+    /// in. Detaching touches nothing on disk — it only forgets the path.
+    pub fn set_conversation_folder(&self, id: &str, path: Option<&str>) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE conversations SET folder_path = ?2 WHERE id = ?1",
+            params![id, path],
+        )?;
+        Ok(())
+    }
+
+    /// Set how much the agent may do inside the attached folder.
+    pub fn set_conversation_trust(&self, id: &str, trust: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE conversations SET folder_trust = ?2 WHERE id = ?1",
+            params![id, trust],
+        )?;
+        Ok(())
+    }
+
+    /// The attached folder + trust for one conversation, without loading the rest.
+    /// Hot path: every file tool call consults this.
+    pub fn conversation_folder(&self, id: &str) -> Result<(Option<String>, String), DbError> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn
+            .query_row(
+                "SELECT folder_path, folder_trust FROM conversations WHERE id = ?1",
+                [id],
+                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+            )
+            .unwrap_or((None, None));
+        Ok((row.0, row.1.unwrap_or_else(|| "confirm".to_string())))
+    }
+
     pub fn list_conversations(&self) -> Result<Vec<Conversation>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, title, model_id, persona_id, overrides_json, workspace, created_at, updated_at,
-                    summary, summary_upto_message_id, reflected_at
+                    summary, summary_upto_message_id, reflected_at, folder_path, folder_trust
              FROM conversations ORDER BY updated_at DESC",
         )?;
         let rows = stmt
@@ -592,7 +670,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT DISTINCT c.id, c.title, c.model_id, c.persona_id, c.overrides_json, c.workspace, c.created_at, c.updated_at,
-                    c.summary, c.summary_upto_message_id, c.reflected_at
+                    c.summary, c.summary_upto_message_id, c.reflected_at, c.folder_path, c.folder_trust
              FROM conversations c
              JOIN messages m ON m.conversation_id = c.id
              JOIN messages_fts f ON f.rowid = m.rowid
@@ -1119,26 +1197,30 @@ impl Db {
             kind: kind.to_string(),
             content: content.to_string(),
             created_at: ts,
+            saved_path: None,
+        })
+    }
+
+    fn map_artifact(r: &rusqlite::Row) -> rusqlite::Result<Artifact> {
+        Ok(Artifact {
+            id: r.get(0)?,
+            conversation_id: r.get(1)?,
+            title: r.get(2)?,
+            kind: r.get(3)?,
+            content: r.get(4)?,
+            created_at: r.get(5)?,
+            saved_path: r.get(6)?,
         })
     }
 
     pub fn list_artifacts(&self, conversation_id: &str) -> Result<Vec<Artifact>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, title, kind, content, created_at
+            "SELECT id, conversation_id, title, kind, content, created_at, saved_path
              FROM artifacts WHERE conversation_id = ?1 ORDER BY created_at ASC",
         )?;
         let rows = stmt
-            .query_map([conversation_id], |r| {
-                Ok(Artifact {
-                    id: r.get(0)?,
-                    conversation_id: r.get(1)?,
-                    title: r.get(2)?,
-                    kind: r.get(3)?,
-                    content: r.get(4)?,
-                    created_at: r.get(5)?,
-                })
-            })?
+            .query_map([conversation_id], Self::map_artifact)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -1146,22 +1228,138 @@ impl Db {
     pub fn list_all_artifacts(&self) -> Result<Vec<Artifact>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, title, kind, content, created_at
+            "SELECT id, conversation_id, title, kind, content, created_at, saved_path
              FROM artifacts ORDER BY created_at DESC",
         )?;
         let rows = stmt
-            .query_map([], |r| {
-                Ok(Artifact {
-                    id: r.get(0)?,
-                    conversation_id: r.get(1)?,
-                    title: r.get(2)?,
-                    kind: r.get(3)?,
-                    content: r.get(4)?,
-                    created_at: r.get(5)?,
-                })
-            })?
+            .query_map([], Self::map_artifact)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    pub fn get_artifact(&self, id: &str) -> Result<Option<Artifact>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, conversation_id, title, kind, content, created_at, saved_path
+             FROM artifacts WHERE id = ?1",
+        )?;
+        let row = stmt.query_row([id], Self::map_artifact).ok();
+        Ok(row)
+    }
+
+    /// Record where an artifact was materialised on disk (promotion, §3.5F).
+    pub fn set_artifact_saved_path(&self, id: &str, path: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE artifacts SET saved_path = ?2 WHERE id = ?1",
+            params![id, path],
+        )?;
+        Ok(())
+    }
+
+    /// Was this path attached to a message at some point? Attaching a file is
+    /// the user handing it over, and that consent outlives the session — without
+    /// this, reopening an old chat couldn't re-read its own images.
+    pub fn is_known_attachment(&self, path: &str) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM attachments WHERE path = ?1",
+            [path],
+            |r| r.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    // ---- file undo trash ----
+
+    pub fn add_trash_entry(
+        &self,
+        conversation_id: &str,
+        op: &str,
+        path: &str,
+        prev_path: Option<&str>,
+        blob_path: Option<&str>,
+    ) -> Result<TrashEntry, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let id = new_id();
+        let ts = now_ms();
+        conn.execute(
+            "INSERT INTO file_trash(id, conversation_id, op, path, prev_path, blob_path, created_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, conversation_id, op, path, prev_path, blob_path, ts],
+        )?;
+        Ok(TrashEntry {
+            id,
+            conversation_id: conversation_id.to_string(),
+            op: op.to_string(),
+            path: path.to_string(),
+            prev_path: prev_path.map(|s| s.to_string()),
+            blob_path: blob_path.map(|s| s.to_string()),
+            created_at: ts,
+            undone: false,
+        })
+    }
+
+    fn map_trash(r: &rusqlite::Row) -> rusqlite::Result<TrashEntry> {
+        Ok(TrashEntry {
+            id: r.get(0)?,
+            conversation_id: r.get(1)?,
+            op: r.get(2)?,
+            path: r.get(3)?,
+            prev_path: r.get(4)?,
+            blob_path: r.get(5)?,
+            created_at: r.get(6)?,
+            undone: r.get::<_, i64>(7)? != 0,
+        })
+    }
+
+    pub fn list_trash(&self, conversation_id: &str, limit: i64) -> Result<Vec<TrashEntry>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, conversation_id, op, path, prev_path, blob_path, created_at, undone
+             FROM file_trash WHERE conversation_id = ?1
+             -- rowid breaks the tie: timestamps are millisecond-resolution, and a
+             -- burst of writes in one turn lands inside a single millisecond.
+             ORDER BY created_at DESC, rowid DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![conversation_id, limit], Self::map_trash)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_trash_entry(&self, id: &str) -> Result<Option<TrashEntry>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, conversation_id, op, path, prev_path, blob_path, created_at, undone
+             FROM file_trash WHERE id = ?1",
+        )?;
+        Ok(stmt.query_row([id], Self::map_trash).ok())
+    }
+
+    pub fn mark_trash_undone(&self, id: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE file_trash SET undone = 1 WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Trash entries older than `cutoff_ms`, so startup can prune their blobs.
+    pub fn expired_trash(&self, cutoff_ms: i64) -> Result<Vec<TrashEntry>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, conversation_id, op, path, prev_path, blob_path, created_at, undone
+             FROM file_trash WHERE created_at < ?1",
+        )?;
+        let rows = stmt
+            .query_map([cutoff_ms], Self::map_trash)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn delete_trash_entry(&self, id: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM file_trash WHERE id = ?1", [id])?;
+        Ok(())
     }
 
     // ---- workspace blocks (Generative UI) ----
@@ -1418,6 +1616,10 @@ impl Db {
             summary: row.get(8)?,
             summary_upto_message_id: row.get(9)?,
             reflected_at: row.get(10)?,
+            folder_path: row.get(11)?,
+            folder_trust: row
+                .get::<_, Option<String>>(12)?
+                .unwrap_or_else(|| "confirm".to_string()),
         })
     }
 
@@ -1483,6 +1685,92 @@ mod tests {
 
         let miss = db.search_conversations("nonexistentterm").unwrap();
         assert!(miss.is_empty());
+    }
+
+    #[test]
+    fn working_folder_and_trust_round_trip() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.create_conversation("Folder", None, false).unwrap();
+
+        // Nothing attached, and the safe middle setting by default.
+        assert_eq!(db.conversation_folder(&c.id).unwrap(), (None, "confirm".into()));
+        assert!(c.folder_path.is_none());
+        assert_eq!(c.folder_trust, "confirm");
+
+        db.set_conversation_folder(&c.id, Some(r"C:\work\thing")).unwrap();
+        db.set_conversation_trust(&c.id, "auto").unwrap();
+        assert_eq!(
+            db.conversation_folder(&c.id).unwrap(),
+            (Some(r"C:\work\thing".to_string()), "auto".to_string())
+        );
+
+        // …and it survives a full load, not just the narrow lookup.
+        let convs = db.list_conversations().unwrap();
+        assert_eq!(convs[0].folder_path.as_deref(), Some(r"C:\work\thing"));
+        assert_eq!(convs[0].folder_trust, "auto");
+
+        // Detaching forgets the path without disturbing the trust level.
+        db.set_conversation_folder(&c.id, None).unwrap();
+        assert_eq!(db.conversation_folder(&c.id).unwrap(), (None, "auto".into()));
+
+        // An unknown conversation reads as "no folder", not an error.
+        assert_eq!(db.conversation_folder("nope").unwrap(), (None, "confirm".into()));
+    }
+
+    #[test]
+    fn artifacts_remember_where_they_were_saved() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.create_conversation("Art", None, false).unwrap();
+        let a = db.add_artifact(Some(&c.id), "Chart", "svg", "<svg/>").unwrap();
+        assert!(a.saved_path.is_none(), "an artifact starts as chat-only");
+
+        db.set_artifact_saved_path(&a.id, r"C:\work\thing\chart.svg").unwrap();
+        let got = db.get_artifact(&a.id).unwrap().unwrap();
+        assert_eq!(got.saved_path.as_deref(), Some(r"C:\work\thing\chart.svg"));
+        // The promotion is visible everywhere the artifact is listed.
+        let listed = db.list_artifacts(&c.id).unwrap();
+        assert_eq!(listed[0].saved_path, got.saved_path);
+    }
+
+    #[test]
+    fn trash_entries_list_newest_first_and_mark_undone() {
+        let db = Db::open_in_memory().unwrap();
+        let a = db.add_trash_entry("conv1", "write", "/a.txt", None, Some("/blob/1")).unwrap();
+        let b = db.add_trash_entry("conv1", "delete", "/b.txt", None, Some("/blob/2")).unwrap();
+        db.add_trash_entry("other", "write", "/c.txt", None, None).unwrap();
+
+        let listed = db.list_trash("conv1", 10).unwrap();
+        assert_eq!(listed.len(), 2, "scoped to the conversation");
+        assert_eq!(listed[0].id, b.id, "newest first");
+        assert!(!listed[0].undone);
+
+        db.mark_trash_undone(&a.id).unwrap();
+        assert!(db.get_trash_entry(&a.id).unwrap().unwrap().undone);
+    }
+
+    #[test]
+    fn known_attachments_stay_readable() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.create_conversation("Att", None, false).unwrap();
+        db.append_message(
+            &c.id,
+            &NewMessage {
+                role: "user".into(),
+                content: "look".into(),
+                model_name: None,
+                model_provenance: None,
+                steps_json: None,
+                attachments: vec![NewAttachment {
+                    kind: "image".into(),
+                    name: "shot.png".into(),
+                    path: r"C:\pics\shot.png".into(),
+                }],
+            },
+        )
+        .unwrap();
+
+        assert!(db.is_known_attachment(r"C:\pics\shot.png").unwrap());
+        assert!(!db.is_known_attachment(r"C:\secrets\passwords.txt").unwrap());
     }
 
     #[test]

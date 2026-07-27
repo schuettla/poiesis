@@ -73,10 +73,23 @@ pub async fn agent_chat_cmd(
         }
     };
 
-    let msgs: Vec<serde_json::Value> = messages
+    let mut msgs: Vec<serde_json::Value> = messages
         .into_iter()
         .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
         .collect();
+
+    // The working folder is described here rather than in the frontend's prompt
+    // so it can never drift from what the file tools will actually enforce. Only
+    // worth saying when the model has tools to act on it.
+    if tools_enabled.unwrap_or(false) && Skill::FileSystem.is_enabled(&db) {
+        if let Some(brief) = crate::agent::filesystem::working_folder_brief(&db, &conversation_id) {
+            let at = msgs
+                .iter()
+                .position(|m| m["role"] != "system")
+                .unwrap_or(msgs.len());
+            msgs.insert(at, serde_json::json!({ "role": "system", "content": brief }));
+        }
+    }
 
     // Key for per-model tool reliability stats (GRM-4): the cloud model id, or
     // the running local model's file stem.

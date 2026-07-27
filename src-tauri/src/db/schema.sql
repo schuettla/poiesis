@@ -170,3 +170,20 @@ CREATE INDEX IF NOT EXISTS idx_tool_stats_conv ON tool_stats(conversation_id);
 -- external-content): the memory store rebuilds it wholesale on every write —
 -- fine at entry-count scale (tens, not thousands).
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(name, description, body, kind);
+
+-- Working folder: undo trash. Every destructive file operation the agent (or the
+-- user, via the Workbench) performs inside the attached folder snapshots the
+-- prior bytes to <app_data>/trash/<uuid> and records a row here, so it can be
+-- reversed. `blob_path` is NULL when the file did not exist before — undoing
+-- such an entry deletes the created file.
+CREATE TABLE IF NOT EXISTS file_trash (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  op              TEXT NOT NULL,           -- 'write' | 'edit' | 'delete' | 'move' | 'save'
+  path            TEXT NOT NULL,           -- affected path (destination, for a move)
+  prev_path       TEXT,                    -- move source, else NULL
+  blob_path       TEXT,                    -- snapshot of prior bytes, NULL if newly created
+  created_at      INTEGER NOT NULL,
+  undone          INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_file_trash_conv ON file_trash(conversation_id, created_at DESC);

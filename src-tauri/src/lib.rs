@@ -68,8 +68,18 @@ pub fn run() {
             // Set aside anything a hand-edit left unreadable, and say so in the
             // activity log rather than letting it disappear quietly (HEAL-3).
             memory.quarantine_scan(&db);
+            // Drop file-undo snapshots past their retention window, so the trash
+            // can't grow without bound behind the user's back.
+            agent::trash::prune(&db, &base_dir);
             app.manage(db);
             app.manage(memory);
+
+            // Paths the user picks in a native dialog become readable for the
+            // session — a dialog is consent, but only for what was picked.
+            // Poiesis's own output (generated images, exports) is readable too.
+            let grants = commands::files::DialogGrants::new();
+            grants.allow_app_data(&base_dir);
+            app.manage(grants);
 
             app.manage(RuntimeManager::new(base_dir));
             app.manage(PermissionManager::new());
@@ -175,8 +185,20 @@ pub fn run() {
             commands::cloud::set_provider_key_cmd,
             commands::cloud::clear_provider_key_cmd,
             commands::cloud::list_cloud_models_cmd,
+            commands::files::pick_folder_cmd,
+            commands::files::pick_files_cmd,
+            commands::files::set_conversation_folder_cmd,
+            commands::files::set_conversation_trust_cmd,
+            commands::files::read_dir_tree_cmd,
+            commands::files::read_text_file_cmd,
+            commands::files::open_path_cmd,
+            commands::files::reveal_path_cmd,
+            commands::files::save_artifact_to_folder_cmd,
+            commands::files::list_trash_cmd,
+            commands::files::undo_file_op_cmd,
             commands::attachments::read_image_data_uri_cmd,
             commands::attachments::extract_pdf_text_cmd,
+            commands::attachments::save_artifact_cmd,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Nexus application")

@@ -129,7 +129,7 @@ export default function Settings() {
   return (
     <div className="surface">
       <div className="surface-inner">
-        <h1>Settings</h1>
+        <h1>General</h1>
         <p className="lede">Your system prompt, file access, and a log of what Poiesis Agent has done.</p>
 
         <section className="setting-block">
@@ -316,9 +316,11 @@ export default function Settings() {
         </section>
 
         <section className="setting-block">
-          <h2 className="setting-title">File access</h2>
+          <h2 className="setting-title">Always-allowed folders</h2>
           <p className="setting-help">
-            Folders Poiesis Agent is allowed to read or change. Nothing is accessible until you allow it.
+            Folders Poiesis Agent may reach in every chat. Most work happens in a single working
+            folder you attach to a conversation from the Workbench panel — these are the standing
+            exceptions on top of it.
           </p>
           {grants.length === 0 && <p className="empty-hint">No folders allowed yet.</p>}
           {grants.map((g) => (

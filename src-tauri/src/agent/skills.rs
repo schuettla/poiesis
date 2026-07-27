@@ -243,10 +243,7 @@ impl Skill {
         args: &serde_json::Value,
     ) -> Result<String, String> {
         match self {
-            Skill::FileSystem => {
-                filesystem::execute(ctx.db, ctx.perms, ctx.sink, ctx.conversation_id, name, args)
-                    .await
-            }
+            Skill::FileSystem => filesystem::execute(ctx, name, args).await,
             Skill::WebSearch => websearch::execute(ctx, name, args).await,
             Skill::CodeExec => codeexec::execute(ctx, name, args).await,
             Skill::Artifacts => artifacts::execute(ctx, name, args).await,

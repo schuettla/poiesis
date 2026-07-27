@@ -7,6 +7,48 @@
   border-bottom: 1px solid var(--paper-edge-2);
 }
 
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: 5px;
+  margin-left: -5px;
+  border-radius: var(--radius);
+}
+.sidebar-toggle:hover {
+  color: var(--ink);
+  background: var(--paper-edge);
+}
+/* A pressed toggle reads as "this panel is on", not just hovered. */
+.sidebar-toggle.on {
+  color: var(--ink);
+}
+
+.workbench-toggle {
+  position: relative;
+  margin-left: 0;
+  margin-right: -5px;
+}
+.toggle-badge {
+  position: absolute;
+  top: 4px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--local);
+}
+
 .brand {
   display: flex;
   align-items: center;

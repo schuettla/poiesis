@@ -1,6 +1,6 @@
-/* The chat body occupies the main grid cell (col 2, row 2): a flex row holding
-   the reading column and, when open, the Canvas panel (CHT-6). The composer
-   spans full width below. */
+/* The chat body occupies the main grid cell (col 2, row 2): just the reading
+   column now — files and artifacts live in the Workbench dock in column 3. The
+   composer sits in row 3 of the same column. */
 .chat-body {
   grid-column: 2;
   grid-row: 2;
@@ -18,38 +18,13 @@
   min-width: 0;
 }
 
-/* Canvas panel takes the right portion of the chat body when open. */
-.canvas-panel {
-  flex: 0 0 46%;
-  max-width: 640px;
-}
-
-/* Reopen affordance shown when artifacts exist but the panel is closed. */
-.canvas-reopen {
-  position: absolute;
-  top: 14px;
-  right: 16px;
-  font-family: var(--font-sans);
-  font-size: 12px;
-  color: var(--ink-muted);
-  background: var(--paper);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: 12px;
-  padding: 4px 12px;
-  cursor: pointer;
-}
-.canvas-reopen:hover {
-  border-color: var(--ink-faint);
-  color: var(--ink);
-}
-
 .conversation {
   width: 100%;
   max-width: 700px;
 }
 
 .composer-wrap {
-  grid-column: 1 / -1;
+  grid-column: 2;
   grid-row: 3;
 }
 

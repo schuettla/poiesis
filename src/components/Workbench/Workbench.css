@@ -1,0 +1,671 @@
+/* The Workbench dock: mirrors the Rail on the opposite edge — same grid span,
+   same padding rhythm, border on the inside edge. */
+.workbench {
+  position: relative;
+  grid-column: 3;
+  grid-row: 2 / -1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--paper);
+  border-left: 1px solid var(--paper-edge-2);
+}
+/* Collapsed: the grid column is 0 wide, so let the content keep its own width
+   and clip. Without this the panel reflows to nothing on the way out and the
+   animation reads as a jumble rather than a slide. */
+.app.dock-collapsed .workbench {
+  border-left: none;
+  pointer-events: none;
+}
+.app.dock-collapsed .workbench > * {
+  min-width: 300px;
+}
+
+/* The drag handle sits *on* the dock's inner edge — a few pixels wide, with a
+   generous hit area, invisible until you approach it. */
+.wb-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 7px;
+  z-index: 5;
+  cursor: col-resize;
+  background: none;
+  border: none;
+  padding: 0;
+}
+.wb-resizer:hover,
+.app.dock-dragging .wb-resizer {
+  background: var(--local);
+  opacity: 0.5;
+}
+.wb-resizer:focus-visible {
+  background: var(--local);
+  opacity: 1;
+  outline: none;
+}
+.app.dock-collapsed .wb-resizer {
+  display: none;
+}
+
+/* ---- folder header ---- */
+
+.wb-head {
+  flex-shrink: 0;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--paper-edge);
+}
+.wb-head-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.wb-folder-icon {
+  display: flex;
+  color: var(--ink-faint);
+  flex-shrink: 0;
+}
+.wb-folder-name {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+.wb-folder-path {
+  margin: 3px 0 9px 22px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  word-break: break-all;
+}
+
+/* Empty state — the prominent, in-conversation way in. */
+.wb-head-empty {
+  padding: 20px 16px 18px;
+}
+.wb-empty-title {
+  margin: 0 0 5px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  font-weight: 600;
+  color: var(--ink);
+}
+.wb-empty-blurb {
+  margin: 0 0 12px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+
+.wb-primary {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  background: var(--paper-edge);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.wb-primary:hover {
+  background: var(--paper-edge-2);
+}
+
+.wb-link {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-muted);
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: var(--radius);
+}
+.wb-link:hover {
+  color: var(--ink);
+  background: var(--paper-edge);
+}
+
+.wb-error {
+  margin: 8px 0 0;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--danger);
+}
+
+/* ---- trust selector: the per-session access level ---- */
+
+.wb-trust {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wb-trust-label {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+}
+.wb-segments {
+  display: flex;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.wb-segment {
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  background: none;
+  border: none;
+  border-right: 1px solid var(--paper-edge-2);
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wb-segment:last-child {
+  border-right: none;
+}
+.wb-segment:hover {
+  background: var(--paper-edge);
+}
+.wb-segment.on {
+  color: var(--ink);
+  background: var(--paper-edge-2);
+  font-weight: 600;
+}
+
+.wb-confirm p {
+  margin: 0 0 8px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+.wb-confirm-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---- overflow menu ---- */
+
+.wb-menu-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.wb-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 20;
+  min-width: 178px;
+  padding: 4px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+}
+.wb-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  background: none;
+  border: none;
+  padding: 6px 9px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.wb-menu button:hover {
+  background: var(--paper-edge);
+}
+.wb-menu hr {
+  border: none;
+  border-top: 1px solid var(--paper-edge);
+  margin: 4px 2px;
+}
+.wb-menu-danger {
+  color: var(--danger) !important;
+}
+
+.wb-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius);
+  flex-shrink: 0;
+}
+.wb-icon:hover {
+  color: var(--ink);
+  background: var(--paper-edge);
+}
+
+/* ---- stacked sections: Files, then Artifacts ---- */
+
+/* Files takes the free height; Artifacts sizes to its content so it never
+   crowds out the tree, but can still scroll when there are many. */
+.wb-section-block {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.wb-files {
+  flex: 1;
+}
+.wb-artifacts-block {
+  flex: 0 1 auto;
+  border-top: 1px solid var(--paper-edge-2);
+  max-height: 40%;
+}
+.wb-artifacts {
+  overflow-y: auto;
+  padding-bottom: 6px;
+  min-height: 0;
+}
+
+.wb-section-toggle {
+  width: 100%;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+.wb-section-toggle:hover {
+  color: var(--ink-muted);
+}
+.wb-section-action {
+  margin-left: auto;
+  padding: 2px;
+}
+
+.wb-filter-wrap {
+  padding: 2px 12px 6px;
+  flex-shrink: 0;
+}
+.wb-filter {
+  width: 100%;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+}
+.wb-filter::placeholder {
+  color: var(--ink-faint);
+}
+
+.wb-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 8px;
+  min-height: 0;
+}
+/* Artifact rows sit in their own section, so they don't need the tree's
+   indent machinery — just the kind chip and the Save action. */
+.wb-artifact .wb-row-name {
+  font-style: italic;
+}
+.wb-hint {
+  margin: 0;
+  padding: 14px 14px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+
+.wb-section {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px 5px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  flex-shrink: 0;
+}
+.wb-section-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.wb-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-right: 10px;
+  min-height: 25px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.wb-row:hover {
+  background: var(--paper-edge);
+  color: var(--ink);
+}
+.wb-row.active {
+  background: var(--paper-edge-2);
+  color: var(--ink);
+}
+.wb-row.is-dir {
+  color: var(--ink);
+}
+.wb-row-caret {
+  width: 9px;
+  flex-shrink: 0;
+  font-size: 9px;
+  color: var(--ink-faint);
+  text-align: center;
+}
+.wb-row-icon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--ink-faint);
+}
+.wb-row:hover .wb-row-icon,
+.wb-row.active .wb-row-icon {
+  color: var(--ink-muted);
+}
+.wb-row-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-touched {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--local);
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-kind {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-faint);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 0 5px;
+}
+
+/* `Save →` promotes an artifact into the folder. Revealed on hover/focus so the
+   rows stay quiet, but always reachable by keyboard. */
+.wb-save {
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 1px 5px;
+  cursor: pointer;
+  opacity: 0;
+}
+.wb-row:hover .wb-save,
+.wb-row:focus-within .wb-save,
+.wb-save:focus-visible {
+  opacity: 1;
+  border-color: var(--paper-edge-2);
+}
+.wb-save:hover {
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.wb-save-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px 6px 24px;
+}
+.wb-save-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 3px 6px;
+}
+
+/* ---- viewer: takes over the panel, with a way back ---- */
+
+.wb-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--ink-muted);
+  cursor: pointer;
+  padding: 3px;
+  margin-left: -3px;
+  border-radius: var(--radius);
+  flex-shrink: 0;
+}
+.wb-back:hover {
+  color: var(--ink);
+  background: var(--paper-edge);
+}
+
+.wb-viewer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.wb-viewer-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--paper-edge);
+  flex-shrink: 0;
+}
+.wb-viewer-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+}
+.wb-viewer-body {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+.viewer-binary {
+  padding: 22px 16px;
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--ink-muted);
+}
+.viewer-binary p {
+  margin: 0 0 8px;
+}
+
+/* Full-screen escape hatch for content 340px can't hold. */
+.wb-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  background: rgba(0, 0, 0, 0.4);
+}
+.wb-overlay-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(1100px, 100%);
+  height: 100%;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* ---- rendered content (shared by the docked viewer and the overlay) ---- */
+
+.canvas-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #fff;
+}
+.canvas-markdown {
+  padding: 18px 20px;
+  font-family: var(--font-serif);
+  font-size: var(--fs-reading);
+  line-height: var(--lh-reading);
+  color: var(--ink);
+  max-width: var(--measure);
+}
+.canvas-markdown img,
+.canvas-markdown table {
+  max-width: 100%;
+}
+.canvas-code {
+  margin: 0;
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.canvas-image {
+  display: block;
+  max-width: 100%;
+  margin: 16px auto;
+}
+.canvas-loading {
+  padding: 24px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--ink-muted);
+  text-align: center;
+}
+
+/* ---- recent changes ---- */
+
+.wb-changes {
+  flex-shrink: 0;
+  border-top: 1px solid var(--paper-edge-2);
+  max-height: 34%;
+  overflow-y: auto;
+}
+.wb-changes-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+.wb-changes-head:hover {
+  color: var(--ink-muted);
+}
+.wb-changes-caret {
+  font-size: 9px;
+}
+.wb-changes-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 10px 8px;
+}
+.wb-changes-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 2px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.wb-changes-list li.undone {
+  opacity: 0.5;
+}
+.wb-change-op {
+  flex-shrink: 0;
+  color: var(--ink-faint);
+}
+.wb-change-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-change-name:hover {
+  text-decoration: underline;
+}
+.wb-change-when,
+.wb-change-undone {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+}

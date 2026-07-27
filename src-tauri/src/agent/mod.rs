@@ -14,6 +14,7 @@ pub mod recipes;
 pub mod run;
 pub mod sandbox;
 pub mod skills;
+pub mod trash;
 pub mod websearch;
 
 use serde::Serialize;
@@ -83,6 +84,14 @@ pub enum AgentEvent {
         id: String,
         target: String,
         rationale: String,
+    },
+    /// A file on disk changed. The Workbench marks the row, refreshes the branch
+    /// it lives in, and adds an undo affordance. `undo_token` is a `file_trash`
+    /// id; empty when the operation left nothing to reverse.
+    FileChanged {
+        op: String,
+        path: String,
+        undo_token: String,
     },
     /// The run completed normally.
     Done,

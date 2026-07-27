@@ -4,8 +4,8 @@ import UserTurn from "../components/Conversation/UserTurn";
 import AgentRun from "../components/Conversation/AgentRun";
 import CompactDivider from "../components/Conversation/CompactDivider";
 import Introduction from "../components/Conversation/Introduction";
+import FolderInvite from "../components/Conversation/FolderInvite";
 import Composer from "../components/Composer/Composer";
-import CanvasPanel from "../components/Canvas/CanvasPanel";
 import MemoryToast from "../components/Memory/MemoryToast";
 import SessionStrip from "../components/Blocks/SessionStrip";
 import Workspace from "./Workspace";
@@ -18,11 +18,6 @@ export default function Chat() {
   const sendMessage = useAppStore((s) => s.sendMessage);
   const stopGenerating = useAppStore((s) => s.stopGenerating);
   const busy = useAppStore((s) => s.busy);
-  const canvasOpen = useAppStore((s) => s.canvasOpen);
-  const openCanvas = useAppStore((s) => s.openCanvas);
-  const artifactCount = useAppStore((s) =>
-    s.activeConversationId ? (s.artifacts[s.activeConversationId]?.length ?? 0) : 0
-  );
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const msgs = conversation?.messages ?? [];
@@ -55,6 +50,7 @@ export default function Chat() {
               <div className="empty-state">
                 <p className="empty-line">No messages yet — say hello to get started.</p>
                 <Introduction />
+                <FolderInvite />
               </div>
             ) : (
               conversation!.messages.map((m, i) => {
@@ -78,13 +74,7 @@ export default function Chat() {
               })
             )}
           </div>
-          {!canvasOpen && artifactCount > 0 && (
-            <button className="canvas-reopen" onClick={() => openCanvas()}>
-              Canvas · {artifactCount}
-            </button>
-          )}
         </div>
-        <CanvasPanel />
       </div>
       <Composer onSend={sendMessage} busy={busy} onStop={stopGenerating} />
       <MemoryToast />

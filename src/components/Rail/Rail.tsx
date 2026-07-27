@@ -1,11 +1,37 @@
 import { useEffect, useState } from "react";
 import { useAppStore } from "../../lib/store";
 import { inTauri, searchConversations } from "../../lib/api";
-import type { Conversation, View } from "../../lib/types";
-import PoiesisMark from "../Mark/PoiesisMark";
+import type { Conversation } from "../../lib/types";
 import "./Rail.css";
 
 const DAY = 86400_000;
+
+function LibraryIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M5.5 3.5h9a1 1 0 0 1 1 1V17l-5.5-3.2L4.5 17V4.5a1 1 0 0 1 1-1z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="10" cy="10" r="2.6" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="M10 2.8v2.3M10 14.9v2.3M17.2 10h-2.3M5.1 10H2.8M15.1 4.9l-1.6 1.6M6.5 13.5l-1.6 1.6M15.1 15.1l-1.6-1.6M6.5 6.5 4.9 4.9"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
 
 function groupConversations(convs: Conversation[]): { label: string; items: Conversation[] }[] {
   const now = Date.now();
@@ -20,16 +46,6 @@ function groupConversations(convs: Conversation[]): { label: string; items: Conv
   if (earlier.length) groups.push({ label: "Earlier", items: earlier });
   return groups;
 }
-
-const NAV: { label: string; view: View; icon: string }[] = [
-  { label: "Models", view: "models", icon: "▤" },
-  { label: "Engine", view: "engine", icon: "◧" },
-  { label: "Library", view: "library", icon: "□" },
-  { label: "Apps", view: "apps", icon: "◇" },
-  // The Self is a place, not a settings tab (PRES-3) — its icon is the mark.
-  { label: "Self", view: "self", icon: "" },
-  { label: "Settings", view: "settings", icon: "⚙" },
-];
 
 
 /** One conversation row, with its digestion state (PRES-2) and the manual
@@ -95,7 +111,6 @@ export default function Rail() {
   const setView = useAppStore((s) => s.setView);
   const newConversation = useAppStore((s) => s.newConversation);
   const collapsed = useAppStore((s) => s.railCollapsed);
-  const toggleRail = useAppStore((s) => s.toggleRail);
   // Something about the agent's self is waiting on an answer (SOUL-UI-3). The
   // dot goes where the answer is given: soul edits are reviewed in Settings →
   // Personas, everything else in the Self panel.
@@ -106,9 +121,10 @@ export default function Rail() {
     s.changeProposals.some((p) => p.target !== "soul")
   );
   const consolidationPending = useAppStore((s) => s.consolidationPending);
-  const badgeFor = (view: string) =>
-    (view === "settings" && soulPending) ||
-    (view === "self" && (selfPending || consolidationPending));
+  // Models, Engine, Apps, Self and Settings now live together in one hub
+  // (behind the cog, below) — one badge covers whatever's waiting in any of them.
+  const settingsPending = soulPending || selfPending || consolidationPending;
+  const inSettingsHub = ["models", "engine", "apps", "self", "settings"].includes(view);
 
   const [query, setQuery] = useState("");
   const [resultIds, setResultIds] = useState<string[] | null>(null);
@@ -146,15 +162,6 @@ export default function Rail() {
 
   return (
     <nav className={`rail ${collapsed ? "collapsed" : ""}`} aria-label="Conversations and sections">
-      <button
-        className="rail-collapse"
-        onClick={toggleRail}
-        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-      >
-        {collapsed ? "»" : "«"}
-      </button>
-
       <button className="new-chat" onClick={newConversation} title="New chat">
         {collapsed ? "+" : "+ New chat"}
       </button>
@@ -167,6 +174,21 @@ export default function Rail() {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
+
+      <ul className="rail-nav rail-nav-top">
+        <li
+          className={view === "library" ? "active" : ""}
+          tabIndex={0}
+          onClick={() => setView("library")}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") setView("library");
+          }}
+          title="Library"
+        >
+          <span className="nav-icon" aria-hidden="true"><LibraryIcon /></span>
+          <span className="nav-label">Library</span>
+        </li>
+      </ul>
 
       {searching ? (
         <div>
@@ -192,32 +214,27 @@ export default function Rail() {
 
       <hr className="rail-divider" />
 
-      <ul className="rail-nav">
-        {NAV.map((n) => (
-          <li
-            key={n.view}
-            className={view === n.view ? "active" : ""}
-            tabIndex={0}
-            onClick={() => setView(n.view)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") setView(n.view);
-            }}
-            title={n.label}
-          >
-            <span className="nav-icon" aria-hidden="true">
-              {n.view === "self" ? <PoiesisMark size={15} /> : n.icon}
-            </span>
-            <span className="nav-label">{n.label}</span>
-            {badgeFor(n.view) && (
-              <span
-                className="nav-badge"
-                role="img"
-                aria-label="Changes waiting for review"
-                title="Changes waiting for review"
-              />
-            )}
-          </li>
-        ))}
+      <ul className="rail-nav rail-nav-footer">
+        <li
+          className={inSettingsHub ? "active" : ""}
+          tabIndex={0}
+          onClick={() => setView("settings")}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") setView("settings");
+          }}
+          title="Settings"
+        >
+          <span className="nav-icon" aria-hidden="true"><SettingsIcon /></span>
+          <span className="nav-label">Settings</span>
+          {settingsPending && (
+            <span
+              className="nav-badge"
+              role="img"
+              aria-label="Changes waiting for review"
+              title="Changes waiting for review"
+            />
+          )}
+        </li>
       </ul>
     </nav>
   );

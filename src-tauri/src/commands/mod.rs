@@ -6,6 +6,7 @@ pub mod attachments;
 pub mod cloud;
 pub mod connectors;
 pub mod conversations;
+pub mod files;
 pub mod imagegen;
 pub mod memory;
 pub mod models;

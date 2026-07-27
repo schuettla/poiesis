@@ -188,6 +188,13 @@ impl AgentEventSink {
             error: error.to_string(),
         });
     }
+    pub fn file_changed(&self, op: &str, path: &str, undo_token: Option<&str>) {
+        let _ = self.channel.send(AgentEvent::FileChanged {
+            op: op.to_string(),
+            path: path.to_string(),
+            undo_token: undo_token.unwrap_or_default().to_string(),
+        });
+    }
     pub fn send_permission(&self, request: PermissionRequest) {
         let _ = self.channel.send(AgentEvent::Permission { request });
     }

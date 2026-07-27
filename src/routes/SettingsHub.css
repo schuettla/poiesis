@@ -1,0 +1,68 @@
+/* Settings hub: occupies the same grid cell the standalone surfaces used to
+   (col 2, row 2/-1), split into a secondary nav + the active section. */
+.settings-hub {
+  grid-column: 2;
+  grid-row: 2 / -1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.settings-hub-nav {
+  flex: 0 0 196px;
+  border-right: 1px solid var(--paper-edge-2);
+  padding: 28px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.settings-hub-tab {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  text-align: left;
+}
+.settings-hub-tab:hover {
+  color: var(--ink);
+  background: var(--paper-edge);
+}
+.settings-hub-tab.active {
+  color: var(--ink);
+  font-weight: 500;
+  background: var(--paper-edge);
+}
+.sht-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  flex-shrink: 0;
+  color: inherit;
+}
+.sht-label {
+  flex: 1;
+}
+.sht-badge {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink);
+  flex-shrink: 0;
+}
+
+.settings-hub-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}

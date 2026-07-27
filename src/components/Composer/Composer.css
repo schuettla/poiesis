@@ -1,11 +1,13 @@
+/* A fixed, self-contained element that floats above the message stream
+   (rather than a full-width toolbar fused to the bottom edge) — closer to
+   the composer in claude.ai. */
 .composer-wrap {
   position: sticky;
   bottom: 0;
-  background: linear-gradient(to bottom, transparent, var(--paper) 28%);
-  padding: 18px 24px 26px;
+  padding: 0 24px 20px;
 }
 .composer-wrap.drag-over .composer {
-  border-top-color: var(--local);
+  border-color: var(--local);
 }
 .composer-wrap.drag-over::after {
   content: "Drop image to attach";
@@ -29,11 +31,17 @@
 }
 
 .composer {
-  border-top: 1px solid var(--paper-edge-2);
-  padding-top: 12px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(0, 0, 0, 0.01);
+  padding: 10px 14px;
   display: flex;
   align-items: center;
   gap: 12px;
+}
+.composer:focus-within {
+  border-color: var(--ink-faint);
 }
 
 .attachment-row {

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { inTauri, listImageModels, type ImageModel } from "../../lib/api";
+import { inTauri, listImageModels, pickFiles, type ImageModel } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import type { Attachment } from "../../lib/types";
 import ContextMeter from "./ContextMeter";
@@ -112,15 +111,18 @@ export default function Composer({
 
   async function attach() {
     if (!inTauri()) return;
-    const selected = await open({
-      multiple: false,
-      filters: [{ name: "Images & PDFs", extensions: [...IMAGE_EXT, "pdf"] }],
-    });
-    if (typeof selected !== "string") return;
-    const kind = kindFor(selected);
-    if (!kind) return;
-    const name = selected.split(/[\\/]/).pop() ?? selected;
-    setAttachments((a) => [...a, { id: `${Date.now()}`, kind, name, path: selected }]);
+    // Routed through the backend picker so the chosen paths are recorded as
+    // consent — reading them back later goes through the same scope check as
+    // everything else that touches the user's disk.
+    const picked = await pickFiles();
+    setAttachments((a) => [
+      ...a,
+      ...picked.flatMap((path, i) => {
+        const kind = kindFor(path);
+        if (!kind) return [];
+        return [{ id: `${Date.now()}-${i}`, kind, name: path.split(/[\\/]/).pop() ?? path, path }];
+      }),
+    ]);
   }
 
   function removeAttachment(id: string) {

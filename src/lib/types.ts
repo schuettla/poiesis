@@ -92,6 +92,13 @@ export interface Message {
   /** Change proposals the agent raised during this turn (SOUL-UI-2). Ids only:
    *  the card reads the live proposal so it disappears once answered. */
   proposalIds?: string[];
+  /** Artifact ids produced during this turn (CHT-6): rendered as clickable
+   *  chips that open the Workbench on the right. */
+  artifactIds?: string[];
+  /** `file_trash` ids for files this turn changed on disk — rendered as rows
+   * that open the file and offer Undo. In-memory only: after a reload the
+   * Workbench's "Recent changes" strip is the durable record. */
+  fileChangeIds?: string[];
   /** True while the assistant turn is still streaming. */
   streaming?: boolean;
   createdAt: number;
@@ -120,6 +127,21 @@ export interface Conversation {
   /** Recipe this conversation was started from (RCP-UI-3). In-memory only —
    * a label on this session, not a fact worth persisting. */
   recipeName?: string;
+  /** The real folder on disk this conversation works in, if one is attached.
+   * The agent's file tools resolve relative paths against it. */
+  folderPath?: string | null;
+  /** How much the agent may change inside that folder. Reads are always free. */
+  folderTrust?: FolderTrust;
+}
+
+/** Per-conversation file-access level, chosen in the Workbench panel. */
+export type FolderTrust = "read-only" | "confirm" | "auto";
+
+/** What the Workbench viewer is showing. Files are identified by path;
+ * artifacts by id — two origins, one selection. */
+export interface WorkbenchSelection {
+  kind: "file" | "artifact";
+  id: string;
 }
 
 export type View = "chat" | "models" | "engine" | "apps" | "settings" | "library" | "self";

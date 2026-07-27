@@ -62,9 +62,171 @@
   color: var(--ink-faint);
   margin-bottom: 10px;
 }
-.run-header .model-tag {
+.run-header .agent-label {
   font-weight: 600;
   color: var(--ink-muted);
+}
+.run-header .model-tag {
+  color: var(--ink-faint);
+  padding: 1px 6px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: 8px;
+}
+
+/* ---- thinking state: shown before the first token/step/block lands ---- */
+.thinking {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 0 6px;
+}
+.thinking-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  animation: thinking-pulse 1.4s ease-in-out infinite;
+}
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes thinking-pulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ---- inline artifact chips (CHT-6): open straight into the Canvas panel ---- */
+.artifact-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* The way in, on an empty chat. Quiet enough not to compete with the composer,
+   present enough that nobody has to find it in Settings. */
+.folder-invite {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  margin-top: 14px;
+  padding: 10px 13px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  text-align: left;
+  color: var(--ink-muted);
+  background: none;
+  border: 1px dashed var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: border-color var(--t-fast), color var(--t-fast);
+}
+.folder-invite:hover {
+  border-color: var(--ink-faint);
+  color: var(--ink);
+}
+.folder-invite-icon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--ink-faint);
+}
+.folder-invite-arrow {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--ink-faint);
+}
+
+/* Files this turn changed on disk. Deliberately quieter than an artifact chip —
+   a record of what happened, with a way back out of it. */
+.changed-files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 10px;
+}
+.changed-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--ink-muted);
+}
+.changed-file.undone {
+  opacity: 0.55;
+}
+.changed-file-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.changed-file-name:hover {
+  text-decoration: underline;
+}
+.changed-file-undo {
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  background: none;
+  border: none;
+  padding: 1px 5px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.changed-file-undo:hover {
+  color: var(--ink);
+  background: var(--paper-edge);
+}
+.changed-file-undone {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.artifact-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: 8px;
+  background: var(--paper-edge);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--ink);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.artifact-chip:hover {
+  border-color: var(--ink-faint);
+  background: var(--paper-edge-2);
+}
+.artifact-chip-kind {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.artifact-chip-title {
+  font-weight: 500;
+}
+.artifact-chip-arrow {
+  color: var(--ink-faint);
 }
 
 /* ---- timeline ---- */

@@ -512,7 +512,7 @@ function ProgressBlock({ block }: { block: BlockView }) {
 function DocumentBlock({ block }: { block: BlockView }) {
   const data = asObj(block.data);
   const artifactId = data.artifact_id as string | undefined;
-  const openCanvas = useAppStore((s) => s.openCanvas);
+  const openArtifact = useAppStore((s) => s.openArtifact);
   const artifact = useAppStore((s) => {
     const convId = s.activeConversationId;
     if (!convId || !artifactId) return undefined;
@@ -525,8 +525,8 @@ function DocumentBlock({ block }: { block: BlockView }) {
       <div className="doc-row">
         <span className="doc-desc">{desc}</span>
         {artifactId && (
-          <button className="doc-open" onClick={() => openCanvas(artifactId)}>
-            Open in Canvas →
+          <button className="doc-open" onClick={() => openArtifact(artifactId)}>
+            Open →
           </button>
         )}
       </div>

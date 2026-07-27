@@ -4,12 +4,14 @@ import type {
   Attachment,
   BlockView,
   Conversation,
+  FolderTrust,
   Message,
   Mode,
   Model,
   ModelFilter,
   Provenance,
   View,
+  WorkbenchSelection,
 } from "./types";
 import { mockConversations, mockModels } from "./mockData";
 import * as api from "./api";
@@ -23,6 +25,10 @@ const MEMORY_ONBOARDED_KEY = "memory.onboarded";
 const REFLECT_AUTO_KEY = "reflection.auto";
 const SELF_BORN_KEY = "self.born";
 const SELF_INTRODUCED_KEY = "self.introduced";
+const DOCK_OPEN_KEY = "workbench.open";
+const DOCK_WIDTH_KEY = "workbench.width";
+/** Matches the `--dock-w` initial value in App.css. */
+const DEFAULT_DOCK_WIDTH = 340;
 /** Below this, a conversation is too slight to have taught anything (REF-3). */
 const REFLECT_MIN_MESSAGES = 8;
 
@@ -269,12 +275,58 @@ interface AppState {
   pendingPermissions: api.PermissionRequest[];
   resolvePermission: (id: string, decision: api.Decision) => Promise<void>;
 
-  // artifacts / canvas panel (CHT-6)
+  // ---- Workbench (right dock): the working folder and this chat's artifacts ----
+  //
+  // Files and artifacts are two origins of one idea — stuff the agent made or
+  // touched — so they share one panel, one tree and one viewer. Artifacts live
+  // in the DB until the user saves one into the folder, at which point it
+  // promotes to a real file and leaves "Made in this chat".
+
   artifacts: Record<string, api.Artifact[]>;
-  canvasOpen: boolean;
-  activeArtifactId: string | null;
-  openCanvas: (artifactId?: string) => void;
-  closeCanvas: () => void;
+  /** Is the dock showing? Persisted across restarts. */
+  dockOpen: boolean;
+  toggleDock: () => void;
+  setDockOpen: (open: boolean) => void;
+  /** What the viewer is showing, file or artifact. */
+  selected: WorkbenchSelection | null;
+  selectNode: (selection: WorkbenchSelection | null) => void;
+  /** Open the dock on a specific artifact — from a timeline chip or a document
+   * block. The artifact's own row in the tree scrolls into view. */
+  openArtifact: (artifactId: string) => void;
+  /** The viewer blown up to a full-screen overlay, for content 340px can't hold. */
+  viewerExpanded: boolean;
+  setViewerExpanded: (expanded: boolean) => void;
+  /** Dock width in px, set by dragging its edge. Persisted across restarts. */
+  dockWidth: number;
+  setDockWidth: (px: number) => void;
+  /** True while the divider is being dragged, so the shell drops its easing. */
+  dockDragging: boolean;
+  setDockDragging: (dragging: boolean) => void;
+  showHidden: boolean;
+  toggleShowHidden: () => void;
+
+  /** Lazily-loaded directory children, keyed by absolute path. */
+  folderTree: Record<string, api.FileNode[]>;
+  expandedDirs: string[];
+  toggleDir: (path: string) => Promise<void>;
+  /** Paths the agent changed this session → when, for the tree's `●` marker. */
+  touchedFiles: Record<string, number>;
+  /** Reversible operations for the "Recent changes" strip. */
+  trash: api.TrashEntry[];
+  /** Why the last folder attach was refused, shown inline. */
+  folderError: string | null;
+
+  attachFolder: () => Promise<void>;
+  detachFolder: () => Promise<void>;
+  setFolderTrust: (trust: FolderTrust) => Promise<void>;
+  /** Reload one directory's children, or the whole tree when omitted. */
+  refreshTree: (path?: string) => Promise<void>;
+  refreshTrash: () => Promise<void>;
+  undoFileOp: (id: string) => Promise<void>;
+  saveArtifactToFolder: (artifactId: string, dest: string) => Promise<void>;
+  /** Hand a file to the OS — open it, or show it in the file manager. */
+  openInSystem: (path: string) => Promise<void>;
+  revealInSystem: (path: string) => Promise<void>;
 }
 
 function applyMode(mode: Mode) {
@@ -387,6 +439,8 @@ function toConversation(c: api.DbConversation): Conversation {
     summary: c.summary,
     summaryUptoMessageId: c.summary_upto_message_id,
     reflectedAt: c.reflected_at,
+    folderPath: c.folder_path,
+    folderTrust: (c.folder_trust as FolderTrust) ?? "confirm",
   };
 }
 
@@ -985,6 +1039,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       bornRaw,
       introducedRaw,
       autoReflectRaw,
+      dockOpenRaw,
+      dockWidthRaw,
       ...autonomyRaw
     ] = await Promise.all([
       api.listConversations(),
@@ -996,6 +1052,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       api.getSetting(SELF_BORN_KEY),
       api.getSetting(SELF_INTRODUCED_KEY),
       api.getSetting(REFLECT_AUTO_KEY),
+      api.getSetting(DOCK_OPEN_KEY),
+      api.getSetting(DOCK_WIDTH_KEY),
       ...AUTONOMY_CLASSES.map((c) => api.getSetting(`autonomy.${c.id}`)),
     ]);
     let conversations = rows.map(toConversation);
@@ -1031,6 +1089,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Homeostasis is on unless the user turned it off.
       autoCompact: autoCompactRaw !== "false",
       memoryOnboarded: onboardedRaw === "true",
+      // The Workbench is open unless the user closed it last time.
+      dockOpen: dockOpenRaw !== "0",
+      dockWidth: Math.min(720, Math.max(260, Number(dockWidthRaw) || DEFAULT_DOCK_WIDTH)),
       bootstrapped: true,
     });
     await get().refreshLibrary();
@@ -1066,13 +1127,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     // A conversation carries its own workspace flag — switching sessions adopts
     // that session's layout (composed surface vs. classic message stream).
     const conv = get().conversations.find((c) => c.id === id);
+    // The Workbench belongs to the conversation, not the window: its folder,
+    // tree, selection and change history all reset and reload with the session.
     set({
       activeConversationId: id,
       view: "chat",
-      canvasOpen: false,
       workspaceMode: !!conv?.workspace,
+      selected: null,
+      viewerExpanded: false,
+      folderTree: {},
+      expandedDirs: [],
+      touchedFiles: {},
+      trash: [],
+      folderError: null,
     });
     if (!api.inTauri()) return;
+    get().refreshTree().catch(() => {});
+    get().refreshTrash().catch(() => {});
     const rows = await api.listMessages(id);
     // Load any saved workspace blocks and attach them to their anchor message
     // (Generative UI). A block with no message_id trails the last assistant turn.
@@ -1111,13 +1182,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       ),
       surfaces: { ...s.surfaces, [id]: surface },
     }));
-    // Load any saved artifacts for the Canvas panel (CHT-6).
+    // Load any saved artifacts for the Workbench (CHT-6). Nothing is selected on
+    // arrival — opening a chat shouldn't yank the viewer onto an old artifact.
     try {
       const arts = await api.listArtifacts(id);
-      set((s) => ({
-        artifacts: { ...s.artifacts, [id]: arts },
-        activeArtifactId: arts.length ? arts[arts.length - 1].id : null,
-      }));
+      set((s) => ({ artifacts: { ...s.artifacts, [id]: arts } }));
     } catch {
       /* ignore */
     }
@@ -1533,16 +1602,230 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   resolvePermission: async (id, decision) => {
+    const request = get().pendingPermissions.find((p) => p.id === id);
     set((s) => ({ pendingPermissions: s.pendingPermissions.filter((p) => p.id !== id) }));
+    // "Don't ask again in this folder" raises the trust level backend-side —
+    // mirror it so the header's segmented control matches what just happened.
+    if (request?.in_folder && decision === "forever") {
+      const convId = get().activeConversationId;
+      if (convId) {
+        set((s) => ({
+          conversations: s.conversations.map((c) =>
+            c.id === convId ? { ...c, folderTrust: "auto" as FolderTrust } : c
+          ),
+        }));
+      }
+    }
     if (api.inTauri()) await api.resolvePermission(id, decision);
   },
 
   artifacts: {},
-  canvasOpen: false,
-  activeArtifactId: null,
-  openCanvas: (artifactId) =>
-    set((s) => ({ canvasOpen: true, activeArtifactId: artifactId ?? s.activeArtifactId })),
-  closeCanvas: () => set({ canvasOpen: false }),
+  dockOpen: true,
+  toggleDock: () => {
+    const dockOpen = !get().dockOpen;
+    set({ dockOpen });
+    if (api.inTauri()) api.setSetting(DOCK_OPEN_KEY, dockOpen ? "1" : "0").catch(() => {});
+  },
+  setDockOpen: (dockOpen) => {
+    if (get().dockOpen === dockOpen) return;
+    set({ dockOpen });
+    if (api.inTauri()) api.setSetting(DOCK_OPEN_KEY, dockOpen ? "1" : "0").catch(() => {});
+  },
+  selected: null,
+  selectNode: (selection) => set({ selected: selection, viewerExpanded: false }),
+  openArtifact: (artifactId) => {
+    const convId = get().activeConversationId;
+    const artifact = convId
+      ? (get().artifacts[convId] ?? []).find((a) => a.id === artifactId)
+      : undefined;
+    // A saved artifact is a file now — show it where it actually lives.
+    set({
+      dockOpen: true,
+      viewerExpanded: false,
+      selected: artifact?.saved_path
+        ? { kind: "file", id: artifact.saved_path }
+        : { kind: "artifact", id: artifactId },
+    });
+  },
+  viewerExpanded: false,
+  setViewerExpanded: (viewerExpanded) => set({ viewerExpanded }),
+  dockWidth: DEFAULT_DOCK_WIDTH,
+  setDockWidth: (px) => {
+    // Floor keeps the tree usable; ceiling keeps the conversation readable.
+    const dockWidth = Math.round(Math.min(720, Math.max(260, px)));
+    if (get().dockWidth === dockWidth) return;
+    set({ dockWidth });
+    // Only worth persisting once the drag settles; `setDockDragging(false)`
+    // does that, so the write here is skipped mid-drag.
+    if (!get().dockDragging && api.inTauri()) {
+      api.setSetting(DOCK_WIDTH_KEY, String(dockWidth)).catch(() => {});
+    }
+  },
+  dockDragging: false,
+  setDockDragging: (dockDragging) => {
+    set({ dockDragging });
+    if (!dockDragging && api.inTauri()) {
+      api.setSetting(DOCK_WIDTH_KEY, String(get().dockWidth)).catch(() => {});
+    }
+  },
+  showHidden: false,
+  toggleShowHidden: () => {
+    set((s) => ({ showHidden: !s.showHidden, folderTree: {} }));
+    get().refreshTree().catch(() => {});
+  },
+
+  folderTree: {},
+  expandedDirs: [],
+  touchedFiles: {},
+  trash: [],
+  folderError: null,
+
+  toggleDir: async (path) => {
+    const open = get().expandedDirs.includes(path);
+    if (open) {
+      set((s) => ({ expandedDirs: s.expandedDirs.filter((p) => p !== path) }));
+      return;
+    }
+    set((s) => ({ expandedDirs: [...s.expandedDirs, path] }));
+    // Fetch children the first time a branch opens; reopening reuses what we
+    // already have, and the agent's file events refresh it when it goes stale.
+    if (!get().folderTree[path]) await get().refreshTree(path);
+  },
+
+  attachFolder: async () => {
+    if (!api.inTauri()) return;
+    const convId = get().activeConversationId;
+    if (!convId) return;
+    set({ folderError: null });
+    try {
+      const picked = await api.pickFolder();
+      if (!picked) return;
+      await api.setConversationFolder(convId, picked);
+      set((s) => ({
+        conversations: s.conversations.map((c) =>
+          c.id === convId ? { ...c, folderPath: picked } : c
+        ),
+        folderTree: {},
+        expandedDirs: [],
+        selected: null,
+        dockOpen: true,
+      }));
+      await get().refreshTree();
+    } catch (e) {
+      set({ folderError: String(e) });
+    }
+  },
+
+  detachFolder: async () => {
+    const convId = get().activeConversationId;
+    if (!convId) return;
+    // Nothing on disk is touched — this only forgets the path.
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === convId ? { ...c, folderPath: null } : c
+      ),
+      folderTree: {},
+      expandedDirs: [],
+      selected: s.selected?.kind === "file" ? null : s.selected,
+      folderError: null,
+    }));
+    if (api.inTauri()) await api.setConversationFolder(convId, null);
+  },
+
+  setFolderTrust: async (trust) => {
+    const convId = get().activeConversationId;
+    if (!convId) return;
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === convId ? { ...c, folderTrust: trust } : c
+      ),
+    }));
+    if (api.inTauri()) await api.setConversationTrust(convId, trust);
+  },
+
+  refreshTree: async (path) => {
+    if (!api.inTauri()) return;
+    const convId = get().activeConversationId;
+    const conv = get().conversations.find((c) => c.id === convId);
+    const root = conv?.folderPath;
+    if (!root) return;
+    // Refreshing the whole tree means the root plus every branch already open,
+    // so an agent edit deep in the tree shows up without collapsing anything.
+    const targets = path ? [path] : [root, ...get().expandedDirs];
+    const showHidden = get().showHidden;
+    const loaded = await Promise.all(
+      targets.map(async (t) => {
+        try {
+          return [t, await api.readDirTree(t, convId ?? undefined, showHidden)] as const;
+        } catch {
+          return [t, [] as api.FileNode[]] as const;
+        }
+      })
+    );
+    set((s) => {
+      const folderTree = { ...s.folderTree };
+      for (const [t, nodes] of loaded) folderTree[t] = nodes;
+      return { folderTree };
+    });
+  },
+
+  refreshTrash: async () => {
+    if (!api.inTauri()) return;
+    const convId = get().activeConversationId;
+    if (!convId) return;
+    try {
+      set({ trash: await api.listTrash(convId, 20) });
+    } catch {
+      /* ignore */
+    }
+  },
+
+  undoFileOp: async (id) => {
+    if (!api.inTauri()) return;
+    const entry = get().trash.find((t) => t.id === id);
+    await api.undoFileOp(id);
+    set((s) => ({
+      trash: s.trash.map((t) => (t.id === id ? { ...t, undone: true } : t)),
+      // The file is back to its prior state, so it's no longer "changed".
+      touchedFiles: entry
+        ? Object.fromEntries(Object.entries(s.touchedFiles).filter(([p]) => p !== entry.path))
+        : s.touchedFiles,
+    }));
+    await get().refreshTree();
+  },
+
+  saveArtifactToFolder: async (artifactId, dest) => {
+    if (!api.inTauri()) return;
+    const convId = get().activeConversationId;
+    if (!convId) return;
+    const written = await api.saveArtifactToFolder(convId, artifactId, dest);
+    // The artifact promotes: it stops being "made in this chat" and becomes a
+    // file in the tree, selected so the user sees where it landed.
+    set((s) => ({
+      artifacts: {
+        ...s.artifacts,
+        [convId]: (s.artifacts[convId] ?? []).map((a) =>
+          a.id === artifactId ? { ...a, saved_path: written } : a
+        ),
+      },
+      touchedFiles: { ...s.touchedFiles, [written]: Date.now() },
+      selected: { kind: "file", id: written },
+    }));
+    await get().refreshTree();
+    await get().refreshTrash();
+  },
+
+  openInSystem: async (path) => {
+    if (!api.inTauri()) return;
+    const convId = get().activeConversationId;
+    await api.openPath(path, convId ?? undefined).catch(() => {});
+  },
+  revealInSystem: async (path) => {
+    if (!api.inTauri()) return;
+    const convId = get().activeConversationId;
+    await api.revealPath(path, convId ?? undefined).catch(() => {});
+  },
+
   allArtifacts: [],
   refreshAllArtifacts: async () => {
     if (!api.inTauri()) return;
@@ -1558,8 +1841,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       await get().setActiveConversation(artifact.conversation_id);
     }
     set((s) => ({
-      activeArtifactId: artifact.id,
-      canvasOpen: true,
+      selected: artifact.saved_path
+        ? { kind: "file" as const, id: artifact.saved_path }
+        : { kind: "artifact" as const, id: artifact.id },
+      dockOpen: true,
       view: artifact.conversation_id ? "chat" : s.view,
     }));
   },
@@ -1738,6 +2023,8 @@ async function streamAssistantTurn(
   const steps: AgentStep[] = [];
   const blocks: BlockView[] = [];
   const proposalIds: string[] = [];
+  const artifactIds: string[] = [];
+  const fileChangeIds: string[] = [];
   try {
     await api.agentChat(
       convId,
@@ -1778,15 +2065,35 @@ async function streamAssistantTurn(
               kind: e.kind,
               content: e.content,
               created_at: Date.now(),
+              saved_path: null,
             };
+            artifactIds.push(e.id);
+            patchAssistant(set, convId, assistantId, { artifactIds: [...artifactIds] });
             set((st) => {
               const existing = st.artifacts[convId] ?? [];
               return {
                 artifacts: { ...st.artifacts, [convId]: [...existing, artifact] },
-                canvasOpen: true,
-                activeArtifactId: e.id,
+                // Auto-open and preview: the strongest signal that the agent is
+                // working beside you rather than somewhere off-screen.
+                dockOpen: true,
+                selected: { kind: "artifact" as const, id: e.id },
               };
             });
+            break;
+          }
+          case "file_changed": {
+            // The agent changed a real file. Mark it, refresh the branch it
+            // lives in, and pull the undo row so "Recent changes" stays honest
+            // about what just happened on disk.
+            set((st) => ({
+              touchedFiles: { ...st.touchedFiles, [e.path]: Date.now() },
+            }));
+            if (e.undo_token) {
+              fileChangeIds.push(e.undo_token);
+              patchAssistant(set, convId, assistantId, { fileChangeIds: [...fileChangeIds] });
+            }
+            get().refreshTree().catch(() => {});
+            get().refreshTrash().catch(() => {});
             break;
           }
           case "block": {

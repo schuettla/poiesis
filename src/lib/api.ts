@@ -34,6 +34,10 @@ export interface DbConversation {
   summary_upto_message_id: string | null;
   /** When the agent last reflected on this conversation (REF-2), or null. */
   reflected_at: number | null;
+  /** The real folder on disk this conversation works in, or null. */
+  folder_path: string | null;
+  /** How much the agent may change inside it: read-only | confirm | auto. */
+  folder_trust: string;
 }
 
 export interface DbAttachment {
@@ -321,6 +325,7 @@ export type AgentEvent =
   | { type: "memory_write"; op: string; name: string; description: string; collection: string; undo_token: string }
   | { type: "recall"; id: string; matches: SearchHit[] }
   | { type: "proposal"; id: string; target: string; rationale: string }
+  | { type: "file_changed"; op: string; path: string; undo_token: string }
   | { type: "done" }
   | { type: "cancelled" }
   | { type: "error"; message: string };
@@ -345,6 +350,9 @@ export interface Artifact {
   kind: string;
   content: string;
   created_at: number;
+  /** Set once the user saved this artifact into the working folder. From then on
+   * it lives in the tree as a real file rather than under "Made in this chat". */
+  saved_path: string | null;
 }
 
 /** One hit from the agent's search over its own past (RCL-1). */
@@ -362,6 +370,12 @@ export interface PermissionRequest {
   summary: string;
   path: string;
   mode: "read" | "read-write";
+  /** A diff or content excerpt to review, for in-folder operation confirms. */
+  diff?: string;
+  /** True when this confirms an operation inside the attached working folder
+   * rather than asking to widen scope — the panel shows Allow / Deny / Don't
+   * ask again instead of the four-way Once / Chat / Forever choice. */
+  in_folder: boolean;
 }
 
 export type Decision = "deny" | "once" | "chat" | "forever";
@@ -830,12 +844,74 @@ export const setConnectorEnabled = (id: string, enabled: boolean) =>
   invoke<void>("set_connector_enabled_cmd", { id, enabled });
 export const deleteConnector = (id: string) => invoke<void>("delete_connector_cmd", { id });
 
+// ---- working folder + Workbench ----
+
+/** How much the agent may change inside the attached folder. */
+export type FolderTrust = "read-only" | "confirm" | "auto";
+
+/** One row in the Workbench tree. */
+export interface FileNode {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  modified: number;
+}
+
+/** One reversible file operation, listed in "Recent changes". */
+export interface TrashEntry {
+  id: string;
+  conversation_id: string;
+  op: string;
+  path: string;
+  prev_path: string | null;
+  blob_path: string | null;
+  created_at: number;
+  undone: boolean;
+}
+
+/** Open the folder picker. Resolves to null if the user cancelled; rejects with
+ * a plain-language reason if the folder is one Poiesis refuses to work in. */
+export const pickFolder = () => invoke<string | null>("pick_folder_cmd");
+/** Pick attachment files. Routed through Rust so the choice counts as consent. */
+export const pickFiles = () => invoke<string[]>("pick_files_cmd");
+
+export const setConversationFolder = (id: string, path: string | null) =>
+  invoke<void>("set_conversation_folder_cmd", { id, path });
+export const setConversationTrust = (id: string, trust: FolderTrust) =>
+  invoke<void>("set_conversation_trust_cmd", { id, trust });
+
+export const readDirTree = (path: string, conversationId?: string, showHidden?: boolean) =>
+  invoke<FileNode[]>("read_dir_tree_cmd", { path, conversationId, showHidden });
+export const readTextFile = (path: string, conversationId?: string, maxBytes?: number) =>
+  invoke<string>("read_text_file_cmd", { path, conversationId, maxBytes });
+export const openPath = (path: string, conversationId?: string) =>
+  invoke<void>("open_path_cmd", { path, conversationId });
+export const revealPath = (path: string, conversationId?: string) =>
+  invoke<void>("reveal_path_cmd", { path, conversationId });
+
+/** Materialise an artifact into the working folder. Returns the written path. */
+export const saveArtifactToFolder = (
+  conversationId: string,
+  artifactId: string,
+  dest: string
+) => invoke<string>("save_artifact_to_folder_cmd", { conversationId, artifactId, dest });
+
+export const listTrash = (conversationId: string, limit?: number) =>
+  invoke<TrashEntry[]>("list_trash_cmd", { conversationId, limit });
+export const undoFileOp = (id: string) => invoke<void>("undo_file_op_cmd", { id });
+
 // ---- multimodal attachments (Phase 5) ----
 
-export const readImageDataUri = (path: string) =>
-  invoke<string>("read_image_data_uri_cmd", { path });
-export const extractPdfText = (path: string) =>
-  invoke<string>("extract_pdf_text_cmd", { path });
+export const readImageDataUri = (path: string, conversationId?: string) =>
+  invoke<string>("read_image_data_uri_cmd", { path, conversationId });
+export const extractPdfText = (path: string, conversationId?: string) =>
+  invoke<string>("extract_pdf_text_cmd", { path, conversationId });
+
+/** Save a Canvas artifact to disk (CHT-6 download). `content` is the artifact's
+ * source path for the `image` kind, its raw text otherwise. */
+export const saveArtifactFile = (dest: string, kind: string, content: string) =>
+  invoke<void>("save_artifact_cmd", { dest, kind, content });
 
 // ---- mapping helpers ----
 
