@@ -11,9 +11,11 @@ import {
   clearProviderKey,
   listSkills,
   setSkillEnabled,
+  getToolStats,
   type Grant,
   type ActivityEntry,
   type SkillInfo,
+  type SkillReliability,
 } from "../lib/api";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppStore, READING_SCALES } from "../lib/store";
@@ -32,6 +34,7 @@ const ATTRIBUTIONS = [
 
 export default function Settings() {
   const systemPrompt = useAppStore((s) => s.systemPrompt);
+  const setView = useAppStore((s) => s.setView);
   const setSystemPrompt = useAppStore((s) => s.setSystemPrompt);
   const [draft, setDraft] = useState(systemPrompt);
   const [saved, setSaved] = useState(false);
@@ -39,6 +42,7 @@ export default function Settings() {
   const [grants, setGrants] = useState<Grant[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [reliability, setReliability] = useState<SkillReliability[]>([]);
   const providers = useAppStore((s) => s.providers);
   const refreshCloud = useAppStore((s) => s.refreshCloud);
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({});
@@ -49,6 +53,9 @@ export default function Settings() {
   const setReadingScale = useAppStore((s) => s.setReadingScale);
   const telemetryEnabled = useAppStore((s) => s.telemetryEnabled);
   const setTelemetryEnabled = useAppStore((s) => s.setTelemetryEnabled);
+  const contextBudget = useAppStore((s) => s.contextBudget);
+  const autoCompact = useAppStore((s) => s.autoCompact);
+  const setAutoCompact = useAppStore((s) => s.setAutoCompact);
 
   useEffect(() => setDraft(systemPrompt), [systemPrompt]);
   useEffect(() => {
@@ -58,6 +65,7 @@ export default function Settings() {
     refreshCloud();
     listActivity(50).then(setActivity).catch(() => {});
     listSkills().then(setSkills).catch(() => {});
+    getToolStats().then(setReliability).catch(() => {});
   }, [refreshCloud]);
 
   async function toggleSkill(id: string, enabled: boolean) {
@@ -122,12 +130,12 @@ export default function Settings() {
     <div className="surface">
       <div className="surface-inner">
         <h1>Settings</h1>
-        <p className="lede">Your system prompt, file access, and a log of what Poiesis has done.</p>
+        <p className="lede">Your system prompt, file access, and a log of what Poiesis Agent has done.</p>
 
         <section className="setting-block">
           <h2 className="setting-title">System prompt</h2>
           <p className="setting-help">
-            Sets how Poiesis behaves across every chat. One global prompt for now; saved profiles
+            Sets how Poiesis Agent behaves across every chat. One global prompt for now; saved profiles
             come later.
           </p>
           <textarea
@@ -146,7 +154,7 @@ export default function Settings() {
         </section>
 
         {inTauri() && (
-          <section className="setting-block">
+          <section className="setting-block" id="settings-personas">
             <h2 className="setting-title">Personas</h2>
             <p className="setting-help">
               Saved profiles that bundle a system prompt (and optionally a model and temperature).
@@ -203,7 +211,7 @@ export default function Settings() {
             <h2 className="setting-title">Cloud models — your keys</h2>
             <p className="setting-help">
               Optionally use hosted models with your own API key. Keys are stored in Windows
-              Credential Manager — never in a file or in your chats. Poiesis stays local-first; this
+              Credential Manager — never in a file or in your chats. Poiesis Agent stays local-first; this
               is entirely opt-in.
             </p>
             {providers.map((p) => (
@@ -252,32 +260,65 @@ export default function Settings() {
           <section className="setting-block">
             <h2 className="setting-title">Skills</h2>
             <p className="setting-help">
-              What Poiesis can do beyond chatting, when tools are turned on in a chat. Each skill is
+              What Poiesis Agent can do beyond chatting, when tools are turned on in a chat. Each skill is
               opt-in; those that leave your device or run code are marked.
             </p>
-            {skills.map((s) => (
-              <label className="toggle-line skill-line" key={s.id}>
-                <input
-                  type="checkbox"
-                  checked={s.enabled}
-                  onChange={(e) => toggleSkill(s.id, e.target.checked)}
-                />
-                <span className="skill-text">
-                  <span className="skill-label">
-                    {s.label}
-                    {s.sensitive && <span className="skill-flag">leaves device / runs code</span>}
+            {skills.map((s) => {
+              const rel = reliability.find((r) => r.skill_id === s.id);
+              return (
+                <label className="toggle-line skill-line" key={s.id}>
+                  <input
+                    type="checkbox"
+                    checked={s.enabled}
+                    onChange={(e) => toggleSkill(s.id, e.target.checked)}
+                  />
+                  <span className="skill-text">
+                    <span className="skill-label">
+                      {s.label}
+                      {s.sensitive && <span className="skill-flag">leaves device / runs code</span>}
+                    </span>
+                    <span className="skill-desc">{s.description}</span>
+                    {rel && (
+                      <span className="skill-reliability">
+                        {rel.ok_percent}% ok over {rel.calls} call{rel.calls === 1 ? "" : "s"} this
+                        week
+                      </span>
+                    )}
                   </span>
-                  <span className="skill-desc">{s.description}</span>
-                </span>
-              </label>
-            ))}
+                </label>
+              );
+            })}
           </section>
         )}
 
         <section className="setting-block">
+          <h2 className="setting-title">Memory &amp; context</h2>
+          <p className="setting-help">
+            A model can only hold so much of a conversation at once. When a chat outgrows that,
+            Poiesis Agent summarizes the older turns instead of letting them fall off the front.
+            Your messages are never deleted — this changes only what the model is shown.
+          </p>
+          <p className="setting-readout">
+            Model context window: {contextBudget.toLocaleString()} tokens
+          </p>
+          <label className="toggle-line">
+            <input
+              type="checkbox"
+              checked={autoCompact}
+              onChange={(e) => setAutoCompact(e.target.checked)}
+            />
+            <span>Summarize older turns automatically</span>
+          </label>
+          {/* PRES-3: the self is a place of its own; Settings only points to it. */}
+          <button className="settings-self-link" onClick={() => setView("self")}>
+            Memory, lessons, recipes and autonomy live in my Self panel →
+          </button>
+        </section>
+
+        <section className="setting-block">
           <h2 className="setting-title">File access</h2>
           <p className="setting-help">
-            Folders Poiesis is allowed to read or change. Nothing is accessible until you allow it.
+            Folders Poiesis Agent is allowed to read or change. Nothing is accessible until you allow it.
           </p>
           {grants.length === 0 && <p className="empty-hint">No folders allowed yet.</p>}
           {grants.map((g) => (
@@ -303,7 +344,7 @@ export default function Settings() {
 
         <section className="setting-block">
           <h2 className="setting-title">Activity</h2>
-          <p className="setting-help">Everything Poiesis did on your computer, most recent first.</p>
+          <p className="setting-help">Everything Poiesis Agent did on your computer, most recent first.</p>
           {activity.length === 0 && <p className="empty-hint">No activity yet.</p>}
           <ul className="activity-list">
             {activity.map((a) => (
@@ -321,7 +362,7 @@ export default function Settings() {
         <section className="setting-block">
           <h2 className="setting-title">Privacy</h2>
           <p className="setting-help">
-            Poiesis is local-first. Anonymous usage stats are <strong>off</strong> by default and
+            Poiesis Agent is local-first. Anonymous usage stats are <strong>off</strong> by default and
             <strong> content-free</strong> — only counts of actions (like how many chats you start),
             never your messages, files, prompts, or model choices. Nothing is sent anywhere in this
             version; the counts stay on your PC.
@@ -332,14 +373,14 @@ export default function Settings() {
               checked={telemetryEnabled}
               onChange={(e) => setTelemetryEnabled(e.target.checked)}
             />
-            <span>Help improve Poiesis with anonymous, content-free usage counts</span>
+            <span>Help improve Poiesis Agent with anonymous, content-free usage counts</span>
           </label>
         </section>
 
         <section className="setting-block">
           <h2 className="setting-title">About &amp; licenses</h2>
           <p className="setting-help">
-            Poiesis is built on open-source software. Thank you to these projects.
+            Poiesis Agent is built on open-source software. Thank you to these projects.
           </p>
           <ul className="attribution-list">
             {ATTRIBUTIONS.map((a) => (
@@ -352,7 +393,7 @@ export default function Settings() {
           </ul>
         </section>
 
-        <p className="version-note">{version ? `Poiesis v${version}` : "Browser preview"}</p>
+        <p className="version-note">{version ? `Poiesis Agent v${version}` : "Browser preview"}</p>
       </div>
     </div>
   );

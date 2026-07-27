@@ -16,8 +16,11 @@ const USER_AGENT: &str =
 const MAX_RESULTS: usize = 6;
 /// Cap on the lead page's extracted text, so a huge page can't blow the context.
 const PAGE_TEXT_CAP: usize = 3000;
+/// Cap for a directly-requested `fetch_url` read (LOOP-2): more headroom than a
+/// search lead, since the user asked for this exact page.
+const FETCH_URL_CAP: usize = 8000;
 
-/// The OpenAI tool schema advertised to the model for this skill.
+/// The OpenAI tool schemas advertised to the model for this skill.
 pub fn tool_specs() -> serde_json::Value {
     serde_json::json!([
         {
@@ -33,21 +36,44 @@ pub fn tool_specs() -> serde_json::Value {
                     "required": ["query"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_url",
+                "description": "Fetch and read one web page the user referenced or a search result. The URL leaves this device.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string", "description": "The full URL of the page to read" }
+                    },
+                    "required": ["url"]
+                }
+            }
         }
     ])
 }
 
 /// Is this a Web Search tool name?
 pub fn handles(name: &str) -> bool {
-    name == "web_search"
+    name == "web_search" || name == "fetch_url"
 }
 
 /// Human-readable (verb, target) for the timeline (§5.6 plain past-tense).
 pub fn describe(name: &str, args: &serde_json::Value) -> (String, String) {
-    let query = args.get("query").and_then(|q| q.as_str()).unwrap_or("the web");
     match name {
-        "web_search" => ("searched".into(), query.to_string()),
-        other => (other.into(), query.to_string()),
+        "fetch_url" => {
+            let url = args.get("url").and_then(|u| u.as_str()).unwrap_or("a page");
+            ("fetched".into(), url.to_string())
+        }
+        "web_search" => {
+            let query = args.get("query").and_then(|q| q.as_str()).unwrap_or("the web");
+            ("searched".into(), query.to_string())
+        }
+        other => {
+            let query = args.get("query").and_then(|q| q.as_str()).unwrap_or("the web");
+            (other.into(), query.to_string())
+        }
     }
 }
 
@@ -62,9 +88,12 @@ struct SearchHit {
 /// return a model-readable digest with source attribution.
 pub async fn execute(
     ctx: &SkillContext<'_>,
-    _name: &str,
+    name: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {
+    if name == "fetch_url" {
+        return fetch_url(ctx, args).await;
+    }
     let query = args
         .get("query")
         .and_then(|q| q.as_str())
@@ -94,7 +123,7 @@ pub async fn execute(
     // Best-effort: pull readable text from the lead result so the model has real
     // content, not just snippets. Failures here are non-fatal.
     if let Some(lead) = hits.first() {
-        if let Ok(text) = fetch_readable(ctx.client, &lead.url).await {
+        if let Ok(text) = fetch_readable(ctx.client, &lead.url, PAGE_TEXT_CAP).await {
             if !text.is_empty() {
                 out.push_str(&format!("--- Content of {} ---\n{}\n", lead.url, text));
             }
@@ -102,6 +131,27 @@ pub async fn execute(
     }
 
     Ok(out)
+}
+
+/// Execute a `fetch_url` tool call (LOOP-2): read one page the model asked for,
+/// capped for context safety. The URL leaves the device, so it is activity-logged.
+async fn fetch_url(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<String, String> {
+    let url = args
+        .get("url")
+        .and_then(|u| u.as_str())
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .ok_or("missing 'url' argument")?;
+
+    let _ = ctx
+        .db
+        .log_activity(Some(ctx.conversation_id), "web", &format!("fetched {url}"));
+
+    let text = fetch_readable(ctx.client, url, FETCH_URL_CAP).await?;
+    if text.is_empty() {
+        return Ok(format!("The page at {url} had no readable text."));
+    }
+    Ok(format!("--- Content of {url} ---\n{text}"))
 }
 
 /// Query DuckDuckGo's no-key HTML endpoint and parse the result list.
@@ -195,7 +245,7 @@ fn clean_url(href: &str) -> String {
 
 /// Fetch a page and reduce it to readable plain text (script/style removed, tags
 /// stripped, whitespace collapsed, capped).
-async fn fetch_readable(client: &reqwest::Client, url: &str) -> Result<String, String> {
+async fn fetch_readable(client: &reqwest::Client, url: &str, cap: usize) -> Result<String, String> {
     let resp = client
         .get(url)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
@@ -203,18 +253,18 @@ async fn fetch_readable(client: &reqwest::Client, url: &str) -> Result<String, S
         .await
         .map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
-    Ok(html_to_text(&body))
+    Ok(html_to_text(&body, cap))
 }
 
 /// Crude readability: drop `<script>`/`<style>` blocks, strip remaining tags,
-/// decode entities, and collapse whitespace.
-fn html_to_text(html: &str) -> String {
+/// decode entities, and collapse whitespace. `cap` bounds the returned length.
+fn html_to_text(html: &str, cap: usize) -> String {
     let without_blocks = remove_blocks(html, "script");
     let without_blocks = remove_blocks(&without_blocks, "style");
     let text = decode_entities(&strip_tags(&without_blocks));
     let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.len() > PAGE_TEXT_CAP {
-        let mut end = PAGE_TEXT_CAP;
+    if collapsed.len() > cap {
+        let mut end = cap;
         while !collapsed.is_char_boundary(end) {
             end -= 1;
         }
@@ -346,6 +396,6 @@ mod tests {
     #[test]
     fn html_to_text_drops_scripts_and_collapses() {
         let html = "<html><head><style>.x{color:red}</style></head><body>Hello <script>evil()</script> world</body></html>";
-        assert_eq!(html_to_text(html), "Hello world");
+        assert_eq!(html_to_text(html, PAGE_TEXT_CAP), "Hello world");
     }
 }

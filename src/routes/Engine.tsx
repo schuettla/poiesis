@@ -120,7 +120,7 @@ export default function Engine() {
       <div className="surface-inner">
         <h1>Engine</h1>
         <p className="lede">
-          Poiesis runs open models on your PC with local engines that download automatically and are
+          Poiesis Agent runs open models on your PC with local engines that download automatically and are
           matched to your hardware — the <strong>llama.cpp</strong> engine for chat, and the{" "}
           <strong>stable-diffusion.cpp</strong> engine for images.
         </p>
@@ -176,6 +176,27 @@ export default function Engine() {
                   : "Not listening"}
               </span>
             </div>
+            <div className="hw-row">
+              <span className="hw-label">Structured tool output</span>
+              <span className="hw-value">
+                {running
+                  ? ov?.engine.structured_tool_output
+                    ? "enforced ✓"
+                    : "validate + retry"
+                  : "validate + retry"}
+              </span>
+            </div>
+            {/* HEAL-1: self-repair is only worth mentioning once it happened. */}
+            {!!ov?.engine.restarts_session && (
+              <div className="hw-row">
+                <span className="hw-label">Self-healing</span>
+                <span className="hw-value">
+                  {ov.engine.self_heal_gave_up
+                    ? `I couldn't keep my engine alive after ${ov.engine.restarts_session} tries — I've stopped trying.`
+                    : `Self-healed ${ov.engine.restarts_session}× this session`}
+                </span>
+              </div>
+            )}
           </div>
           <div className="engine-actions">
             {running ? (
@@ -253,7 +274,7 @@ export default function Engine() {
             {update && (
               <span className="update-note">
                 {update.update_available
-                  ? `A newer build (${update.latest}) is available. Poiesis pins a tested build (${update.current}) for stability.`
+                  ? `A newer build (${update.latest}) is available. Poiesis Agent pins a tested build (${update.current}) for stability.`
                   : `You’re on the latest tested build (${update.current}).`}
               </span>
             )}

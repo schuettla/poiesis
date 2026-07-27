@@ -42,6 +42,9 @@ pub struct RunningEngine {
     pub port: u16,
     pub token: String,
     pub model_path: PathBuf,
+    /// Context window this engine was launched with (`--ctx-size`). Drives the
+    /// turn budgeter (CTX-1) so requests never overflow and get front-truncated.
+    pub ctx_size: u32,
 }
 
 /// Snapshot of engine state for the UI / readiness gating.
@@ -50,6 +53,18 @@ pub struct EngineStatus {
     pub running: bool,
     pub port: Option<u16>,
     pub model_path: Option<String>,
+    pub ctx_size: Option<u32>,
+    /// Whether the running engine enforces structured tool calls natively
+    /// (GRM-1/2). True whenever an engine is up: we always launch with `--jinja`
+    /// (see `spawn_engine`), which turns on llama.cpp's lazy-grammar tool-call
+    /// enforcement. GRM-3's validate-and-retry is the universal fallback for any
+    /// model that slips a call out as content JSON regardless.
+    pub structured_tool_output: bool,
+    /// How many times the watchdog put this engine back on its feet since the
+    /// app started (HEAL-1). 0 for a session that never needed healing.
+    pub restarts_session: u32,
+    /// True once self-repair hit its rolling-hour limit and stopped trying.
+    pub self_heal_gave_up: bool,
 }
 
 impl RunningEngine {
@@ -58,7 +73,7 @@ impl RunningEngine {
         format!("http://127.0.0.1:{}", self.port)
     }
 
-    fn still_running(&mut self) -> bool {
+    pub fn still_running(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
     }
 }
@@ -135,6 +150,7 @@ pub fn spawn_engine(config: &EngineConfig) -> Result<RunningEngine, EngineError>
         port,
         token,
         model_path: config.model_path.clone(),
+        ctx_size: config.ctx_size,
     })
 }
 
@@ -176,11 +192,19 @@ impl EngineStatus {
                 running: true,
                 port: Some(e.port),
                 model_path: Some(e.model_path.to_string_lossy().to_string()),
+                ctx_size: Some(e.ctx_size),
+                structured_tool_output: true,
+                restarts_session: 0,
+                self_heal_gave_up: false,
             },
             None => EngineStatus {
                 running: false,
                 port: None,
                 model_path: None,
+                ctx_size: None,
+                structured_tool_output: false,
+                restarts_session: 0,
+                self_heal_gave_up: false,
             },
         }
     }

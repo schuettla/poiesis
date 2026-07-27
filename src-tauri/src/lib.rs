@@ -5,11 +5,13 @@
 //! wires them into the Tauri runtime and exposes the IPC command surface.
 
 mod agent;
+mod autonomy;
 mod cloud;
 mod commands;
 mod db;
 mod marketplace;
 mod mcp;
+mod memory;
 mod permissions;
 mod runtime;
 mod secrets;
@@ -56,7 +58,18 @@ pub fn run() {
             let db = Db::open(&base_dir.join("nexus.db")).expect("failed to open database");
             // Content-free, opt-in only (no-ops unless the user enabled it).
             telemetry::record(&db, "app_open");
+
+            // The durable self: markdown files the user owns, alongside models/.
+            let memory =
+                memory::MemoryStore::new(&base_dir).expect("failed to open the memory folder");
+            // The FTS index is derived state — rebuild it from disk at startup so
+            // hand-edits made outside the app are searchable.
+            memory.sync_fts(&db);
+            // Set aside anything a hand-edit left unreadable, and say so in the
+            // activity log rather than letting it disappear quietly (HEAL-3).
+            memory.quarantine_scan(&db);
             app.manage(db);
+            app.manage(memory);
 
             app.manage(RuntimeManager::new(base_dir));
             app.manage(PermissionManager::new());
@@ -76,6 +89,31 @@ pub fn run() {
             commands::runtime::check_runtime_update_cmd,
             commands::runtime::chat_cmd,
             commands::runtime::stop_chat_cmd,
+            commands::runtime::get_context_budget_cmd,
+            commands::conversations::compact_conversation_cmd,
+            commands::memory::get_memory_context_cmd,
+            commands::memory::list_memory_facts_cmd,
+            commands::memory::update_memory_fact_cmd,
+            commands::memory::forget_memory_fact_cmd,
+            commands::memory::restore_memory_fact_cmd,
+            commands::memory::set_soul_cmd,
+            commands::memory::open_memory_dir_cmd,
+            commands::memory::export_memory_zip_cmd,
+            commands::memory::list_change_proposals_cmd,
+            commands::memory::resolve_change_proposal_cmd,
+            commands::memory::consolidate_memory_cmd,
+            commands::memory::get_pending_consolidation_cmd,
+            commands::memory::apply_consolidation_cmd,
+            commands::reflect::reflect_conversation_cmd,
+            commands::reflect::list_lessons_cmd,
+            commands::reflect::forget_lesson_cmd,
+            commands::organism::get_vitality_cmd,
+            commands::organism::get_tool_health_cmd,
+            commands::organism::list_recipes_cmd,
+            commands::organism::forget_recipe_cmd,
+            commands::organism::restore_quarantined_cmd,
+            commands::organism::delete_quarantined_cmd,
+            commands::organism::set_surface_cmd,
             commands::conversations::list_conversations_cmd,
             commands::conversations::create_conversation_cmd,
             commands::conversations::rename_conversation_cmd,
@@ -111,6 +149,7 @@ pub fn run() {
             commands::agent::agent_chat_cmd,
             commands::agent::resolve_permission_cmd,
             commands::agent::list_skills_cmd,
+            commands::agent::get_tool_stats_cmd,
             commands::agent::set_skill_enabled_cmd,
             commands::imagegen::image_setup_status_cmd,
             commands::imagegen::setup_image_generation_cmd,

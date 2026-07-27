@@ -1,6 +1,7 @@
 > Project renamed to Poiesis (2026-07); internal identifiers still say nexus
-> by design. Phase 10 entries below are superseded by `docs/POIESIS_PLAN.md`
-> and should eventually be regenerated from it.
+> by design. Phase 10/11 entries below are regenerated from
+> `docs/POIESIS_PLAN.md` (the master plan and source of truth — read the
+> matching section there before implementing any item).
 
 # Project Nexus — Task List
 
@@ -12,12 +13,13 @@ Status: `[ ]` todo · `[~]` partial · `[x]` done.
 > live** (CUDA engine → streamed chat → tools on a GTX 1060); cloud path **verified
 > live via OpenRouter**; **local image generation verified live** (auto-download →
 > SD-1.5 → inline chat image on a GTX 1060 6 GB). Only one v1 task is intentionally
-> left open (PDF page-image/OCR — needs a heavy external binary). **git not
-> initialized yet** (owner will do baseline commit).
+> left open (PDF page-image/OCR — needs a heavy external binary). **git
+> initialized 2026-07-24**, baseline commit made before Poiesis Phase 10/11
+> implementation began.
 >
 > | Phase | State |
 > |---|---|
-> | 0 Scaffold + shell | ✅ done (git not initialized) |
+> | 0 Scaffold + shell | ✅ done |
 > | 1 Runtime loop | ✅ **verified live** — CUDA stream on a GTX 1060; Job-Object orphan guard added |
 > | 2 Chat + persistence | ✅ done — rail FTS search surfaced |
 > | 3 Marketplace + library | ✅ done — tok/s estimate, quant slider, library mgmt, URL/GitHub add, first-run |
@@ -27,7 +29,9 @@ Status: `[ ]` todo · `[~]` partial · `[x]` done.
 > | 7 BYOK cloud | ✅ done — **verified live via OpenRouter**; OpenAI/OpenRouter/Anthropic, keyring keys |
 > | 8 Polish + installer | ✅ done — reading size (Smaller→Larger), telemetry, licenses, WebView2, focus ring, WCAG, icon rail |
 > | 9 v2 capabilities | ✅ done — skills framework, personas, web search, code exec, Canvas, **chat-integrated image gen (verified live)**, MCP stdio + import/export |
-> | 10 Agent memory & context | 🔲 planned — see `docs/AGENT_MEMORY_PLAN.md` (compaction, recall, durable memory, soul, grammar) |
+> | 10 Substrate (context/recall/memory/soul/grammar/loop) | ✅ implemented — see `docs/POIESIS_PLAN.md` Part III; **not yet click-tested live** |
+> | BRAND Rename to Poiesis | ✅ done — brand-level strings only, internal identifiers unchanged |
+> | 11 Autopoietic layer (reflection/heal/recipes/autonomy/organism/presence) | ✅ implemented — 44 Rust tests + `tsc` green; **not yet click-tested live** |
 >
 > **Engine view** (LM Studio-style runtime management): status/start-stop, backend
 > override (CUDA/Vulkan/CPU), per-backend install detection, update check.
@@ -219,60 +223,139 @@ Status: `[ ]` todo · `[~]` partial · `[x]` done.
 
 ---
 
-## Phase 10 — Agent memory & context
+## Phase 10 — The substrate (Poiesis Part III)
 
-> **Design doc: `docs/AGENT_MEMORY_PLAN.md`** (file-level spec per task — read the
-> matching section before implementing). Build order: 10A → 10B → 10C → 10D;
-> 10E/10F independent. One schema migration (v5) covers the whole phase.
+> **Design doc: `docs/POIESIS_PLAN.md`** (file-level spec per task — read the
+> matching section before implementing; this supersedes the retired
+> `docs/AGENT_MEMORY_PLAN.md`). Build order: BRAND → 10A → 10B → 10C → 10D →
+> 11A → 11B ∥ 11C → 11D → 11E → 11F; 10E/10F independent. One schema
+> migration (v5) covers Phase 10 **and** 11. Table/field names below reflect
+> the Poiesis adaptation: `soul_proposals` → **`change_proposals`**
+> (`target: soul|persona|recipe|lesson`), `tool_stats` gains
+> **`conversation_id`**, `memory_fts` gains **`kind`**.
+
+### BRAND — Rename to Poiesis
+- [x] `tauri.conf.json` productName/title → "Poiesis" (BRAND-1)
+- [x] User-visible strings under `src/` → Poiesis (BRAND-2)
+- [x] Base system prompt identity sentence (`store.ts`) (BRAND-3)
+- [x] Docs sweep: README, `IMPLEMENTATION_PLAN.md`, `TASKS.md` top notes (BRAND-4)
 
 ### 10A — Context ledger & compaction (CTX) — *foundation*
-- [ ] Schema v5 migration: `conversations.summary` + `summary_upto_message_id`; `soul_proposals`, `tool_stats`, `memory_fts` tables in `schema.sql` (CTX/SOUL/LOOP prereq)
-- [ ] `ctx_size` exposed: `RunningEngine` → `EngineStatus` → `get_context_budget_cmd` + `api.getContextBudget()` (CTX-1)
-- [ ] `src/lib/context.ts`: `estimateTokens` + `budgetTurns` (keep system + last 6 + current; 75% threshold), tested (CTX-2)
-- [ ] `compact_conversation_cmd`: summarize-oldest via same endpoint (FACTS/DECISIONS/OPEN prompt), persist summary + boundary (CTX-3)
-- [ ] Both send paths use one shared `assembleTurns` helper: budget → compact → `withSummary` system section → post-boundary turns only (CTX-4)
-- [ ] Workspace mode: `KEEP_RECENT = 3` + "surface is authoritative" summary line (CTX-4)
-- [ ] Composer context meter (hidden <50%, tooltip, `aria-label`) (CTX-UI-1)
-- [ ] Compaction divider in transcript; click shows the stored summary; no messages hidden (CTX-UI-2)
-- [ ] Same meter in Workspace `ws-head` (CTX-UI-3)
-- [ ] Settings "Memory & context" card: window size readout + `context.autocompact` toggle (CTX-UI-4)
+- [x] Schema v5 migration: `conversations.summary` + `summary_upto_message_id` + `reflected_at`; `change_proposals`, `tool_stats` (+ `conversation_id`), `memory_fts` (+ `kind`) tables in `schema.sql` (CTX/SOUL/REF/GRM prereq)
+- [x] `ctx_size` exposed: `RunningEngine` → `EngineStatus` → `get_context_budget_cmd` + `api.getContextBudget()` (CTX-1)
+- [x] `src/lib/context.ts`: `estimateTokens` + `budgetTurns` (keep system + last 6 + current; 75% threshold), tested (CTX-2)
+- [x] `compact_conversation_cmd`: summarize-oldest via same endpoint (FACTS/DECISIONS/OPEN prompt), persist summary + boundary (CTX-3)
+- [x] Both send paths use one shared `assembleTurns` helper: budget → compact → `withSummary` system section → post-boundary turns only (CTX-4)
+- [x] Workspace mode: `KEEP_RECENT = 3` + "surface is authoritative" summary line (CTX-4)
+- [x] Composer context meter (hidden <50%, tooltip, `aria-label`) (CTX-UI-1)
+- [x] Compaction divider in transcript; click shows the stored summary; no messages hidden (CTX-UI-2)
+- [x] Same meter in Workspace `ws-head` (CTX-UI-3)
+- [x] Settings "Memory & context" card: window size readout + `context.autocompact` toggle (CTX-UI-4)
 
 ### 10B — Recall skill (RCL)
-- [ ] `SearchHit` + `search_messages_fts` (snippet, rank, `fts_escape`) + `search_memory_fts`; unit-tested (RCL-1)
-- [ ] `Skill::Recall` (`agent/recall.rs`, default on): `search_history` + `read_conversation`, capped outputs, activity-logged (RCL-2)
-- [ ] `SkillContext.call_id` plumbed; `AgentEvent::Recall { id, matches }` emitted (RCL-2)
-- [ ] Timeline: recall steps expand to provenance rows; chat rows open the conversation; `◆ memory` chip on fact hits (RCL-UI)
+- [x] `SearchHit` + `search_messages_fts` (snippet, rank, `fts_escape`) + `search_memory_fts`; unit-tested (RCL-1)
+- [x] `Skill::Recall` (`agent/recall.rs`, default on): `search_history` + `read_conversation`, capped outputs, activity-logged (RCL-2)
+- [x] `SkillContext.call_id` plumbed; `AgentEvent::Recall { id, matches }` emitted (RCL-2)
+- [x] Timeline: recall steps expand to provenance rows; chat rows open the conversation; `◆ memory` chip on fact hits (RCL-UI)
 
 ### 10C — Durable memory store (MEM)
-- [ ] `MemoryStore` (`src-tauri/src/memory/mod.rs`): fact CRUD, slug rules, frontmatter parse, derived `MEMORY.md` (2 KB cap), trash, snapshots, `memory_fts` sync; unit-tested (MEM-1)
-- [ ] `Skill::Memory`: one `memory(op: save|update|forget|read)` tool, flat params, conservative write policy, receipts; `SkillContext.memory` plumbed (MEM-2)
-- [ ] `AgentEvent::MemoryWrite` + activity log on every op (MEM-6)
-- [ ] `get_memory_context_cmd`; `composeSystemPrompt` injects SOUL + memory index (+ tools-off caveat) (MEM-3)
-- [ ] `consolidate_memory_cmd` → strict-JSON proposal stored in `memory.pending_consolidation`; `apply_consolidation_cmd` snapshots then applies (MEM-5)
-- [ ] `MemoryPanel` in Settings: fact cards (edit/delete/undo/source link), search, Tidy up review, Open folder, Export zip (MEM-UI-1/2/5)
-- [ ] Memory toast with Undo + first-write onboarding line (`memory.onboarded`) (MEM-UI-3/4)
-- [ ] Skill toggle disables injection **and** tool; `◆` durable marker on SessionStrip entries (MEM-UI-6/7)
+- [x] `MemoryStore` (`src-tauri/src/memory/mod.rs`): fact CRUD, slug rules, frontmatter parse, derived `MEMORY.md` (2 KB cap), trash, snapshots, `memory_fts` sync; unit-tested (MEM-1)
+- [x] `Skill::Memory`: one `memory(op: save|update|forget|read)` tool, flat params, conservative write policy, receipts; `SkillContext.memory` plumbed (MEM-2)
+- [x] `AgentEvent::MemoryWrite` + activity log on every op (MEM-6)
+- [x] `get_memory_context_cmd`; `composeSystemPrompt` injects SOUL + memory index (+ tools-off caveat) (MEM-3)
+- [x] `consolidate_memory_cmd` → strict-JSON proposal stored in `memory.pending_consolidation`; `apply_consolidation_cmd` snapshots then applies (MEM-5)
+- [x] `MemoryPanel` in Settings: fact cards (edit/delete/undo/source link), search, Tidy up review, Open folder, Export zip (MEM-UI-1/2/5)
+- [x] Memory toast with Undo + first-write onboarding line (`memory.onboarded`) (MEM-UI-3/4)
+- [x] Skill toggle disables injection **and** tool; `◆` durable marker on SessionStrip entries (MEM-UI-6/7)
 
 ### 10D — Soul: evolvable standing instructions (SOUL)
-- [ ] `SOUL.md` via MemoryStore; injected after base prompt, 1.5 KB cap (SOUL-1)
-- [ ] `propose_soul_edit` tool → `soul_proposals` row + `AgentEvent::SoulProposal`; never auto-applies (SOUL-2)
-- [ ] `list_soul_proposals_cmd` / `resolve_soul_proposal_cmd` (accept ⇒ `set_soul`) (SOUL-3)
-- [ ] PersonaEditor "Soul" section: textarea + proposal old/new cards, Accept/Dismiss (SOUL-UI-1)
-- [ ] Inline proposal card under the assistant turn (PermissionPanel tone, not a modal) (SOUL-UI-2)
-- [ ] Settings rail badge dot when proposals/consolidation pending (SOUL-UI-3)
+- [x] `SOUL.md` via MemoryStore; injected after base prompt, 1.5 KB cap (SOUL-1)
+- [x] `propose_soul_edit` tool → `change_proposals` row (`target: soul`) + `AgentEvent::Proposal`; never auto-applies (SOUL-2)
+- [x] `list_change_proposals_cmd` / `resolve_change_proposal_cmd` (accept ⇒ `set_soul` for target `soul`) (SOUL-3)
+- [x] PersonaEditor "Soul" section: textarea + proposal old/new cards, Accept/Dismiss (SOUL-UI-1)
+- [x] Inline proposal card under the assistant turn, first-person copy per PRES-0 (PermissionPanel tone, not a modal) (SOUL-UI-2)
+- [x] Settings rail badge dot when proposals/consolidation pending (SOUL-UI-3)
 
 ### 10E — Grammar-constrained decoding (GRM) — *independent*
-- [ ] Validate + retry: one guided retry per failed built-in call (system nudge, retried-ids set) (GRM-3)
-- [ ] Probe native lazy-grammar tool enforcement on the pinned llama.cpp build; bump pin if needed; record result on `EngineStatus` (GRM-1/2)
-- [ ] `tool_stats` recording in `dispatch_calls` (model name plumbed into `run_agent`) (GRM-4/LOOP-5)
-- [ ] Engine card line: "Structured tool output: enforced ✓ / validate + retry" (GRM-UI-1)
+- [x] Validate + retry: one guided retry per failed built-in call (system nudge, retried-ids set) (GRM-3)
+- [x] Probe native lazy-grammar tool enforcement on the pinned llama.cpp build; bump pin if needed; record result on `EngineStatus` (GRM-1/2)
+- [x] `tool_stats` recording in `dispatch_calls` (model name plumbed into `run_agent`) (GRM-4/LOOP-5)
+- [x] Engine card line: "Structured tool output: enforced ✓ / validate + retry" (GRM-UI-1)
 
 ### 10F — Loop hygiene (LOOP)
-- [ ] Per-run MCP client pool (initialize once per connector per run) (LOOP-1)
-- [ ] `fetch_url` tool on Web Search skill (8 KB cap, off-device disclosure, activity-logged) (LOOP-2)
-- [ ] Plan-first line in tools-mode guidance (LOOP-3)
-- [ ] Early-flush streaming in tools mode (buffer-biased heuristic) (LOOP-4)
-- [ ] Settings → Skills reliability captions from `tool_stats` (LOOP-UI-1)
+- [x] Per-run MCP client pool (initialize once per connector per run) (LOOP-1)
+- [x] `fetch_url` tool on Web Search skill (8 KB cap, off-device disclosure, activity-logged) (LOOP-2)
+- [x] Plan-first line in tools-mode guidance (LOOP-3)
+- [x] Early-flush streaming in tools mode (buffer-biased heuristic) (LOOP-4)
+- [x] Settings → Skills reliability captions from `tool_stats` (LOOP-UI-1)
+
+---
+
+## Phase 11 — The autopoietic layer (Poiesis Part IV)
+
+> **Design doc: `docs/POIESIS_PLAN.md` Part IV.** Builds strictly on Phase 10
+> plumbing (`MemoryStore` collection helpers, `change_proposals`,
+> `tool_stats(conversation_id)`, `AgentEvent::{MemoryWrite,Proposal}`). Build
+> order: 11A → 11B ∥ 11C → 11D → 11E → 11F. PRES-0 (first-person copy) binds
+> every `-UI-` task from BRAND onward — do not retrofit it at the end.
+
+### 11A — Reflection & lessons (REF)
+- [x] `MemoryStore` lesson helpers: `list_lessons`/`save_lesson`/`forget_lesson`, 40-entry pruning to `.trash/` (REF-1)
+- [x] `reflect_conversation_cmd`: idempotent (`reflected_at` set first), ≤3 lessons via strict-JSON `drive_turn`, gated by `autonomy_gate("lessons")` (REF-2)
+- [x] Auto-trigger on leaving a conversation (≥8 messages, not yet reflected); manual "Reflect now" as a hover `◆` per Rail row (no overflow menu exists) + the Self panel's Health tab (REF-3)
+- [x] Lessons section in `index_markdown` (1 KB cap), injected via existing MEM-3 path (REF-4)
+- [x] Lessons tab in the Self panel; "Reflect now" shows "Reflecting…" and reports "I found nothing new to learn from that one." inline (REF-UI-1/2)
+
+### 11B — Self-repair (HEAL)
+- [x] Engine watchdog: 30s health polls, 3-consecutive-failure restart, backoff 2s→10s→30s, 3 restarts/rolling-hour cap, `poiesis-healed` event (HEAL-1)
+- [x] `tool_health` db helper + `get_tool_health_cmd`; caution lines in `composeSystemPrompt` for tools failing >60% over ≥8 calls (HEAL-2)
+- [x] Memory integrity quarantine: bad frontmatter files moved to `.quarantine/`, never dropped silently (HEAL-3)
+- [x] Self-heal toast + Engine card "Self-healed N× this session" line (HEAL-1 UI)
+
+### 11C — Recipes (RCP)
+- [x] `MemoryStore` recipe helpers: `list/save/read/touch/forget_recipe`, surface-fence parser (RCP-1)
+- [x] `Skill::Recipes`: `propose_recipe` (→ `change_proposals`, target `recipe`) + `use_recipe` tools (RCP-2)
+- [x] Recipes section in `index_markdown` (800 B cap) (RCP-3)
+- [x] Recipes tab in Self panel incl. pending proposals; "Start from recipe…" in Composer drop-up seeds a workspace via `set_surface_cmd`; `ws-head` "from recipe" label (RCP-UI-1/2/3)
+
+### 11D — The autonomy ladder (AUT)
+- [x] `autonomy_gate(db, class)` helper + `AUTONOMY_DEFAULTS` (facts/lessons=auto, consolidate/soul/recipes=ask); `off` withdraws the tool from the spec list; `ask` for facts falls back to refusing the write (no proposal UI for facts, per plan) (AUT-1)
+- [x] Autonomy tab in Self panel: segmented control per class, first-person header copy (AUT-UI-1)
+
+### 11E — The organism made visible (ORG)
+- [x] `Vitality` struct + `get_vitality_cmd` (facts/lessons/recipes/quarantine/restarts/pending/last-reflection/tool-health) (ORG-1)
+- [x] Self view content: vitality strip + Memory/Lessons/Recipes/Health/Autonomy tabs (placement superseded by PRES-3) (ORG-UI-1)
+- [x] `SURFACE_GUIDANCE` line enabling "show me what you've learned" as a rendered workspace surface (ORG-UI-2)
+
+### 11F — Presence (PRES) — *the organism must be felt, not administered*
+- [x] PRES-0 first-person copy table applied at every self-related UI site (binding, not optional)
+- [x] `PoiesisMark.tsx`: growth-stage SVG (dashed→solid membrane, 0-3 orbit dots at 5/20/50 entries), idle/active/reflecting/healing motion, full reduced-motion + ARIA fallback (PRES-1)
+- [x] Rail row `◆` digestion pulse during auto-reflection (PRES-2)
+- [x] `routes/Self.tsx`: own Rail destination (mark-as-icon), first-person narrative + vitality (supersedes ORG-UI-1 placement) (PRES-3)
+- [x] `GrowthRings.tsx`: concentric rings per 7-day week **since `self.born`** (not ISO calendar weeks — the rings track its own life), pure `groupByWeek` in `lib/growth.ts`, unit-tested (PRES-4)
+- [x] Ambient "Recently learned" line in chat empty state (PRES-5)
+- [x] First-run introduction card, one-time (`self.introduced`) (PRES-6)
+- [x] Surface hatch entrance transition, first render per conversation only (PRES-7)
+
+---
+
+## Carry-over after Phase 11
+
+> Implemented but unverified work, plus known rough edges — see
+> `docs/POIESIS_PLAN.md` **Part VI**. The headline: **nothing in 10A–11F has
+> been click-tested in a running GUI yet**, and two exit criteria (LOOP-4's
+> no-leak run, GRM-1/2's structured-output probe) were never checked.
+> Not ticked off here because these are verification tasks, not build tasks.
+
+---
+
+## Part VII — Exploratory ideas (OPT-1…12)
+
+> **Unscheduled idea reservoir, not committed scope** — see
+> `docs/POIESIS_PLAN.md` Part VII. Adopt individually, never as a batch; each
+> item names its own data needs and "kitsch check." Not tracked as
+> checklist items here until one is actually adopted — promote it into this
+> file (Phase 11 style) at that point.
 
 ---
 

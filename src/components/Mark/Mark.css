@@ -1,0 +1,71 @@
+/* The living mark (PRES-1). Ink tokens and one slow animation at a time —
+   quiet biology, not a status light. Every state it can be in is also written
+   into its aria-label and title, so nothing here is load-bearing. */
+
+.poiesis-mark {
+  flex: none;
+  color: var(--ink);
+}
+.poiesis-mark .mark-membrane {
+  stroke: currentColor;
+  opacity: 0.55;
+}
+.poiesis-mark .mark-nucleus,
+.poiesis-mark .mark-orbit {
+  fill: currentColor;
+}
+.poiesis-mark .mark-orbit {
+  opacity: 0.7;
+}
+/* Not yet grown: quieter still, so the first earned dot is a visible change. */
+.poiesis-mark.stage-0 .mark-membrane {
+  opacity: 0.35;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Working: the nucleus breathes. */
+  .poiesis-mark.state-active .mark-nucleus {
+    animation: mark-breathe 2.4s ease-in-out infinite;
+  }
+  /* Reflecting: the orbits go round. */
+  .poiesis-mark.state-reflecting .mark-orbits {
+    transform-origin: 12px 12px;
+    animation: mark-orbit 1.8s linear infinite;
+  }
+  /* Recovering: the membrane flickers twice, then settles. */
+  .poiesis-mark.state-healing .mark-membrane {
+    animation: mark-flicker 1.5s ease-in-out 2;
+  }
+}
+
+@keyframes mark-breathe {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes mark-orbit {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes mark-flicker {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.15;
+  }
+}
+
+/* The same mark, standing in as the Self destination's rail icon (PRES-3). */
+.rail .nav-icon .poiesis-mark {
+  vertical-align: middle;
+}

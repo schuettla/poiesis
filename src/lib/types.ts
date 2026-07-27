@@ -29,6 +29,8 @@ export interface AgentStep {
   target: string;
   /** Optional trailing result, e.g. "— 3 matches". */
   result?: string;
+  /** Provenance for a recall step (RCL-UI): what was found, and where. */
+  matches?: import("./api").SearchHit[];
   status: "running" | "done" | "error";
 }
 
@@ -87,6 +89,9 @@ export interface Message {
   /** Typed workspace blocks the assistant produced in this turn (Generative UI). */
   blocks?: BlockView[];
   attachments?: Attachment[];
+  /** Change proposals the agent raised during this turn (SOUL-UI-2). Ids only:
+   *  the card reads the live proposal so it disappears once answered. */
+  proposalIds?: string[];
   /** True while the assistant turn is still streaming. */
   streaming?: boolean;
   createdAt: number;
@@ -104,8 +109,19 @@ export interface Conversation {
   /** Pinned to workspace mode (W): the composed interface is this session's
    * primary surface, the message stream is a demoted log. */
   workspace?: boolean;
+  /** Rolling summary standing in for the older turns when talking to the model
+   * (CTX-3). Every message is still stored and still shown. */
+  summary?: string | null;
+  /** Newest message the summary covers; turns after it are sent verbatim. */
+  summaryUptoMessageId?: string | null;
+  /** When the agent last reflected on this conversation (REF-2), or null if
+   * it hasn't yet. Drives the auto-reflection trigger on leaving. */
+  reflectedAt?: number | null;
+  /** Recipe this conversation was started from (RCP-UI-3). In-memory only —
+   * a label on this session, not a fact worth persisting. */
+  recipeName?: string;
 }
 
-export type View = "chat" | "models" | "engine" | "apps" | "settings" | "library";
+export type View = "chat" | "models" | "engine" | "apps" | "settings" | "library" | "self";
 export type Mode = "light" | "dark";
 export type ModelFilter = "all" | "local";

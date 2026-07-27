@@ -13,5 +13,6 @@ pub mod manager;
 pub mod manifest;
 pub mod process;
 pub mod proxy;
+pub mod watchdog;
 
 pub use manager::RuntimeManager;

@@ -1,3 +1,4 @@
+import ContextMeter from "../components/Composer/ContextMeter";
 import { useEffect, useRef, useState } from "react";
 import { useActiveConversation, useAppStore } from "../lib/store";
 import type { BlockView, Message, UINode } from "../lib/types";
@@ -49,7 +50,14 @@ export default function Workspace() {
             ▦ Workspace
           </span>
           {conversation?.title && <span className="ws-title">{conversation.title}</span>}
+          {/* RCP-UI-3: this workspace came from a procedure we kept. */}
+          {conversation?.recipeName && (
+            <span className="ws-recipe" title={`Started from the recipe ${conversation.recipeName}`}>
+              · from recipe {conversation.recipeName}
+            </span>
+          )}
           <SessionStrip />
+          <ContextMeter />
           <button
             className="ws-log-toggle"
             onClick={() => setShowLog((v) => !v)}

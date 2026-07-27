@@ -2,8 +2,11 @@ import { useEffect, useRef } from "react";
 import { useActiveConversation, useAppStore } from "../lib/store";
 import UserTurn from "../components/Conversation/UserTurn";
 import AgentRun from "../components/Conversation/AgentRun";
+import CompactDivider from "../components/Conversation/CompactDivider";
+import Introduction from "../components/Conversation/Introduction";
 import Composer from "../components/Composer/Composer";
 import CanvasPanel from "../components/Canvas/CanvasPanel";
+import MemoryToast from "../components/Memory/MemoryToast";
 import SessionStrip from "../components/Blocks/SessionStrip";
 import Workspace from "./Workspace";
 import "../components/Conversation/Conversation.css";
@@ -33,7 +36,14 @@ export default function Chat() {
 
   // Workspace mode: same session, inverted layout — the composed interface is
   // the interaction point, the message stream demotes to an optional log.
-  if (workspaceMode) return <Workspace />;
+  if (workspaceMode) {
+    return (
+      <>
+        <Workspace />
+        <MemoryToast />
+      </>
+    );
+  }
 
   return (
     <>
@@ -44,15 +54,28 @@ export default function Chat() {
             {isEmpty ? (
               <div className="empty-state">
                 <p className="empty-line">No messages yet — say hello to get started.</p>
+                <Introduction />
               </div>
             ) : (
-              conversation!.messages.map((m) =>
-                m.role === "user" ? (
-                  <UserTurn key={m.id} message={m} />
-                ) : (
-                  <AgentRun key={m.id} message={m} />
-                )
-              )
+              conversation!.messages.map((m, i) => {
+                const turn =
+                  m.role === "user" ? (
+                    <UserTurn key={m.id} message={m} />
+                  ) : (
+                    <AgentRun key={m.id} message={m} />
+                  );
+                // The boundary sits *after* the last summarized turn, so the
+                // divider goes before the message that follows it.
+                const isFirstUnsummarized =
+                  i > 0 && conversation!.messages[i - 1].id === conversation!.summaryUptoMessageId;
+                if (!isFirstUnsummarized || !conversation!.summary) return turn;
+                return (
+                  <div key={`div-${m.id}`}>
+                    <CompactDivider summary={conversation!.summary} />
+                    {turn}
+                  </div>
+                );
+              })
             )}
           </div>
           {!canvasOpen && artifactCount > 0 && (
@@ -64,6 +87,7 @@ export default function Chat() {
         <CanvasPanel />
       </div>
       <Composer onSend={sendMessage} busy={busy} onStop={stopGenerating} />
+      <MemoryToast />
     </>
   );
 }

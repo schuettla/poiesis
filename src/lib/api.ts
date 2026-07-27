@@ -3,6 +3,7 @@
 // `inTauri()` lets callers fall back to mock data in that case.
 
 import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { AgentStep, Provenance } from "./types";
 
 export function inTauri(): boolean {
@@ -27,6 +28,12 @@ export interface DbConversation {
   workspace: boolean;
   created_at: number;
   updated_at: number;
+  /** Rolling summary of the older turns (CTX-3), or null before compaction. */
+  summary: string | null;
+  /** Newest message covered by `summary`; later turns are sent verbatim. */
+  summary_upto_message_id: string | null;
+  /** When the agent last reflected on this conversation (REF-2), or null. */
+  reflected_at: number | null;
 }
 
 export interface DbAttachment {
@@ -60,6 +67,9 @@ export const createConversation = (title?: string, modelId?: string, workspace?:
 
 export const renameConversation = (id: string, title: string) =>
   invoke<void>("rename_conversation_cmd", { id, title });
+
+/** Context window of the loaded local engine, or null when none is loaded (CTX-1). */
+export const getContextBudget = () => invoke<number | null>("get_context_budget_cmd");
 
 export const setConversationWorkspace = (id: string, workspace: boolean) =>
   invoke<void>("set_conversation_workspace_cmd", { id, workspace });
@@ -127,6 +137,12 @@ export interface EngineStatus {
   running: boolean;
   port: number | null;
   model_path: string | null;
+  /** GRM-1/2: engine enforces structured tool calls natively (`--jinja`). */
+  structured_tool_output?: boolean;
+  /** HEAL-1: times the watchdog restarted this engine since launch. */
+  restarts_session?: number;
+  /** HEAL-1: self-repair hit its rolling-hour limit and stopped trying. */
+  self_heal_gave_up?: boolean;
 }
 export interface DownloadProgress {
   received: number;
@@ -302,6 +318,9 @@ export type AgentEvent =
   | { type: "block_update"; id: string; title: string; data: unknown }
   | { type: "state_update"; state: unknown }
   | { type: "permission"; request: PermissionRequest }
+  | { type: "memory_write"; op: string; name: string; description: string; collection: string; undo_token: string }
+  | { type: "recall"; id: string; matches: SearchHit[] }
+  | { type: "proposal"; id: string; target: string; rationale: string }
   | { type: "done" }
   | { type: "cancelled" }
   | { type: "error"; message: string };
@@ -326,6 +345,16 @@ export interface Artifact {
   kind: string;
   content: string;
   created_at: number;
+}
+
+/** One hit from the agent's search over its own past (RCL-1). */
+export interface SearchHit {
+  source: "chat" | "memory";
+  conversation_id: string | null;
+  /** Conversation title, or the memory entry's name. */
+  title: string;
+  created_at: number;
+  snippet: string;
 }
 
 export interface PermissionRequest {
@@ -383,6 +412,193 @@ export function agentChat(
   });
 }
 
+/**
+ * Fold every turn up to `uptoMessageId` into the conversation's summary and
+ * return it (CTX-3). Only changes what is *sent* to the model — no message is
+ * deleted or hidden.
+ */
+export const compactConversation = (
+  conversationId: string,
+  uptoMessageId: string,
+  target?: ChatTarget
+) =>
+  invoke<string>("compact_conversation_cmd", { conversationId, uptoMessageId, target });
+
+// ---- durable memory (MEM) ----
+
+/** A durable entry — a fact, lesson, or recipe — as stored on disk. */
+export interface Fact {
+  name: string;
+  description: string;
+  kind: string;
+  created: string;
+  source_conversation: string | null;
+  body: string;
+}
+
+/** What gets prepended to every conversation (MEM-3). */
+export interface MemoryContext {
+  index: string;
+  soul: string;
+  fact_count: number;
+}
+
+export interface ChangeProposal {
+  id: string;
+  target: string;
+  slug: string | null;
+  proposed_text: string;
+  rationale: string;
+  status: string;
+  created_at: number;
+}
+
+export interface Consolidation {
+  deletes: string[];
+  edits: { name: string; text: string }[];
+  merges: { keep: string; drop: string[]; text: string }[];
+}
+
+export const getMemoryContext = () => invoke<MemoryContext>("get_memory_context_cmd");
+
+export const listMemoryFacts = () => invoke<Fact[]>("list_memory_facts_cmd");
+
+export const updateMemoryFact = (name: string, body: string, description?: string) =>
+  invoke<void>("update_memory_fact_cmd", { name, body, description });
+
+/** Moves the fact to trash and returns the trash filename, for undo. */
+export const forgetMemoryFact = (name: string) =>
+  invoke<string>("forget_memory_fact_cmd", { name });
+
+export const restoreMemoryFact = (file: string) =>
+  invoke<void>("restore_memory_fact_cmd", { file });
+
+export const setSoul = (text: string) => invoke<void>("set_soul_cmd", { text });
+
+export const openMemoryDir = () => invoke<void>("open_memory_dir_cmd");
+
+/** Zip the memory folder next to itself and reveal it. Returns the zip path. */
+export const exportMemoryZip = () => invoke<string>("export_memory_zip_cmd");
+
+export const listChangeProposals = () => invoke<ChangeProposal[]>("list_change_proposals_cmd");
+
+export const resolveChangeProposal = (id: string, accept: boolean) =>
+  invoke<void>("resolve_change_proposal_cmd", { id, accept });
+
+/** Ask the model to propose a tidy-up. Nothing is applied until apply_consolidation. */
+export const consolidateMemory = (target?: ChatTarget) =>
+  invoke<Consolidation>("consolidate_memory_cmd", { target });
+
+export const getPendingConsolidation = () =>
+  invoke<Consolidation | null>("get_pending_consolidation_cmd");
+
+export const applyConsolidation = (accept: boolean) =>
+  invoke<void>("apply_consolidation_cmd", { accept });
+
+// ---- the autopoietic layer: reflection, recipes, vitality (Phase 11) ----
+
+/** Subscribe to an app-level backend event — the self-maintenance processes
+ * (reflection, healing) run outside any chat stream and announce themselves
+ * this way rather than through an agent-run channel. No-op in the browser. */
+export function onAppEvent<T>(name: string, handler: (payload: T) => void): void {
+  if (!inTauri()) return;
+  listen<T>(name, (e) => handler(e.payload)).catch(() => {
+    /* the app still works without the announcement */
+  });
+}
+
+/** A durable-self write announced outside a chat stream (REF-3). Same shape as
+ * the `memory_write` agent event. */
+export interface MemoryWriteEvent {
+  op: string;
+  name: string;
+  description: string;
+  collection: string;
+  undo_token: string;
+}
+
+/** The watchdog restarted (or failed to restart) the engine (HEAL-1). */
+export interface HealedEvent {
+  attempt: number;
+  ok: boolean;
+}
+
+/** A lesson the agent drew from a finished conversation (REF-2). */
+export interface LessonDraft {
+  name: string;
+  description: string;
+  body: string;
+  confidence: string;
+}
+
+/** A procedure the agent developed with the user and may reuse (RCP-1). */
+export interface Recipe {
+  name: string;
+  description: string;
+  trigger: string;
+  created: string;
+  used: number;
+  last_used: string | null;
+  steps: string;
+  surface_json: string | null;
+}
+
+/** One tool's success record over a window (HEAL-2 / LOOP-UI-1). */
+export interface ToolHealth {
+  tool_name: string;
+  ok: number;
+  total: number;
+}
+
+/** How the organism is doing, in counts and words (ORG-1). */
+export interface Vitality {
+  facts: number;
+  lessons: number;
+  recipes: number;
+  recipe_uses: number;
+  quarantined: string[];
+  engine_restarts_session: number;
+  pending_proposals: number;
+  last_reflection: number | null;
+  tool_health: ToolHealth[];
+}
+
+/** What one reflection pass produced. `saved` is in effect now; `proposed` is
+ * waiting for the user (the `lessons` rung is set to ask-first). */
+export interface Reflection {
+  saved: LessonDraft[];
+  proposed: LessonDraft[];
+}
+
+export const reflectConversation = (conversationId: string, target?: ChatTarget) =>
+  invoke<Reflection>("reflect_conversation_cmd", { conversationId, target });
+
+export const listLessons = () => invoke<Fact[]>("list_lessons_cmd");
+
+/** Moves the lesson to trash and returns the trash filename, for undo. */
+export const forgetLesson = (name: string) => invoke<string>("forget_lesson_cmd", { name });
+
+export const getVitality = (modelName?: string) =>
+  invoke<Vitality>("get_vitality_cmd", { modelName });
+
+/** Omit `modelName` for a local model — the backend fills in the running one. */
+export const getToolHealth = (modelName?: string) =>
+  invoke<ToolHealth[]>("get_tool_health_cmd", { modelName });
+
+export const listRecipes = () => invoke<Recipe[]>("list_recipes_cmd");
+
+export const forgetRecipe = (name: string) => invoke<string>("forget_recipe_cmd", { name });
+
+export const restoreQuarantined = (file: string) =>
+  invoke<void>("restore_quarantined_cmd", { file });
+
+export const deleteQuarantined = (file: string) =>
+  invoke<void>("delete_quarantined_cmd", { file });
+
+/** Seed a conversation's workspace surface from a recipe template (RCP-UI-2). */
+export const setSurface = (conversationId: string, treeJson: string) =>
+  invoke<string>("set_surface_cmd", { conversationId, treeJson });
+
 // ---- workspace blocks + session state (Generative UI) ----
 
 export const listBlocks = (conversationId: string) =>
@@ -414,6 +630,14 @@ export interface SkillInfo {
 export const listSkills = () => invoke<SkillInfo[]>("list_skills_cmd");
 export const setSkillEnabled = (id: string, enabled: boolean) =>
   invoke<void>("set_skill_enabled_cmd", { id, enabled });
+
+/** How reliably a skill's tools ran this week (LOOP-UI-1). Absent when no data. */
+export interface SkillReliability {
+  skill_id: string;
+  ok_percent: number;
+  calls: number;
+}
+export const getToolStats = () => invoke<SkillReliability[]>("get_tool_stats_cmd");
 
 // ---- local image generation setup (Phase 9F) ----
 

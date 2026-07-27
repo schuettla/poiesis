@@ -8,6 +8,7 @@ use crate::agent::skills::{self, Skill, SkillInfo};
 use crate::agent::AgentEvent;
 use crate::cloud::{self, ChatEndpoint, Provider};
 use crate::db::Db;
+use crate::memory::MemoryStore;
 use crate::permissions::{Decision, PermissionManager};
 use crate::runtime::RuntimeManager;
 use crate::NexusError;
@@ -37,6 +38,7 @@ pub async fn agent_chat_cmd(
     mgr: State<'_, RuntimeManager>,
     db: State<'_, Db>,
     perms: State<'_, PermissionManager>,
+    memory: State<'_, MemoryStore>,
     conversation_id: String,
     assistant_message_id: Option<String>,
     messages: Vec<TurnMessage>,
@@ -76,6 +78,16 @@ pub async fn agent_chat_cmd(
         .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
         .collect();
 
+    // Key for per-model tool reliability stats (GRM-4): the cloud model id, or
+    // the running local model's file stem.
+    let model_name = if is_cloud {
+        target.model.clone().unwrap_or_else(|| "cloud".to_string())
+    } else {
+        mgr.engine_model_name()
+            .await
+            .unwrap_or_else(|| "local".to_string())
+    };
+
     let cancel = mgr.new_cancel();
     let sink = AgentEventSink::new(on_event);
     let images_dir = mgr.generated_images_dir();
@@ -84,9 +96,11 @@ pub async fn agent_chat_cmd(
         &endpoint,
         &db,
         &perms,
+        &memory,
         &conversation_id,
         assistant_message_id.as_deref(),
         &images_dir,
+        &model_name,
         msgs,
         temperature.unwrap_or(0.7),
         tools_enabled.unwrap_or(false),
@@ -99,7 +113,7 @@ pub async fn agent_chat_cmd(
 
 /// Build the cloud endpoint for a target, fetching the provider key from the OS
 /// credential store. Returns a user-facing message on failure.
-fn build_cloud_endpoint(target: &ChatTarget) -> Result<ChatEndpoint, String> {
+pub(crate) fn build_cloud_endpoint(target: &ChatTarget) -> Result<ChatEndpoint, String> {
     let provider_id = target
         .provider
         .as_deref()
@@ -139,6 +153,41 @@ pub fn resolve_permission_cmd(perms: State<'_, PermissionManager>, id: String, d
 #[tauri::command]
 pub fn list_skills_cmd(db: State<'_, Db>) -> Vec<SkillInfo> {
     skills::all_info(&db)
+}
+
+/// How reliably one skill's tools have run lately (LOOP-UI-1), for the muted
+/// caption under each Settings toggle.
+#[derive(serde::Serialize)]
+pub struct SkillReliability {
+    pub skill_id: String,
+    pub ok_percent: i64,
+    pub calls: i64,
+}
+
+/// Aggregate the last 7 days of `tool_stats` per skill. The skill↔tool mapping
+/// lives here (`Skill::handles`), so the UI just renders what it's given.
+#[tauri::command]
+pub fn get_tool_stats_cmd(db: State<'_, Db>) -> Vec<SkillReliability> {
+    let Ok(rows) = db.tool_stats_since(7) else {
+        return Vec::new();
+    };
+    Skill::ALL
+        .into_iter()
+        .filter_map(|skill| {
+            let (ok, calls) = rows
+                .iter()
+                .filter(|r| skill.handles(&r.tool_name))
+                .fold((0, 0), |(o, c), r| (o + r.ok, c + r.total));
+            if calls == 0 {
+                return None; // absent when there's no data
+            }
+            Some(SkillReliability {
+                skill_id: skill.id().to_string(),
+                ok_percent: (ok * 100) / calls,
+                calls,
+            })
+        })
+        .collect()
 }
 
 /// Enable or disable a built-in skill (TOOL-6).

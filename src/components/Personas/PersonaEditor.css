@@ -4,6 +4,64 @@
   gap: 10px;
 }
 
+/* ---- soul: standing instructions + their proposals (SOUL-UI-1) ---- */
+.soul-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--paper-edge);
+}
+.soul-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.soul-title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+}
+.soul-hint {
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
+
+.soul-proposal {
+  padding: 12px 14px;
+  border: 1px solid var(--paper-edge-2);
+  border-left: 2px solid var(--ink-muted);
+  border-radius: 6px;
+}
+.soul-proposal-why {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.soul-diff {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.soul-diff-side {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.soul-diff-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.soul-diff-side pre {
+  margin: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .persona-row {
   display: flex;
   align-items: flex-start;

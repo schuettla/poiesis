@@ -8,6 +8,9 @@
 }
 
 .brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   font-family: var(--font-serif);
   font-size: 17px;
   letter-spacing: 0.02em;

@@ -336,3 +336,21 @@
   border: 1px solid var(--paper-edge);
   border-radius: var(--radius);
 }
+
+/* PRES-7: a surface hatches into place on its first render. Reduced motion
+   never gets the class, so there is nothing to suppress. */
+@media (prefers-reduced-motion: no-preference) {
+  .surface-enter {
+    animation: surface-hatch 300ms ease-out;
+  }
+}
+@keyframes surface-hatch {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

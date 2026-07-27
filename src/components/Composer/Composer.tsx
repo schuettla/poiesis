@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { inTauri, listImageModels, type ImageModel } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import type { Attachment } from "../../lib/types";
+import ContextMeter from "./ContextMeter";
 import "./Composer.css";
 
 const IMAGE_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
@@ -33,6 +34,11 @@ export default function Composer({
   const workspaceMode = useAppStore((s) => s.workspaceMode);
   const setWorkspaceMode = useAppStore((s) => s.setWorkspaceMode);
   const [menuOpen, setMenuOpen] = useState(false);
+  // The drop-up becomes a recipe list in place, rather than opening a submenu
+  // over a menu — one surface at a time (RCP-UI-2).
+  const [recipePicker, setRecipePicker] = useState(false);
+  const recipes = useAppStore((s) => s.recipes);
+  const startFromRecipe = useAppStore((s) => s.startFromRecipe);
   const createImage = useAppStore((s) => s.createImage);
   const [imageModels, setImageModels] = useState<ImageModel[]>([]);
   const [imageModel, setImageModel] = useState("");
@@ -167,13 +173,22 @@ export default function Composer({
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               title="Modes & tools"
-              onClick={() => setMenuOpen((v) => !v)}
+              onClick={() => {
+                setRecipePicker(false);
+                setMenuOpen((v) => !v);
+              }}
             >
               {workspaceMode ? "▦" : imageMode ? "◲" : "⌁"}
             </button>
             {menuOpen && (
               <>
-                <div className="composer-menu-backdrop" onClick={() => setMenuOpen(false)} />
+                <div
+                  className="composer-menu-backdrop"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setRecipePicker(false);
+                  }}
+                />
                 <div className="composer-menu" role="menu">
                   <button
                     className="composer-menu-item"
@@ -237,6 +252,46 @@ export default function Composer({
                     </span>
                     <span className="mi-check">{imageMode ? "✓" : ""}</span>
                   </button>
+                  {/* RCP-UI-2: a saved procedure is a way to *start*, so it
+                      belongs where the other ways to start a turn live. */}
+                  {recipes.length > 0 && !recipePicker && (
+                    <button
+                      className="composer-menu-item"
+                      role="menuitem"
+                      onClick={() => setRecipePicker(true)}
+                    >
+                      <span className="mi-icon" aria-hidden="true">◈</span>
+                      <span className="mi-body">
+                        Start from recipe…
+                        <span className="mi-hint">
+                          open a new workspace and follow a procedure we kept
+                        </span>
+                      </span>
+                      <span className="mi-check" />
+                    </button>
+                  )}
+                  {recipePicker &&
+                    recipes.map((r) => (
+                      <button
+                        className="composer-menu-item"
+                        role="menuitem"
+                        key={r.name}
+                        onClick={() => {
+                          setMenuOpen(false);
+                          setRecipePicker(false);
+                          startFromRecipe(r);
+                        }}
+                      >
+                        <span className="mi-icon" aria-hidden="true">
+                          {r.surface_json ? "▦" : "◈"}
+                        </span>
+                        <span className="mi-body">
+                          {r.name}
+                          <span className="mi-hint">when: {r.trigger}</span>
+                        </span>
+                        <span className="mi-check" />
+                      </button>
+                    ))}
                 </div>
               </>
             )}
@@ -282,9 +337,9 @@ export default function Composer({
                 ? imageModels.length === 0
                   ? "Get an image model in Models → Image first"
                   : "Describe an image to create…"
-                : "Message Poiesis  ·  paste or drop an image"
+                : "Message Poiesis Agent  ·  paste or drop an image"
             }
-            aria-label={imageMode ? "Describe an image to create" : "Message Poiesis"}
+            aria-label={imageMode ? "Describe an image to create" : "Message Poiesis Agent"}
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onPaste={onPaste}
@@ -295,6 +350,7 @@ export default function Composer({
               }
             }}
           />
+          {!imageMode && <ContextMeter draft={value} />}
           {busy ? (
             <button className="icon-btn send" aria-label="Stop generating" title="Stop" onClick={onStop}>
               ■

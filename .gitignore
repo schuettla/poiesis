@@ -17,6 +17,7 @@ src-tauri/gen/
 .vscode/*
 !.vscode/extensions.json
 .idea/
+.kilo/
 .DS_Store
 Thumbs.db
 *.log

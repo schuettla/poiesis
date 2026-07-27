@@ -80,6 +80,8 @@
 .step {
   display: flex;
   align-items: baseline;
+  /* The recall provenance panel drops to its own full-width line. */
+  flex-wrap: wrap;
   gap: 9px;
   font-family: var(--font-mono);
   font-size: var(--fs-timeline);
@@ -133,6 +135,66 @@
   font-size: 11.5px;
 }
 
+/* ---- recall provenance (RCL-UI) ---- */
+.step-expand {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  cursor: pointer;
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1;
+}
+.step-expand:hover {
+  color: var(--ink-muted);
+}
+.recall-matches {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 2px;
+  padding-left: 2px;
+  border-left: 1px solid var(--paper-edge-2);
+}
+.recall-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0 3px 10px;
+  border: none;
+  background: none;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+.recall-row.link {
+  cursor: pointer;
+}
+.recall-row.link:hover .recall-title {
+  text-decoration: underline;
+}
+.recall-chip {
+  flex: none;
+  color: var(--ink-faint);
+  letter-spacing: 0.03em;
+}
+.recall-title {
+  flex: none;
+  color: var(--ink);
+}
+.recall-date {
+  flex: none;
+  color: var(--ink-faint);
+}
+.recall-snippet {
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---- run prose (serif reading column) ---- */
 .run-text {
   font-family: var(--font-serif);
@@ -184,4 +246,62 @@
   50% {
     opacity: 0;
   }
+}
+
+/* Compaction boundary (CTX-UI-2). Every message above it is still rendered —
+   this only marks where the model's verbatim view gives way to the summary. */
+.compact-divider-wrap {
+  margin: 20px 0;
+}
+.compact-divider {
+  display: block;
+  width: 100%;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+  text-align: center;
+}
+.compact-divider:hover {
+  color: var(--ink-muted);
+}
+.compact-summary {
+  margin: 8px 0 0;
+  padding: 12px 14px;
+  border-left: 2px solid var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-muted);
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+/* ---- inline change proposal (SOUL-UI-2) ----
+   Permission-panel register: bordered, calm, no colour alarm. */
+.proposal-card {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--paper-edge-2);
+  border-left: 2px solid var(--ink-muted);
+  border-radius: 6px;
+}
+.proposal-text {
+  flex: 1;
+  min-width: 200px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-muted);
+}
+.proposal-actions {
+  display: flex;
+  gap: 12px;
 }

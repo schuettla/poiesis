@@ -9,6 +9,7 @@
 //! event sink.
 
 use super::skills::SkillContext;
+use crate::db::Db;
 
 /// The six block kinds the renderer understands.
 const KINDS: [&str; 6] = ["comparison", "collection", "plan", "form", "progress", "document"];
@@ -203,6 +204,29 @@ fn render_ui(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<String,
             "Rendered the workspace surface ({nodes} nodes). The user sees it in the Workspace view — do not describe it in prose; conclude in one sentence. Revise a region later with render_ui + node_id, or re-render the whole surface."
         ))
     }
+}
+
+/// Write a conversation's surface directly, outside any agent run (RCP-UI-2:
+/// starting a workspace from a recipe template). Same reserved row, same
+/// create-or-update rule as `render_ui` — a seeded surface is an ordinary
+/// surface the model can revise from its first turn. Returns the block id.
+pub fn write_surface(db: &Db, conversation_id: &str, data_json: &str) -> Result<String, String> {
+    if data_json.len() > SURFACE_CAP_BYTES {
+        return Err("that surface template is too large".into());
+    }
+    if let Some(block) = db
+        .find_block_by_title(conversation_id, SURFACE_KIND, SURFACE_TITLE)
+        .ok()
+        .flatten()
+    {
+        db.update_block_data(&block.id, SURFACE_TITLE, data_json)
+            .map_err(|e| e.to_string())?;
+        return Ok(block.id);
+    }
+    let block = db
+        .add_block(conversation_id, None, SURFACE_KIND, SURFACE_TITLE, data_json)
+        .map_err(|e| e.to_string())?;
+    Ok(block.id)
 }
 
 /// Depth-first replace of the node whose `id` matches; returns whether found.

@@ -27,7 +27,9 @@ decides what may change.
 > **PRES-0 (first-person copy) is not sequenced — it binds every `-UI-`
 > task from BRAND onward**; build each UI task with its PRES-0 copy from the
 > start, don't retrofit.
-> **Part VI (OPT-1…12) is an unscheduled idea reservoir** — optional
+> **Part VI is the post-Phase-11 carry-over list** — what is implemented but
+> unverified, plus known rough edges.
+> **Part VII (OPT-1…12) is an unscheduled idea reservoir** — optional
 > explorations adopted individually, never implemented as a batch.
 > **Settled decisions (2026-07-18):** one merged plan doc · graduated
 > autonomy ladder · recipes are in scope for v1 · rename is brand-level only
@@ -155,20 +157,24 @@ app-data directory, the DB filename, `nexus-action` fence tags, Tauri event
 names, the bundle `identifier` in `tauri.conf.json`. Renaming any of those
 breaks existing user data or risks a large refactor with no git safety net.
 
-- `BRAND-1` `src-tauri/tauri.conf.json`: set `productName: "Poiesis"` and the
-  main window `title: "Poiesis"`. Leave `identifier` exactly as it is.
+- `BRAND-1` `src-tauri/tauri.conf.json`: set `productName: "Poiesis Agent"`
+  and the main window `title: "Poiesis Agent"`. Leave `identifier` exactly
+  as it is. **Frontend-facing name is "Poiesis Agent"; "Poiesis" alone is
+  the internal/short form** used in package metadata (`package.json` name,
+  `Cargo.toml` description/authors) and in this plan document — never in
+  UI copy the user sees.
 - `BRAND-2` Frontend display strings: grep `Nexus` under `src/` and replace
   **only user-visible strings** (TopBar brand text, Settings headers,
-  onboarding/empty-state copy, toasts, aria-labels). Do not touch
-  identifiers, CSS class names, comments referencing files, or the
-  `nexus-action` fence constant.
+  onboarding/empty-state copy, toasts, aria-labels) with **"Poiesis Agent"**.
+  Do not touch identifiers, CSS class names, comments referencing files, or
+  the `nexus-action` fence constant.
 - `BRAND-3` Identity in the base system prompt (`composeSystemPrompt` in
   `src/lib/store.ts`): the base prompt's self-reference becomes:
-  *"You are Poiesis, a local-first assistant that maintains itself: you keep
-  durable memory, learn lessons from your own mistakes, and propose — never
-  impose — changes to how you work."* (One sentence of the existing prompt is
-  replaced; the rest is untouched.)
-- `BRAND-4` Docs sweep: README title/intro → Poiesis, one paragraph
+  *"You are Poiesis Agent, a local-first assistant that maintains itself: you
+  keep durable memory, learn lessons from your own mistakes, and propose —
+  never impose — changes to how you work."* (One sentence of the existing
+  prompt is replaced; the rest is untouched.)
+- `BRAND-4` Docs sweep: README title/intro → Poiesis Agent, one paragraph
   explaining the name and the self-maintenance concept, plus a placeholder
   section header `## What Poiesis remembers` (filled when Part III 10C
   ships). `IMPLEMENTATION_PLAN.md`/`TASKS.md` get a top note: "Project
@@ -756,7 +762,7 @@ activity log.
 
 ### MEM-UI — the Memory panel and chat affordances
 
-*(In 11E the Memory panel becomes one tab of the umbrella "Poiesis — self"
+*(In 11E the Memory panel becomes one tab of the umbrella "Poiesis Agent — self"
 Settings section; build it standalone first exactly as below, ORG-UI-1 then
 re-parents it. Nothing here is throwaway.)*
 
@@ -1416,7 +1422,7 @@ the mark is a 20×20 inline SVG using `currentColor`/ink tokens only.
   around the membrane, 1.8 s per revolution · healing = membrane opacity
   1→0.3→1, twice, then done. Under reduced motion: static always, states
   conveyed by label only.
-- **Accessibility:** `role="img"`; `aria-label` = `Poiesis — {resting|working|reflecting on a past conversation|recovering}`;
+- **Accessibility:** `role="img"`; `aria-label` = `Poiesis Agent — {resting|working|reflecting on a past conversation|recovering}`;
   identical `title` tooltip.
 
 **Accept:** fresh install shows a dashed membrane; after 5 saved entries the
@@ -1481,7 +1487,7 @@ ambient, not promotional.
 One-time (setting `self.introduced`), a quiet card in the same empty state.
 Exact copy:
 
-> **I'm Poiesis.** I work for you locally, and I maintain myself: I remember
+> **I'm Poiesis Agent.** I work for you locally, and I maintain myself: I remember
 > what matters to you, learn from my own mistakes, and keep procedures we
 > develop together. Everything I know lives in plain files on this device —
 > you can read, edit, or delete any of it.
@@ -1601,7 +1607,93 @@ bar (`role="status"` on toasts, buttons not divs).
 
 ---
 
-# Part VI — Appendix: exploratory ideas (OPT) — *unscheduled, adopt one at a time*
+# Part VI — Carry-over after Phase 11 (as of 2026-07-27)
+
+Parts II–IV are implemented: 44 Rust tests, `tsc --noEmit` clean, `context.ts`
+and `growth.ts` self-tests passing. This part records what is **known to be
+unfinished or unverified** — it is committed scope that hasn't landed, unlike
+Part VII's reservoir. Nothing here is a design change; it is a to-do list
+written down so it isn't rediscovered by accident.
+
+## VII-1 — Nothing has been click-tested live *(the big one)*
+
+**Not one item of 10A–11F has been exercised in a running GUI.** Every
+verification so far is a compiler or a unit test. The Part V "live smoke" list
+is the script; run it top to bottom on the GTX 1060 + a 3B model. Expect to
+find import-order and runtime wiring faults that no type-checker can see —
+this has bitten this project before.
+
+Highest-value first, because they need no model cooperation:
+
+1. Self view renders; all five tabs populate.
+2. Autonomy → facts `Off` → the agent declines to save and says what it would
+   have remembered; back to `Auto` → toast + working Undo.
+3. `taskkill` llama-server → recovery within ~90 s. **Then, during the
+   restart window, press Stop engine** — the engine must stay stopped
+   (regression check for the `heal()` generation guard, which no unit test
+   can cover; it needs a real engine and a stop timed inside a ~150 s window).
+4. Hand-write a broken `facts/*.md` → it appears under "Files I couldn't
+   read" with working Restore/Discard.
+5. Fresh profile → dashed membrane; 5 entries → first orbit dot; OS
+   reduced-motion → everything static, every label still correct.
+
+## VII-2 — Exit criteria never checked
+
+- **LOOP-4** — "20 consecutive `render_ui` calls, zero raw-JSON leaks" with a
+  3B model. The early-flush heuristic is the single most leak-prone thing in
+  the loop and has never been run in anger.
+- **GRM-1/2** — **`EngineStatus.structured_tool_output` is hardcoded `true`
+  whenever an engine is up** (`runtime/process.rs`), on the reasoning that we
+  always pass `--jinja`. The plan asked for an *empirical* probe: `curl` the
+  running engine's `/v1/chat/completions` with a `tools` array and confirm the
+  reply carries structured `tool_calls` rather than content JSON. Until that
+  is done the Engine card may be claiming enforcement the pinned build does
+  not actually provide. Either run the probe and keep the constant, or make it
+  a real probe.
+- **10A** — the 200-turn compaction exit (summary row written, divider shown,
+  early facts still answerable) has never been simulated.
+
+## VII-3 — Known rough edges, deliberately left
+
+None of these are bugs with a wrong answer; they are accepted trade-offs that
+should be revisited if they bite.
+
+- **Only one toast at a time.** `MemoryToast` renders `HealToast` only when no
+  memory toast is showing (`if (!toast) return <HealToast/>`), so a self-heal
+  that coincides with a memory write is dropped rather than queued. A real
+  queue is the fix if it ever matters.
+- **Reflection is hard to demo.** It needs ≥8 messages, a conversation switch,
+  *and* the model returning `confidence:"high"` — a 3B often won't. "Reflect
+  now" in the Health tab is the reliable path. Conservative by design; just
+  know it before concluding the feature is broken.
+- **`facts` has no ask-first rung.** Per AUT-1's sanctioned fallback, `ask`
+  refuses the write instead of raising a proposal — facts have no proposal UI.
+  Lessons, recipes and soul all do (the lessons one landed 2026-07-27).
+- **Reflection triggers on conversation switch only**, not on app close. The
+  plan calls this sufficient for v1; a quit with an unreflected conversation
+  simply reflects on next visit.
+- **`parse_recipe` reads frontmatter twice** — once via `parse_entry`, once in
+  its own scan for `trigger`/`used`/`last_used`. Two parsers that must agree.
+  It also requires the file to start exactly with `---\n`: a BOM or leading
+  blank line makes the recipe-only fields silently empty.
+- **`list_recipes()` reads every file twice** (once through `list_in` for
+  quarantine, once through `read_recipe`). Fine at tens of files.
+- **Watchdog tolerance is 90 s** (3 × 30 s polls). If a machine's `/health`
+  ever answers slower than that under load, the watchdog will restart a
+  working engine. Raise `FAILURES_BEFORE_RESTART` if observed.
+- **`prune_lessons` breaks ties by name**, because `created` is day-granular.
+  Only reachable if 40+ lessons share a creation date.
+
+## VII-4 — Not started
+
+- **`git init`.** Still not done, still recommended (Part V already records
+  this). Every fix in Part IV so far has been made without a safety net.
+- **BRAND-4's README section** "What Poiesis remembers" — the header exists,
+  the content was to be written once 10C shipped. It has shipped.
+
+---
+
+# Part VII — Appendix: exploratory ideas (OPT) — *unscheduled, adopt one at a time*
 
 A reservoir of further autopoiesis-driven UI and interaction patterns.
 **None of this is committed scope.** Rules for adopting any OPT item:

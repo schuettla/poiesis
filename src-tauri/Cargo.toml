@@ -1,8 +1,8 @@
 [package]
 name = "nexus"
 version = "0.1.0"
-description = "Project Nexus — a local-first, agentic desktop LLM application"
-authors = ["Project Nexus contributors"]
+description = "Poiesis — a local-first, agentic desktop LLM application"
+authors = ["Poiesis contributors"]
 edition = "2021"
 rust-version = "1.77"
 
@@ -65,3 +65,6 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

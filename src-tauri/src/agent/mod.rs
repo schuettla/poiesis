@@ -7,7 +7,10 @@ pub mod artifacts;
 pub mod codeexec;
 pub mod filesystem;
 pub mod imagegen;
+pub mod memory_skill;
 pub mod present;
+pub mod recall;
+pub mod recipes;
 pub mod run;
 pub mod sandbox;
 pub mod skills;
@@ -58,6 +61,29 @@ pub enum AgentEvent {
     StateUpdate { state: serde_json::Value },
     /// The agent needs a capability — show the consent side panel (§5.4.4).
     Permission { request: PermissionRequest },
+    /// A durable self entry was written/updated/forgotten (MEM-6 / REF-3).
+    /// `collection` is "facts" | "lessons" | "recipes".
+    MemoryWrite {
+        op: String,
+        name: String,
+        description: String,
+        collection: String,
+        /// For `forget`, the trash filename that undoes it via `restore_trash`.
+        /// Empty for `save` (undo = forget the new entry) and other ops.
+        undo_token: String,
+    },
+    /// Recall search results with provenance, for the expandable timeline step.
+    Recall {
+        id: String,
+        matches: Vec<crate::db::SearchHit>,
+    },
+    /// The agent proposed a self-change (SOUL-2 / RCP-2); `target` as in
+    /// `change_proposals`. Never applied without the user saying yes.
+    Proposal {
+        id: String,
+        target: String,
+        rationale: String,
+    },
     /// The run completed normally.
     Done,
     /// The run was cancelled by the user.

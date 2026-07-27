@@ -12,7 +12,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -38,6 +38,14 @@ pub struct Conversation {
     /// Workspace mode (W): the conversation is pinned to the composed-interface
     /// layout rather than the classic message stream.
     pub workspace: bool,
+    /// Rolling summary of the older turns (CTX-3). Changes only what is *sent*
+    /// to the model — the messages themselves are never deleted or hidden.
+    pub summary: Option<String>,
+    /// Newest message covered by `summary`; turns after it are sent verbatim.
+    pub summary_upto_message_id: Option<String>,
+    /// When this conversation was last reflected on (REF-2). `None` means the
+    /// agent hasn't yet tried to learn anything from it.
+    pub reflected_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -121,6 +129,15 @@ pub struct ModelEntry {
     pub added_at: i64,
 }
 
+/// One tool's success record over a window (LOOP-UI-1), aggregated from
+/// `tool_stats`. Content-free — just counts.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolStatRow {
+    pub tool_name: String,
+    pub ok: i64,
+    pub total: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Grant {
     pub id: String,
@@ -188,7 +205,51 @@ pub struct Connector {
     pub created_at: i64,
 }
 
-fn now_ms() -> i64 {
+/// A self-change the agent proposed and the user hasn't answered yet (SOUL-2).
+/// `target` is 'soul' | 'persona' | 'recipe' | 'lesson'; the `persona_id` column
+/// future-proofs per-persona prompt proposals, which are out of scope for v1.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeProposal {
+    pub id: String,
+    pub target: String,
+    /// The entry name, when the target is a recipe or lesson.
+    pub slug: Option<String>,
+    /// The complete replacement text for the target.
+    pub proposed_text: String,
+    pub rationale: String,
+    /// pending | applied | dismissed
+    pub status: String,
+    pub created_at: i64,
+}
+
+/// One hit from the agent's own search over its past (RCL-1) — a chat message
+/// or a durable memory entry, always with provenance the user can click.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHit {
+    /// "chat" | "memory"
+    pub source: String,
+    pub conversation_id: Option<String>,
+    /// Conversation title, or the memory entry's name.
+    pub title: String,
+    pub created_at: i64,
+    pub snippet: String,
+}
+
+/// Quote every term so arbitrary user text can't break FTS5 MATCH syntax.
+/// Turn a user/agent query into a safe FTS5 MATCH string: each whitespace token
+/// becomes a quoted phrase. Tokens with no alphanumeric content are dropped —
+/// a quoted phrase of pure punctuation is an FTS5 syntax error, not a no-match.
+/// Returns `""` when nothing usable remains, which callers treat as no hits.
+fn fts_escape(q: &str) -> String {
+    q.split_whitespace()
+        .map(|t| t.replace('"', ""))
+        .filter(|t| t.chars().any(|c| c.is_alphanumeric()))
+        .map(|t| format!("\"{t}\""))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -249,6 +310,14 @@ impl Db {
             // pinned to it — the composed interface, not the message stream, is
             // its primary surface. 0 = classic chat, 1 = workspace.
             Self::add_column(&conn, "conversations", "workspace", "INTEGER NOT NULL DEFAULT 0")?;
+        }
+        if current < 5 {
+            // v5 (Poiesis): context compaction + reflection marker. The
+            // `change_proposals`, `tool_stats` and `memory_fts` tables are created
+            // by SCHEMA above; these add the compaction columns to `conversations`.
+            Self::add_column(&conn, "conversations", "summary", "TEXT")?;
+            Self::add_column(&conn, "conversations", "summary_upto_message_id", "TEXT")?;
+            Self::add_column(&conn, "conversations", "reflected_at", "INTEGER")?;
         }
         if current < SCHEMA_VERSION {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -316,6 +385,9 @@ impl Db {
             persona_id: None,
             overrides_json: None,
             workspace,
+            summary: None,
+            summary_upto_message_id: None,
+            reflected_at: None,
             created_at: ts,
             updated_at: ts,
         })
@@ -334,7 +406,8 @@ impl Db {
     pub fn list_conversations(&self) -> Result<Vec<Conversation>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, title, model_id, persona_id, overrides_json, workspace, created_at, updated_at
+            "SELECT id, title, model_id, persona_id, overrides_json, workspace, created_at, updated_at,
+                    summary, summary_upto_message_id, reflected_at
              FROM conversations ORDER BY updated_at DESC",
         )?;
         let rows = stmt
@@ -458,11 +531,68 @@ impl Db {
         Ok(rows)
     }
 
+    /// Messages up to and including `upto_id`, oldest first — the slice that
+    /// compaction (CTX-3) folds into `conversations.summary`.
+    ///
+    /// Bounded by `rowid`, not `created_at`: turns written in the same
+    /// millisecond would otherwise all fall inside the bound.
+    pub fn list_messages_until(&self, conversation_id: &str, upto_id: &str) -> Result<Vec<Message>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, created_at
+             FROM messages
+             WHERE conversation_id = ?1
+               AND rowid <= (SELECT rowid FROM messages WHERE id = ?2)
+             ORDER BY rowid ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![conversation_id, upto_id], Self::map_message)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Persist a compaction result (CTX-3). Nothing is deleted — this only
+    /// records what may be replaced by the summary when assembling a request.
+    pub fn set_conversation_summary(
+        &self,
+        id: &str,
+        summary: &str,
+        upto_message_id: &str,
+    ) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE conversations SET summary = ?2, summary_upto_message_id = ?3 WHERE id = ?1",
+            params![id, summary, upto_message_id],
+        )?;
+        Ok(())
+    }
+
+    /// Mark a conversation as reflected on (REF-2). Set *before* the reflection
+    /// turn runs, so a model that hangs or returns junk can't put the app in a
+    /// loop of retrying the same conversation.
+    pub fn set_conversation_reflected(&self, id: &str, at: i64) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE conversations SET reflected_at = ?2 WHERE id = ?1",
+            params![id, at],
+        )?;
+        Ok(())
+    }
+
+    /// The most recent moment any conversation was reflected on (ORG-1).
+    pub fn last_reflection(&self) -> Result<Option<i64>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let at: Option<i64> =
+            conn.query_row("SELECT MAX(reflected_at) FROM conversations", [], |r| r.get(0))?;
+        Ok(at)
+    }
+
     /// Full-text search returning matching conversations, most-recent first (CHT-3).
     pub fn search_conversations(&self, query: &str) -> Result<Vec<Conversation>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT DISTINCT c.id, c.title, c.model_id, c.persona_id, c.overrides_json, c.workspace, c.created_at, c.updated_at
+            "SELECT DISTINCT c.id, c.title, c.model_id, c.persona_id, c.overrides_json, c.workspace, c.created_at, c.updated_at,
+                    c.summary, c.summary_upto_message_id, c.reflected_at
              FROM conversations c
              JOIN messages m ON m.conversation_id = c.id
              JOIN messages_fts f ON f.rowid = m.rowid
@@ -472,6 +602,189 @@ impl Db {
         let rows = stmt
             .query_map([query], Self::map_conversation)?
             .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    // ---- agent-proposed self-changes (SOUL-2 / RCP-2) ----
+
+    /// Record a proposal. The agent never applies these itself — a proposal is
+    /// a request for consent, and stays `pending` until the user answers.
+    pub fn add_change_proposal(
+        &self,
+        target: &str,
+        slug: Option<&str>,
+        proposed_text: &str,
+        rationale: &str,
+    ) -> Result<ChangeProposal, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let id = new_id();
+        let ts = now_ms();
+        conn.execute(
+            "INSERT INTO change_proposals(id, target, slug, proposed_text, rationale, status, created_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, 'pending', ?6)",
+            params![id, target, slug, proposed_text, rationale, ts],
+        )?;
+        Ok(ChangeProposal {
+            id,
+            target: target.to_string(),
+            slug: slug.map(str::to_string),
+            proposed_text: proposed_text.to_string(),
+            rationale: rationale.to_string(),
+            status: "pending".to_string(),
+            created_at: ts,
+        })
+    }
+
+    /// Proposals still awaiting an answer, newest first.
+    pub fn list_change_proposals(&self) -> Result<Vec<ChangeProposal>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, target, slug, proposed_text, rationale, status, created_at
+             FROM change_proposals WHERE status = 'pending' ORDER BY created_at DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(ChangeProposal {
+                    id: r.get(0)?,
+                    target: r.get(1)?,
+                    slug: r.get(2)?,
+                    proposed_text: r.get(3)?,
+                    rationale: r.get(4)?,
+                    status: r.get(5)?,
+                    created_at: r.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Fetch one proposal by id regardless of status — callers decide whether a
+    /// non-pending row is actionable. (`list_change_proposals` returns only
+    /// pending rows, so it can't answer this.)
+    pub fn get_change_proposal(&self, id: &str) -> Result<Option<ChangeProposal>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, target, slug, proposed_text, rationale, status, created_at
+             FROM change_proposals WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map([id], |r| {
+            Ok(ChangeProposal {
+                id: r.get(0)?,
+                target: r.get(1)?,
+                slug: r.get(2)?,
+                proposed_text: r.get(3)?,
+                rationale: r.get(4)?,
+                status: r.get(5)?,
+                created_at: r.get(6)?,
+            })
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    /// Mark a proposal `applied` or `dismissed`. Rows are kept, not deleted —
+    /// what the agent asked for and what the user answered is part of the record.
+    pub fn resolve_change_proposal(&self, id: &str, status: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE change_proposals SET status = ?2 WHERE id = ?1",
+            params![id, status],
+        )?;
+        Ok(())
+    }
+
+    // ---- the agent's search over its own past (RCL-1) ----
+
+    /// Full-text search over past messages, best matches first.
+    pub fn search_messages_fts(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, DbError> {
+        let match_expr = fts_escape(query);
+        if match_expr.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT m.conversation_id, c.title, m.created_at,
+                    snippet(messages_fts, 0, '', '', '…', 16)
+             FROM messages_fts
+             JOIN messages m      ON m.rowid = messages_fts.rowid
+             JOIN conversations c ON c.id = m.conversation_id
+             WHERE messages_fts MATCH ?1
+             ORDER BY rank
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![match_expr, limit as i64], |r| {
+                Ok(SearchHit {
+                    source: "chat".to_string(),
+                    conversation_id: r.get(0)?,
+                    title: r.get(1)?,
+                    created_at: r.get(2)?,
+                    snippet: r.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Full-text search over the durable self (facts, lessons, recipes).
+    pub fn search_memory_fts(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, DbError> {
+        let match_expr = fts_escape(query);
+        if match_expr.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT name, snippet(memory_fts, 2, '', '', '…', 16), description
+             FROM memory_fts
+             WHERE memory_fts MATCH ?1
+             ORDER BY rank
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![match_expr, limit as i64], |r| {
+                let snippet: String = r.get(1)?;
+                let description: String = r.get(2)?;
+                Ok(SearchHit {
+                    source: "memory".to_string(),
+                    conversation_id: None,
+                    title: r.get(0)?,
+                    created_at: 0,
+                    snippet: if snippet.trim().is_empty() { description } else { snippet },
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Replace the whole memory FTS index. The store rebuilds it on every write —
+    /// fine at entry-count scale (tens, not thousands).
+    pub fn replace_memory_fts(&self, rows: &[(String, String, String, String)]) -> Result<(), DbError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM memory_fts", [])?;
+        {
+            let mut stmt =
+                tx.prepare("INSERT INTO memory_fts(name, description, body, kind) VALUES(?1, ?2, ?3, ?4)")?;
+            for (name, description, body, kind) in rows {
+                stmt.execute(params![name, description, body, kind])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The last `max` messages of a conversation, oldest first (RCL-2
+    /// `read_conversation`). Empty when the conversation doesn't exist.
+    pub fn list_messages_window(&self, conversation_id: &str, max: usize) -> Result<Vec<Message>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, created_at
+             FROM messages WHERE conversation_id = ?1
+             ORDER BY rowid DESC LIMIT ?2",
+        )?;
+        let mut rows = stmt
+            .query_map(params![conversation_id, max as i64], Self::map_message)?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.reverse();
         Ok(rows)
     }
 
@@ -621,6 +934,88 @@ impl Db {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    // ---- Tool reliability stats (GRM-4 / LOOP-5) ----
+
+    /// Record one tool-call outcome for the running model. Content-free — only
+    /// the model name, tool name, owning conversation, and success bit. Feeds the
+    /// reliability captions (LOOP-UI-1) and, later, self-repair/reflection.
+    /// Best-effort: a stats write must never break a turn, so errors are dropped.
+    pub fn add_tool_stat(&self, model_name: &str, tool_name: &str, conversation_id: &str, ok: bool) {
+        let Ok(conn) = self.conn.lock() else { return };
+        let _ = conn.execute(
+            "INSERT INTO tool_stats(id, model_name, tool_name, conversation_id, ok, created_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            params![new_id(), model_name, tool_name, conversation_id, ok as i64, now_ms()],
+        );
+    }
+
+    /// Per-tool success counts over the last `days` days (LOOP-UI-1).
+    pub fn tool_stats_since(&self, days: i64) -> Result<Vec<ToolStatRow>, DbError> {
+        let cutoff = now_ms() - days * 24 * 60 * 60 * 1000;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT tool_name, SUM(ok), COUNT(*) FROM tool_stats
+             WHERE created_at >= ?1 GROUP BY tool_name",
+        )?;
+        let rows = stmt
+            .query_map([cutoff], |r| {
+                Ok(ToolStatRow {
+                    tool_name: r.get(0)?,
+                    ok: r.get(1)?,
+                    total: r.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Which tools failed in one conversation, and how often (REF-2). This is
+    /// the only hard evidence reflection gets about its own mistakes.
+    pub fn tool_failures_in(&self, conversation_id: &str) -> Result<Vec<(String, i64)>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT tool_name, COUNT(*) FROM tool_stats
+             WHERE conversation_id = ?1 AND ok = 0 GROUP BY tool_name ORDER BY COUNT(*) DESC",
+        )?;
+        let rows = stmt
+            .query_map([conversation_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Per-tool reliability for one model over the last `days` (HEAL-2). Same
+    /// shape as `tool_stats_since`, narrowed to the model actually running —
+    /// a tool that a 3B model fumbles isn't broken for a cloud model.
+    pub fn tool_health(&self, model: &str, days: i64) -> Result<Vec<ToolStatRow>, DbError> {
+        let cutoff = now_ms() - days * 24 * 60 * 60 * 1000;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT tool_name, SUM(ok), COUNT(*) FROM tool_stats
+             WHERE model_name = ?1 AND created_at >= ?2 GROUP BY tool_name",
+        )?;
+        let rows = stmt
+            .query_map(params![model, cutoff], |r| {
+                Ok(ToolStatRow {
+                    tool_name: r.get(0)?,
+                    ok: r.get(1)?,
+                    total: r.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// How many proposals are still waiting for an answer (ORG-1).
+    pub fn pending_proposal_count(&self) -> Result<usize, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM change_proposals WHERE status = 'pending'",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
     }
 
     // ---- MCP connectors (MCP-1, MCP-3) ----
@@ -1020,6 +1415,9 @@ impl Db {
             workspace: row.get::<_, i64>(5)? != 0,
             created_at: row.get(6)?,
             updated_at: row.get(7)?,
+            summary: row.get(8)?,
+            summary_upto_message_id: row.get(9)?,
+            reflected_at: row.get(10)?,
         })
     }
 
@@ -1119,5 +1517,84 @@ mod tests {
             db.get_session_state(&c.id).unwrap().as_deref(),
             Some(r#"{"constraints":{"budget":2000}}"#)
         );
+    }
+
+    /// RCL-1: the agent searches both its chat history and its durable self.
+    #[test]
+    fn recall_searches_chats_and_memory() {
+        let db = Db::open_in_memory().unwrap();
+        let a = db.create_conversation("NAS build", None, false).unwrap();
+        let b = db.create_conversation("Dinner plans", None, false).unwrap();
+        for (conv, text) in [(&a, "we settled on ZFS mirrored vdevs"), (&b, "risotto on friday")] {
+            db.append_message(
+                &conv.id,
+                &NewMessage {
+                    role: "user".into(),
+                    content: text.into(),
+                    model_name: None,
+                    model_provenance: None,
+                    steps_json: None,
+                    attachments: Vec::new(),
+                },
+            )
+            .unwrap();
+        }
+        db.replace_memory_fts(&[(
+            "prefers-metric-units".into(),
+            "User wants all measurements in metric".into(),
+            "Always give measurements in metric. Confirmed twice.".into(),
+            "fact".into(),
+        )])
+        .unwrap();
+
+        let chat = db.search_messages_fts("ZFS", 5).unwrap();
+        assert_eq!(chat.len(), 1);
+        assert_eq!(chat[0].source, "chat");
+        assert_eq!(chat[0].title, "NAS build");
+        assert_eq!(chat[0].conversation_id.as_deref(), Some(a.id.as_str()));
+
+        let mem = db.search_memory_fts("metric", 5).unwrap();
+        assert_eq!(mem.len(), 1);
+        assert_eq!(mem[0].source, "memory");
+        assert_eq!(mem[0].title, "prefers-metric-units");
+
+        // Raw user text must not break MATCH syntax (fts_escape).
+        assert!(db.search_messages_fts("what about \"ZFS\" ?", 5).is_ok());
+        assert!(db.search_messages_fts("NOT (broken", 5).unwrap().is_empty());
+    }
+
+    /// CTX-3: compaction records a summary boundary without touching messages.
+    #[test]
+    fn compaction_summary_round_trips() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.create_conversation("Long chat", None, false).unwrap();
+        let mut ids = Vec::new();
+        for i in 0..4 {
+            let m = db
+                .append_message(
+                    &c.id,
+                    &NewMessage {
+                        role: if i % 2 == 0 { "user".into() } else { "assistant".into() },
+                        content: format!("turn {i}"),
+                        model_name: None,
+                        model_provenance: None,
+                        steps_json: None,
+                        attachments: Vec::new(),
+                    },
+                )
+                .unwrap();
+            ids.push(m.id);
+        }
+
+        let until = db.list_messages_until(&c.id, &ids[1]).unwrap();
+        assert_eq!(until.len(), 2, "inclusive of the boundary message");
+
+        db.set_conversation_summary(&c.id, "FACTS: …", &ids[1]).unwrap();
+        let conv = db.list_conversations().unwrap().remove(0);
+        assert_eq!(conv.summary.as_deref(), Some("FACTS: …"));
+        assert_eq!(conv.summary_upto_message_id.as_deref(), Some(ids[1].as_str()));
+
+        assert_eq!(db.list_messages(&c.id).unwrap().len(), 4, "nothing is ever deleted");
+        assert_eq!(db.list_messages_window(&c.id, 2).unwrap().len(), 2);
     }
 }

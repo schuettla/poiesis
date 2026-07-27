@@ -1,7 +1,7 @@
-# Poiesis
+# Poiesis Agent
 
 *(formerly Project Nexus — renamed 2026-07; internal identifiers still say
-`nexus` by design, see `docs/POIESIS_PLAN.md`.)*
+`nexus`/`poiesis` by design, see `docs/POIESIS_PLAN.md`.)*
 
 A **local-first, agentic desktop LLM application** for Windows. Chat with local
 models that run entirely on your machine, give the assistant real capabilities
@@ -9,15 +9,15 @@ models that run entirely on your machine, give the assistant real capabilities
 optionally bring your own cloud API keys — all in a calm, editorial "Paper /
 Slate" interface.
 
-**Poiesis** takes its name from *autopoiesis* (Maturana & Varela): a system
-that continuously produces and repairs the components that constitute it.
-Poiesis doesn't just use its memory, instructions, and procedures — it
+**Poiesis Agent** takes its name from *autopoiesis* (Maturana & Varela): a
+system that continuously produces and repairs the components that constitute
+it. It doesn't just use its memory, instructions, and procedures — it
 maintains them: it observes its own mistakes, distills lessons, repairs
 degraded parts, and evolves its own way of working, with you as the boundary
 that decides what may change. See `docs/POIESIS_PLAN.md` for the full concept
 and implementation plan.
 
-## What Poiesis remembers
+## What Poiesis Agent remembers
 
 *(filled in once Part III (10C) of `docs/POIESIS_PLAN.md` ships — durable
 memory facts, lessons learned from mistakes, standing instructions, and

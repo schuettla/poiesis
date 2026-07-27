@@ -1,6 +1,7 @@
 import { useAppStore } from "../../lib/store";
 import { inTauri } from "../../lib/api";
 import ModelPicker from "../ModelPicker/ModelPicker";
+import PoiesisMark from "../Mark/PoiesisMark";
 import "./TopBar.css";
 
 /**
@@ -38,7 +39,10 @@ function EngineStatus() {
 export default function TopBar() {
   return (
     <div className="topbar">
-      <div className="brand">Poiesis</div>
+      <div className="brand">
+        <PoiesisMark />
+        <span>Poiesis Agent</span>
+      </div>
       <div className="topbar-right">
         <EngineStatus />
         <ModelPicker />

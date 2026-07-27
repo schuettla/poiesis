@@ -3,6 +3,7 @@ import Timeline from "./Timeline";
 import RunText from "./RunText";
 import ChatImage from "./ChatImage";
 import BlockRenderer from "../Blocks/BlockRenderer";
+import ProposalCard from "./ProposalCard";
 
 export default function AgentRun({ message }: { message: Message }) {
   const model = message.model;
@@ -26,6 +27,9 @@ export default function AgentRun({ message }: { message: Message }) {
       {!message.text && images.length === 0 && message.streaming && (
         <RunText text="" streaming />
       )}
+      {message.proposalIds?.map((id) => (
+        <ProposalCard key={id} id={id} />
+      ))}
     </div>
   );
 }

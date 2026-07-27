@@ -14,6 +14,7 @@ use crate::runtime::proxy::{CancelFlag, ToolCallReq, TurnOutcome};
 use crate::secrets::{self, SERVICE_MCP};
 
 use super::skills::{self, Skill, SkillContext};
+use crate::memory::MemoryStore;
 use super::AgentEvent;
 
 /// Cap on tool-call iterations to bound runaway loops. Blocks add present/update
@@ -28,6 +29,23 @@ struct McpBinding {
     /// HTTP endpoint URL, or (for stdio) the server command line.
     url: String,
     transport: String,
+}
+
+/// One live MCP client per connector, reused for the whole run (LOOP-1): the
+/// `initialize` handshake (and, for stdio, the child process) happens once per
+/// connector instead of once per tool call. Keyed by `connector_id`. Dropping
+/// the pool at run end kills stdio children (`kill_on_drop`).
+type McpPool = tokio::sync::Mutex<HashMap<String, McpClient>>;
+
+/// Which autonomy class (AUT-1) governs a tool, if any. Tools not listed here
+/// don't change the agent's own self and are never gated.
+fn self_change_class(tool: &str) -> Option<&'static str> {
+    match tool {
+        "memory" => Some("facts"),
+        "propose_soul_edit" => Some("soul"),
+        "propose_recipe" => Some("recipes"),
+        _ => None,
+    }
 }
 
 /// The unified tool table for one run: the OpenAI specs advertised to the model,
@@ -52,6 +70,15 @@ impl ToolRegistry {
         let enabled = skills::enabled(db);
         let mut specs: Vec<serde_json::Value> =
             enabled.iter().flat_map(|s| s.tool_specs()).collect();
+        // AUT-1: a self-change class set to "off" withdraws its tool entirely —
+        // the model is never offered a capability the user has closed off.
+        specs.retain(|s| {
+            s.pointer("/function/name")
+                .and_then(|n| n.as_str())
+                .and_then(self_change_class)
+                .map(|class| crate::autonomy::autonomy_gate(db, class) != crate::autonomy::Rung::Off)
+                .unwrap_or(true)
+        });
         let mut taken: std::collections::HashSet<String> = specs
             .iter()
             .filter_map(|s| s.pointer("/function/name").and_then(|n| n.as_str()))
@@ -93,6 +120,40 @@ impl ToolRegistry {
     fn builtin_for(&self, name: &str) -> Option<Skill> {
         self.skills.iter().copied().find(|s| s.handles(name))
     }
+
+    /// Every advertised tool name — used by the early-flush guard (LOOP-4) to
+    /// keep buffering anything that might still turn out to be a tool call.
+    fn tool_names(&self) -> Vec<String> {
+        self.specs
+            .iter()
+            .filter_map(|s| s.pointer("/function/name").and_then(|n| n.as_str()))
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+/// Least tokens after which a still-unclassified buffer is judged prose (LOOP-4).
+const EARLY_FLUSH_CHARS: usize = 160;
+
+/// LOOP-4: may we start streaming this partial turn to the user live?
+///
+/// Deliberately dumb and biased toward buffering: a false *buffer* just restores
+/// the old behavior (prose appears at end of turn), while a false *flush* leaks
+/// raw tool-call JSON into the conversation — much worse. So anything that could
+/// still become a tool call — a JSON/array opener, a code fence, a `<think>`
+/// preamble, or any text mentioning a known tool name — keeps buffering.
+fn should_flush_prose(buf: &str, tool_names: &[String]) -> bool {
+    let t = buf.trim_start();
+    let Some(first) = t.chars().next() else { return false };
+    if matches!(first, '{' | '[' | '`' | '<') {
+        return false;
+    }
+    if tool_names.iter().any(|n| t.contains(n.as_str())) {
+        return false;
+    }
+    // Opening on a letter is the clearest prose signal; otherwise give the turn
+    // some room to reveal itself before committing.
+    first.is_alphabetic() || t.chars().count() >= EARLY_FLUSH_CHARS
 }
 
 /// Thin wrapper over the Tauri channel with typed emit helpers.
@@ -103,6 +164,10 @@ pub struct AgentEventSink {
 impl AgentEventSink {
     pub fn new(channel: Channel<AgentEvent>) -> Self {
         Self { channel }
+    }
+    /// Send any event verbatim — for variants without a dedicated helper.
+    pub fn emit(&self, event: AgentEvent) {
+        let _ = self.channel.send(event);
     }
     pub fn token(&self, text: &str) {
         let _ = self.channel.send(AgentEvent::Token { text: text.to_string() });
@@ -199,9 +264,11 @@ pub async fn run_agent(
     endpoint: &ChatEndpoint,
     db: &Db,
     perms: &PermissionManager,
+    memory: &MemoryStore,
     conversation_id: &str,
     assistant_message_id: Option<&str>,
     data_dir: &std::path::Path,
+    model_name: &str,
     mut messages: Vec<serde_json::Value>,
     temperature: f32,
     tools_enabled: bool,
@@ -210,8 +277,15 @@ pub async fn run_agent(
 ) -> String {
     // Unified tool table: built-in skills + enabled MCP connectors (§7.5).
     let registry = ToolRegistry::build(db);
+    let tool_names = registry.tool_names();
     let no_tools: Vec<serde_json::Value> = Vec::new();
     let mut final_text = String::new();
+    // GRM-3: call ids we've already nudged, so a failed built-in gets exactly
+    // one guided retry — not an unbounded correction loop.
+    let mut retried: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // LOOP-1: MCP sessions reused across this run; dropped (and stdio children
+    // killed) when the run returns.
+    let mcp_pool: McpPool = Default::default();
 
     for _ in 0..MAX_ITERATIONS {
         if cancel.is_cancelled() {
@@ -222,8 +296,11 @@ pub async fn run_agent(
         let tools_for_turn = if tools_enabled { &registry.specs } else { &no_tools };
 
         // In plain-chat mode we stream prose live. In tools mode we buffer the
-        // turn so a content-form tool call can be intercepted before display.
+        // turn so a content-form tool call can be intercepted before display —
+        // until the buffer clearly reads as prose, at which point we flush what
+        // we have and stream the rest live (LOOP-4).
         let mut turn_buf = String::new();
+        let mut streaming_live = false;
         let outcome = drive_turn(
             client,
             endpoint,
@@ -236,6 +313,13 @@ pub async fn run_agent(
                 if !tools_enabled {
                     final_text.push_str(t);
                     sink.token(t);
+                } else if streaming_live {
+                    final_text.push_str(t);
+                    sink.token(t);
+                } else if should_flush_prose(&turn_buf, &tool_names) {
+                    streaming_live = true;
+                    final_text.push_str(&turn_buf);
+                    sink.token(&turn_buf);
                 }
             },
         )
@@ -243,13 +327,20 @@ pub async fn run_agent(
 
         match outcome {
             Ok(TurnOutcome::Final { content }) => {
+                // Already streamed live (LOOP-4): `final_text` holds the whole
+                // turn, so don't re-emit it and don't re-parse it as a tool call.
+                if tools_enabled && streaming_live {
+                    sink.done();
+                    return final_text;
+                }
+
                 let text = if content.is_empty() { turn_buf } else { content };
 
                 // Fallback: the engine may have streamed a tool call as content
                 // JSON instead of structured tool_calls. Execute it if so.
                 if tools_enabled {
                     if let Some(calls) = parse_text_tool_calls(&text, &registry) {
-                        dispatch_calls(client, db, perms, sink, conversation_id, assistant_message_id, data_dir, &registry, &mut messages, &calls)
+                        dispatch_calls(client, db, perms, memory, sink, conversation_id, assistant_message_id, data_dir, model_name, &registry, &mcp_pool, &mut messages, &mut retried, &calls)
                             .await;
                         continue;
                     }
@@ -269,7 +360,7 @@ pub async fn run_agent(
                 return final_text;
             }
             Ok(TurnOutcome::ToolCalls(calls)) => {
-                dispatch_calls(client, db, perms, sink, conversation_id, assistant_message_id, data_dir, &registry, &mut messages, &calls)
+                dispatch_calls(client, db, perms, memory, sink, conversation_id, assistant_message_id, data_dir, model_name, &registry, &mcp_pool, &mut messages, &mut retried, &calls)
                     .await;
                 // Loop continues — the model sees the tool results next turn.
             }
@@ -291,12 +382,16 @@ async fn dispatch_calls(
     client: &reqwest::Client,
     db: &Db,
     perms: &PermissionManager,
+    memory: &MemoryStore,
     sink: &AgentEventSink,
     conversation_id: &str,
     assistant_message_id: Option<&str>,
     data_dir: &std::path::Path,
+    model_name: &str,
     registry: &ToolRegistry,
+    mcp_pool: &McpPool,
     messages: &mut Vec<serde_json::Value>,
+    retried: &mut std::collections::HashSet<String>,
     calls: &[ToolCallReq],
 ) {
     messages.push(assistant_tool_call_message(calls));
@@ -306,7 +401,10 @@ async fn dispatch_calls(
         let (verb, target) = describe(&call.name, &args, registry);
         sink.step_start(&call.id, &verb, &target);
 
-        match dispatch(client, db, perms, sink, conversation_id, assistant_message_id, data_dir, registry, &call.name, &args).await {
+        let result = dispatch(client, db, perms, memory, sink, conversation_id, assistant_message_id, data_dir, registry, mcp_pool, &call.id, &call.name, &args).await;
+        // GRM-4/LOOP-5: record every dispatched call's outcome (content-free).
+        db.add_tool_stat(model_name, &call.name, conversation_id, result.is_ok());
+        match result {
             Ok(output) => {
                 sink.step_done(&call.id, summarize(&output));
                 messages.push(tool_result_message(&call.id, &output));
@@ -314,6 +412,16 @@ async fn dispatch_calls(
             Err(e) => {
                 sink.step_error(&call.id, &e);
                 messages.push(tool_result_message(&call.id, &format!("Error: {e}")));
+                // GRM-3: give a failed *built-in* call one guided retry. MCP
+                // errors take the LOOP-UI-2 path, not this nudge.
+                if registry.builtin_for(&call.name).is_some() && retried.insert(call.id.clone()) {
+                    messages.push(serde_json::json!({
+                        "role": "system",
+                        "content": format!(
+                            "Fix the previous tool call: {e}. Reply with ONLY the corrected tool call."
+                        ),
+                    }));
+                }
             }
         }
     }
@@ -410,44 +518,59 @@ async fn dispatch(
     client: &reqwest::Client,
     db: &Db,
     perms: &PermissionManager,
+    memory: &MemoryStore,
     sink: &AgentEventSink,
     conversation_id: &str,
     assistant_message_id: Option<&str>,
     data_dir: &std::path::Path,
     registry: &ToolRegistry,
+    mcp_pool: &McpPool,
+    call_id: &str,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {
     if let Some(skill) = registry.builtin_for(name) {
-        let ctx = SkillContext { client, db, perms, sink, conversation_id, assistant_message_id, data_dir };
+        let ctx = SkillContext { client, db, perms, sink, conversation_id, assistant_message_id, data_dir, call_id, memory };
         skill.execute(&ctx, name, args).await
     } else if let Some(binding) = registry.mcp.get(name) {
-        call_mcp_tool(client, db, conversation_id, binding, name, args).await
+        call_mcp_tool(client, db, conversation_id, mcp_pool, binding, name, args).await
     } else {
         Err(format!("No skill or connector provides the tool '{name}'."))
     }
 }
 
-/// Invoke a tool on a remote MCP server (MCP-4): connect, call, and log the act
-/// in the visible activity log.
+/// Invoke a tool on a remote MCP server (MCP-4): reuse this run's live client for
+/// the connector (LOOP-1), calling `initialize` only the first time it is seen,
+/// then log the act in the visible activity log.
 async fn call_mcp_tool(
     client: &reqwest::Client,
     db: &Db,
     conversation_id: &str,
+    mcp_pool: &McpPool,
     binding: &McpBinding,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {
-    let mut mcp = if binding.transport == "stdio" {
-        McpClient::new_stdio(binding.url.clone())
-    } else {
-        let token = secrets::get_secret(SERVICE_MCP, &binding.connector_id)
-            .ok()
-            .flatten();
-        McpClient::new(client.clone(), binding.url.clone(), token)
-    };
-    mcp.initialize().await.map_err(|e| e.to_string())?;
+    let mut pool = mcp_pool.lock().await;
+    if !pool.contains_key(&binding.connector_id) {
+        let mut mcp = if binding.transport == "stdio" {
+            McpClient::new_stdio(binding.url.clone())
+        } else {
+            let token = secrets::get_secret(SERVICE_MCP, &binding.connector_id)
+                .ok()
+                .flatten();
+            McpClient::new(client.clone(), binding.url.clone(), token)
+        };
+        // Handshake once per connector per run. If it fails, leave the slot
+        // empty so a later call can retry the connection.
+        mcp.initialize().await.map_err(|e| e.to_string())?;
+        pool.insert(binding.connector_id.clone(), mcp);
+    }
+    let mcp = pool
+        .get_mut(&binding.connector_id)
+        .expect("just inserted or already present");
     let output = mcp.call_tool(name, args.clone()).await.map_err(|e| e.to_string())?;
+    drop(pool);
     let _ = db.log_activity(
         Some(conversation_id),
         "mcp",
@@ -480,5 +603,42 @@ fn summarize(output: &str) -> Option<String> {
         Some(format!("— {}…", &trimmed[..48]))
     } else {
         Some(format!("— {trimmed}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names() -> Vec<String> {
+        vec!["render_ui".to_string(), "web_search".to_string()]
+    }
+
+    #[test]
+    fn early_flush_streams_plain_prose() {
+        assert!(should_flush_prose("Here's what I found", &names()));
+        assert!(should_flush_prose("I", &names()));
+    }
+
+    #[test]
+    fn early_flush_holds_anything_that_could_be_a_tool_call() {
+        // JSON / array openers, fences and reasoning preambles keep buffering,
+        // even part-way through a long emission.
+        assert!(!should_flush_prose("{\"name\": \"render", &names()));
+        assert!(!should_flush_prose("[{\"name\"", &names()));
+        assert!(!should_flush_prose("```json", &names()));
+        assert!(!should_flush_prose("<think>let me", &names()));
+        assert!(!should_flush_prose(&format!("{{{}", "x".repeat(400)), &names()));
+        // A known tool name anywhere in the buffer is enough to keep waiting.
+        assert!(!should_flush_prose("I will call web_search now", &names()));
+        assert!(!should_flush_prose("", &names()));
+    }
+
+    #[test]
+    fn early_flush_waits_out_an_ambiguous_opener() {
+        // Starts on a digit — could be prose or could be anything, so hold until
+        // there is enough text to be confident.
+        assert!(!should_flush_prose("1. first", &names()));
+        assert!(should_flush_prose(&format!("1. {}", "word ".repeat(60)), &names()));
     }
 }

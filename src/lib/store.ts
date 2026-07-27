@@ -13,12 +13,67 @@ import type {
 } from "./types";
 import { mockConversations, mockModels } from "./mockData";
 import * as api from "./api";
+import { budgetTurns, withSummary, KEEP_RECENT, KEEP_RECENT_WORKSPACE } from "./context";
 
 const SYSTEM_PROMPT_KEY = "system_prompt";
 const READING_SCALE_KEY = "reading_scale";
 const TELEMETRY_KEY = "telemetry_enabled";
+const AUTOCOMPACT_KEY = "context.autocompact";
+const MEMORY_ONBOARDED_KEY = "memory.onboarded";
+const REFLECT_AUTO_KEY = "reflection.auto";
+const SELF_BORN_KEY = "self.born";
+const SELF_INTRODUCED_KEY = "self.introduced";
+/** Below this, a conversation is too slight to have taught anything (REF-3). */
+const REFLECT_MIN_MESSAGES = 8;
+
+/** The self-change classes the Autonomy card offers (AUT-1). `fallback` mirrors
+ * the backend's `AUTONOMY_DEFAULTS`; `rungs` hides options a class can't honour
+ * — facts have no proposal UI, so they are auto-with-undo or off. */
+export const AUTONOMY_CLASSES: {
+  id: string;
+  label: string;
+  blurb: string;
+  fallback: string;
+  rungs: string[];
+}[] = [
+  {
+    id: "facts",
+    label: "Remembering facts about you",
+    blurb: "What I save when you tell me something durable. Every save is undoable.",
+    fallback: "auto",
+    rungs: ["auto", "off"],
+  },
+  {
+    id: "lessons",
+    label: "Learning from my mistakes",
+    blurb: "Lessons I draw from finished conversations. Also undoable.",
+    fallback: "auto",
+    rungs: ["auto", "ask", "off"],
+  },
+  {
+    id: "recipes",
+    label: "Keeping procedures",
+    blurb: "Step-by-step procedures we developed together. I always ask first.",
+    fallback: "ask",
+    rungs: ["ask", "off"],
+  },
+  {
+    id: "soul",
+    label: "Changing my standing instructions",
+    blurb: "How I should always behave. I always ask first.",
+    fallback: "ask",
+    rungs: ["ask", "off"],
+  },
+  {
+    id: "consolidate",
+    label: "Tidying up my memory",
+    blurb: "Merging and pruning what I remember. You review the whole tidy-up.",
+    fallback: "ask",
+    rungs: ["ask", "off"],
+  },
+];
 const DEFAULT_SYSTEM_PROMPT =
-  "You are Poiesis, a local-first assistant that maintains itself: you keep durable memory, learn lessons from your own mistakes, and propose — never impose — changes to how you work. Be concise and clear.";
+  "You are Poiesis Agent, a local-first assistant that maintains itself: you keep durable memory, learn lessons from your own mistakes, and propose — never impose — changes to how you work. Be concise and clear.";
 
 interface AppState {
   bootstrapped: boolean;
@@ -91,6 +146,83 @@ interface AppState {
   setReadingScale: (scale: number) => Promise<void>;
   telemetryEnabled: boolean;
   setTelemetryEnabled: (on: boolean) => Promise<void>;
+
+  // durable memory (MEM)
+  /** The always-injected index + standing instructions (MEM-3). */
+  memoryContext: api.MemoryContext;
+  refreshMemoryContext: () => Promise<void>;
+  /** Self-changes the agent proposed and the user hasn't answered (SOUL-3). */
+  changeProposals: api.ChangeProposal[];
+  refreshChangeProposals: () => Promise<void>;
+  resolveChangeProposal: (id: string, accept: boolean) => Promise<void>;
+  /** A tidy-up the user hasn't answered — feeds the Settings badge (SOUL-UI-3). */
+  consolidationPending: boolean;
+  /** The most recent memory write, for the undoable toast (MEM-UI-3). `op` and
+   *  `undoToken` decide what Undo means: undo a save by forgetting it, a forget
+   *  by restoring it from trash. */
+  memoryToast: {
+    op: string;
+    name: string;
+    description: string;
+    collection: string;
+    undoToken: string;
+  } | null;
+  dismissMemoryToast: () => void;
+  undoMemoryWrite: () => Promise<void>;
+  /** True until the first-write explainer has been shown once (MEM-UI-4). */
+  memoryOnboarded: boolean;
+  /** Whether the Memory skill is on — gates both the tool and the injection. */
+  memorySkillEnabled: boolean;
+  refreshMemorySkill: () => Promise<void>;
+
+  // the autopoietic layer (Phase 11)
+  /** What the organism is doing right now, for the living mark (PRES-1). */
+  presence: "idle" | "active" | "reflecting" | "healing";
+  /** Conversations currently being reflected on — the rail shows them digesting
+   * (PRES-2). In-memory only. */
+  reflectingIds: string[];
+  /** Conversations this session's reflection actually learned from (PRES-2). */
+  digestedIds: string[];
+  /** Run reflection over one conversation and surface what it learned (REF-3).
+   * `learned` was written; `proposed` is waiting on the user. */
+  reflectConversation: (
+    conversationId: string
+  ) => Promise<{ learned: number; proposed: number }>;
+  /** Counts + health for the Self view (ORG-1). */
+  vitality: api.Vitality | null;
+  lessons: api.Fact[];
+  recipes: api.Recipe[];
+  refreshSelf: () => Promise<void>;
+  forgetLesson: (name: string) => Promise<void>;
+  forgetRecipe: (name: string) => Promise<void>;
+  /** 7-day per-tool reliability for the running model; feeds the caution lines
+   * the agent gets in its own prompt (HEAL-2). */
+  toolHealth: api.ToolHealth[];
+  refreshToolHealth: () => Promise<void>;
+  /** A one-line notice from the watchdog (HEAL-1), or null. */
+  healToast: string | null;
+  dismissHealToast: () => void;
+  /** Reflect automatically on leaving a conversation (setting `reflection.auto`). */
+  autoReflect: boolean;
+  setAutoReflect: (on: boolean) => Promise<void>;
+  /** How much Poiesis may change without asking, per class (AUT-1). */
+  autonomy: Record<string, string>;
+  setAutonomy: (cls: string, rung: string) => Promise<void>;
+  /** When this Poiesis first ran, for the growth narrative (PRES-3). */
+  selfBorn: number | null;
+  /** True once the first-run introduction has been answered (PRES-6). */
+  selfIntroduced: boolean;
+  dismissIntroduction: () => Promise<void>;
+  /** Start a new workspace conversation from a saved procedure (RCP-UI-2). */
+  startFromRecipe: (recipe: api.Recipe) => Promise<void>;
+
+  // context homeostasis (CTX)
+  /** Context window of the current model, for the composer meter. */
+  contextBudget: number;
+  /** Summarize older turns instead of hard-dropping them (setting `context.autocompact`). */
+  autoCompact: boolean;
+  setAutoCompact: (on: boolean) => Promise<void>;
+  refreshContextBudget: () => Promise<void>;
 
   // library / all artifacts
   allArtifacts: api.Artifact[];
@@ -252,6 +384,9 @@ function toConversation(c: api.DbConversation): Conversation {
     personaId: c.persona_id,
     overrides: parseOverrides(c.overrides_json),
     workspace: c.workspace,
+    summary: c.summary,
+    summaryUptoMessageId: c.summary_upto_message_id,
+    reflectedAt: c.reflected_at,
   };
 }
 
@@ -287,6 +422,18 @@ function deriveTitle(text: string): string {
   return t.length > 48 ? `${t.slice(0, 48)}…` : t || "New chat";
 }
 
+// Context-window constants (CTX-4). Declared above the store because the store's
+// initial `contextBudget` reads DEFAULT_LOCAL_CTX at creation time — a `const`
+// referenced before its declaration is a temporal-dead-zone crash at import.
+/** Published context windows for hosted models, by provider. */
+const CLOUD_CTX: Record<string, number> = {
+  anthropic: 200_000,
+  openai: 128_000,
+  openrouter: 32_000,
+};
+/** Used before the engine reports its real window, and in browser preview. */
+const DEFAULT_LOCAL_CTX = 4096;
+
 export const useAppStore = create<AppState>((set, get) => ({
   bootstrapped: false,
 
@@ -317,6 +464,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectModel: (id) => {
     set({ selectedModelId: id });
     const m = get().models.find((x) => x.id === id);
+    // The context window is a property of the model, so the meter follows it.
+    get().refreshContextBudget();
+    get().refreshMemoryContext();
+    get().refreshChangeProposals();
+    get().refreshMemorySkill();
+    // Tool reliability is per model too (HEAL-2): a tool a 3B fumbles isn't
+    // broken for a cloud model, so the cautions must not carry over.
+    get().refreshToolHealth();
     if (api.inTauri() && m?.provenance === "local") {
       const s = get();
       // Already running (or starting) this exact model — nothing to do.
@@ -437,6 +592,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
     set((s) => ({
       busy: true,
+      presence: "active",
       conversations: s.conversations.map((c) =>
         c.id === convId
           ? { ...c, updatedAt: Date.now(), messages: [...c.messages, userMsg, assistantMsg] }
@@ -572,6 +728,241 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (api.inTauri()) await api.setSetting(TELEMETRY_KEY, telemetryEnabled ? "true" : "false");
   },
 
+  memoryContext: { index: "", soul: "", fact_count: 0 },
+  refreshMemoryContext: async () => {
+    if (!api.inTauri()) return;
+    try {
+      set({ memoryContext: await api.getMemoryContext() });
+    } catch {
+      /* memory folder unreadable — the app still works without it */
+    }
+  },
+  changeProposals: [],
+  consolidationPending: false,
+  refreshChangeProposals: async () => {
+    if (!api.inTauri()) return;
+    try {
+      set({ changeProposals: await api.listChangeProposals() });
+    } catch {
+      /* non-fatal */
+    }
+    try {
+      const c = await api.getPendingConsolidation();
+      set({
+        consolidationPending:
+          !!c && (c.deletes.length > 0 || c.edits.length > 0 || c.merges.length > 0),
+      });
+    } catch {
+      /* non-fatal */
+    }
+  },
+  resolveChangeProposal: async (id, accept) => {
+    await api.resolveChangeProposal(id, accept);
+    await get().refreshChangeProposals();
+    if (accept) await get().refreshMemoryContext();
+  },
+  memoryToast: null,
+  dismissMemoryToast: () => set({ memoryToast: null }),
+  undoMemoryWrite: async () => {
+    const toast = get().memoryToast;
+    set({ memoryToast: null });
+    if (!toast) return;
+    try {
+      // Undo the actual operation: a forget is undone by restoring from trash,
+      // anything else (a save) by forgetting the entry it created.
+      if (toast.op === "forget" && toast.undoToken) {
+        await api.restoreMemoryFact(toast.undoToken);
+      } else {
+        await api.forgetMemoryFact(toast.name);
+      }
+      await get().refreshMemoryContext();
+    } catch {
+      /* already gone */
+    }
+  },
+  memoryOnboarded: false,
+  memorySkillEnabled: true,
+  refreshMemorySkill: async () => {
+    if (!api.inTauri()) return;
+    try {
+      const skills = await api.listSkills();
+      const memory = skills.find((s) => s.id === "memory");
+      set({ memorySkillEnabled: memory?.enabled ?? true });
+    } catch {
+      /* keep the default */
+    }
+  },
+
+  // ---- the autopoietic layer (Phase 11) ----
+
+  presence: "idle",
+  reflectingIds: [],
+  digestedIds: [],
+  reflectConversation: async (conversationId) => {
+    if (!api.inTauri()) return { learned: 0, proposed: 0 };
+    // Mark it before the call so the rail row starts digesting immediately.
+    set((s) => ({
+      reflectingIds: [...s.reflectingIds, conversationId],
+      presence: "reflecting",
+    }));
+    // Reflection is a real turn against a real model — route it the same way a
+    // chat turn is routed, so a cloud-only setup can still learn.
+    const model = get().models.find((m) => m.id === get().selectedModelId);
+    const target: api.ChatTarget | undefined =
+      model?.provenance === "cloud"
+        ? { provenance: "cloud", provider: model.provider, model: model.cloudModel }
+        : undefined;
+    let learned = 0;
+    let proposed = 0;
+    try {
+      const result = await api.reflectConversation(conversationId, target);
+      learned = result.saved.length;
+      proposed = result.proposed.length;
+    } catch {
+      /* a failed reflection teaches nothing and says nothing */
+    }
+    set((s) => {
+      const stillReflecting = s.reflectingIds.filter((id) => id !== conversationId);
+      return {
+        reflectingIds: stillReflecting,
+        // Only step down to idle if nothing else is going on: a reflection
+        // finishing must not stop the mark breathing mid-generation.
+        presence: stillReflecting.length
+          ? s.presence
+          : s.busy
+            ? "active"
+            : "idle",
+        // Only a lesson actually written is something learned. A proposal is
+        // still a question, and the rail must not claim otherwise.
+        digestedIds: learned > 0 ? [...s.digestedIds, conversationId] : s.digestedIds,
+        // The conversation has had its turn either way — don't re-reflect it.
+        conversations: s.conversations.map((c) =>
+          c.id === conversationId ? { ...c, reflectedAt: Date.now() } : c
+        ),
+      };
+    });
+    if (learned > 0 || proposed > 0) {
+      get().refreshMemoryContext();
+      get().refreshSelf();
+      // Proposals only reach the Lessons tab (and the rail badge) once the
+      // pending list is refetched.
+      if (proposed > 0) get().refreshChangeProposals();
+    }
+    return { learned, proposed };
+  },
+
+  vitality: null,
+  lessons: [],
+  recipes: [],
+  refreshSelf: async () => {
+    if (!api.inTauri()) return;
+    const model = get().models.find((m) => m.id === get().selectedModelId);
+    const [vitality, lessons, recipes] = await Promise.all([
+      api.getVitality(model?.provenance === "cloud" ? model.cloudModel : undefined).catch(() => null),
+      api.listLessons().catch(() => [] as api.Fact[]),
+      api.listRecipes().catch(() => [] as api.Recipe[]),
+    ]);
+    set({ vitality, lessons, recipes });
+  },
+  forgetLesson: async (name) => {
+    const undoToken = await api.forgetLesson(name);
+    set({ memoryToast: { op: "forget", name, description: name, collection: "lessons", undoToken } });
+    await get().refreshSelf();
+    await get().refreshMemoryContext();
+  },
+  forgetRecipe: async (name) => {
+    await api.forgetRecipe(name);
+    await get().refreshSelf();
+    await get().refreshMemoryContext();
+  },
+
+  toolHealth: [],
+  refreshToolHealth: async () => {
+    if (!api.inTauri()) return;
+    const model = get().models.find((m) => m.id === get().selectedModelId);
+    // Health is per model: a tool a small local model fumbles isn't broken.
+    const name = model?.provenance === "cloud" ? model.cloudModel : undefined;
+    try {
+      set({ toolHealth: await api.getToolHealth(name) });
+    } catch {
+      /* no stats yet is the normal case */
+    }
+  },
+
+  healToast: null,
+  dismissHealToast: () => set({ healToast: null }),
+  autoReflect: true,
+  setAutoReflect: async (autoReflect) => {
+    set({ autoReflect });
+    if (api.inTauri()) await api.setSetting(REFLECT_AUTO_KEY, autoReflect ? "true" : "false");
+  },
+
+  autonomy: {},
+  setAutonomy: async (cls, rung) => {
+    set((s) => ({ autonomy: { ...s.autonomy, [cls]: rung } }));
+    if (api.inTauri()) await api.setSetting(`autonomy.${cls}`, rung);
+  },
+
+  selfBorn: null,
+  selfIntroduced: false,
+  dismissIntroduction: async () => {
+    set({ selfIntroduced: true });
+    if (api.inTauri()) await api.setSetting(SELF_INTRODUCED_KEY, "true");
+  },
+
+  startFromRecipe: async (recipe) => {
+    const wasWorkspace = get().workspaceMode;
+    set({ workspaceMode: true });
+    await get().newConversation();
+    const convId = get().activeConversationId;
+    if (!convId) {
+      set({ workspaceMode: wasWorkspace });
+      return;
+    }
+    set((s) => ({
+      view: "chat",
+      conversations: s.conversations.map((c) =>
+        c.id === convId ? { ...c, recipeName: recipe.name } : c
+      ),
+    }));
+    // Seed the template first, so the workspace is already furnished when the
+    // agent's first turn arrives — the recipe visibly hatches (PRES-7).
+    if (recipe.surface_json && api.inTauri()) {
+      try {
+        const id = await api.setSurface(convId, recipe.surface_json);
+        set((s) => ({
+          surfaces: {
+            ...s.surfaces,
+            [convId]: {
+              id,
+              kind: "surface",
+              title: "Workspace",
+              data: JSON.parse(recipe.surface_json as string),
+            },
+          },
+        }));
+      } catch {
+        /* a bad template shouldn't stop the procedure from running */
+      }
+    }
+    // The recipe *is* the kickoff prompt; the agent takes it from there.
+    await get().sendMessage(
+      `Follow your recipe "${recipe.name}". Steps:\n${recipe.steps}`
+    );
+  },
+
+  contextBudget: DEFAULT_LOCAL_CTX,
+  autoCompact: true,
+  setAutoCompact: async (autoCompact) => {
+    set({ autoCompact });
+    if (api.inTauri()) await api.setSetting(AUTOCOMPACT_KEY, autoCompact ? "true" : "false");
+  },
+  refreshContextBudget: async () => {
+    const state = get();
+    const model = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
+    set({ contextBudget: await resolveBudget(model) });
+  },
+
   bootstrap: async () => {
     if (get().bootstrapped) return;
     if (!api.inTauri()) {
@@ -584,11 +975,28 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    const [rows, prompt, readingScaleRaw, telemetryRaw] = await Promise.all([
+    const [
+      rows,
+      prompt,
+      readingScaleRaw,
+      telemetryRaw,
+      autoCompactRaw,
+      onboardedRaw,
+      bornRaw,
+      introducedRaw,
+      autoReflectRaw,
+      ...autonomyRaw
+    ] = await Promise.all([
       api.listConversations(),
       api.getSetting(SYSTEM_PROMPT_KEY),
       api.getSetting(READING_SCALE_KEY),
       api.getSetting(TELEMETRY_KEY),
+      api.getSetting(AUTOCOMPACT_KEY),
+      api.getSetting(MEMORY_ONBOARDED_KEY),
+      api.getSetting(SELF_BORN_KEY),
+      api.getSetting(SELF_INTRODUCED_KEY),
+      api.getSetting(REFLECT_AUTO_KEY),
+      ...AUTONOMY_CLASSES.map((c) => api.getSetting(`autonomy.${c.id}`)),
     ]);
     let conversations = rows.map(toConversation);
     if (conversations.length === 0) {
@@ -597,22 +1005,64 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     const readingScale = readingScaleRaw ? Number(readingScaleRaw) || 1 : 1;
     applyReadingScale(readingScale);
+    // Poiesis's birthday is set once, the first time it runs after this ships —
+    // the growth narrative counts from there, not from an install timestamp we
+    // never recorded.
+    let selfBorn = bornRaw ? Number(bornRaw) : NaN;
+    if (!Number.isFinite(selfBorn)) {
+      selfBorn = Date.now();
+      api.setSetting(SELF_BORN_KEY, String(selfBorn)).catch(() => {});
+    }
+    const autonomy: Record<string, string> = {};
+    AUTONOMY_CLASSES.forEach((c, i) => {
+      autonomy[c.id] = autonomyRaw[i] || c.fallback;
+    });
     set({
+      selfBorn,
+      selfIntroduced: introducedRaw === "true",
+      // Learning from finished work is on unless the user turned it off.
+      autoReflect: autoReflectRaw !== "false",
+      autonomy,
       conversations,
       activeConversationId: conversations[0].id,
       systemPrompt: prompt ?? DEFAULT_SYSTEM_PROMPT,
       readingScale,
       telemetryEnabled: telemetryRaw === "true",
+      // Homeostasis is on unless the user turned it off.
+      autoCompact: autoCompactRaw !== "false",
+      memoryOnboarded: onboardedRaw === "true",
       bootstrapped: true,
     });
     await get().refreshLibrary();
     // Cloud models load in the background (network) — don't block startup.
     get().refreshCloud();
     get().refreshPersonas();
+    get().refreshContextBudget();
+    get().refreshMemoryContext();
+    get().refreshChangeProposals();
+    get().refreshMemorySkill();
+    get().refreshSelf();
+    get().refreshToolHealth();
+    listenForSelfEvents(set, get);
     await get().setActiveConversation(conversations[0].id);
   },
 
   setActiveConversation: async (id) => {
+    // Leaving a conversation is when it becomes reviewable: it's finished
+    // enough to learn from, and the user isn't waiting on anything (REF-3).
+    // Fire-and-forget — reflection must never sit in the navigation path.
+    const leaving = get().conversations.find((c) => c.id === get().activeConversationId);
+    if (
+      leaving &&
+      leaving.id !== id &&
+      !leaving.reflectedAt &&
+      leaving.messages.length >= REFLECT_MIN_MESSAGES &&
+      get().autoReflect &&
+      api.inTauri()
+    ) {
+      get().reflectConversation(leaving.id).catch(() => {});
+    }
+
     // A conversation carries its own workspace flag — switching sessions adopts
     // that session's layout (composed surface vs. classic message stream).
     const conv = get().conversations.find((c) => c.id === id);
@@ -748,6 +1198,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
     set((s) => ({
       busy: true,
+      presence: "active",
       conversations: s.conversations.map((c) =>
         c.id === convId
           ? { ...c, updatedAt: Date.now(), messages: [...c.messages, userMsg, assistantMsg] }
@@ -879,19 +1330,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       sessionState: get().sessionState[convId],
       toolsEnabled: get().toolsEnabled,
       surface: get().surfaces[convId],
+      memory: memoryForPrompt(get()),
+      toolHealth: get().toolHealth,
     });
     const effectiveTemperature =
       conv?.overrides?.temperature ?? personaTemperature(persona);
 
-    // Build the model context: system prompt + prior turns + this one.
-    const priorTurns = (conv?.messages ?? [])
-      .filter((m) => m.text.trim().length > 0)
-      .map((m) => ({ role: m.role as "user" | "assistant", content: m.text }));
-    const turns: api.ChatTurnMessage[] = [
-      { role: "system", content: effectiveSystemPrompt },
-      ...priorTurns,
-      { role: "user", content: userContent },
-    ];
+    // System prompt + as much history as the context window holds + this turn.
+    const turns = await assembleTurns(set, get, {
+      convId,
+      system: effectiveSystemPrompt,
+      current: { role: "user", content: userContent },
+      model,
+    });
 
     await streamAssistantTurn(set, get, {
       convId,
@@ -951,6 +1402,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
     set((s) => ({
       busy: true,
+      presence: "active",
       conversations: s.conversations.map((c) =>
         c.id === convId
           ? { ...c, updatedAt: Date.now(), messages: [...c.messages, userMsg, assistantMsg] }
@@ -960,7 +1412,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     if (!api.inTauri()) {
       patchAssistant(set, convId, assistantId, { streaming: false });
-      set(() => ({ busy: false }));
+      // Back to resting unless a self-process is still working (PRES-1).
+    set((st) => ({ busy: false, presence: st.reflectingIds.length ? "reflecting" : "idle" }));
       return;
     }
 
@@ -983,7 +1436,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const engineError = await ensureEngineForModel(get, model);
     if (engineError) {
       patchAssistant(set, convId, assistantId, { text: engineError, streaming: false });
-      set(() => ({ busy: false }));
+      // Back to resting unless a self-process is still working (PRES-1).
+    set((st) => ({ busy: false, presence: st.reflectingIds.length ? "reflecting" : "idle" }));
       try {
         await api.finalizeMessage(persistedAssistantId, engineError, undefined);
       } catch {
@@ -1001,18 +1455,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       sessionState: get().sessionState[convId],
       toolsEnabled: get().toolsEnabled,
       surface: get().surfaces[convId],
+      memory: memoryForPrompt(get()),
+      toolHealth: get().toolHealth,
     });
     const effectiveTemperature =
       conv?.overrides?.temperature ?? personaTemperature(persona);
 
-    const priorTurns = (conv?.messages ?? [])
-      .filter((m) => m.text.trim().length > 0)
-      .map((m) => ({ role: m.role as "user" | "assistant", content: m.text }));
-    const turns: api.ChatTurnMessage[] = [
-      { role: "system", content: effectiveSystemPrompt },
-      ...priorTurns,
-      { role: "user", content: modelContent },
-    ];
+    const turns = await assembleTurns(set, get, {
+      convId,
+      system: effectiveSystemPrompt,
+      current: { role: "user", content: modelContent },
+      model,
+    });
 
     await streamAssistantTurn(set, get, {
       convId,
@@ -1165,6 +1619,106 @@ async function ensureEngineForModel(get: () => AppState, model: Model): Promise<
   return null;
 }
 
+/**
+ * The durable self to inject. Turning the Memory skill off silences the fact
+ * index and the read tool (MEM-UI-6) — but SOUL.md is the user's own standing
+ * text, edited by hand in Settings, so it keeps riding along regardless.
+ */
+function memoryForPrompt(state: AppState): api.MemoryContext | undefined {
+  const mc = state.memoryContext;
+  if (!mc) return undefined;
+  if (state.memorySkillEnabled) return mc;
+  if (!mc.soul.trim()) return undefined;
+  return { ...mc, index: "" };
+}
+
+// ---- context homeostasis (CTX-4) ----
+
+async function resolveBudget(model: Model | undefined): Promise<number> {
+  if (model?.provenance === "cloud") return CLOUD_CTX[model.provider ?? ""] ?? 32_000;
+  if (!api.inTauri()) return DEFAULT_LOCAL_CTX;
+  try {
+    return (await api.getContextBudget()) ?? DEFAULT_LOCAL_CTX;
+  } catch {
+    return DEFAULT_LOCAL_CTX;
+  }
+}
+
+function targetFor(model: Model): api.ChatTarget {
+  return model.provenance === "cloud"
+    ? { provenance: "cloud", provider: model.provider, model: model.cloudModel }
+    : { provenance: "local" };
+}
+
+/** Optimistic ids are minted client-side and mean nothing to the backend. */
+function isPersistedId(id: string): boolean {
+  return !id.startsWith("u-") && !id.startsWith("a-");
+}
+
+/**
+ * Build the turns for one request: system prompt + as much history as the
+ * model's context window can hold + the current turn (CTX-4).
+ *
+ * When history overflows, the older part is summarized into the conversation
+ * (once), and the summary rides along in the system prompt. Nothing is deleted
+ * or hidden — this only decides what gets *sent*. Shared by `sendMessage` and
+ * `sendBlockAction` so both paths budget identically.
+ */
+async function assembleTurns(
+  set: StoreSet,
+  get: () => AppState,
+  opts: {
+    convId: string;
+    system: string;
+    current: api.ChatTurnMessage;
+    model: Model;
+  }
+): Promise<api.ChatTurnMessage[]> {
+  const { convId, current, model } = opts;
+  const conv = get().conversations.find((c) => c.id === convId);
+  const keepRecent = conv?.workspace ? KEEP_RECENT_WORKSPACE : KEEP_RECENT;
+
+  /** History after the summary boundary — the turns still sent verbatim. */
+  const priorFrom = (boundaryId: string | null | undefined) => {
+    const all = (conv?.messages ?? []).filter((m) => m.text.trim().length > 0);
+    const cut = boundaryId ? all.findIndex((m) => m.id === boundaryId) : -1;
+    return all.slice(cut + 1).map((m) => ({
+      id: m.id,
+      turn: { role: m.role as "user" | "assistant", content: m.text },
+    }));
+  };
+
+  const budget = await resolveBudget(model);
+  set(() => ({ contextBudget: budget }));
+
+  let system = conv?.summary ? withSummary(opts.system, conv.summary) : opts.system;
+  let prior = priorFrom(conv?.summaryUptoMessageId);
+  let bt = budgetTurns(system, prior.map((p) => p.turn), current, budget, keepRecent);
+
+  if (bt.needsCompaction && api.inTauri() && get().autoCompact) {
+    // Overflow is the oldest prefix, so the boundary is its last message.
+    const boundary = prior[bt.overflow.length - 1];
+    if (boundary && isPersistedId(boundary.id)) {
+      try {
+        const summary = await api.compactConversation(convId, boundary.id, targetFor(model));
+        set((s) => ({
+          conversations: s.conversations.map((c) =>
+            c.id === convId ? { ...c, summary, summaryUptoMessageId: boundary.id } : c
+          ),
+        }));
+        system = withSummary(opts.system, summary);
+        prior = priorFrom(boundary.id);
+        bt = budgetTurns(system, prior.map((p) => p.turn), current, budget, keepRecent);
+      } catch {
+        // Summarizing failed (no engine, model error). Sending must never block:
+        // fall through and let the oldest turns simply be dropped.
+      }
+    }
+  }
+
+  return bt.turns;
+}
+
 /** Run one assistant turn: stream events into the optimistic message, then
  * finalize. Shared by `sendMessage` and `sendBlockAction`. */
 async function streamAssistantTurn(
@@ -1183,6 +1737,7 @@ async function streamAssistantTurn(
   let acc = "";
   const steps: AgentStep[] = [];
   const blocks: BlockView[] = [];
+  const proposalIds: string[] = [];
   try {
     await api.agentChat(
       convId,
@@ -1293,6 +1848,38 @@ async function streamAssistantTurn(
           case "permission":
             set((st) => ({ pendingPermissions: [...st.pendingPermissions, e.request] }));
             break;
+          case "memory_write": {
+            // The self changed mid-turn: refresh what gets injected, and show
+            // the user what was written with a way to take it back.
+            get().refreshMemoryContext();
+            if (e.op !== "read") {
+              set(() => ({
+                memoryToast: {
+                  op: e.op,
+                  name: e.name,
+                  description: e.description,
+                  collection: e.collection,
+                  undoToken: e.undo_token,
+                },
+              }));
+            }
+            break;
+          }
+          case "proposal":
+            // Hang it off this turn so the user meets the suggestion where it
+            // was made, not only later in Settings (SOUL-UI-2).
+            proposalIds.push(e.id);
+            patchAssistant(set, convId, assistantId, { proposalIds: [...proposalIds] });
+            get().refreshChangeProposals();
+            break;
+          case "recall": {
+            // Hang the provenance off the step the search is running under, so
+            // the timeline row can expand into clickable sources (RCL-UI).
+            const s = steps.find((x) => x.id === e.id);
+            if (s) s.matches = e.matches;
+            patchAssistant(set, convId, assistantId, { steps: [...steps] });
+            break;
+          }
           case "done":
           case "cancelled":
             patchAssistant(set, convId, assistantId, { streaming: false });
@@ -1317,14 +1904,49 @@ async function streamAssistantTurn(
     acc = acc || `That didn't work: ${String(err)}`;
     patchAssistant(set, convId, assistantId, { text: acc, streaming: false });
   } finally {
-    set(() => ({ busy: false }));
+    // Back to resting unless a self-process is still working (PRES-1).
+    set((st) => ({ busy: false, presence: st.reflectingIds.length ? "reflecting" : "idle" }));
     try {
       const stepsJson = steps.length ? JSON.stringify(steps) : undefined;
       await api.finalizeMessage(persistedAssistantId, acc, stepsJson);
     } catch {
       /* ignore */
     }
+    // This turn just wrote its tool outcomes (GRM-4). Re-reading them here is
+    // what lets a tool that starts failing earn its caution during the session
+    // it is failing in, rather than after the next restart (HEAL-2).
+    if (steps.length) useAppStore.getState().refreshToolHealth();
   }
+}
+
+/** Subscribe to the self-maintenance processes that run outside a chat stream
+ * (REF-3, HEAL-1). Registered once, at bootstrap. */
+function listenForSelfEvents(set: StoreSet, get: () => AppState) {
+  api.onAppEvent<api.MemoryWriteEvent>("poiesis-memory-write", (e) => {
+    get().refreshMemoryContext();
+    get().refreshSelf();
+    set(() => ({
+      memoryToast: {
+        op: e.op,
+        name: e.name,
+        description: e.description,
+        collection: e.collection,
+        undoToken: e.undo_token,
+      },
+    }));
+  });
+  api.onAppEvent<api.HealedEvent>("poiesis-healed", (e) => {
+    set(() => ({
+      presence: "healing" as const,
+      healToast: e.ok
+        ? "↻ My engine stalled — I restarted it."
+        : "↻ I couldn't keep my engine alive — I've stopped trying. Check the Engine page.",
+    }));
+    // The healing state is a moment, not a mode.
+    setTimeout(() => {
+      set((s) => (s.presence === "healing" ? { presence: "idle" } : {}));
+    }, 3000);
+  });
 }
 
 // ---- session state helpers (Generative UI, Phase C) ----
@@ -1346,9 +1968,35 @@ function composeSystemPrompt(
     sessionState: Record<string, unknown> | undefined;
     toolsEnabled: boolean;
     surface?: BlockView;
+    /** The durable self (MEM-3). Omitted when the Memory skill is off. */
+    memory?: api.MemoryContext;
+    /** 7-day tool reliability for this model (HEAL-2). */
+    toolHealth?: api.ToolHealth[];
   }
 ): string {
   let out = base;
+  // The durable self comes first, right after the base prompt: standing
+  // instructions the user approved, then the index of what's remembered.
+  const soul = opts.memory?.soul.trim();
+  if (soul) {
+    out += `
+
+## Standing instructions (SOUL.md — the user approved these)
+${soul}`;
+  }
+  const index = opts.memory?.index.trim();
+  if (index) {
+    const detail = opts.toolsEnabled
+      ? ""
+      : " Tools are off — treat descriptions as the only available detail.";
+    out +=
+      `
+
+## Your memory index (durable facts about the user)
+${index}
+` +
+      `(Read a fact's full text with memory(op:"read", name:…) before relying on its details.${detail})`;
+  }
   // Only mention blocks/surface machinery when the model can actually call the
   // tools — otherwise it imitates tool-call JSON as prose and it leaks raw.
   if (opts.toolsEnabled) {
@@ -1358,8 +2006,30 @@ function composeSystemPrompt(
     if (surface) out += `\n\n${surface}`;
   }
   out = withSessionState(out, opts.sessionState);
-  if (opts.toolsEnabled) out += `\n\n${SURFACE_GUIDANCE}\n\n${BLOCK_GUIDANCE}`;
+  if (opts.toolsEnabled) {
+    out += `\n\n${SURFACE_GUIDANCE}\n\n${BLOCK_GUIDANCE}\n\n${PLAN_FIRST_GUIDANCE}`;
+    const cautions = toolCautions(opts.toolHealth);
+    if (cautions) out += `\n\n${cautions}`;
+  }
   return out;
+}
+
+/** HEAL-2: tell the agent which of its own tools have been failing lately, so
+ * it can route around the damage. Informational self-repair — it changes only
+ * this prompt, stores nothing, and needs no setting. Worst two tools only:
+ * a wall of cautions would just teach the model to distrust every tool. */
+export function toolCautions(health: api.ToolHealth[] | undefined): string {
+  if (!health?.length) return "";
+  const failing = health
+    .filter((t) => t.total >= 8 && t.ok / t.total < 0.4)
+    .sort((a, b) => a.ok / a.total - b.ok / b.total)
+    .slice(0, 2);
+  return failing
+    .map(
+      (t) =>
+        `Note: your "${t.tool_name}" tool has failed often recently — double-check its arguments, and prefer an alternative when one exists.`
+    )
+    .join("\n");
 }
 
 /** The current composed surface, injected so the model can revise it by
@@ -1382,6 +2052,10 @@ const SURFACE_GUIDANCE = [
   "The Workspace view renders whatever interface tree you pass to `render_ui` — compose a real interface for the task (a dashboard, a board, a picker, a wizard, a tracker) instead of describing things in prose or emitting fixed chat blocks.",
   "Keep the surface CURRENT: as the task evolves, revise it (render_ui with node_id for one region, or re-render the whole tree) rather than accumulating chat.",
   "When a `ui_action` message arrives, it carries the user's bound state — revise the surface to reflect the interaction and reply in at most one sentence.",
+  // ORG-UI-2: the data is already in this prompt (memory index, lessons,
+  // recipes) and render_ui already renders — so "show me what you've learned"
+  // becomes the organism examining itself in its own body, with no new machinery.
+  "If the user asks how you are, what you remember, or what you've learned, you may render your memory index, lessons, and recipes as a workspace surface.",
 ].join("\n");
 
 /** W4/W5: teach the model to treat blocks as the surface, not to narrate them,
@@ -1391,6 +2065,13 @@ const BLOCK_GUIDANCE = [
   "When you present a block (comparison, plan, collection, form, progress, document), the user sees it rendered in full in their workspace. Do NOT restate the block's contents in prose — after presenting, conclude in at most two sentences.",
   "To change a block that already exists, call `present` with that block's existing `block_id` (see the workspace-block list above) rather than creating a new one.",
   "If the user's message is only a block interaction (a workspace update, or a `nexus-action`), acknowledge it in one short sentence and do not present a menu of follow-up options.",
+].join("\n");
+
+/** LOOP-3: a multi-step run reads as deliberate rather than flailing when the
+ * model says what it intends before the first tool call. One line, tools only. */
+const PLAN_FIRST_GUIDANCE = [
+  "## Working through a task",
+  "For multi-step tasks, state a one-line plan before your first tool call.",
 ].join("\n");
 
 /** W3: a compact registry of the blocks already on the user's workspace, so the

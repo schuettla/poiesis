@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Component, type ReactNode } from "react";
 import type { UINode } from "../../lib/types";
 import "./Surface.css";
@@ -21,8 +22,21 @@ export interface SurfaceCtx {
 }
 
 export default function SurfaceRenderer({ tree, ctx }: { tree: UINode; ctx: SurfaceCtx }) {
+  // PRES-7: a surface hatches the first time it appears — including one seeded
+  // from a recipe, so a workspace born from a procedure visibly comes to life.
+  // Only the first render: revisions should feel continuous, not restarted.
+  const hatched = useRef(false);
+  const entering = !hatched.current;
+  useEffect(() => {
+    hatched.current = true;
+  }, []);
+
   return (
-    <div className="surface" role="region" aria-label="Workspace surface">
+    <div
+      className={`surface ${entering ? "surface-enter" : ""}`}
+      role="region"
+      aria-label="Workspace surface"
+    >
       <SurfaceErrorBoundary tree={tree}>
         <Node node={tree} ctx={ctx} />
       </SurfaceErrorBoundary>

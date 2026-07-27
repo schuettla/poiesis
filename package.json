@@ -1,7 +1,7 @@
 {
-  "name": "nexus",
+  "name": "poiesis",
   "version": "0.1.0",
-  "description": "Project Nexus — a local-first, agentic desktop LLM application",
+  "description": "Poiesis — a local-first, agentic desktop LLM application",
   "type": "module",
   "scripts": {
     "dev": "vite",

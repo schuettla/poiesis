@@ -1,0 +1,17 @@
+/* Context fullness (CTX-UI-1). Deliberately quiet: a hairline, no colour of
+   its own, no number unless you hover. */
+.context-meter {
+  width: 64px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--ink-faint);
+  overflow: hidden;
+  flex: none;
+  align-self: center;
+}
+
+.context-meter-fill {
+  height: 100%;
+  background: var(--ink-muted);
+  transition: width 240ms ease;
+}

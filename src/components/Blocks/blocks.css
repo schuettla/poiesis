@@ -423,6 +423,12 @@
   align-items: center;
   gap: 5px;
 }
+/* This one outlives the session (MEM-UI-7). */
+.session-durable {
+  color: var(--ink-faint);
+  font-size: 9px;
+  cursor: default;
+}
 .session-clear {
   border: none;
   background: none;

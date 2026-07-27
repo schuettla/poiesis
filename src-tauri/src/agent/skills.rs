@@ -11,10 +11,13 @@
 use serde::Serialize;
 
 use crate::db::Db;
+use crate::memory::MemoryStore;
 use crate::permissions::PermissionManager;
 
 use super::run::AgentEventSink;
-use super::{artifacts, codeexec, filesystem, imagegen, present, websearch};
+use super::{
+    artifacts, codeexec, filesystem, imagegen, memory_skill, present, recall, recipes, websearch,
+};
 
 /// Everything a skill might need to run a call. Built-in skills receive this so
 /// new skills can reach the HTTP client, database, permission manager, and the
@@ -29,6 +32,10 @@ pub struct SkillContext<'a> {
     pub assistant_message_id: Option<&'a str>,
     /// App-data directory for persistent skill output (e.g. generated images).
     pub data_dir: &'a std::path::Path,
+    /// This tool call's id, so a skill can attach richer data to its timeline step.
+    pub call_id: &'a str,
+    /// The durable self on disk (facts, lessons, recipes, SOUL.md).
+    pub memory: &'a MemoryStore,
 }
 
 /// A built-in skill. Adding a capability means adding a variant here and a
@@ -41,6 +48,9 @@ pub enum Skill {
     Artifacts,
     ImageGen,
     Present,
+    Recall,
+    Memory,
+    Recipes,
 }
 
 /// A skill's metadata for the Settings surface (id, label, blurb, current state).
@@ -57,13 +67,16 @@ pub struct SkillInfo {
 
 impl Skill {
     /// Every built-in skill, in display order.
-    pub const ALL: [Skill; 6] = [
+    pub const ALL: [Skill; 9] = [
         Skill::FileSystem,
         Skill::WebSearch,
         Skill::CodeExec,
         Skill::Artifacts,
         Skill::ImageGen,
         Skill::Present,
+        Skill::Recall,
+        Skill::Memory,
+        Skill::Recipes,
     ];
 
     /// Stable id used for settings keys and the frontend.
@@ -75,6 +88,9 @@ impl Skill {
             Skill::Artifacts => "artifacts",
             Skill::ImageGen => "image_gen",
             Skill::Present => "present",
+            Skill::Recall => "recall",
+            Skill::Memory => "memory",
+            Skill::Recipes => "recipes",
         }
     }
 
@@ -90,6 +106,9 @@ impl Skill {
             Skill::Artifacts => "Artifacts",
             Skill::ImageGen => "Image generation",
             Skill::Present => "Workspace UI",
+            Skill::Recall => "Recall",
+            Skill::Memory => "Memory",
+            Skill::Recipes => "Recipes",
         }
     }
 
@@ -113,6 +132,15 @@ impl Skill {
             Skill::Present => {
                 "Let the assistant compose a live, interactive interface for the task in the Workspace view — plus inline chat blocks."
             }
+            Skill::Recall => {
+                "Search your past conversations and saved memories. Stays on your device."
+            }
+            Skill::Memory => {
+                "Remember durable facts about you across conversations — stored as markdown files on this device."
+            }
+            Skill::Recipes => {
+                "Let Poiesis keep and reuse step-by-step procedures it developed with you — stored as markdown on this device."
+            }
         }
     }
 
@@ -124,7 +152,15 @@ impl Skill {
     /// Default state when the user hasn't chosen. File System + Artifacts are
     /// benign and default on; network/exec skills default off for safety.
     fn default_enabled(self) -> bool {
-        matches!(self, Skill::FileSystem | Skill::Artifacts | Skill::Present)
+        matches!(
+            self,
+            Skill::FileSystem
+                | Skill::Artifacts
+                | Skill::Present
+                | Skill::Recall
+                | Skill::Memory
+                | Skill::Recipes
+        )
     }
 
     fn setting_key(self) -> String {
@@ -162,6 +198,9 @@ impl Skill {
             Skill::Artifacts => artifacts::tool_specs(),
             Skill::ImageGen => imagegen::tool_specs(),
             Skill::Present => present::tool_specs(),
+            Skill::Recall => recall::tool_specs(),
+            Skill::Memory => memory_skill::tool_specs(),
+            Skill::Recipes => recipes::tool_specs(),
         };
         v.as_array().cloned().unwrap_or_default()
     }
@@ -175,6 +214,9 @@ impl Skill {
             Skill::Artifacts => artifacts::handles(name),
             Skill::ImageGen => imagegen::handles(name),
             Skill::Present => present::handles(name),
+            Skill::Recall => recall::handles(name),
+            Skill::Memory => memory_skill::handles(name),
+            Skill::Recipes => recipes::handles(name),
         }
     }
 
@@ -187,6 +229,9 @@ impl Skill {
             Skill::Artifacts => artifacts::describe(name, args),
             Skill::ImageGen => imagegen::describe(name, args),
             Skill::Present => present::describe(name, args),
+            Skill::Recall => recall::describe(name, args),
+            Skill::Memory => memory_skill::describe(name, args),
+            Skill::Recipes => recipes::describe(name, args),
         }
     }
 
@@ -207,6 +252,9 @@ impl Skill {
             Skill::Artifacts => artifacts::execute(ctx, name, args).await,
             Skill::ImageGen => imagegen::execute(ctx, name, args).await,
             Skill::Present => present::execute(ctx, name, args).await,
+            Skill::Recall => recall::execute(ctx, name, args).await,
+            Skill::Memory => memory_skill::execute(ctx, name, args).await,
+            Skill::Recipes => recipes::execute(ctx, name, args).await,
         }
     }
 }

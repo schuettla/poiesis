@@ -1,0 +1,166 @@
+/* The durable self, made visible (MEM-UI). Same ink tokens as everything else —
+   memory should feel like part of the room, not an alert. */
+
+.memory-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.memory-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.memory-count {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+.memory-search {
+  margin-bottom: 2px;
+}
+.memory-error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+/* ---- fact cards ---- */
+.memory-card {
+  padding: 12px 14px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: 6px;
+}
+.memory-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.memory-name {
+  color: var(--ink);
+}
+.memory-kind {
+  padding: 1px 6px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: 10px;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+.memory-created {
+  margin-left: auto;
+  color: var(--ink-faint);
+}
+.memory-desc {
+  margin: 6px 0 2px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+.memory-body {
+  margin: 6px 0 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+.memory-card-actions {
+  display: flex;
+  gap: 12px;
+}
+
+/* ---- consolidation proposal ---- */
+.memory-proposal {
+  padding: 12px 14px;
+  border: 1px solid var(--paper-edge-2);
+  border-left: 2px solid var(--ink-muted);
+  border-radius: 6px;
+}
+.memory-proposal-head {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.memory-proposal-row {
+  display: flex;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--paper-edge-2);
+  font-size: 12.5px;
+}
+.memory-proposal-kind {
+  flex: none;
+  width: 46px;
+  font-family: var(--font-mono);
+  color: var(--ink-faint);
+}
+.memory-proposal-body {
+  flex: 1;
+  color: var(--ink-muted);
+}
+.memory-proposal-body pre {
+  margin: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  white-space: pre-wrap;
+}
+
+.memory-undo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+/* ---- live write toast (MEM-UI-3) ---- */
+.memory-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%);
+  z-index: 40;
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 10px 14px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: 8px;
+  box-shadow: 0 2px 14px rgb(0 0 0 / 8%);
+}
+.memory-toast-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.memory-toast-mark {
+  color: var(--ink-faint);
+}
+.memory-toast-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--ink);
+}
+.memory-toast-undo {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink-muted);
+  text-decoration: underline;
+}
+.memory-toast-undo:hover {
+  color: var(--ink);
+}
+.memory-toast-explain {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}

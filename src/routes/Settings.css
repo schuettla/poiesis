@@ -218,6 +218,14 @@
   color: var(--ink-muted);
   line-height: 1.5;
 }
+/* LOOP-UI-1: how this skill's tools actually performed lately. Quieter than the
+   description — a footnote, not a claim. Absent entirely when there's no data. */
+.skill-reliability {
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
 
 /* license attribution */
 .attribution-list {
@@ -340,4 +348,30 @@
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--ink-faint);
+}
+
+/* A plain read-only value inside a settings card (e.g. context window size). */
+.setting-readout {
+  margin: 0 0 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+/* PRES-3: the pointer from Settings to the Self view. A line of prose that
+   happens to be clickable, not a button competing with the settings around it. */
+.settings-self-link {
+  display: block;
+  margin-top: 12px;
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  text-align: left;
+}
+.settings-self-link:hover {
+  color: var(--ink);
 }

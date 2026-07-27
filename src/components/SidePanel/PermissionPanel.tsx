@@ -20,7 +20,7 @@ export default function PermissionPanel() {
   return (
     <div className="side-panel" role="dialog" aria-label="Permission request">
       <div className="side-panel-inner">
-        <p className="permission-eyebrow">Poiesis is asking</p>
+        <p className="permission-eyebrow">Poiesis Agent is asking</p>
         <p className="permission-summary">{request.summary}</p>
         <p className="permission-path">
           {request.path} · {request.mode === "read-write" ? "read & write" : "read only"}

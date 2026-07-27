@@ -7,6 +7,7 @@ import Models from "./routes/Models";
 import Engine from "./routes/Engine";
 import Apps from "./routes/Apps";
 import Settings from "./routes/Settings";
+import Self from "./routes/Self";
 import Library from "./routes/Library";
 import PermissionPanel from "./components/SidePanel/PermissionPanel";
 import "./App.css";
@@ -28,6 +29,7 @@ export default function App() {
       {view === "models" && <Models />}
       {view === "engine" && <Engine />}
       {view === "apps" && <Apps />}
+      {view === "self" && <Self />}
       {view === "settings" && <Settings />}
       {view === "library" && <Library />}
       <PermissionPanel />

@@ -141,3 +141,32 @@ CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
   INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
   INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
 END;
+
+-- Poiesis: agent-proposed self-changes awaiting user approval (SOUL-2, RCP-2).
+CREATE TABLE IF NOT EXISTS change_proposals (
+  id            TEXT PRIMARY KEY,
+  target        TEXT NOT NULL,            -- 'soul' | 'persona' | 'recipe' | 'lesson'
+  persona_id    TEXT,                     -- when target='persona' (future)
+  slug          TEXT,                     -- when target='recipe'|'lesson': the entry name
+  proposed_text TEXT NOT NULL,            -- full replacement/new text for the target
+  rationale     TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'pending', -- pending|applied|dismissed
+  created_at    INTEGER NOT NULL
+);
+
+-- Poiesis: per-model tool reliability (GRM-4 / HEAL-2). Content-free.
+CREATE TABLE IF NOT EXISTS tool_stats (
+  id              TEXT PRIMARY KEY,
+  model_name      TEXT NOT NULL,
+  tool_name       TEXT NOT NULL,
+  conversation_id TEXT,                   -- lets reflection find this chat's failures
+  ok              INTEGER NOT NULL,       -- 1 success, 0 error
+  created_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tool_stats ON tool_stats(model_name, tool_name);
+CREATE INDEX IF NOT EXISTS idx_tool_stats_conv ON tool_stats(conversation_id);
+
+-- Poiesis: FTS over memory entries (RCL-4). Plain fts5 table (not
+-- external-content): the memory store rebuilds it wholesale on every write —
+-- fine at entry-count scale (tens, not thousands).
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(name, description, body, kind);

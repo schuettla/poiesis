@@ -152,6 +152,7 @@ pub async fn ensure_runtime_cmd(
 /// (provisioning the runtime first if necessary).
 #[tauri::command]
 pub async fn load_model_cmd(
+    app: tauri::AppHandle,
     mgr: State<'_, RuntimeManager>,
     db: State<'_, Db>,
     model_path: String,
@@ -166,7 +167,10 @@ pub async fn load_model_cmd(
         ctx_size: ctx_size.unwrap_or(4096),
         n_gpu_layers: n_gpu_layers.unwrap_or(999), // offload all by default; engine clamps
     };
-    mgr.load_model(config).await.map_err(err)
+    let status = mgr.load_model(config).await.map_err(err)?;
+    // From here the engine keeps itself alive (HEAL-1).
+    crate::runtime::watchdog::spawn(app, mgr.generation());
+    Ok(status)
 }
 
 /// One selectable backend in the engine view, with its install + recommend state.
@@ -255,6 +259,7 @@ pub async fn set_backend_override_cmd(db: State<'_, Db>, backend: Option<String>
 /// Engine view. Provisions the runtime first if needed.
 #[tauri::command]
 pub async fn start_engine_cmd(
+    app: tauri::AppHandle,
     mgr: State<'_, RuntimeManager>,
     db: State<'_, Db>,
     on_progress: Channel<DownloadProgress>,
@@ -273,7 +278,9 @@ pub async fn start_engine_cmd(
         ctx_size: 4096,
         n_gpu_layers: 999,
     };
-    mgr.load_model(config).await.map_err(err)
+    let status = mgr.load_model(config).await.map_err(err)?;
+    crate::runtime::watchdog::spawn(app, mgr.generation());
+    Ok(status)
 }
 
 /// Information about an available upstream engine update (§7.3, D-4: pinned
@@ -316,6 +323,14 @@ pub async fn check_runtime_update_cmd(mgr: State<'_, RuntimeManager>) -> Cmd<Upd
 pub async fn stop_engine_cmd(mgr: State<'_, RuntimeManager>) -> Cmd<()> {
     mgr.stop().await;
     Ok(())
+}
+
+/// Context window of the loaded local engine, or `null` when none is loaded
+/// (CTX-1). The frontend budgets turns against this so llama.cpp never has to
+/// truncate from the front — which would eat the system prompt.
+#[tauri::command]
+pub async fn get_context_budget_cmd(mgr: State<'_, RuntimeManager>) -> Cmd<Option<u32>> {
+    Ok(mgr.engine_ctx_size().await)
 }
 
 /// A single chat message in the OpenAI-compatible shape.

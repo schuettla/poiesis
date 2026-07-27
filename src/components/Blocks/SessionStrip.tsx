@@ -23,12 +23,24 @@ function formatVal(v: unknown): string {
   return String(v);
 }
 
+/**
+ * Does this session key also live in durable memory (MEM-UI-7)? A substring
+ * check against the memory index is deliberately cheap and slightly loose —
+ * the marker is a hint that something outlives the session, not a claim about
+ * a specific file. Very short keys are skipped so they can't match by accident.
+ */
+function isDurable(path: string, index: string): boolean {
+  const leaf = path.split(".").pop() ?? "";
+  return leaf.length >= 4 && index.toLowerCase().includes(leaf.toLowerCase());
+}
+
 /** The durable session-state strip (Generative UI, Phase C): a quiet running
  * head of the conversation's remembered constraints and decisions. */
 export default function SessionStrip() {
   const convId = useAppStore((s) => s.activeConversationId);
   const state = useAppStore((s) => (convId ? s.sessionState[convId] : undefined));
   const clearKey = useAppStore((s) => s.clearSessionStateKey);
+  const memoryIndex = useAppStore((s) => s.memoryContext.index);
   const items = flatten(state);
   if (!items.length) return null;
   return (
@@ -37,6 +49,15 @@ export default function SessionStrip() {
       {items.map((it) => (
         <span className="session-item" key={it.path}>
           {it.label}
+          {isDurable(it.path, memoryIndex) && (
+            <span
+              className="session-durable"
+              title="also saved to durable memory"
+              aria-label="also saved to durable memory"
+            >
+              ◆
+            </span>
+          )}
           <button
             className="session-clear"
             aria-label={`Forget ${it.label}`}

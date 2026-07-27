@@ -2,7 +2,11 @@
 
 use tauri::State;
 
+use crate::cloud::{drive_turn, ChatEndpoint};
+use crate::commands::agent::{build_cloud_endpoint, ChatTarget};
 use crate::db::{Artifact, Block, Conversation, Db, Message, NewAttachment, NewMessage};
+use crate::runtime::proxy::{CancelFlag, TurnOutcome};
+use crate::runtime::RuntimeManager;
 use crate::NexusError;
 
 type Cmd<T> = Result<T, NexusError>;
@@ -141,4 +145,111 @@ pub fn get_setting_cmd(db: State<'_, Db>, key: String) -> Cmd<Option<String>> {
 #[tauri::command]
 pub fn set_setting_cmd(db: State<'_, Db>, key: String, value: String) -> Cmd<()> {
     db.set_setting(&key, &value).map_err(err)
+}
+
+// ---- context compaction (CTX-3) ----
+
+/// Clip a message body for the summarization prompt. Compaction is about the
+/// shape of the conversation, not its every word.
+fn clip(s: &str, max: usize) -> String {
+    let s = s.trim();
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    s.chars().take(max).collect::<String>() + "…"
+}
+
+/// Summarize every message up to and including `upto_message_id` into
+/// `conversations.summary`, merging any existing summary, and return the result.
+///
+/// Runs on the same endpoint the chat uses — a local model summarizes locally.
+/// This changes only what is *sent* to the model on later turns: no message is
+/// ever deleted, hidden, or altered.
+#[tauri::command]
+pub async fn compact_conversation_cmd(
+    mgr: State<'_, RuntimeManager>,
+    db: State<'_, Db>,
+    conversation_id: String,
+    upto_message_id: String,
+    target: Option<ChatTarget>,
+) -> Cmd<String> {
+    let target = target.unwrap_or_default();
+    let endpoint = if target.provenance.as_deref() == Some("cloud") {
+        build_cloud_endpoint(&target).map_err(NexusError::Message)?
+    } else {
+        let Some((base_url, token)) = mgr.engine_endpoint().await else {
+            return Err(NexusError::Message(
+                "No model is loaded, so older turns can't be summarized.".into(),
+            ));
+        };
+        ChatEndpoint::OpenAi {
+            base_url,
+            api_key: Some(token),
+            model: None,
+        }
+    };
+
+    let conv = db
+        .list_conversations()
+        .map_err(err)?
+        .into_iter()
+        .find(|c| c.id == conversation_id)
+        .ok_or_else(|| NexusError::Message("That conversation no longer exists.".into()))?;
+
+    let messages = db.list_messages_until(&conversation_id, &upto_message_id).map_err(err)?;
+    if messages.is_empty() {
+        return Err(NexusError::Message("Nothing to summarize yet.".into()));
+    }
+
+    let transcript = messages
+        .iter()
+        .map(|m| format!("{}: {}", m.role, clip(&m.content, 500)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let existing = conv.summary.as_deref().unwrap_or("none");
+
+    // In workspace mode the live surface holds the task state, so restating it
+    // in the summary would only duplicate (and can contradict) what's on screen.
+    let workspace_rule = if conv.workspace {
+        "\nThe live workspace surface is authoritative; do not restate its contents."
+    } else {
+        ""
+    };
+
+    let prompt = format!(
+        "Summarize this conversation so a colleague can continue it.\n\
+         Use exactly these sections, plain text, max 300 words total:\n\
+         FACTS: (stable facts, names, numbers)\n\
+         DECISIONS: (settled choices)\n\
+         OPEN: (unresolved threads, next steps){workspace_rule}\n\
+         Existing summary to merge in:\n{existing}\n\
+         Conversation:\n{transcript}"
+    );
+
+    let msgs = vec![
+        serde_json::json!({
+            "role": "system",
+            "content": "You compress conversation history. Output ONLY the summary, no preamble.",
+        }),
+        serde_json::json!({ "role": "user", "content": prompt }),
+    ];
+
+    let outcome = drive_turn(&mgr.client, &endpoint, &msgs, &[], 0.2, &CancelFlag::new(), |_| {})
+        .await
+        .map_err(err)?;
+
+    let summary = match outcome {
+        TurnOutcome::Final { content } => content.trim().to_string(),
+        TurnOutcome::ToolCalls(_) => {
+            return Err(NexusError::Message("The model tried to use a tool while summarizing.".into()))
+        }
+        TurnOutcome::Cancelled => return Err(NexusError::Message("Summarizing was cancelled.".into())),
+    };
+    if summary.is_empty() {
+        return Err(NexusError::Message("The model returned an empty summary.".into()));
+    }
+
+    db.set_conversation_summary(&conversation_id, &summary, &upto_message_id)
+        .map_err(err)?;
+    Ok(summary)
 }

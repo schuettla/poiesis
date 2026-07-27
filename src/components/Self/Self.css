@@ -1,0 +1,165 @@
+/* The Self view (PRES-3, ORG-UI-1). Same paper and ink as everywhere else —
+   this is a page about a self, so: sentences, counts, no gauges, no green/red. */
+
+/* The head reuses the shared surface shell (h1 + .lede) so Self reads as one of
+   the app's pages, not a panel of its own. The only addition is the rings
+   sitting alongside the prose. */
+.self-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+}
+.self-narrative {
+  flex: 1;
+  min-width: 0;
+}
+/* The narrative is followed by the counts strip, so it needs less room beneath
+   it than a lede that runs straight into content. */
+.self-header .lede {
+  margin-bottom: 10px;
+}
+.self-strip {
+  /* Carries the gap down to the tab row, which sits outside the header. */
+  margin: 0 0 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.growth-rings {
+  flex: none;
+  color: var(--ink);
+}
+
+/* Tabs come from Models.css (.model-tabs / .model-tab) — see SelfPanel. */
+
+.self-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.self-block {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--paper-edge);
+}
+.self-block:last-child {
+  border-bottom: none;
+}
+.self-subhead {
+  margin: 0 0 6px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.self-line {
+  margin: 0 0 6px;
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink-muted);
+}
+.self-note {
+  color: var(--ink);
+}
+
+/* A recipe's steps, and the full text of a proposed one. */
+.self-steps {
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  background: var(--paper-edge);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.self-chip {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+/* Tool health and quarantined files: counts, not bars. */
+.self-table {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.self-table li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 5px 0;
+  border-top: 1px solid var(--paper-edge);
+}
+.self-table li:first-child {
+  border-top: none;
+}
+.self-tool {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--ink);
+  word-break: break-all;
+}
+.self-tool-count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+/* ---- the autonomy ladder ---- */
+.self-rung {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--paper-edge);
+}
+.self-rung:last-child {
+  border-bottom: none;
+}
+.self-rung-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.self-rung-label {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.self-segmented {
+  display: flex;
+  flex: none;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.self-segment {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  background: none;
+  border: none;
+  border-left: 1px solid var(--paper-edge-2);
+  color: var(--ink-muted);
+  padding: 6px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.self-segment:first-child {
+  border-left: none;
+}
+.self-segment:hover {
+  color: var(--ink);
+}
+.self-segment.active {
+  background: var(--paper-edge);
+  color: var(--ink);
+  font-weight: 600;
+}

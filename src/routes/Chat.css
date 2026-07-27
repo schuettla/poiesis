@@ -56,9 +56,41 @@
 /* empty state — invites action rather than apologizes (§5.6) */
 .empty-state {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 22px;
   min-height: 50vh;
+}
+
+/* PRES-6: the one-time introduction. Existing card tokens, no illustration,
+   no modal — it reads as something said, not something popped up. */
+.intro-card {
+  max-width: 46ch;
+  padding: 16px 18px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: 6px;
+}
+.intro-body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--ink);
+}
+
+/* PRES-5: ambient, not promotional — one muted line, no card, no border. */
+.ambient-line {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.ambient-line:hover {
+  color: var(--ink);
 }
 .empty-line {
   font-family: var(--font-serif);

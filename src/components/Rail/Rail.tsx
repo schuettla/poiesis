@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useAppStore } from "../../lib/store";
 import { inTauri, searchConversations } from "../../lib/api";
 import type { Conversation, View } from "../../lib/types";
+import PoiesisMark from "../Mark/PoiesisMark";
 import "./Rail.css";
 
 const DAY = 86400_000;
@@ -25,18 +26,89 @@ const NAV: { label: string; view: View; icon: string }[] = [
   { label: "Engine", view: "engine", icon: "◧" },
   { label: "Library", view: "library", icon: "□" },
   { label: "Apps", view: "apps", icon: "◇" },
+  // The Self is a place, not a settings tab (PRES-3) — its icon is the mark.
+  { label: "Self", view: "self", icon: "" },
   { label: "Settings", view: "settings", icon: "⚙" },
 ];
+
+
+/** One conversation row, with its digestion state (PRES-2) and the manual
+ * "reflect now" affordance (REF-UI-2). The `◆` is one element in three states:
+ * an offer, a pulse while I'm reading the conversation back, and a quiet mark
+ * once it taught me something. */
+function ChatRow({ c, active }: { c: Conversation; active: boolean }) {
+  const setActive = useAppStore((s) => s.setActiveConversation);
+  const reflect = useAppStore((s) => s.reflectConversation);
+  const reflecting = useAppStore((s) => s.reflectingIds.includes(c.id));
+  const digested = useAppStore((s) => s.digestedIds.includes(c.id));
+
+  return (
+    <li
+      className={active ? "active" : ""}
+      title={c.title}
+      tabIndex={0}
+      onClick={() => setActive(c.id)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") setActive(c.id);
+      }}
+    >
+      {c.workspace && (
+        <span className="chat-workspace" aria-label="Workspace session" title="Workspace session">
+          ▦
+        </span>
+      )}
+      <span className="chat-title">{c.title}</span>
+      {reflecting ? (
+        <span className="chat-digest reflecting" role="status" aria-label="I'm reflecting on this conversation">
+          ◆
+        </span>
+      ) : digested ? (
+        <span
+          className="chat-digest learned"
+          role="img"
+          aria-label="I learned something from this conversation"
+          title="I learned something from this conversation"
+        >
+          ◆
+        </span>
+      ) : (
+        <button
+          className="chat-digest offer"
+          title="Reflect on this conversation"
+          aria-label={`Reflect on ${c.title}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            reflect(c.id);
+          }}
+        >
+          ◆
+        </button>
+      )}
+    </li>
+  );
+}
 
 export default function Rail() {
   const conversations = useAppStore((s) => s.conversations);
   const activeId = useAppStore((s) => s.activeConversationId);
   const view = useAppStore((s) => s.view);
-  const setActive = useAppStore((s) => s.setActiveConversation);
   const setView = useAppStore((s) => s.setView);
   const newConversation = useAppStore((s) => s.newConversation);
   const collapsed = useAppStore((s) => s.railCollapsed);
   const toggleRail = useAppStore((s) => s.toggleRail);
+  // Something about the agent's self is waiting on an answer (SOUL-UI-3). The
+  // dot goes where the answer is given: soul edits are reviewed in Settings →
+  // Personas, everything else in the Self panel.
+  const soulPending = useAppStore((s) =>
+    s.changeProposals.some((p) => p.target === "soul")
+  );
+  const selfPending = useAppStore((s) =>
+    s.changeProposals.some((p) => p.target !== "soul")
+  );
+  const consolidationPending = useAppStore((s) => s.consolidationPending);
+  const badgeFor = (view: string) =>
+    (view === "settings" && soulPending) ||
+    (view === "self" && (selfPending || consolidationPending));
 
   const [query, setQuery] = useState("");
   const [resultIds, setResultIds] = useState<string[] | null>(null);
@@ -101,21 +173,7 @@ export default function Rail() {
           <p className="rail-label">{results.length ? "Results" : "No matches"}</p>
           <ul className="chat-list">
             {results.map((c) => (
-              <li
-                key={c.id}
-                className={c.id === activeId && view === "chat" ? "active" : ""}
-                title={c.title}
-                tabIndex={0}
-                onClick={() => setActive(c.id)}
-                onKeyDown={(e) => e.key === "Enter" && setActive(c.id)}
-              >
-                {c.workspace && (
-                  <span className="chat-workspace" aria-label="Workspace session" title="Workspace session">
-                    ▦
-                  </span>
-                )}
-                {c.title}
-              </li>
+              <ChatRow key={c.id} c={c} active={c.id === activeId && view === "chat"} />
             ))}
           </ul>
         </div>
@@ -125,23 +183,7 @@ export default function Rail() {
           <p className="rail-label">{g.label}</p>
           <ul className="chat-list">
             {g.items.map((c) => (
-              <li
-                key={c.id}
-                className={c.id === activeId && view === "chat" ? "active" : ""}
-                title={c.title}
-                tabIndex={0}
-                onClick={() => setActive(c.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") setActive(c.id);
-                }}
-              >
-                {c.workspace && (
-                  <span className="chat-workspace" aria-label="Workspace session" title="Workspace session">
-                    ▦
-                  </span>
-                )}
-                {c.title}
-              </li>
+              <ChatRow key={c.id} c={c} active={c.id === activeId && view === "chat"} />
             ))}
           </ul>
         </div>
@@ -163,9 +205,17 @@ export default function Rail() {
             title={n.label}
           >
             <span className="nav-icon" aria-hidden="true">
-              {n.icon}
+              {n.view === "self" ? <PoiesisMark size={15} /> : n.icon}
             </span>
             <span className="nav-label">{n.label}</span>
+            {badgeFor(n.view) && (
+              <span
+                className="nav-badge"
+                role="img"
+                aria-label="Changes waiting for review"
+                title="Changes waiting for review"
+              />
+            )}
           </li>
         ))}
       </ul>

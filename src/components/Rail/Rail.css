@@ -73,6 +73,9 @@
   padding: 0;
 }
 .chat-list li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 13px;
   color: var(--ink-muted);
   padding: 6px 2px;
@@ -80,7 +83,41 @@
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
+}
+.chat-title {
+  flex: 1;
+  overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Witnessed digestion (PRES-2): one ◆ in three states — an offer to reflect,
+   a pulse while I'm reading the conversation back, and a quiet mark once it
+   taught me something. */
+.chat-digest {
+  flex: none;
+  font-size: 10px;
+  line-height: 1;
+  background: none;
+  border: none;
+  padding: 2px;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.chat-digest.offer {
+  opacity: 0;
+}
+.chat-list li:hover .chat-digest.offer,
+.chat-list li:focus-within .chat-digest.offer,
+.chat-digest.offer:focus {
+  opacity: 1;
+}
+.chat-digest.learned {
+  color: var(--ink-muted);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chat-digest.reflecting {
+    animation: mark-breathe 2.4s ease-in-out infinite;
+  }
 }
 .chat-list li.active {
   color: var(--ink);
@@ -118,6 +155,21 @@
   color: var(--ink-muted);
   padding: 7px 2px;
   cursor: pointer;
+}
+
+/* Something about the agent's self is waiting on the user (SOUL-UI-3). A dot,
+   not a count — this is an invitation to look, not an alarm. */
+.nav-badge {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--ink);
+  vertical-align: middle;
+}
+.rail.collapsed .nav-badge {
+  margin-left: 4px;
 }
 .rail-nav li:hover {
   color: var(--ink);
