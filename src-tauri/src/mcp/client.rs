@@ -63,7 +63,7 @@ impl McpClient {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": {
-                "name": "Project Nexus",
+                "name": "Project Poiesis",
                 "version": env!("CARGO_PKG_VERSION"),
             }
         });

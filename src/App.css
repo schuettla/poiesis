@@ -29,7 +29,7 @@
 
 /* Manual icon-only collapse (rail toggle). */
 .app.rail-collapsed {
-  grid-template-columns: 60px 1fr var(--dock-w);
+  grid-template-columns: 52px 1fr var(--dock-w);
 }
 
 /* While dragging the divider the width is already following the pointer;

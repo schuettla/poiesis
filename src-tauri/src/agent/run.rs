@@ -1,5 +1,5 @@
 //! The agent loop (PRD §7.5): drive model turns, dispatch tool calls to built-in
-//! skills, feed results back, and emit a visible step timeline — until the model
+//! toolsets, feed results back, and emit a visible step timeline — until the model
 //! produces a final answer.
 
 use std::collections::HashMap;
@@ -11,9 +11,10 @@ use crate::db::Db;
 use crate::mcp::McpClient;
 use crate::permissions::{PermissionManager, PermissionRequest};
 use crate::runtime::proxy::{CancelFlag, ToolCallReq, TurnOutcome};
+use crate::runtime::{EmbedManager, RerankManager, RuntimeManager};
 use crate::secrets::{self, SERVICE_MCP};
 
-use super::skills::{self, Skill, SkillContext};
+use super::toolsets::{self, Toolset, ToolContext};
 use crate::memory::MemoryStore;
 use super::AgentEvent;
 
@@ -43,31 +44,39 @@ fn self_change_class(tool: &str) -> Option<&'static str> {
     match tool {
         "memory" => Some("facts"),
         "propose_soul_edit" => Some("soul"),
-        "propose_recipe" => Some("recipes"),
+        "propose_skill" => Some("skills"),
         _ => None,
     }
 }
 
 /// The unified tool table for one run: the OpenAI specs advertised to the model,
-/// the enabled built-in skills, plus the routing map for MCP tools.
+/// the enabled built-in toolsets, plus the routing map for MCP tools.
 struct ToolRegistry {
     specs: Vec<serde_json::Value>,
-    skills: Vec<Skill>,
+    toolsets: Vec<Toolset>,
     mcp: HashMap<String, McpBinding>,
 }
 
 impl ToolRegistry {
-    /// Build from every **enabled** built-in skill (TOOL-6) plus every enabled
-    /// MCP connector's cached tools (MCP-4, §7.5 unified dispatch). Built-in
-    /// tools win name collisions.
-    fn build(db: &Db) -> Self {
+    /// Build from every **enabled** built-in toolset (TOOL-6), narrowed by this
+    /// conversation's persona allowlist if it has one (`PER-1`/`PER-2`), plus
+    /// every enabled MCP connector's cached tools (MCP-4, §7.5 unified
+    /// dispatch). Built-in tools win name collisions.
+    fn build(db: &Db, conversation_id: &str) -> Self {
         #[derive(serde::Deserialize, Default)]
         struct CachedConfig {
             #[serde(default)]
             tools: Vec<crate::mcp::McpTool>,
         }
 
-        let enabled = skills::enabled(db);
+        let persona_tools = db
+            .get_conversation(conversation_id)
+            .ok()
+            .flatten()
+            .and_then(|c| c.persona_id)
+            .and_then(|pid| db.get_persona(&pid).ok().flatten())
+            .and_then(|p| p.tools_json);
+        let enabled = toolsets::enabled_for_persona(db, persona_tools.as_deref());
         let mut specs: Vec<serde_json::Value> =
             enabled.iter().flat_map(|s| s.tool_specs()).collect();
         // AUT-1: a self-change class set to "off" withdraws its tool entirely —
@@ -113,12 +122,12 @@ impl ToolRegistry {
             }
         }
 
-        ToolRegistry { specs, skills: enabled, mcp }
+        ToolRegistry { specs, toolsets: enabled, mcp }
     }
 
-    /// The enabled built-in skill that owns `name`, if any.
-    fn builtin_for(&self, name: &str) -> Option<Skill> {
-        self.skills.iter().copied().find(|s| s.handles(name))
+    /// The enabled built-in toolset that owns `name`, if any.
+    fn builtin_for(&self, name: &str) -> Option<Toolset> {
+        self.toolsets.iter().copied().find(|s| s.handles(name))
     }
 
     /// Every advertised tool name — used by the early-flush guard (LOOP-4) to
@@ -198,12 +207,29 @@ impl AgentEventSink {
     pub fn send_permission(&self, request: PermissionRequest) {
         let _ = self.channel.send(AgentEvent::Permission { request });
     }
+    /// `BRW-UI-1`: the Browser panel replaces its state wholesale on every
+    /// action — see `AgentEvent::Browser`.
+    pub fn browser(&self, state: super::browser::BrowserPanelState) {
+        let _ = self.channel.send(AgentEvent::Browser { state });
+    }
     pub fn artifact(&self, id: &str, title: &str, kind: &str, content: &str) {
         let _ = self.channel.send(AgentEvent::Artifact {
             id: id.to_string(),
             title: title.to_string(),
             kind: kind.to_string(),
             content: content.to_string(),
+            meta_json: None,
+        });
+    }
+    /// A whole artifact row, metadata included. Media uses this so the stream
+    /// can render it as a media block rather than a bare chip.
+    pub fn artifact_row(&self, artifact: &crate::db::Artifact) {
+        let _ = self.channel.send(AgentEvent::Artifact {
+            id: artifact.id.clone(),
+            title: artifact.title.clone(),
+            kind: artifact.kind.clone(),
+            content: artifact.content.clone(),
+            meta_json: artifact.meta_json.clone(),
         });
     }
     pub fn block(&self, id: &str, message_id: Option<&str>, kind: &str, title: &str, data: &serde_json::Value) {
@@ -259,19 +285,85 @@ fn tool_result_message(call_id: &str, content: &str) -> serde_json::Value {
 /// Run the agent loop to completion, streaming events to `sink`. Returns the
 /// final assistant prose so the caller can persist it.
 ///
-/// `tools_enabled` gates the built-in skills. When false (the default for plain
+/// `tools_enabled` gates the built-in toolsets. When false (the default for plain
 /// chat) no `tools` are advertised, so the model answers directly and prose is
-/// streamed live. When true, the File System skill is offered and the loop
+/// streamed live. When true, the File System toolset is offered and the loop
 /// dispatches tool calls — buffering each turn so a tool call that the engine
 /// streams as plain content JSON (see [`parse_text_tool_calls`]) is executed
 /// rather than leaked to the user as raw text.
+///
+/// Thin wrapper over [`run_agent_inner`]: every exit from the loop below is a
+/// `return`, so backfilling `OUT-1`'s `skill_runs.tool_failures` (which needs
+/// every `tool_stats` row this run produced, including the last one) has to
+/// happen after the loop is truly done — one place, not one per early return.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_agent(
     client: &reqwest::Client,
     endpoint: &ChatEndpoint,
+    local_endpoint: Option<&ChatEndpoint>,
     db: &Db,
+    mgr: &RuntimeManager,
+    embed_mgr: &EmbedManager,
+    rerank_mgr: &RerankManager,
     perms: &PermissionManager,
     memory: &MemoryStore,
+    browser_pool: Option<&super::browser::BrowserPool>,
+    conversation_id: &str,
+    assistant_message_id: Option<&str>,
+    data_dir: &std::path::Path,
+    model_name: &str,
+    messages: Vec<serde_json::Value>,
+    temperature: f32,
+    tools_enabled: bool,
+    headless: bool,
+    cancel: CancelFlag,
+    sink: &AgentEventSink,
+) -> String {
+    let text = run_agent_inner(
+        client,
+        endpoint,
+        local_endpoint,
+        db,
+        mgr,
+        embed_mgr,
+        rerank_mgr,
+        perms,
+        memory,
+        browser_pool,
+        conversation_id,
+        assistant_message_id,
+        data_dir,
+        model_name,
+        messages,
+        temperature,
+        tools_enabled,
+        headless,
+        cancel,
+        sink,
+    )
+    .await;
+    let _ = db.backfill_skill_run_failures(conversation_id);
+    text
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_agent_inner(
+    client: &reqwest::Client,
+    endpoint: &ChatEndpoint,
+    // The local engine, if one is loaded — see `ToolContext::local_endpoint`.
+    // Separate from `endpoint` so a toolset's own side call stays on this machine
+    // even when the turn itself is running against a cloud provider.
+    local_endpoint: Option<&ChatEndpoint>,
+    db: &Db,
+    mgr: &RuntimeManager,
+    embed_mgr: &EmbedManager,
+    rerank_mgr: &RerankManager,
+    perms: &PermissionManager,
+    memory: &MemoryStore,
+    // `BRW-1`: `None` for callers with no live pool — the scheduler's
+    // headless runs (which the Browser toolset refuses outright) and the
+    // `EVL` harness, which never dispatches a real tool call.
+    browser_pool: Option<&super::browser::BrowserPool>,
     conversation_id: &str,
     assistant_message_id: Option<&str>,
     data_dir: &std::path::Path,
@@ -279,20 +371,33 @@ pub async fn run_agent(
     mut messages: Vec<serde_json::Value>,
     temperature: f32,
     tools_enabled: bool,
+    // SCH-3: true for an unattended scheduled-job run — no one is watching, so
+    // toolsets must skip renders (RND-3) and the File System toolset refuses any
+    // write/delete/move outright rather than opening a permission prompt that
+    // could never be answered.
+    headless: bool,
     cancel: CancelFlag,
     sink: &AgentEventSink,
 ) -> String {
-    // Unified tool table: built-in skills + enabled MCP connectors (§7.5).
-    let registry = ToolRegistry::build(db);
+    // Unified tool table: built-in toolsets + enabled MCP connectors (§7.5).
+    let registry = ToolRegistry::build(db, conversation_id);
     let tool_names = registry.tool_names();
     let no_tools: Vec<serde_json::Value> = Vec::new();
     let mut final_text = String::new();
     // GRM-3: call ids we've already nudged, so a failed built-in gets exactly
     // one guided retry — not an unbounded correction loop.
     let mut retried: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // FIX-1: the last failed call per tool name this run, so a later success
+    // of the *same* tool writes exactly one `tool_fixes` row and nothing is
+    // written if the tool never succeeds.
+    let mut last_failure = FixTracker::default();
     // LOOP-1: MCP sessions reused across this run; dropped (and stdio children
     // killed) when the run returns.
     let mcp_pool: McpPool = Default::default();
+    // `SKL-3`: directories a skill activated this run has made readable,
+    // shared across every tool call in the run (not per-call) so a skill
+    // loaded early stays reachable for the rest of it.
+    let extra_read_roots: std::sync::Mutex<Vec<std::path::PathBuf>> = Default::default();
 
     for _ in 0..MAX_ITERATIONS {
         if cancel.is_cancelled() {
@@ -347,7 +452,7 @@ pub async fn run_agent(
                 // JSON instead of structured tool_calls. Execute it if so.
                 if tools_enabled {
                     if let Some(calls) = parse_text_tool_calls(&text, &registry) {
-                        dispatch_calls(client, db, perms, memory, sink, conversation_id, assistant_message_id, data_dir, model_name, &registry, &mcp_pool, &mut messages, &mut retried, &calls)
+                        dispatch_calls(client, local_endpoint, db, mgr, embed_mgr, rerank_mgr, perms, memory, browser_pool, sink, conversation_id, assistant_message_id, data_dir, model_name, headless, &registry, &mcp_pool, &extra_read_roots, &mut messages, &mut retried, &mut last_failure, &calls)
                             .await;
                         continue;
                     }
@@ -367,7 +472,7 @@ pub async fn run_agent(
                 return final_text;
             }
             Ok(TurnOutcome::ToolCalls(calls)) => {
-                dispatch_calls(client, db, perms, memory, sink, conversation_id, assistant_message_id, data_dir, model_name, &registry, &mcp_pool, &mut messages, &mut retried, &calls)
+                dispatch_calls(client, local_endpoint, db, mgr, embed_mgr, rerank_mgr, perms, memory, browser_pool, sink, conversation_id, assistant_message_id, data_dir, model_name, headless, &registry, &mcp_pool, &extra_read_roots, &mut messages, &mut retried, &mut last_failure, &calls)
                     .await;
                 // Loop continues — the model sees the tool results next turn.
             }
@@ -382,23 +487,62 @@ pub async fn run_agent(
     final_text
 }
 
+/// `FIX-1`'s bookkeeping: the last failed call per tool name, for one run.
+///
+/// The rule this type exists to hold is narrower than "remember failures", and
+/// each narrowing is deliberate:
+///
+/// - **Same tool.** A different tool succeeding says nothing about the one that
+///   failed, so the pair is keyed by tool name.
+/// - **Same run.** The tracker lives on the stack of a single run; a correction
+///   the user made in a later conversation isn't the model correcting itself.
+/// - **Only on success.** A tool that fails and never succeeds teaches nothing
+///   except that it's broken, which is `HEAL-2`'s job, not a lesson's.
+/// - **At most one pair per failure.** `succeeded` takes the entry rather than
+///   reading it, so a tool that fails once and then succeeds five times yields
+///   one row, not five.
+#[derive(Default)]
+struct FixTracker(HashMap<String, (String, String)>);
+
+impl FixTracker {
+    /// Remember a failed call, replacing any earlier unpaired failure of the
+    /// same tool — the most recent wrong approach is the one the correction
+    /// actually corrected.
+    fn failed(&mut self, tool: &str, args: &str, error: &str) {
+        self.0.insert(tool.to_string(), (args.to_string(), error.to_string()));
+    }
+
+    /// The `(failed_args, error)` this success corrects, if any. Clears it.
+    fn succeeded(&mut self, tool: &str) -> Option<(String, String)> {
+        self.0.remove(tool)
+    }
+}
+
 /// Execute a batch of tool calls: echo them into the message history, run each
-/// through its skill or MCP server (emitting timeline steps), and append results.
+/// through its toolset or MCP server (emitting timeline steps), and append results.
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_calls(
     client: &reqwest::Client,
+    local_endpoint: Option<&ChatEndpoint>,
     db: &Db,
+    mgr: &RuntimeManager,
+    embed_mgr: &EmbedManager,
+    rerank_mgr: &RerankManager,
     perms: &PermissionManager,
     memory: &MemoryStore,
+    browser_pool: Option<&super::browser::BrowserPool>,
     sink: &AgentEventSink,
     conversation_id: &str,
     assistant_message_id: Option<&str>,
     data_dir: &std::path::Path,
     model_name: &str,
+    headless: bool,
     registry: &ToolRegistry,
     mcp_pool: &McpPool,
+    extra_read_roots: &std::sync::Mutex<Vec<std::path::PathBuf>>,
     messages: &mut Vec<serde_json::Value>,
     retried: &mut std::collections::HashSet<String>,
+    last_failure: &mut FixTracker,
     calls: &[ToolCallReq],
 ) {
     messages.push(assistant_tool_call_message(calls));
@@ -408,15 +552,22 @@ async fn dispatch_calls(
         let (verb, target) = describe(&call.name, &args, registry);
         sink.step_start(&call.id, &verb, &target);
 
-        let result = dispatch(client, db, perms, memory, sink, conversation_id, assistant_message_id, data_dir, registry, mcp_pool, &call.id, &call.name, &args).await;
+        let result = dispatch(client, local_endpoint, db, mgr, embed_mgr, rerank_mgr, perms, memory, browser_pool, sink, conversation_id, assistant_message_id, data_dir, headless, registry, mcp_pool, extra_read_roots, &call.id, &call.name, &args).await;
         // GRM-4/LOOP-5: record every dispatched call's outcome (content-free).
         db.add_tool_stat(model_name, &call.name, conversation_id, result.is_ok());
         match result {
-            Ok(output) => {
-                sink.step_done(&call.id, summarize(&output));
+            Ok((output, note)) => {
+                // FIX-1: this tool just succeeded — if its last call in this
+                // run had failed, that pair is exactly "wrong approach, then
+                // right approach". Nothing is written if it never failed.
+                if let Some((failed_args, error)) = last_failure.succeeded(&call.name) {
+                    db.add_tool_fix(conversation_id, &call.name, &failed_args, &error, &call.arguments);
+                }
+                sink.step_done(&call.id, note.or_else(|| summarize(&output)));
                 messages.push(tool_result_message(&call.id, &output));
             }
             Err(e) => {
+                last_failure.failed(&call.name, &call.arguments, &e);
                 sink.step_error(&call.id, &e);
                 messages.push(tool_result_message(&call.id, &format!("Error: {e}")));
                 // GRM-3: give a failed *built-in* call one guided retry. MCP
@@ -519,30 +670,62 @@ fn strip_code_fence(s: &str) -> &str {
     }
 }
 
-/// Route a tool call to the skill or MCP server that handles it (§7.5).
+/// Route a tool call to the toolset or MCP server that handles it (§7.5).
 #[allow(clippy::too_many_arguments)]
 async fn dispatch(
     client: &reqwest::Client,
+    local_endpoint: Option<&ChatEndpoint>,
     db: &Db,
+    mgr: &RuntimeManager,
+    embed_mgr: &EmbedManager,
+    rerank_mgr: &RerankManager,
     perms: &PermissionManager,
     memory: &MemoryStore,
+    browser_pool: Option<&super::browser::BrowserPool>,
     sink: &AgentEventSink,
     conversation_id: &str,
     assistant_message_id: Option<&str>,
     data_dir: &std::path::Path,
+    headless: bool,
     registry: &ToolRegistry,
     mcp_pool: &McpPool,
+    extra_read_roots: &std::sync::Mutex<Vec<std::path::PathBuf>>,
     call_id: &str,
     name: &str,
     args: &serde_json::Value,
-) -> Result<String, String> {
-    if let Some(skill) = registry.builtin_for(name) {
-        let ctx = SkillContext { client, db, perms, sink, conversation_id, assistant_message_id, data_dir, call_id, memory };
-        skill.execute(&ctx, name, args).await
+) -> Result<(String, Option<String>), String> {
+    if let Some(toolset) = registry.builtin_for(name) {
+        let ctx = ToolContext {
+            client,
+            local_endpoint,
+            db,
+            mgr,
+            embed_mgr,
+            rerank_mgr,
+            perms,
+            sink,
+            conversation_id,
+            assistant_message_id,
+            data_dir,
+            call_id,
+            memory,
+            headless,
+            // One context per tool call, so this is RND-3's one-render budget.
+            rendered: std::sync::atomic::AtomicBool::new(false),
+            step_note: std::sync::Mutex::new(None),
+            extra_read_roots,
+            browser_pool,
+        };
+        let output = toolset.execute(&ctx, name, args).await?;
+        // A toolset that said what its step line should read (RET-UI-2) wins over
+        // the generic summary; everything else still gets `summarize`.
+        Ok((output, ctx.step_note.into_inner().unwrap_or(None)))
     } else if let Some(binding) = registry.mcp.get(name) {
-        call_mcp_tool(client, db, conversation_id, mcp_pool, binding, name, args).await
+        call_mcp_tool(client, db, conversation_id, mcp_pool, binding, name, args)
+            .await
+            .map(|out| (out, None))
     } else {
-        Err(format!("No skill or connector provides the tool '{name}'."))
+        Err(format!("No toolset or connector provides the tool '{name}'."))
     }
 }
 
@@ -586,10 +769,10 @@ async fn call_mcp_tool(
     Ok(output)
 }
 
-/// (verb, target) for a tool call, dispatched to the owning skill or connector.
+/// (verb, target) for a tool call, dispatched to the owning toolset or connector.
 fn describe(name: &str, args: &serde_json::Value, registry: &ToolRegistry) -> (String, String) {
-    if let Some(skill) = registry.builtin_for(name) {
-        skill.describe(name, args)
+    if let Some(toolset) = registry.builtin_for(name) {
+        toolset.describe(name, args)
     } else if let Some(binding) = registry.mcp.get(name) {
         ("used".to_string(), format!("{} · {name}", binding.connector_name))
     } else {
@@ -606,10 +789,13 @@ fn summarize(output: &str) -> Option<String> {
     let lines = trimmed.lines().count();
     if lines > 1 {
         Some(format!("— {lines} lines"))
-    } else if trimmed.len() > 48 {
-        Some(format!("— {}…", &trimmed[..48]))
     } else {
-        Some(format!("— {trimmed}"))
+        // Char-safe, never a byte index (`FIX-1`): a tool's one-line result
+        // carries user text — the image tool's is literally the prompt — so a
+        // byte cut lands inside a multi-byte character sooner or later and
+        // panics the run. `ellipsize` already appends the ellipsis, and
+        // returns the string untouched when it's short enough.
+        Some(format!("— {}", crate::media::ellipsize(trimmed, 48)))
     }
 }
 
@@ -619,6 +805,72 @@ mod tests {
 
     fn names() -> Vec<String> {
         vec!["render_ui".to_string(), "web_search".to_string()]
+    }
+
+    /// `FIX-1`, the site the plan's three didn't cover: every tool result is
+    /// summarised here, and the image tool's result carries the user's prompt.
+    /// A byte cut at 48 landed inside a multi-byte character and panicked the
+    /// whole run — for this user, on an ordinary German prompt.
+    #[test]
+    fn summarize_cuts_on_char_boundaries_not_bytes() {
+        let output = "Generated an image for \"Zeichne eine Straße bei Nacht\" and opened it.";
+        let note = summarize(output).expect("a one-line result summarises");
+        assert!(note.starts_with("— Generated an image"));
+        assert!(note.ends_with('…'), "a cut result says so: {note}");
+    }
+
+    #[test]
+    fn summarize_leaves_a_short_result_whole() {
+        assert_eq!(summarize("wrote 3 files").as_deref(), Some("— wrote 3 files"));
+        assert_eq!(summarize("   ").as_deref(), None);
+        assert_eq!(summarize("one\ntwo").as_deref(), Some("— 2 lines"));
+    }
+
+    /// `FIX-1`: a pair is written only when the *same* tool that failed later
+    /// succeeds in the *same* run.
+    #[test]
+    fn a_fix_pair_needs_the_same_tool_to_fail_then_succeed() {
+        let mut t = FixTracker::default();
+        t.failed("read_file", r#"{"path":"/etc/hosts"}"#, "path outside the working folder");
+
+        // A *different* tool succeeding is not a correction of `read_file`.
+        assert!(t.succeeded("web_search").is_none(), "another tool's success proves nothing");
+
+        let (args, err) = t.succeeded("read_file").expect("the same tool succeeding is the fix");
+        assert_eq!(args, r#"{"path":"/etc/hosts"}"#);
+        assert_eq!(err, "path outside the working folder");
+    }
+
+    /// A run of failures teaches nothing except that the tool is broken, which
+    /// is `HEAL-2`'s job — no `tool_fixes` row may come out of it.
+    #[test]
+    fn all_fail_and_never_succeed_records_nothing() {
+        let mut t = FixTracker::default();
+        t.failed("run_code", "{}", "timed out");
+        t.failed("run_code", "{}", "timed out again");
+        // The run ends here: nothing ever asked for a pair, so nothing is written.
+        assert_eq!(t.0.len(), 1, "the pending failure is held, not recorded");
+    }
+
+    #[test]
+    fn one_failure_yields_at_most_one_pair() {
+        let mut t = FixTracker::default();
+        t.failed("read_file", "bad", "nope");
+        assert!(t.succeeded("read_file").is_some());
+        assert!(
+            t.succeeded("read_file").is_none(),
+            "later successes must not each re-record the same mistake"
+        );
+    }
+
+    #[test]
+    fn the_most_recent_wrong_approach_is_the_one_paired() {
+        let mut t = FixTracker::default();
+        t.failed("read_file", "first", "e1");
+        t.failed("read_file", "second", "e2");
+        let (args, err) = t.succeeded("read_file").unwrap();
+        assert_eq!(args, "second");
+        assert_eq!(err, "e2");
     }
 
     #[test]

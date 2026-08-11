@@ -10,16 +10,18 @@ use tauri::State;
 use crate::db::{Db, ToolStatRow};
 use crate::memory::MemoryStore;
 use crate::runtime::RuntimeManager;
-use crate::NexusError;
+use crate::PoiesisError;
 
 /// Everything the Self view's vitality strip and Health tab need, in one call.
 #[derive(Debug, Serialize)]
 pub struct Vitality {
     pub facts: usize,
     pub lessons: usize,
-    pub recipes: usize,
-    /// Sum of every recipe's use count — how much the procedures earned.
-    pub recipe_uses: u32,
+    /// Agent Skills currently discoverable and switched on (`SKL-5`).
+    pub skills: usize,
+    /// How many times a skill has been read this install — the same honesty
+    /// the recipe use count carried, now sourced from the activity log.
+    pub skill_uses: u32,
     pub quarantined: Vec<String>,
     /// Engine restarts the watchdog performed since launch (HEAL-1).
     pub engine_restarts_session: u32,
@@ -35,11 +37,12 @@ pub async fn get_vitality_cmd(
     mem: State<'_, MemoryStore>,
     mgr: State<'_, RuntimeManager>,
     model_name: Option<String>,
-) -> Result<Vitality, NexusError> {
+) -> Result<Vitality, PoiesisError> {
     // Reading the Health tab is also the moment to notice damaged files.
     mem.quarantine_scan(&db);
 
-    let recipes = mem.list_recipes();
+    let skills = crate::agent::skillpack::discover(mgr.app_data_dir(), None);
+    let skills_on = skills.iter().filter(|p| crate::agent::skillpack::is_enabled(&db, p)).count();
     let model = match model_name {
         Some(m) if !m.trim().is_empty() => Some(m),
         _ => mgr.engine_model_name().await,
@@ -51,14 +54,37 @@ pub async fn get_vitality_cmd(
     Ok(Vitality {
         facts: mem.list().len(),
         lessons: mem.list_lessons().len(),
-        recipes: recipes.len(),
-        recipe_uses: recipes.iter().map(|r| r.used).sum(),
+        skills: skills_on,
+        skill_uses: db.count_activity("skill").unwrap_or(0),
         quarantined: mem.quarantined(),
         engine_restarts_session: mgr.restarts_session(),
         pending_proposals: db.pending_proposal_count().unwrap_or(0),
         last_reflection: db.last_reflection().ok().flatten(),
         tool_health,
     })
+}
+
+/// The Health tab's Golden section (`GLD-UI-1`): the last recorded run,
+/// without running a fresh one — matches how the rest of the tab is read
+/// passively on open.
+#[tauri::command]
+pub fn get_golden_status_cmd(db: State<'_, Db>) -> Option<crate::agent::golden::GoldenStatus> {
+    crate::agent::golden::load_status(&db)
+}
+
+/// "Check me now" (`GLD-UI-1`): always runs a fresh pass over the golden set,
+/// independent of `golden.enabled` — that setting only gates the automatic
+/// guard around a self-change, never the user's own button.
+#[tauri::command]
+pub async fn check_golden_cmd(
+    db: State<'_, Db>,
+    mem: State<'_, MemoryStore>,
+    mgr: State<'_, RuntimeManager>,
+    target: Option<crate::commands::agent::ChatTarget>,
+) -> Result<crate::agent::golden::GoldenStatus, PoiesisError> {
+    crate::agent::golden::check_now(&mgr.client, &mgr, &db, &mem, target.as_ref())
+        .await
+        .map_err(PoiesisError::Message)
 }
 
 /// 7-day per-tool reliability for one model (HEAL-2). Separate from `Vitality`
@@ -71,7 +97,7 @@ pub async fn get_tool_health_cmd(
     db: State<'_, Db>,
     mgr: State<'_, RuntimeManager>,
     model_name: Option<String>,
-) -> Result<Vec<ToolStatRow>, NexusError> {
+) -> Result<Vec<ToolStatRow>, PoiesisError> {
     let model = match model_name {
         Some(m) if !m.trim().is_empty() => Some(m),
         _ => mgr.engine_model_name().await,
@@ -81,30 +107,14 @@ pub async fn get_tool_health_cmd(
         .unwrap_or_default())
 }
 
-#[tauri::command]
-pub fn list_recipes_cmd(mem: State<'_, MemoryStore>) -> Vec<crate::memory::Recipe> {
-    mem.list_recipes()
-}
-
-#[tauri::command]
-pub fn forget_recipe_cmd(
-    mem: State<'_, MemoryStore>,
-    db: State<'_, Db>,
-    name: String,
-) -> Result<String, NexusError> {
-    let file = mem.forget_recipe(&db, &name).map_err(NexusError::Message)?;
-    let _ = db.log_activity(None, "memory", &format!("dropped the recipe {name}"));
-    Ok(file)
-}
-
 /// Put a quarantined file back (HEAL-3) — the user has presumably repaired it.
 #[tauri::command]
 pub fn restore_quarantined_cmd(
     mem: State<'_, MemoryStore>,
     db: State<'_, Db>,
     file: String,
-) -> Result<(), NexusError> {
-    mem.restore_quarantined(&db, &file).map_err(NexusError::Message)?;
+) -> Result<(), PoiesisError> {
+    mem.restore_quarantined(&db, &file).map_err(PoiesisError::Message)?;
     let _ = db.log_activity(None, "heal", &format!("restored {file}"));
     Ok(())
 }
@@ -114,24 +124,25 @@ pub fn delete_quarantined_cmd(
     mem: State<'_, MemoryStore>,
     db: State<'_, Db>,
     file: String,
-) -> Result<(), NexusError> {
-    mem.delete_quarantined(&file).map_err(NexusError::Message)?;
+) -> Result<(), PoiesisError> {
+    mem.delete_quarantined(&file).map_err(PoiesisError::Message)?;
     let _ = db.log_activity(None, "heal", &format!("discarded {file}"));
     Ok(())
 }
 
-/// Seed a conversation's workspace surface from a recipe template (RCP-UI-2).
-/// Writes the reserved surface row exactly the way `render_ui` does, so the
-/// template renders through the ordinary surface path with nothing special
-/// about having come from a recipe.
+/// Seed a conversation's workspace surface from a skill's bundled
+/// `assets/surface.json` (`SKL-5`, carrying `RCP-UI-2` forward). Writes the
+/// reserved surface row exactly the way `render_ui` does, so the template
+/// renders through the ordinary surface path with nothing special about
+/// having come from a skill.
 #[tauri::command]
 pub fn set_surface_cmd(
     db: State<'_, Db>,
     conversation_id: String,
     tree_json: String,
-) -> Result<String, NexusError> {
+) -> Result<String, PoiesisError> {
     serde_json::from_str::<serde_json::Value>(&tree_json)
-        .map_err(|e| NexusError::Message(format!("that surface template isn't valid JSON: {e}")))?;
+        .map_err(|e| PoiesisError::Message(format!("that surface template isn't valid JSON: {e}")))?;
     crate::agent::present::write_surface(&db, &conversation_id, &tree_json)
-        .map_err(NexusError::Message)
+        .map_err(PoiesisError::Message)
 }

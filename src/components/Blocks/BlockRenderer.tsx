@@ -58,6 +58,8 @@ function BlockFrame({ block }: { block: BlockView }) {
       return <ProgressBlock block={block} />;
     case "document":
       return <DocumentBlock block={block} />;
+    case "table":
+      return <TableBlock block={block} />;
     default:
       return <RawBlock block={block} />;
   }
@@ -529,6 +531,43 @@ function DocumentBlock({ block }: { block: BlockView }) {
             Open →
           </button>
         )}
+      </div>
+    </Frame>
+  );
+}
+
+// ---- table (DAT-3) ----
+
+function TableBlock({ block }: { block: BlockView }) {
+  const data = asObj(block.data);
+  const columns = Array.isArray(data.columns) ? (data.columns as unknown[]) : [];
+  const rows = Array.isArray(data.rows) ? (data.rows as unknown[][]) : [];
+
+  return (
+    <Frame title={block.title} kind="table" footer={`${rows.length} row${rows.length === 1 ? "" : "s"}`}>
+      <div className="tbl-scroll">
+        <table className="tbl-table">
+          <thead>
+            <tr>
+              {columns.map((c, i) => (
+                <th key={i} className="tbl-label">
+                  {String(c)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={i} className="tbl-row">
+                {row.map((cell, j) => (
+                  <td key={j} className="tbl-cell">
+                    {String(cell)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </Frame>
   );

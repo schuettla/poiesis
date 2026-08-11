@@ -7,6 +7,9 @@ import Chat from "./routes/Chat";
 import SettingsHub from "./routes/SettingsHub";
 import Library from "./routes/Library";
 import PermissionPanel from "./components/SidePanel/PermissionPanel";
+import ContextPanel from "./components/Context/ContextPanel";
+import MediaConsentDialog from "./components/Confirm/MediaConsentDialog";
+import ImageLightbox from "./components/Conversation/ImageLightbox";
 import "./App.css";
 
 export default function App() {
@@ -56,7 +59,14 @@ export default function App() {
       <TopBar />
       <Rail />
       {view === "chat" && <Chat />}
-      {(view === "models" || view === "engine" || view === "apps" || view === "self" || view === "settings") && (
+      {(view === "models" ||
+        view === "engine" ||
+        view === "apps" ||
+        view === "skills" ||
+        view === "self" ||
+        view === "tasks" ||
+        view === "activity" ||
+        view === "settings") && (
         <SettingsHub />
       )}
       {view === "library" && <Library />}
@@ -65,6 +75,9 @@ export default function App() {
           nothing. */}
       {showDock && <Workbench />}
       <PermissionPanel />
+      <ContextPanel />
+      <MediaConsentDialog />
+      <ImageLightbox />
     </div>
   );
 }

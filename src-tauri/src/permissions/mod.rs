@@ -126,17 +126,39 @@ pub struct PermissionRequest {
     /// rather than a request to widen scope. The UI shows Allow / Deny / Don't
     /// ask again in this folder instead of the four-way scope choice.
     pub in_folder: bool,
+    /// `BRW-3`/`SYS-1`: a non-filesystem capability request — `"domain"`,
+    /// `"screen"`, or `"open-app"` — reusing this same panel and the same
+    /// `Decision` oneshot rather than inventing a parallel consent mechanism.
+    /// `path` carries the domain/app name. The panel shows a plain three-way
+    /// Once / Always / No choice; `None` for every filesystem request above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability: Option<String>,
 }
 
 impl PermissionRequest {
     /// A scope request: "may I reach into this folder at all?"
     pub fn scope(id: String, summary: String, path: String, mode: Mode) -> Self {
-        Self { id, summary, path, mode, diff: None, in_folder: false }
+        Self { id, summary, path, mode, diff: None, in_folder: false, capability: None }
     }
 
     /// An operation confirm inside the already-attached folder.
     pub fn operation(id: String, summary: String, path: String, mode: Mode, diff: Option<String>) -> Self {
-        Self { id, summary, path, mode, diff, in_folder: true }
+        Self { id, summary, path, mode, diff, in_folder: true, capability: None }
+    }
+
+    /// A one-off capability consent: visiting a domain, taking a screenshot,
+    /// launching an app. `kind` is `"domain"` | `"screen"` | `"open-app"`;
+    /// `target` is the domain or app name (empty for `"screen"`).
+    pub fn capability(id: String, kind: &'static str, summary: String, target: String) -> Self {
+        Self {
+            id,
+            summary,
+            path: target,
+            mode: Mode::Read,
+            diff: None,
+            in_folder: false,
+            capability: Some(kind.to_string()),
+        }
     }
 }
 
@@ -326,7 +348,7 @@ mod tests {
     #[test]
     fn blocks_traversal_escape() {
         let root = std::env::temp_dir();
-        let inside = root.join("nexus_test_file.txt");
+        let inside = root.join("poiesis_test_file.txt");
         assert!(path_within_root(&inside, &root));
         let escape = root.join("..").join("somewhere_else.txt");
         assert!(!path_within_root(&escape, &root));

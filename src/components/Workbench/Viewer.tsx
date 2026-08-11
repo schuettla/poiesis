@@ -1,18 +1,23 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { useAppStore } from "../../lib/store";
 import { readImageDataUri, readTextFile } from "../../lib/api";
 
 /** Render kinds the viewer knows. Artifacts carry theirs; files get one from
  * their extension — one renderer, two origins, which is the whole point of
  * putting files and artifacts in the same panel. */
-export type RenderKind = "html" | "svg" | "image" | "markdown" | "code" | "binary";
+export type RenderKind = "html" | "svg" | "image" | "video" | "markdown" | "code" | "binary";
 
 const IMAGE_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico"];
+// `ART-3`: these used to sit in `BINARY_EXT`, so a generated clip in a
+// working folder rendered as "This file can't be previewed here" instead of
+// playing.
+const VIDEO_EXT = ["mp4", "mov", "webm", "mkv"];
 const BINARY_EXT = [
   "pdf", "zip", "gz", "7z", "rar", "exe", "dll", "bin", "so", "dylib",
-  "mp3", "mp4", "mov", "wav", "avi", "mkv", "ttf", "otf", "woff", "woff2",
+  "mp3", "wav", "avi", "ttf", "otf", "woff", "woff2",
   "doc", "docx", "xls", "xlsx", "ppt", "pptx", "gguf", "safetensors",
 ];
 
@@ -22,6 +27,7 @@ export function kindForPath(path: string): RenderKind {
   if (ext === "html" || ext === "htm") return "html";
   if (ext === "md" || ext === "markdown") return "markdown";
   if (IMAGE_EXT.includes(ext)) return "image";
+  if (VIDEO_EXT.includes(ext)) return "video";
   if (BINARY_EXT.includes(ext)) return "binary";
   return "code";
 }
@@ -41,6 +47,9 @@ export function ArtifactView({ kind, content }: { kind: string; content: string 
   }
   if (kind === "image") {
     return <ImageView path={content} />;
+  }
+  if (kind === "video") {
+    return <VideoView path={content} />;
   }
   if (kind === "markdown") {
     return (
@@ -77,6 +86,26 @@ export function ImageView({ path }: { path: string }) {
   return <img className="canvas-image" src={src} alt="" />;
 }
 
+/** A generated clip, played straight from disk via the asset protocol —
+ * never base64'd over IPC, which a video-sized payload would make painfully
+ * slow (`ART-3`). */
+export function VideoView({ path }: { path: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <div className="canvas-loading">This video is no longer available.</div>;
+  return (
+    <video
+      className="canvas-image"
+      src={convertFileSrc(path)}
+      controls
+      loop
+      muted
+      playsInline
+      preload="metadata"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 /** Reads a file off disk and renders it by extension. Unlike an artifact, the
  * content isn't in memory — so this is the one view that can fail, and says so
  * plainly rather than showing an empty pane. */
@@ -87,7 +116,7 @@ export function FileView({ path }: { path: string }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (kind === "image" || kind === "binary") return;
+    if (kind === "image" || kind === "video" || kind === "binary") return;
     let cancelled = false;
     setText(null);
     setError(null);
@@ -100,6 +129,7 @@ export function FileView({ path }: { path: string }) {
   }, [path, kind, conversationId]);
 
   if (kind === "image") return <ImageView path={path} />;
+  if (kind === "video") return <VideoView path={path} />;
   if (kind === "binary") {
     return (
       <div className="viewer-binary">

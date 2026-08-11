@@ -3,12 +3,12 @@
 use tauri::State;
 
 use crate::db::{ActivityEntry, Db, Grant};
-use crate::NexusError;
+use crate::PoiesisError;
 
-type Cmd<T> = Result<T, NexusError>;
+type Cmd<T> = Result<T, PoiesisError>;
 
-fn err<E: std::fmt::Display>(e: E) -> NexusError {
-    NexusError::Message(e.to_string())
+fn err<E: std::fmt::Display>(e: E) -> PoiesisError {
+    PoiesisError::Message(e.to_string())
 }
 
 /// Granted folders, listed + revocable in Settings (§5.4.4).

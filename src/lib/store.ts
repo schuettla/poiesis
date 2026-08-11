@@ -27,14 +27,42 @@ const SELF_BORN_KEY = "self.born";
 const SELF_INTRODUCED_KEY = "self.introduced";
 const DOCK_OPEN_KEY = "workbench.open";
 const DOCK_WIDTH_KEY = "workbench.width";
+const EXPERT_KEY = "ui.expert";
+const RECALL_DECLINED_KEY = "recall.declined";
+/** SMP-4c: folder reading explains itself once, the first time it happens. */
+const INDEX_EXPLAINED_KEY = "index.explained";
+/** SMP-7a: keys the generalized `maybeFirstTime` helper tracks, each backed by
+ * its own `onboarded.<key>` setting. `folder` (`SMP-4c`) and the original
+ * memory-write explainer (`MEM-UI-4`, `memoryOnboarded`) predate this helper
+ * and render inline where the ability itself is shown rather than as a toast
+ * — left as they are rather than forced through a shared shell that doesn't
+ * fit their context. */
+const FIRST_TIME_KEYS = ["recall", "retrieval", "digest", "proposal"] as const;
+/** How long a first-time explanation toast stays up before clearing itself —
+ * independent of whether it's still mounted, so it can never get stuck behind
+ * a memory-write or heal toast that outlives it. */
+const EXPLAIN_DWELL_MS = 6000;
 /** Matches the `--dock-w` initial value in App.css. */
 const DEFAULT_DOCK_WIDTH = 340;
 /** Below this, a conversation is too slight to have taught anything (REF-3). */
 const REFLECT_MIN_MESSAGES = 8;
+/** PRO-4: last calendar date the daily rebuild tick ran, so it fires at most
+ * once per day the app is actually open — simpler than routing a per-user
+ * fact-rebuild through `SCH`'s job scheduler, which is for named, editable
+ * jobs, not internal maintenance ticks like this one. */
+const PROFILE_CHECKED_KEY = "profile.checked_on";
+/** PRO-4: how long to wait after a global fact changes before rebuilding —
+ * long enough that a burst of edits (e.g. `Tidy up`) coalesces into one call. */
+const PROFILE_DEBOUNCE_MS = 8000;
+let profileDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** The self-change classes the Autonomy card offers (AUT-1). `fallback` mirrors
  * the backend's `AUTONOMY_DEFAULTS`; `rungs` hides options a class can't honour
- * — facts have no proposal UI, so they are auto-with-undo or off. */
+ * — facts have no proposal UI, so they are auto-with-undo or off.
+ *
+ * `profile` deliberately has no entry here (it still defaults to `auto` in the
+ * backend): SMP-5b says the synthesis never appears as "a settings entry" —
+ * adding a toggle here would be exactly that. */
 export const AUTONOMY_CLASSES: {
   id: string;
   label: string;
@@ -57,13 +85,6 @@ export const AUTONOMY_CLASSES: {
     rungs: ["auto", "ask", "off"],
   },
   {
-    id: "recipes",
-    label: "Keeping procedures",
-    blurb: "Step-by-step procedures we developed together. I always ask first.",
-    fallback: "ask",
-    rungs: ["ask", "off"],
-  },
-  {
     id: "soul",
     label: "Changing my standing instructions",
     blurb: "How I should always behave. I always ask first.",
@@ -76,6 +97,27 @@ export const AUTONOMY_CLASSES: {
     blurb: "Merging and pruning what I remember. You review the whole tidy-up.",
     fallback: "ask",
     rungs: ["ask", "off"],
+  },
+  {
+    id: "email_send",
+    label: "Sending mail on your behalf",
+    blurb: "Mail leaving this machine. I can't unsend it, so I always ask first unless you turn this on.",
+    fallback: "ask",
+    rungs: ["auto", "ask", "off"],
+  },
+  {
+    id: "skills",
+    label: "Keeping Agent Skills",
+    blurb: "New procedures I write for myself. I always ask first.",
+    fallback: "ask",
+    rungs: ["ask", "off"],
+  },
+  {
+    id: "screen",
+    label: "Taking screenshots",
+    blurb: "A picture of your screen can contain anything, so I always ask first unless you turn this on.",
+    fallback: "ask",
+    rungs: ["auto", "ask", "off"],
   },
 ];
 const DEFAULT_SYSTEM_PROMPT =
@@ -98,8 +140,15 @@ interface AppState {
   models: Model[];
   libraryModels: api.ModelEntry[];
   cloudModels: api.CloudModel[];
+  /** Images & video group (`PIK-1`) — every model any credentialed backend
+   * offers, local and hosted together. */
+  mediaModels: api.MediaModel[];
   providers: api.ProviderInfo[];
   selectedModelId: string;
+  /** The chat model to fall back to when "← Back to chat" is pressed, or a
+   * media selection is cleared (`PIK-2`). Set whenever a chat model is chosen;
+   * never a media one, so it always names something `run_agent` can use. */
+  lastChatModelId: string;
   modelFilter: ModelFilter;
   engineReady: boolean;
   /** Which library model the running engine currently holds (null = none). */
@@ -109,6 +158,7 @@ interface AppState {
   setModelFilter: (f: ModelFilter) => void;
   refreshLibrary: () => Promise<void>;
   refreshCloud: () => Promise<void>;
+  refreshMediaModels: () => Promise<void>;
   loadModelById: (id: string) => Promise<void>;
   stopEngine: () => Promise<void>;
 
@@ -117,18 +167,69 @@ interface AppState {
   activeConversationId: string | null;
   busy: boolean;
   systemPrompt: string;
-  /** Whether built-in skills are offered to the model (TOOL-3, TOOL-6). */
+  /** Whether built-in toolsets are offered to the model (TOOL-3, TOOL-6). */
   toolsEnabled: boolean;
   setToolsEnabled: (on: boolean) => void;
   /** Workspace mode: the chat view flips to the composed-interface layout —
    * the agent's UI is the interaction point, the message stream is a log. */
   workspaceMode: boolean;
   setWorkspaceMode: (on: boolean) => void;
-  /** Composer "Create image" mode: the next message generates an image directly. */
-  imageMode: boolean;
-  setImageMode: (on: boolean) => void;
-  /** Generate an image from `prompt` and show it inline in the chat (9F). */
+  /** Generate an image from `prompt` and show it inline in the chat — the
+   * inferred route (`PIK-3`) and the composer's legacy direct path both land
+   * here; it always resolves to whichever backend is available (9F). */
   createImage: (prompt: string, modelPath?: string | null) => Promise<void>;
+  /** The declared route (`PIK-2`/Path E): generate against an exact model the
+   * user picked in the chooser, with the target bar's aspect ratio and any
+   * reference (an explicit attachment, or the implicit one from `EDT-2`). */
+  createMedia: (args: {
+    prompt: string;
+    modelId: string;
+    aspectRatio?: string;
+    /** `PIK-4`'s advanced knobs. Every one is optional, and a backend that
+     * can't honour one reports it rather than failing. */
+    resolution?: string;
+    seed?: number;
+    steps?: number;
+    negative?: string;
+    durationSecs?: number;
+    references?: string[];
+    parentArtifactId?: string;
+  }) => Promise<void>;
+  /** `CST-1`: which backends the user has already said yes to paying for, this
+   * install. Persisted client-side — it is a UI trust decision, not a fact the
+   * agent's memory or the DB needs to know. */
+  mediaConsent: Record<string, boolean>;
+  /** A cloud generation is waiting on consent. `resolve(true)` proceeds and
+   * remembers the choice for this backend; `resolve(false)` cancels this one
+   * call only. */
+  pendingMediaConsent: { backendId: string; backendLabel: string; priceLabel?: string; resolve: (ok: boolean) => void } | null;
+  /** The artifact the previous assistant turn produced, if it was media and it
+   * was within the last few turns — the implicit reference `EDT-2` offers for
+   * a bare "make it warmer". Cleared once too much has happened since. */
+  lastMediaArtifact: { id: string; path: string; conversationId: string; turnsAgo: number } | null;
+  clearImplicitReference: () => void;
+  /** `PIK-4`: the seed the last generation actually came out with, which is
+   * what *reuse last seed* reuses. Only a value the provider reported back
+   * counts — a requested seed a backend ignored would make "reproducible"
+   * a lie. */
+  lastMediaSeed: number | null;
+  /** The media block's **Refine** (`STR-2`) asking the composer to pin an
+   * intent, show this artifact as its reference chip, and take focus. The
+   * nonce is what makes a second click on the same artifact register. */
+  composerPin: { intent: "image" | "video"; nonce: number } | null;
+  refineArtifact: (artifact: api.Artifact) => void;
+  /** Generations in flight (`JOB-1`), by job id — which turn each one belongs
+   * to, so a result arriving minutes later lands in the right place. Not
+   * persisted: the backing rows are, and a reload re-reads them. */
+  mediaJobs: Record<string, { conversationId: string; messageId: string; stepId: string }>;
+  /** `STR-4`: the latest partial image per running job, as a data URI. Held
+   * outside the message so a stream of partials doesn't rewrite the
+   * transcript on every frame. */
+  mediaPartials: Record<string, string>;
+  /** Apply a job's completion (or failure, or cancellation) to its turn. */
+  applyMediaJobEvent: (event: api.MediaJobEvent) => void;
+  /** Stop a running generation. */
+  cancelMediaJob: (jobId: string) => Promise<void>;
 
   // personas (CHT-4 / CHT-7)
   personas: api.Persona[];
@@ -138,6 +239,8 @@ interface AppState {
     systemPrompt: string;
     modelId?: string | null;
     temperature?: number;
+    toolsJson?: string | null;
+    skillsJson?: string | null;
   }) => Promise<void>;
   updatePersona: (persona: api.Persona) => Promise<void>;
   deletePersona: (id: string) => Promise<void>;
@@ -146,12 +249,23 @@ interface AppState {
   applyPersona: (conversationId: string, personaId: string | null) => Promise<void>;
   /** Set a one-off per-conversation temperature override (CHT-7). */
   setConversationTemperature: (conversationId: string, temperature: number | null) => Promise<void>;
+  /** What's shaping the current answer (WHY-1/4) — `undefined` when the panel
+   * is closed. `messageId` unset means the live/composer view; set means the
+   * "why this answer?" view for one past message. */
+  contextPanelTarget: { conversationId: string; messageId?: string } | undefined;
+  openContextPanel: (target: { conversationId: string; messageId?: string }) => void;
+  closeContextPanel: () => void;
 
   // accessibility + privacy (§5.5, §6.3)
   readingScale: number;
   setReadingScale: (scale: number) => Promise<void>;
   telemetryEnabled: boolean;
   setTelemetryEnabled: (on: boolean) => Promise<void>;
+  /** "Show me everything" (SMP-1a) — reveals engine internals, per-note and
+   * per-persona controls, indexed-folder management, and raw prompt layers.
+   * Off by default: Simple mode should read as a complete product. */
+  expert: boolean;
+  setExpert: (on: boolean) => Promise<void>;
 
   // durable memory (MEM)
   /** The always-injected index + standing instructions (MEM-3). */
@@ -161,6 +275,8 @@ interface AppState {
   changeProposals: api.ChangeProposal[];
   refreshChangeProposals: () => Promise<void>;
   resolveChangeProposal: (id: string, accept: boolean) => Promise<void>;
+  /** `MAIL-UI-2`'s `Edit`: rewrite a pending proposal's text before accepting. */
+  updateChangeProposalText: (id: string, text: string) => Promise<void>;
   /** A tidy-up the user hasn't answered — feeds the Settings badge (SOUL-UI-3). */
   consolidationPending: boolean;
   /** The most recent memory write, for the undoable toast (MEM-UI-3). `op` and
@@ -177,9 +293,45 @@ interface AppState {
   undoMemoryWrite: () => Promise<void>;
   /** True until the first-write explainer has been shown once (MEM-UI-4). */
   memoryOnboarded: boolean;
-  /** Whether the Memory skill is on — gates both the tool and the injection. */
-  memorySkillEnabled: boolean;
-  refreshMemorySkill: () => Promise<void>;
+  /** SMP-7: one ability explaining itself once, the first time it actually
+   *  happens — `recall`, `retrieval`, `digest`, `proposal`. At most one such
+   *  explanation per session (`SMP-7c`); a second candidate simply waits for
+   *  next time rather than queuing behind the first. */
+  explainToast: string | null;
+  firstTimeFlags: Record<string, boolean>;
+  /** Whether `firstTimeFlags` has come back from disk. Nothing explains itself
+   * before it has: an empty map is indistinguishable from "never explained". */
+  firstTimeFlagsLoaded: boolean;
+  firstTimeShownThisSession: boolean;
+  maybeFirstTime: (key: string, message: string) => void;
+  /** `SMP-7d`: forget every first-time flag, from Everything mode. */
+  resetFirstTimeExplanations: () => Promise<void>;
+  /** Whether the Memory toolset is on — gates both the tool and the injection. */
+  memoryToolEnabled: boolean;
+  refreshMemoryToolset: () => Promise<void>;
+  /** PRO-4: call after any change to a global-scoped fact. Debounces 8s, then
+   * attempts an automatic rebuild — a no-op below the volume gate or with the
+   * `profile` autonomy rung off. */
+  noteGlobalFactChange: () => void;
+  /** The automatic rebuild trigger itself (debounce and daily tick both land
+   * here). Silent on every "decided not to" outcome; only a genuine new
+   * synthesis raises the toast (PRO-UI-5). */
+  maybeAutoRebuildProfile: () => Promise<void>;
+
+  /** SMP-2: the first-need prompt to install the recall helper. `null` when
+   * nothing is being offered; "asking" while the two-button prompt shows,
+   * "installing" while the download runs, "installed" for the one-time
+   * confirmation once it finishes. */
+  recallOffer: { stage: "asking" | "installing" | "installed"; progress?: api.DownloadProgress } | null;
+  /** "Not now" is permanent (SMP-2b), not per-session — read once at bootstrap. */
+  recallDeclined: boolean;
+  /** Show the first-need prompt if the recall helper isn't installed and
+   * wasn't already declined. Safe to call on every folder attach and memory
+   * write (SMP-2b) — a no-op once it's already showing, installed, or
+   * declined. */
+  maybeOfferRecall: () => Promise<void>;
+  acceptRecallOffer: () => Promise<void>;
+  declineRecallOffer: () => Promise<void>;
 
   // the autopoietic layer (Phase 11)
   /** What the organism is doing right now, for the living mark (PRES-1). */
@@ -197,10 +349,8 @@ interface AppState {
   /** Counts + health for the Self view (ORG-1). */
   vitality: api.Vitality | null;
   lessons: api.Fact[];
-  recipes: api.Recipe[];
   refreshSelf: () => Promise<void>;
   forgetLesson: (name: string) => Promise<void>;
-  forgetRecipe: (name: string) => Promise<void>;
   /** 7-day per-tool reliability for the running model; feeds the caution lines
    * the agent gets in its own prompt (HEAL-2). */
   toolHealth: api.ToolHealth[];
@@ -208,6 +358,22 @@ interface AppState {
   /** A one-line notice from the watchdog (HEAL-1), or null. */
   healToast: string | null;
   dismissHealToast: () => void;
+  /** `TTL-2`: a one-line notice that short-lived facts were let go. */
+  expirySweptToast: string | null;
+  dismissExpirySweptToast: () => void;
+  /** `GLD-2`: a one-line confession that a self-change was checked and put back. */
+  goldenRevertedToast: string | null;
+  dismissGoldenRevertedToast: () => void;
+  /** `MAIL-3`: a receipt that a message actually left the machine at the
+   * `auto` rung — there's no undo, so this is announcement only. */
+  mailSentToast: string | null;
+  dismissMailSentToast: () => void;
+  /** The Health tab's Golden section (`GLD-UI-1`). */
+  goldenStatus: api.GoldenStatus | null;
+  /** Why the last check couldn't run (usually: no model loaded), or "". */
+  goldenError: string;
+  checkingGolden: boolean;
+  checkGoldenNow: () => Promise<void>;
   /** Reflect automatically on leaving a conversation (setting `reflection.auto`). */
   autoReflect: boolean;
   setAutoReflect: (on: boolean) => Promise<void>;
@@ -220,7 +386,38 @@ interface AppState {
   selfIntroduced: boolean;
   dismissIntroduction: () => Promise<void>;
   /** Start a new workspace conversation from a saved procedure (RCP-UI-2). */
-  startFromRecipe: (recipe: api.Recipe) => Promise<void>;
+  startFromSkill: (skill: api.SkillView) => Promise<void>;
+
+  // Agent Skills (SKL): discovered skills, for the system-prompt disclosure,
+  // the Composer's `/` drop-up, and the Skills settings tab.
+  skills: api.SkillView[];
+  refreshSkills: () => Promise<void>;
+  setSkillEnabled: (source: string, name: string, enabled: boolean) => Promise<void>;
+  forgetSkill: (name: string) => Promise<void>;
+
+  // scheduled jobs (SCH): the quiet night shift
+  scheduledJobs: api.ScheduledJob[];
+  /** The job currently in the one run slot (SCH-1), if any. */
+  runningJob: api.RunningJob | null;
+  /** The most recent nightly first-person summary (SCH-UI-1), if one exists. */
+  digest: api.Digest | null;
+  refreshScheduler: () => Promise<void>;
+  createScheduledJob: (input: api.ScheduledJobInput) => Promise<void>;
+  updateScheduledJob: (id: string, input: api.ScheduledJobInput) => Promise<void>;
+  deleteScheduledJob: (id: string) => Promise<void>;
+  /** SCH-UI-3's "Run now". Resolves with the job's short result summary. */
+  runScheduledJobNow: (id: string) => Promise<string>;
+  /** SCH-UI-4's Stop, for the job currently occupying the run slot. */
+  stopScheduledJob: () => Promise<void>;
+  /** Mark the digest read (SCH-UI-2) — clears the mark's slow pulse. */
+  dismissDigest: () => Promise<void>;
+  /** A task being made out of an open chat ("Schedule this" in the Workbench).
+   * Handed to the Tasks section, which opens its editor prefilled. Held in the
+   * store rather than passed as a route param because the two surfaces are in
+   * different columns of the app shell with no router between them. */
+  taskDraft: { name: string; prompt: string; conversationId: string } | null;
+  scheduleConversation: (conversationId: string) => void;
+  clearTaskDraft: () => void;
 
   // context homeostasis (CTX)
   /** Context window of the current model, for the composer meter. */
@@ -234,6 +431,12 @@ interface AppState {
   allArtifacts: api.Artifact[];
   refreshAllArtifacts: () => Promise<void>;
   viewArtifact: (artifact: api.Artifact) => Promise<void>;
+  /** A user-attached image doesn't always have an artifact behind it — a
+   * pasted screenshot never does — so `STR-3`'s thumbnail click opens a plain
+   * full-size lightbox instead of routing through the Workbench viewer. */
+  imageLightbox: { path?: string; dataUri?: string; alt?: string } | null;
+  viewArtifactByPath: (path: string, dataUri?: string, alt?: string) => void;
+  closeImageLightbox: () => void;
 
   bootstrap: () => Promise<void>;
   setActiveConversation: (id: string) => Promise<void>;
@@ -254,6 +457,18 @@ interface AppState {
    * surface per conversation; `data` is the UINode tree, `state` the user's
    * bound values. */
   surfaces: Record<string, BlockView | undefined>;
+  /** `BRW-UI-1`: the live browsing session per conversation, if one is open.
+   * Absent (not just empty) means no session — the panel only shows while
+   * one is live. */
+  browserSessions: Record<string, api.BrowserPanelState | undefined>;
+  /** "Stop browsing" — drops the session and marks the panel closed, so it
+   * says "I closed the page." instead of vanishing mid-sentence. */
+  stopBrowsing: (conversationId: string) => Promise<void>;
+  /** Clear a closed panel away once the user has read it. */
+  dismissBrowserPanel: (conversationId: string) => void;
+  /** Re-read the live session from the backend — on reload, and after a
+   * conversation switch, the store knows nothing but Chrome may still be up. */
+  refreshBrowserSession: (conversationId: string) => Promise<void>;
   /** Persist the surface's bound state (inputs, choices, toggles) — local-only,
    * no model turn; the state rides along with the next action or message. */
   setSurfaceState: (state: Record<string, unknown>) => void;
@@ -316,6 +531,36 @@ interface AppState {
   /** Why the last folder attach was refused, shown inline. */
   folderError: string | null;
 
+  /** IDX-UI-1: the attached folder's index status. `null` = no folder
+   * attached, or it's never been read ("I haven't read this folder yet"). */
+  indexState: api.IndexRootView | null;
+  /** Live counting line while a build runs (IDX-7); cleared when it ends. */
+  indexProgress: api.IndexProgress | null;
+  /** Set on a failed build; cleared on the next attempt. */
+  indexError: string | null;
+  /** SMP-4c: whether folder reading has already explained itself once. Until
+   * it has, the reading line carries a one-sentence "what this is". */
+  indexExplained: boolean;
+  refreshIndexStatus: () => Promise<void>;
+  /** SMP-4a: start reading a freshly attached folder, unless it was read
+   * before or the user stopped it (SMP-4d). Silent when it decides not to. */
+  maybeAutoIndex: () => Promise<void>;
+  buildFolderIndex: () => Promise<void>;
+  cancelFolderIndex: () => Promise<void>;
+  forgetFolderIndex: (path: string) => Promise<void>;
+
+  /** `PHS-UI-1`: the last "Find duplicates" scan's groups, the folder it
+   * scanned, and any error — `null` groups means no scan has run yet. */
+  duplicateGroups: api.DuplicateGroup[] | null;
+  duplicateScanPath: string | null;
+  duplicatesLoading: boolean;
+  duplicatesError: string | null;
+  findDuplicatesIn: (path: string) => Promise<void>;
+  /** Trash every file in the group except `keep` — the existing trash path,
+   * so `RecentChanges.tsx` can undo it. */
+  keepDuplicate: (group: api.DuplicateGroup, keep: string) => Promise<void>;
+  dismissDuplicates: () => void;
+
   attachFolder: () => Promise<void>;
   detachFolder: () => Promise<void>;
   setFolderTrust: (trust: FolderTrust) => Promise<void>;
@@ -376,8 +621,28 @@ function cloudToModels(cm: api.CloudModel[]): Model[] {
   }));
 }
 
-function composeModels(lib: api.ModelEntry[], cloud: api.CloudModel[]): Model[] {
-  return [...localToModels(lib), ...cloudToModels(cloud)];
+function mediaToModels(media: api.MediaModel[]): Model[] {
+  return media.map((m) => ({
+    id: m.id,
+    name: m.name,
+    // A hosted media backend leaves the machine exactly like a hosted chat
+    // model does; the local one doesn't. Same dot, same meaning, no special case.
+    provenance: m.backend_id === "local" ? "local" : "cloud",
+    meta: `${m.modality} · ${m.backend_label}`,
+    available: true,
+    modality: m.modality,
+    backendId: m.backend_id,
+    backendLabel: m.backend_label,
+    priceLabel: m.price_label ?? undefined,
+    supportsEdit: m.supports_edit,
+    supportedAspectRatios: m.supported_aspect_ratios,
+    supportedResolutions: m.supported_resolutions,
+    maxDurationSecs: m.max_duration_secs ?? undefined,
+  }));
+}
+
+function composeModels(lib: api.ModelEntry[], cloud: api.CloudModel[], media: api.MediaModel[] = []): Model[] {
+  return [...localToModels(lib), ...cloudToModels(cloud), ...mediaToModels(media)];
 }
 
 /**
@@ -399,9 +664,12 @@ function toMessage(m: api.DbMessage): Message {
     attachments: m.attachments?.length
       ? m.attachments.map((a) => ({
           id: a.id,
-          kind: a.kind === "pdf" ? "pdf" : "image",
+          kind: (a.kind === "pdf" ? "pdf" : a.kind === "video" ? "video" : "image") as Attachment["kind"],
           name: a.name,
           path: a.path,
+          // Dimensions aren't stored here — `ChatMedia` reads them off the
+          // artifact's metadata, which is the one place they're recorded.
+          artifactId: a.artifact_id ?? undefined,
         }))
       : undefined,
     createdAt: m.created_at,
@@ -476,6 +744,81 @@ function deriveTitle(text: string): string {
   return t.length > 48 ? `${t.slice(0, 48)}…` : t || "New chat";
 }
 
+/** Mirrors the backend's `media::ellipsize` (`FIX-1`) so a composer-made
+ * image's step target matches what the same prompt would show via the tool
+ * path. Uses code points (`Array.from`), not `.slice`, for the same reason
+ * the Rust side iterates `char_indices()` — a naive UTF-16 cut can land
+ * inside a surrogate pair for a multi-codepoint emoji. */
+function ellipsizeClient(s: string, maxChars: number): string {
+  const chars = Array.from(s);
+  return chars.length <= maxChars ? s : `${chars.slice(0, maxChars).join("")}…`;
+}
+
+const MEDIA_CONSENT_KEY = "poiesis.media.consent";
+
+/** Which cloud media backends the user has already agreed to pay for, this
+ * install (`CST-1`). A UI trust decision, not a fact worth the DB or the
+ * agent's memory — so it lives in `localStorage`, not `settings`. */
+function loadMediaConsent(): Record<string, boolean> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(MEDIA_CONSENT_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+function saveMediaConsent(consent: Record<string, boolean>) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(MEDIA_CONSENT_KEY, JSON.stringify(consent));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** An artifact's `meta_json`, parsed defensively. It is written by us, but a
+ * throw here would take the whole transcript down with it — a caption is never
+ * worth that, so a malformed row degrades to no metadata instead. */
+export function parseArtifactMeta(metaJson?: string | null): Record<string, unknown> {
+  if (!metaJson) return {};
+  try {
+    const parsed: unknown = JSON.parse(metaJson);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The inline attachment that renders a media artifact in the message stream.
+ * Both creation paths build it from here, which is what makes them
+ * presentation-identical (`STR-1`) rather than merely similar. */
+export function mediaAttachmentFor(artifact: api.Artifact): Attachment {
+  const meta = parseArtifactMeta(artifact.meta_json);
+  const ext = artifact.content.split(".").pop()?.toLowerCase();
+  return {
+    id: `media-${artifact.id}`,
+    kind: artifact.kind === "video" ? "video" : "image",
+    name: `${artifact.kind}.${ext && ext.length <= 4 ? ext : "png"}`,
+    path: artifact.content,
+    artifactId: artifact.id,
+    width: typeof meta.width === "number" ? meta.width : undefined,
+    height: typeof meta.height === "number" ? meta.height : undefined,
+    durationSecs: typeof meta.duration_secs === "number" ? meta.duration_secs : undefined,
+  };
+}
+
+/** The model header a media artifact should carry: the provider that actually
+ * made it, and whether that left the machine. */
+export function mediaModelFor(artifact: api.Artifact): { name: string; provenance: Provenance } {
+  const meta = parseArtifactMeta(artifact.meta_json);
+  const modelId = typeof meta.model_id === "string" ? meta.model_id : "";
+  return {
+    name: typeof meta.provider_label === "string" ? meta.provider_label : "Image",
+    provenance: modelId.startsWith("local:") ? "local" : "cloud",
+  };
+}
+
 // Context-window constants (CTX-4). Declared above the store because the store's
 // initial `contextBudget` reads DEFAULT_LOCAL_CTX at creation time — a `const`
 // referenced before its declaration is a temporal-dead-zone crash at import.
@@ -513,19 +856,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadingModel: null,
   setModelFilter: (modelFilter) => set({ modelFilter }),
 
+  lastChatModelId: mockModels[0].id,
+
   // Selecting a local model loads it into the engine; cloud models (later)
   // just become the active choice without spawning anything.
   selectModel: (id) => {
-    set({ selectedModelId: id });
     const m = get().models.find((x) => x.id === id);
+    set({ selectedModelId: id, ...(!m?.modality || m.modality === "chat" ? { lastChatModelId: id } : {}) });
     // The context window is a property of the model, so the meter follows it.
     get().refreshContextBudget();
     get().refreshMemoryContext();
     get().refreshChangeProposals();
-    get().refreshMemorySkill();
+    get().refreshMemoryToolset();
     // Tool reliability is per model too (HEAL-2): a tool a 3B fumbles isn't
     // broken for a cloud model, so the cautions must not carry over.
     get().refreshToolHealth();
+    // A media id has no engine to load (`PIK-2`) — `libraryModels` would
+    // simply miss it, but the guard is explicit so a lookup miss can never
+    // silently fall through into spawning `llama-server` on the wrong id.
+    if (m?.modality && m.modality !== "chat") return;
     if (api.inTauri() && m?.provenance === "local") {
       const s = get();
       // Already running (or starting) this exact model — nothing to do.
@@ -540,7 +889,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!api.inTauri()) return;
     const lib = await api.listModels();
     set((s) => {
-      const models = composeModels(lib, s.cloudModels);
+      const models = composeModels(lib, s.cloudModels, s.mediaModels);
       return {
         libraryModels: lib,
         models,
@@ -549,6 +898,16 @@ export const useAppStore = create<AppState>((set, get) => ({
           : lib.find((e) => e.is_default)?.id ?? models[0]?.id ?? s.selectedModelId,
       };
     });
+  },
+
+  mediaModels: [],
+  // The picker's "Images & video" group (`PIK-1`). Omitted entirely by the UI
+  // when this comes back empty — a fresh install with no engine and no key
+  // sees today's picker unchanged, per the plan's own acceptance bar.
+  refreshMediaModels: async () => {
+    if (!api.inTauri()) return;
+    const mediaModels = await api.listMediaModels().catch(() => []);
+    set((s) => ({ mediaModels, models: composeModels(s.libraryModels, s.cloudModels, mediaModels) }));
   },
 
   // Load cloud providers + their models for the unified picker (CLD-3, CLD-4).
@@ -561,7 +920,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       providers,
       cloudModels,
-      models: composeModels(s.libraryModels, cloudModels),
+      models: composeModels(s.libraryModels, cloudModels, s.mediaModels),
     }));
   },
 
@@ -618,85 +977,178 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
     if (convId && api.inTauri()) api.setConversationWorkspace(convId, workspaceMode).catch(() => {});
   },
-  imageMode: false,
-  setImageMode: (imageMode) => set({ imageMode }),
-
   createImage: async (prompt, modelPath) => {
-    const state = get();
-    const convId = state.activeConversationId;
-    const text = prompt.trim();
-    if (!convId || state.busy || !text) return;
-    const conv = state.conversations.find((c) => c.id === convId);
-    const isFirstMessage = !conv || conv.messages.length === 0;
+    await startMediaTurn(set, get, {
+      text: prompt,
+      modality: "image",
+      submit: ({ conversationId, messageId }) =>
+        api.generateImage({
+          prompt: prompt.trim(),
+          conversationId,
+          messageId,
+          modelPath: modelPath ?? undefined,
+        }),
+    });
+  },
 
-    const userMsg: Message = {
-      id: `u-${Date.now()}`,
-      role: "user",
-      text,
-      createdAt: Date.now(),
-    };
-    const assistantId = `a-${Date.now()}`;
-    const assistantMsg: Message = {
-      id: assistantId,
-      role: "assistant",
-      model: { name: "Image", provenance: "local" },
-      text: "Creating image…",
-      streaming: true,
-      createdAt: Date.now() + 1,
-    };
-    set((s) => ({
-      busy: true,
-      presence: "active",
-      conversations: s.conversations.map((c) =>
-        c.id === convId
-          ? { ...c, updatedAt: Date.now(), messages: [...c.messages, userMsg, assistantMsg] }
-          : c
-      ),
-    }));
-    if (isFirstMessage) get().renameConversation(convId, deriveTitle(text));
+  mediaConsent: loadMediaConsent(),
+  pendingMediaConsent: null,
+  lastMediaArtifact: null,
+  lastMediaSeed: null,
+  clearImplicitReference: () => set({ lastMediaArtifact: null }),
 
-    if (!api.inTauri()) {
-      patchAssistant(set, convId, assistantId, {
-        text: "_Run the desktop app to generate images._",
+  mediaJobs: {},
+  mediaPartials: {},
+
+  applyMediaJobEvent: (event) => {
+    const tracked = get().mediaJobs[event.job_id];
+    // A job whose turn this session doesn't know about — submitted by the
+    // agent tool, or before a reload. `message_id` is the durable answer, and
+    // the attachment row the worker wrote means a reload would show it anyway.
+    const convId = tracked?.conversationId ?? event.conversation_id;
+    const messageId = tracked?.messageId ?? event.message_id;
+    const stepId = tracked?.stepId;
+
+    set((s) => {
+      const { [event.job_id]: _done, ...rest } = s.mediaJobs;
+      const { [event.job_id]: _partial, ...partials } = s.mediaPartials;
+      return { mediaJobs: rest, mediaPartials: partials };
+    });
+    if (!convId || !messageId) return;
+
+    const patchStep = (status: AgentStep["status"], result?: string) => {
+      const existing = get()
+        .conversations.find((c) => c.id === convId)
+        ?.messages.find((m) => m.id === messageId);
+      const step = existing?.steps?.find((st) => st.id === stepId) ?? existing?.steps?.[0];
+      return step ? [{ ...step, status, result }] : undefined;
+    };
+
+    if (event.status === "done" && event.artifact) {
+      const artifact = event.artifact;
+      const { name: providerLabel, provenance } = mediaModelFor(artifact);
+      const attachment = mediaAttachmentFor(artifact);
+      patchAssistant(set, convId, messageId, {
         streaming: false,
+        pendingMedia: undefined,
+        model: { name: providerLabel, provenance },
+        steps: patchStep("done"),
+        attachments: [attachment],
+        artifactIds: [artifact.id],
       });
-      set({ busy: false });
+      set((s) => ({
+        artifacts: {
+          ...s.artifacts,
+          [convId]: [...(s.artifacts[convId] ?? []).filter((a) => a.id !== artifact.id), artifact],
+        },
+        lastMediaArtifact: {
+          id: artifact.id,
+          path: artifact.content,
+          conversationId: convId,
+          turnsAgo: 0,
+        },
+        lastMediaSeed: (() => {
+          const seed = parseArtifactMeta(artifact.meta_json).seed;
+          return typeof seed === "number" ? seed : s.lastMediaSeed;
+        })(),
+      }));
+      get().refreshAllArtifacts();
       return;
     }
 
-    try {
-      await api.appendMessage({ conversationId: convId, role: "user", content: text });
-    } catch {
-      /* non-fatal */
-    }
-    try {
-      const path = await api.generateImage({ prompt: text, modelPath: modelPath ?? undefined });
-      const attachment: Attachment = { id: `img-${Date.now()}`, kind: "image", name: "image.png", path };
-      patchAssistant(set, convId, assistantId, {
+    if (event.status === "cancelled") {
+      patchAssistant(set, convId, messageId, {
         text: "",
         streaming: false,
-        attachments: [attachment],
+        pendingMedia: undefined,
+        steps: patchStep("error", "— stopped"),
       });
-      try {
-        await api.appendMessage({
-          conversationId: convId,
-          role: "assistant",
-          content: "",
-          modelName: "Image",
-          modelProvenance: "local",
-          attachments: [{ kind: "image", name: "image.png", path }],
-        });
-      } catch {
-        /* non-fatal */
-      }
-    } catch (e) {
-      patchAssistant(set, convId, assistantId, {
-        text: `That didn't work: ${String(e)}`,
-        streaming: false,
-      });
-    } finally {
-      set({ busy: false });
+      return;
     }
+
+    const message = event.error ?? "the generation failed";
+    patchAssistant(set, convId, messageId, {
+      text: `That didn't work: ${message}`,
+      streaming: false,
+      pendingMedia: undefined,
+      steps: patchStep("error", `— ${message}`),
+    });
+  },
+
+  cancelMediaJob: async (jobId) => {
+    if (!api.inTauri()) return;
+    // The backend announces the cancellation on the same event every other
+    // outcome arrives on, so there is nothing to patch here — one path in,
+    // one path out.
+    await api.cancelMediaJob(jobId).catch(() => {});
+  },
+
+  composerPin: null,
+  refineArtifact: (artifact) => {
+    const convId = artifact.conversation_id ?? get().activeConversationId;
+    if (!convId) return;
+    set((s) => ({
+      lastMediaArtifact: { id: artifact.id, path: artifact.content, conversationId: convId, turnsAgo: 0 },
+      composerPin: { intent: "image", nonce: (s.composerPin?.nonce ?? 0) + 1 },
+    }));
+  },
+
+  createMedia: async ({ prompt, modelId, aspectRatio, resolution, seed, steps, negative, durationSecs, references, parentArtifactId }) => {
+    const state = get();
+    const model = state.models.find((m) => m.id === modelId);
+
+    // `CST-1`: the first paid generation per backend asks first. Local is
+    // never gated — there is nothing to consent to.
+    if (model?.provenance === "cloud" && model.backendId && !state.mediaConsent[model.backendId]) {
+      const backendId = model.backendId;
+      const ok = await new Promise<boolean>((resolvePromise) => {
+        const resolve = (accept: boolean) => {
+          if (accept) {
+            set((s) => {
+              const mediaConsent = { ...s.mediaConsent, [backendId]: true };
+              saveMediaConsent(mediaConsent);
+              return { mediaConsent };
+            });
+          }
+          set({ pendingMediaConsent: null });
+          resolvePromise(accept);
+        };
+        set({
+          pendingMediaConsent: {
+            backendId,
+            backendLabel: model.backendLabel ?? model.name,
+            priceLabel: model.priceLabel,
+            resolve,
+          },
+        });
+      });
+      if (!ok) return;
+    }
+
+    await startMediaTurn(set, get, {
+      text: prompt,
+      modality: model?.modality === "video" ? "video" : "image",
+      aspectRatio,
+      modelLabel: model?.name,
+      provenance: model?.provenance,
+      clearImplicitReference: true,
+      submit: ({ conversationId, messageId }) =>
+        api.generateMedia({
+          modelId,
+          modality: model?.modality === "video" ? "video" : "image",
+          prompt: prompt.trim(),
+          conversationId,
+          messageId,
+          aspectRatio,
+          resolution,
+          seed,
+          steps,
+          negative,
+          durationSecs,
+          references,
+          parentArtifactId,
+        }),
+    });
   },
 
   personas: [],
@@ -708,11 +1160,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       /* ignore */
     }
   },
-  createPersona: async ({ name, systemPrompt, modelId, temperature }) => {
+  createPersona: async ({ name, systemPrompt, modelId, temperature, toolsJson, skillsJson }) => {
     if (!api.inTauri()) return;
     const paramsJson =
       typeof temperature === "number" ? JSON.stringify({ temperature }) : null;
-    await api.createPersona({ name, systemPrompt, modelId: modelId ?? null, paramsJson });
+    await api.createPersona({
+      name,
+      systemPrompt,
+      modelId: modelId ?? null,
+      paramsJson,
+      toolsJson: toolsJson ?? null,
+      skillsJson: skillsJson ?? null,
+    });
     await get().refreshPersonas();
   },
   updatePersona: async (persona) => {
@@ -767,6 +1226,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       await api.setConversationPersona(conversationId, personaId, serializeOverrides(overrides));
     }
   },
+  contextPanelTarget: undefined,
+  openContextPanel: (target) => set({ contextPanelTarget: target }),
+  closeContextPanel: () => set({ contextPanelTarget: undefined }),
 
   pendingPermissions: [],
 
@@ -781,8 +1243,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ telemetryEnabled });
     if (api.inTauri()) await api.setSetting(TELEMETRY_KEY, telemetryEnabled ? "true" : "false");
   },
+  expert: false,
+  setExpert: async (expert) => {
+    set({ expert });
+    if (api.inTauri()) await api.setSetting(EXPERT_KEY, expert ? "true" : "false");
+  },
 
-  memoryContext: { index: "", soul: "", fact_count: 0 },
+  memoryContext: { index: "", soul: "", about_you: "", fact_count: 0 },
   refreshMemoryContext: async () => {
     if (!api.inTauri()) return;
     try {
@@ -796,7 +1263,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   refreshChangeProposals: async () => {
     if (!api.inTauri()) return;
     try {
-      set({ changeProposals: await api.listChangeProposals() });
+      const changeProposals = await api.listChangeProposals();
+      set({ changeProposals });
+      if (changeProposals.length > 0) {
+        get().maybeFirstTime(
+          "proposal",
+          "This is a proposal — something I'd like to change about myself, waiting on your yes or no."
+        );
+      }
     } catch {
       /* non-fatal */
     }
@@ -811,9 +1285,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   resolveChangeProposal: async (id, accept) => {
-    await api.resolveChangeProposal(id, accept);
+    // Accepting a soul proposal runs `GLD-2`'s before/after check, which needs
+    // the same routing a chat turn gets.
+    await api.resolveChangeProposal(id, accept, cloudTarget());
     await get().refreshChangeProposals();
-    if (accept) await get().refreshMemoryContext();
+    if (accept) {
+      await get().refreshMemoryContext();
+      await get().refreshSelf();
+    }
+  },
+  updateChangeProposalText: async (id, text) => {
+    await api.updateChangeProposalText(id, text);
+    await get().refreshChangeProposals();
   },
   memoryToast: null,
   dismissMemoryToast: () => set({ memoryToast: null }),
@@ -822,9 +1305,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ memoryToast: null });
     if (!toast) return;
     try {
-      // Undo the actual operation: a forget is undone by restoring from trash,
-      // anything else (a save) by forgetting the entry it created.
-      if (toast.op === "forget" && toast.undoToken) {
+      if (toast.op === "profile") {
+        // PRO-9: undo restores PROFILE.md from the snapshot the rebuild took
+        // of itself, not a fact-trash round trip.
+        await api.undoProfileRebuild();
+      } else if (toast.op === "forget" && toast.undoToken) {
+        // Undo the actual operation: a forget is undone by restoring from
+        // trash, anything else (a save) by forgetting the entry it created.
         await api.restoreMemoryFact(toast.undoToken);
       } else {
         await api.forgetMemoryFact(toast.name);
@@ -834,17 +1321,113 @@ export const useAppStore = create<AppState>((set, get) => ({
       /* already gone */
     }
   },
-  memoryOnboarded: false,
-  memorySkillEnabled: true,
-  refreshMemorySkill: async () => {
+  noteGlobalFactChange: () => {
+    if (!api.inTauri() || !get().memoryToolEnabled) return;
+    if (profileDebounceTimer) clearTimeout(profileDebounceTimer);
+    profileDebounceTimer = setTimeout(() => {
+      profileDebounceTimer = null;
+      get().maybeAutoRebuildProfile();
+    }, PROFILE_DEBOUNCE_MS);
+  },
+  maybeAutoRebuildProfile: async () => {
     if (!api.inTauri()) return;
     try {
-      const skills = await api.listSkills();
-      const memory = skills.find((s) => s.id === "memory");
-      set({ memorySkillEnabled: memory?.enabled ?? true });
+      const p = await api.rebuildProfile(false);
+      if (!p) return; // below the volume gate, or the rung is off — quietly nothing
+      await get().refreshMemoryContext();
+      set({
+        memoryToast: { op: "profile", name: "", description: "", collection: "profile", undoToken: "" },
+      });
+    } catch {
+      // A failed local call is ambient, not an error the user asked to see —
+      // the next debounce or the next daily tick tries again.
+    }
+  },
+  memoryOnboarded: false,
+
+  explainToast: null,
+  firstTimeFlags: {},
+  firstTimeFlagsLoaded: false,
+  firstTimeShownThisSession: false,
+  maybeFirstTime: (key, message) => {
+    const s = get();
+    // Until the flags are back from disk, `firstTimeFlags` is an empty object
+    // and every check below would pass — re-explaining something already
+    // explained. Bootstrap fires several of these callers before that load
+    // resolves, so staying silent is the only honest answer here: an
+    // explanation is worth nothing if it can't tell "first time" from "again".
+    if (!s.firstTimeFlagsLoaded) return;
+    if (s.firstTimeFlags[key]) return; // already explained, ever
+    if (s.firstTimeShownThisSession) return; // SMP-7c: at most one per session
+    // The toast shell is one slot — don't step on a memory-write or heal
+    // notice that's already using it.
+    if (s.explainToast !== null || s.memoryToast !== null || s.healToast !== null) return;
+    set((st) => ({
+      explainToast: message,
+      firstTimeShownThisSession: true,
+      firstTimeFlags: { ...st.firstTimeFlags, [key]: true },
+    }));
+    if (api.inTauri()) api.setSetting(`onboarded.${key}`, "true").catch(() => {});
+    // Self-clearing on a timer, not on unmount — so it can never get stuck
+    // showing after something else replaces it in the toast shell.
+    setTimeout(() => {
+      if (get().explainToast === message) set({ explainToast: null });
+    }, EXPLAIN_DWELL_MS);
+  },
+  resetFirstTimeExplanations: async () => {
+    // `firstTimeFlagsLoaded` stays true: these flags are now known-empty on
+    // purpose, which is the opposite of not knowing them yet.
+    set({ firstTimeFlags: {}, firstTimeShownThisSession: false });
+    if (!api.inTauri()) return;
+    await Promise.all(FIRST_TIME_KEYS.map((k) => api.setSetting(`onboarded.${k}`, "false")));
+  },
+
+  memoryToolEnabled: true,
+  refreshMemoryToolset: async () => {
+    if (!api.inTauri()) return;
+    try {
+      const toolsets = await api.listToolsets();
+      const memory = toolsets.find((s) => s.id === "memory");
+      set({ memoryToolEnabled: memory?.enabled ?? true });
     } catch {
       /* keep the default */
     }
+  },
+
+  recallOffer: null,
+  recallDeclined: false,
+  maybeOfferRecall: async () => {
+    if (!api.inTauri()) return;
+    // Already showing, already answered "yes" (installing/installed this
+    // session), or permanently declined — nothing to do.
+    if (get().recallOffer || get().recallDeclined) return;
+    try {
+      const status = await api.embedEngineStatus();
+      // A second trigger (folder attach + memory write landing close together)
+      // can both pass the check above before either sets state — re-check
+      // after the await so only the first one to resolve shows the prompt.
+      if (status.model_installed || get().recallOffer || get().recallDeclined) return;
+      set({ recallOffer: { stage: "asking" } });
+    } catch {
+      /* engine status unreachable — say nothing rather than guess */
+    }
+  },
+  acceptRecallOffer: async () => {
+    set({ recallOffer: { stage: "installing" } });
+    try {
+      await api.installEmbedEngine((p) => set({ recallOffer: { stage: "installing", progress: p } }));
+      set({ recallOffer: { stage: "installed" } });
+      setTimeout(() => {
+        set((s) => (s.recallOffer?.stage === "installed" ? { recallOffer: null } : {}));
+      }, 4000);
+    } catch {
+      // The Engine → Recall tab (SMP-2a) remains available to retry by hand.
+      set({ recallOffer: null });
+    }
+  },
+  declineRecallOffer: async () => {
+    set({ recallOffer: null, recallDeclined: true });
+    if (api.inTauri()) await api.setSetting(RECALL_DECLINED_KEY, "true").catch(() => {});
   },
 
   // ---- the autopoietic layer (Phase 11) ----
@@ -907,16 +1490,16 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   vitality: null,
   lessons: [],
-  recipes: [],
   refreshSelf: async () => {
     if (!api.inTauri()) return;
     const model = get().models.find((m) => m.id === get().selectedModelId);
-    const [vitality, lessons, recipes] = await Promise.all([
+    const [vitality, lessons, goldenStatus] = await Promise.all([
       api.getVitality(model?.provenance === "cloud" ? model.cloudModel : undefined).catch(() => null),
       api.listLessons().catch(() => [] as api.Fact[]),
-      api.listRecipes().catch(() => [] as api.Recipe[]),
+      api.getGoldenStatus().catch(() => null),
     ]);
-    set({ vitality, lessons, recipes });
+    set({ vitality, lessons, goldenStatus });
+    await get().refreshSkills();
   },
   forgetLesson: async (name) => {
     const undoToken = await api.forgetLesson(name);
@@ -924,10 +1507,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     await get().refreshSelf();
     await get().refreshMemoryContext();
   },
-  forgetRecipe: async (name) => {
-    await api.forgetRecipe(name);
-    await get().refreshSelf();
-    await get().refreshMemoryContext();
+
+  skills: [],
+  refreshSkills: async () => {
+    if (!api.inTauri()) return;
+    const conv = get().conversations.find((c) => c.id === get().activeConversationId);
+    try {
+      set({ skills: await api.listSkills(conv?.folderPath ?? null) });
+    } catch {
+      // Left as-is: a failed refresh keeps the last known list rather than
+      // blanking the prompt's skills block mid-conversation.
+    }
+  },
+  setSkillEnabled: async (source, name, enabled) => {
+    // `GLD-2`: switching a skill *on* injects new instructions into every
+    // prompt, so the backend checks itself before and after. That's a couple
+    // of model passes — the toggle would otherwise look frozen, so say so.
+    if (enabled) set({ checkingGolden: true });
+    try {
+      await api.setSkillEnabled(source, name, enabled, cloudTarget());
+    } finally {
+      if (enabled) set({ checkingGolden: false });
+    }
+    await get().refreshSkills();
+    if (enabled) await get().refreshSelf();
+  },
+  forgetSkill: async (name) => {
+    await api.forgetSkill(name);
+    await get().refreshSkills();
   },
 
   toolHealth: [],
@@ -945,6 +1552,29 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   healToast: null,
   dismissHealToast: () => set({ healToast: null }),
+  expirySweptToast: null,
+  dismissExpirySweptToast: () => set({ expirySweptToast: null }),
+  goldenRevertedToast: null,
+  dismissGoldenRevertedToast: () => set({ goldenRevertedToast: null }),
+  mailSentToast: null,
+  dismissMailSentToast: () => set({ mailSentToast: null }),
+  goldenStatus: null,
+  goldenError: "",
+  checkingGolden: false,
+  checkGoldenNow: async () => {
+    if (!api.inTauri()) return;
+    set({ checkingGolden: true, goldenError: "" });
+    try {
+      const goldenStatus = await api.checkGolden(cloudTarget());
+      set({ goldenStatus });
+    } catch (e) {
+      // No engine loaded is the common case, and a button that silently does
+      // nothing reads as broken — say which it was.
+      set({ goldenError: String(e) });
+    } finally {
+      set({ checkingGolden: false });
+    }
+  },
   autoReflect: true,
   setAutoReflect: async (autoReflect) => {
     set({ autoReflect });
@@ -964,9 +1594,89 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (api.inTauri()) await api.setSetting(SELF_INTRODUCED_KEY, "true");
   },
 
-  startFromRecipe: async (recipe) => {
+  // ---- scheduled jobs (SCH): the quiet night shift ----
+  scheduledJobs: [],
+  runningJob: null,
+  digest: null,
+  refreshScheduler: async () => {
+    if (!api.inTauri()) return;
+    const [scheduledJobs, runningJob, digest] = await Promise.all([
+      api.listScheduledJobs().catch(() => [] as api.ScheduledJob[]),
+      api.schedulerStatus().catch(() => null),
+      api.getSchedulerDigest().catch(() => null),
+    ]);
+    set({ scheduledJobs, runningJob, digest });
+    if (digest) {
+      get().maybeFirstTime(
+        "digest",
+        "This is a digest — a note I leave after reading back over recent conversations on my own."
+      );
+    }
+  },
+  createScheduledJob: async (input) => {
+    await api.createScheduledJob(input);
+    await get().refreshScheduler();
+  },
+  updateScheduledJob: async (id, input) => {
+    await api.updateScheduledJob(id, input);
+    await get().refreshScheduler();
+  },
+  deleteScheduledJob: async (id) => {
+    await api.deleteScheduledJob(id);
+    await get().refreshScheduler();
+  },
+  runScheduledJobNow: async (id) => {
+    const result = await api.runScheduledJobNow(id);
+    await get().refreshScheduler();
+    return result;
+  },
+  stopScheduledJob: async () => {
+    await api.stopScheduledJob();
+    await get().refreshScheduler();
+  },
+  taskDraft: null,
+  scheduleConversation: (conversationId) => {
+    const conv = get().conversations.find((c) => c.id === conversationId);
+    // Seed the instructions from what was actually asked here — the first real
+    // request in the chat. A task made from a conversation should arrive
+    // already saying something, not as an empty box next to a chat you now
+    // have to re-read and summarise yourself.
+    const firstAsk = conv?.messages.find((m) => m.role === "user")?.text.trim() ?? "";
+    set({
+      taskDraft: {
+        name: conv?.title ?? "New task",
+        prompt: firstAsk.slice(0, 2000),
+        conversationId,
+      },
+    });
+    get().setView("tasks");
+  },
+  clearTaskDraft: () => set({ taskDraft: null }),
+  dismissDigest: async () => {
+    set((s) => (s.digest ? { digest: { ...s.digest, unread: false } } : {}));
+    if (api.inTauri()) await api.markDigestRead().catch(() => {});
+  },
+
+  startFromSkill: async (skill) => {
+    // Most skills are just work, and work is a conversation. Only a skill that
+    // actually ships a surface template has anything to put in a workspace, so
+    // that — not the act of starting a skill — is what decides the mode. Asked
+    // before the conversation exists, because `newConversation` pins the
+    // workspace flag onto the row it creates. A fresh chat has no folder yet,
+    // hence the `null`.
+    let treeJson: string | null = null;
+    if (api.inTauri()) {
+      try {
+        treeJson = await api.skillSurface(skill.name, null);
+      } catch {
+        /* a bad or missing template shouldn't stop the skill from running */
+      }
+    }
+
     const wasWorkspace = get().workspaceMode;
-    set({ workspaceMode: true });
+    // The `skill` tool is how the model reads the steps at all (SKL-2 stage 2);
+    // with tools off, "start from a skill" would start nothing.
+    set({ workspaceMode: !!treeJson, toolsEnabled: true });
     await get().newConversation();
     const convId = get().activeConversationId;
     if (!convId) {
@@ -976,33 +1686,28 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       view: "chat",
       conversations: s.conversations.map((c) =>
-        c.id === convId ? { ...c, recipeName: recipe.name } : c
+        c.id === convId ? { ...c, skillName: skill.name } : c
       ),
     }));
     // Seed the template first, so the workspace is already furnished when the
-    // agent's first turn arrives — the recipe visibly hatches (PRES-7).
-    if (recipe.surface_json && api.inTauri()) {
+    // agent's first turn arrives — the skill visibly hatches (PRES-7).
+    if (treeJson) {
       try {
-        const id = await api.setSurface(convId, recipe.surface_json);
+        const id = await api.setSurface(convId, treeJson);
         set((s) => ({
           surfaces: {
             ...s.surfaces,
-            [convId]: {
-              id,
-              kind: "surface",
-              title: "Workspace",
-              data: JSON.parse(recipe.surface_json as string),
-            },
+            [convId]: { id, kind: "surface", title: "Workspace", data: JSON.parse(treeJson!) },
           },
         }));
       } catch {
-        /* a bad template shouldn't stop the procedure from running */
+        /* same: a surface that won't load isn't a reason not to run the skill */
       }
     }
-    // The recipe *is* the kickoff prompt; the agent takes it from there.
-    await get().sendMessage(
-      `Follow your recipe "${recipe.name}". Steps:\n${recipe.steps}`
-    );
+    // Naming the skill *is* the kickoff prompt: the model reads the steps
+    // itself with the `skill` tool (SKL-2 stage 2), rather than us pasting a
+    // body the user would then see twice.
+    await get().sendMessage(`Use your "${skill.name}" skill.`);
   },
 
   contextBudget: DEFAULT_LOCAL_CTX,
@@ -1035,12 +1740,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       readingScaleRaw,
       telemetryRaw,
       autoCompactRaw,
+      expertRaw,
       onboardedRaw,
       bornRaw,
       introducedRaw,
       autoReflectRaw,
       dockOpenRaw,
       dockWidthRaw,
+      recallDeclinedRaw,
+      indexExplainedRaw,
+      firstTimeRaw,
       ...autonomyRaw
     ] = await Promise.all([
       api.listConversations(),
@@ -1048,12 +1757,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       api.getSetting(READING_SCALE_KEY),
       api.getSetting(TELEMETRY_KEY),
       api.getSetting(AUTOCOMPACT_KEY),
+      api.getSetting(EXPERT_KEY),
       api.getSetting(MEMORY_ONBOARDED_KEY),
       api.getSetting(SELF_BORN_KEY),
       api.getSetting(SELF_INTRODUCED_KEY),
       api.getSetting(REFLECT_AUTO_KEY),
       api.getSetting(DOCK_OPEN_KEY),
       api.getSetting(DOCK_WIDTH_KEY),
+      api.getSetting(RECALL_DECLINED_KEY),
+      api.getSetting(INDEX_EXPLAINED_KEY),
+      // SMP-7a: loaded with the rest rather than a beat later. The refreshes
+      // below call `maybeFirstTime`, and a flag that hasn't landed yet reads
+      // as "never explained" — so this has to be settled before any of them
+      // run, not merely soon after.
+      Promise.all(FIRST_TIME_KEYS.map((k) => api.getSetting(`onboarded.${k}`))),
       ...AUTONOMY_CLASSES.map((c) => api.getSetting(`autonomy.${c.id}`)),
     ]);
     let conversations = rows.map(toConversation);
@@ -1075,6 +1792,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     AUTONOMY_CLASSES.forEach((c, i) => {
       autonomy[c.id] = autonomyRaw[i] || c.fallback;
     });
+    const firstTimeFlags: Record<string, boolean> = {};
+    FIRST_TIME_KEYS.forEach((k, i) => {
+      firstTimeFlags[k] = firstTimeRaw[i] === "true";
+    });
     set({
       selfBorn,
       selfIntroduced: introducedRaw === "true",
@@ -1088,7 +1809,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       telemetryEnabled: telemetryRaw === "true",
       // Homeostasis is on unless the user turned it off.
       autoCompact: autoCompactRaw !== "false",
+      expert: expertRaw === "true",
       memoryOnboarded: onboardedRaw === "true",
+      firstTimeFlags,
+      firstTimeFlagsLoaded: true,
+      recallDeclined: recallDeclinedRaw === "true",
+      indexExplained: indexExplainedRaw === "true",
       // The Workbench is open unless the user closed it last time.
       dockOpen: dockOpenRaw !== "0",
       dockWidth: Math.min(720, Math.max(260, Number(dockWidthRaw) || DEFAULT_DOCK_WIDTH)),
@@ -1097,14 +1823,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     await get().refreshLibrary();
     // Cloud models load in the background (network) — don't block startup.
     get().refreshCloud();
+    get().refreshMediaModels();
     get().refreshPersonas();
     get().refreshContextBudget();
     get().refreshMemoryContext();
     get().refreshChangeProposals();
-    get().refreshMemorySkill();
+    get().refreshMemoryToolset();
     get().refreshSelf();
     get().refreshToolHealth();
+    get().refreshScheduler();
     listenForSelfEvents(set, get);
+    maybeDailyProfileTick(get);
     await get().setActiveConversation(conversations[0].id);
   },
 
@@ -1129,9 +1858,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     const conv = get().conversations.find((c) => c.id === id);
     // The Workbench belongs to the conversation, not the window: its folder,
     // tree, selection and change history all reset and reload with the session.
+    // A media model is sticky across messages but not across conversations
+    // (Path E step 6) — "make me a picture" is a session, not a personality.
+    // A new session opens on the chat model the user was last talking to.
+    const current = get().models.find((m) => m.id === get().selectedModelId);
+    const restoreChatModel = current?.modality && current.modality !== "chat";
+
     set({
       activeConversationId: id,
       view: "chat",
+      ...(restoreChatModel ? { selectedModelId: get().lastChatModelId } : {}),
       workspaceMode: !!conv?.workspace,
       selected: null,
       viewerExpanded: false,
@@ -1140,10 +1876,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       touchedFiles: {},
       trash: [],
       folderError: null,
+      indexState: null,
+      indexProgress: null,
+      indexError: null,
+      duplicateGroups: null,
+      duplicateScanPath: null,
+      duplicatesError: null,
     });
     if (!api.inTauri()) return;
     get().refreshTree().catch(() => {});
     get().refreshTrash().catch(() => {});
+    get().refreshIndexStatus().catch(() => {});
     const rows = await api.listMessages(id);
     // Load any saved workspace blocks and attach them to their anchor message
     // (Generative UI). A block with no message_id trails the last assistant turn.
@@ -1171,6 +1914,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     const messages = rows.map(toMessage);
     for (const m of messages) {
       if (blocksByMessage[m.id]) m.blocks = blocksByMessage[m.id];
+    }
+    // `JOB-1`: a generation can outlive the view that started it. Re-attach to
+    // anything still running so the turn shows its tile and its Cancel again,
+    // rather than a finished-looking turn with nothing in it.
+    try {
+      const running = await api.listRunningMediaJobs(id);
+      if (running.length) {
+        const tracked: AppState["mediaJobs"] = {};
+        for (const job of running) {
+          const target = job.message_id && messages.find((m) => m.id === job.message_id);
+          if (!target) continue;
+          target.streaming = true;
+          target.pendingMedia = {
+            modality: job.modality,
+            aspectRatio: job.aspect_ratio ?? undefined,
+            startedAt: job.started_at,
+            jobId: job.id,
+          };
+          tracked[job.id] = {
+            conversationId: id,
+            messageId: target.id,
+            stepId: target.steps?.[0]?.id ?? "",
+          };
+        }
+        set((s) => ({ mediaJobs: { ...s.mediaJobs, ...tracked } }));
+      }
+    } catch {
+      /* ignore */
     }
     if (orphanBlocks.length) {
       const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
@@ -1244,6 +2015,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     const convId = state.activeConversationId;
     if (!convId || state.busy) return;
     const model = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
+
+    // Belt and braces (`PIK-2`): `run_agent` must never be handed an image or
+    // video model. The composer already routes these to `createMedia`, but a
+    // media id reaching the agent loop would fail deep in the engine with an
+    // unrecognisable error, so reroute here rather than trusting one caller.
+    if (model?.modality && model.modality !== "chat") {
+      await get().createMedia({ prompt: text, modelId: model.id });
+      return;
+    }
+
     const conv = state.conversations.find((c) => c.id === convId);
     const isFirstMessage = !conv || conv.messages.length === 0;
 
@@ -1273,6 +2054,15 @@ export const useAppStore = create<AppState>((set, get) => ({
           ? { ...c, updatedAt: Date.now(), messages: [...c.messages, userMsg, assistantMsg] }
           : c
       ),
+      // `EDT-2`: the implicit reference only offers a *recent* image — three
+      // turns out, "make it warmer" is more likely about something else the
+      // conversation has moved on to than about a picture from a while ago.
+      lastMediaArtifact:
+        s.lastMediaArtifact && s.lastMediaArtifact.conversationId === convId
+          ? s.lastMediaArtifact.turnsAgo >= 3
+            ? null
+            : { ...s.lastMediaArtifact, turnsAgo: s.lastMediaArtifact.turnsAgo + 1 }
+          : s.lastMediaArtifact,
     }));
 
     if (isFirstMessage) {
@@ -1394,13 +2184,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       ? state.personas.find((p) => p.id === conv.personaId)
       : undefined;
     const baseSystemPrompt = persona?.system_prompt ?? get().systemPrompt;
+    const { memory, matches, injectedFacts } = await recallForPrompt(get, text);
     const effectiveSystemPrompt = composeSystemPrompt(baseSystemPrompt, {
       conv: get().conversations.find((c) => c.id === convId),
       sessionState: get().sessionState[convId],
       toolsEnabled: get().toolsEnabled,
       surface: get().surfaces[convId],
-      memory: memoryForPrompt(get()),
+      memory,
       toolHealth: get().toolHealth,
+      skills: skillsForPersona(get().skills, persona?.skills_json),
     });
     const effectiveTemperature =
       conv?.overrides?.temperature ?? personaTemperature(persona);
@@ -1413,6 +2205,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       model,
     });
 
+    const recalled = recallStep(matches);
     await streamAssistantTurn(set, get, {
       convId,
       assistantId,
@@ -1420,6 +2213,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       turns,
       model,
       temperature: effectiveTemperature,
+      initialSteps: recalled ? [recalled] : undefined,
+      contextRefs: buildContextRefs({ personaId: persona?.id ?? null, memory, injectedFacts, matches }),
     });
   },
 
@@ -1451,7 +2246,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // The model sees the sentence plus a compact action payload; the transcript
     // renders it as a chip (see UserTurn).
-    const modelContent = `${humanText}\n\n\`\`\`nexus-action\n${JSON.stringify(payload)}\n\`\`\``;
+    const modelContent = `${humanText}\n\n\`\`\`poiesis-action\n${JSON.stringify(payload)}\n\`\`\``;
 
     const userMsg: Message = {
       id: `u-${Date.now()}`,
@@ -1519,13 +2314,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       ? state.personas.find((p) => p.id === conv.personaId)
       : undefined;
     const baseSystemPrompt = persona?.system_prompt ?? get().systemPrompt;
+    const { memory, matches, injectedFacts } = await recallForPrompt(get, humanText);
     const effectiveSystemPrompt = composeSystemPrompt(baseSystemPrompt, {
       conv: get().conversations.find((c) => c.id === convId),
       sessionState: get().sessionState[convId],
       toolsEnabled: get().toolsEnabled,
       surface: get().surfaces[convId],
-      memory: memoryForPrompt(get()),
+      memory,
       toolHealth: get().toolHealth,
+      skills: skillsForPersona(get().skills, persona?.skills_json),
     });
     const effectiveTemperature =
       conv?.overrides?.temperature ?? personaTemperature(persona);
@@ -1537,6 +2334,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       model,
     });
 
+    const recalled = recallStep(matches);
     await streamAssistantTurn(set, get, {
       convId,
       assistantId,
@@ -1544,6 +2342,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       turns,
       model,
       temperature: effectiveTemperature,
+      initialSteps: recalled ? [recalled] : undefined,
+      contextRefs: buildContextRefs({ personaId: persona?.id ?? null, memory, injectedFacts, matches }),
     });
   },
 
@@ -1554,6 +2354,45 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (api.inTauri()) {
       api.updateBlockState(blockId, JSON.stringify(blockState)).catch(() => {});
     }
+  },
+
+  browserSessions: {},
+  stopBrowsing: async (conversationId) => {
+    set((s) => {
+      const open = s.browserSessions[conversationId];
+      if (!open) return {};
+      return {
+        browserSessions: { ...s.browserSessions, [conversationId]: { ...open, closed: true } },
+      };
+    });
+    if (api.inTauri()) {
+      await api.stopBrowser(conversationId).catch(() => {});
+    }
+  },
+  dismissBrowserPanel: (conversationId) => {
+    set((s) => {
+      const next = { ...s.browserSessions };
+      delete next[conversationId];
+      return { browserSessions: next };
+    });
+    // The record outlives the live session, so dismissing has to clear it too
+    // — otherwise the panel reappears the next time this chat is opened.
+    if (api.inTauri()) api.forgetBrowserSession(conversationId).catch(() => {});
+  },
+  refreshBrowserSession: async (conversationId) => {
+    if (!api.inTauri()) return;
+    // A reload wipes the store but not the live Chrome process — without this,
+    // the panel would stay blank while a session is still open.
+    const state = await api.browserState(conversationId).catch(() => null);
+    set((s) => {
+      if (!state) {
+        if (!s.browserSessions[conversationId]) return {};
+        const next = { ...s.browserSessions };
+        delete next[conversationId];
+        return { browserSessions: next };
+      }
+      return { browserSessions: { ...s.browserSessions, [conversationId]: state } };
+    });
   },
 
   surfaces: {},
@@ -1679,6 +2518,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   touchedFiles: {},
   trash: [],
   folderError: null,
+  indexState: null,
+  indexProgress: null,
+  indexError: null,
+  indexExplained: false,
+
+  duplicateGroups: null,
+  duplicateScanPath: null,
+  duplicatesLoading: false,
+  duplicatesError: null,
 
   toggleDir: async (path) => {
     const open = get().expandedDirs.includes(path);
@@ -1709,8 +2557,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         expandedDirs: [],
         selected: null,
         dockOpen: true,
+        indexState: null,
+        indexProgress: null,
+        indexError: null,
       }));
       await get().refreshTree();
+      get().refreshIndexStatus().catch(() => {});
+      // SMP-4a: handing over a folder already means "work here" — reading it
+      // is not a second decision, so it starts now and can be stopped.
+      get().maybeAutoIndex().catch(() => {});
+      // SMP-2b: attaching a folder is one of the two genuine first-need
+      // moments for the recall helper.
+      get().maybeOfferRecall();
     } catch (e) {
       set({ folderError: String(e) });
     }
@@ -1728,6 +2586,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       expandedDirs: [],
       selected: s.selected?.kind === "file" ? null : s.selected,
       folderError: null,
+      indexState: null,
+      indexProgress: null,
+      indexError: null,
     }));
     if (api.inTauri()) await api.setConversationFolder(convId, null);
   },
@@ -1741,6 +2602,121 @@ export const useAppStore = create<AppState>((set, get) => ({
       ),
     }));
     if (api.inTauri()) await api.setConversationTrust(convId, trust);
+  },
+
+  refreshIndexStatus: async () => {
+    if (!api.inTauri()) return;
+    const convId = get().activeConversationId;
+    if (!convId) return;
+    try {
+      const indexState = await api.indexStatus(convId);
+      // A conversation switch (or detach) may have landed in between — don't
+      // let a slow response overwrite a newer one.
+      if (get().activeConversationId === convId) set({ indexState });
+    } catch {
+      // Silent: this is a background refresh, not a user action.
+    }
+  },
+
+  maybeAutoIndex: async () => {
+    if (!api.inTauri()) return;
+    const convId = get().activeConversationId;
+    if (!convId) return;
+    try {
+      if (!(await api.shouldAutoIndex(convId))) return;
+      // The conversation may have moved on while we asked.
+      if (get().activeConversationId !== convId) return;
+      await get().buildFolderIndex();
+    } catch {
+      // Nothing was promised — a folder that can't be read yet just shows
+      // "I haven't read this folder yet" and its `Read it` button.
+    }
+  },
+
+  buildFolderIndex: async () => {
+    if (!api.inTauri()) return;
+    const convId = get().activeConversationId;
+    if (!convId) return;
+    // SMP-4c: the first read explains itself, then never again. Set the flag
+    // as the read starts, so the sentence shows for exactly one build.
+    if (!get().indexExplained) {
+      api.setSetting(INDEX_EXPLAINED_KEY, "true").catch(() => {});
+    }
+    set({ indexError: null, indexProgress: { files_done: 0, files_total: 0 } });
+    try {
+      const indexState = await api.buildIndex(convId, (p) => {
+        if (get().activeConversationId === convId) set({ indexProgress: p });
+      });
+      if (get().activeConversationId === convId) set({ indexState, indexProgress: null });
+    } catch (e) {
+      if (get().activeConversationId === convId) {
+        set({ indexError: String(e), indexProgress: null });
+      }
+      // Either way, the row on disk may have changed (reverted to idle, or
+      // dropped back to "never built") — pick up the real state rather than
+      // leave the stale pre-build one showing.
+      get().refreshIndexStatus().catch(() => {});
+    } finally {
+      // The explanation has now been shown for the length of one read; a
+      // second folder attached in the same session doesn't repeat it.
+      set({ indexExplained: true });
+    }
+  },
+
+  cancelFolderIndex: async () => {
+    if (!api.inTauri()) return;
+    const convId = get().activeConversationId;
+    if (!convId) return;
+    await api.cancelIndex(convId).catch(() => {});
+  },
+
+  forgetFolderIndex: async (path) => {
+    if (!api.inTauri()) return;
+    await api.forgetIndex(path);
+    if (get().indexState?.path === path) set({ indexState: null });
+  },
+
+  findDuplicatesIn: async (path) => {
+    if (!api.inTauri()) return;
+    const convId = get().activeConversationId;
+    if (!convId) return;
+    set({ duplicatesLoading: true, duplicatesError: null, duplicateScanPath: path });
+    try {
+      const groups = await api.findDuplicates(convId, path);
+      if (get().activeConversationId === convId) set({ duplicateGroups: groups });
+    } catch (e) {
+      if (get().activeConversationId === convId) set({ duplicatesError: String(e) });
+    } finally {
+      if (get().activeConversationId === convId) set({ duplicatesLoading: false });
+    }
+  },
+
+  keepDuplicate: async (group, keep) => {
+    if (!api.inTauri()) return;
+    const convId = get().activeConversationId;
+    if (!convId) return;
+    const others = group.files.filter((f) => f !== keep);
+    // A file that couldn't be trashed is still on disk, and the group is about
+    // to vanish from the panel — so say so rather than let the UI imply a
+    // tidy-up that didn't happen.
+    const failed: string[] = [];
+    for (const path of others) {
+      try {
+        await api.trashFile(convId, path);
+      } catch {
+        failed.push(path.split(/[\\/]/).filter(Boolean).pop() ?? path);
+      }
+    }
+    set((s) => ({
+      duplicateGroups: (s.duplicateGroups ?? []).filter((g) => g !== group),
+      duplicatesError: failed.length ? `I couldn't remove ${failed.join(", ")}.` : s.duplicatesError,
+    }));
+    get().refreshTrash().catch(() => {});
+    get().refreshTree().catch(() => {});
+  },
+
+  dismissDuplicates: () => {
+    set({ duplicateGroups: null, duplicateScanPath: null, duplicatesError: null });
   },
 
   refreshTree: async (path) => {
@@ -1848,9 +2824,164 @@ export const useAppStore = create<AppState>((set, get) => ({
       view: artifact.conversation_id ? "chat" : s.view,
     }));
   },
+
+  imageLightbox: null,
+  viewArtifactByPath: (path, dataUri, alt) => set({ imageLightbox: { path, dataUri, alt } }),
+  closeImageLightbox: () => set({ imageLightbox: null }),
 }));
 
 type StoreSet = (fn: (s: AppState) => Partial<AppState>) => void;
+type StoreGet = () => AppState;
+
+/** The shared spine behind both generation entry points (`STR-1`): one
+ * presentation, two submit calls. Posts a normal-looking agent turn, persists
+ * both messages so the background job has a real message to attach its result
+ * to, submits, and then gets out of the way.
+ *
+ * Crucially it releases `busy` as soon as the job is *accepted* (`JOB-1`) —
+ * not when the picture is ready. Holding it for the whole generation is what
+ * used to stop the user saying anything else for the next three minutes. The
+ * turn stays visibly in flight through `pendingMedia`; the composer does not.
+ */
+async function startMediaTurn(
+  set: StoreSet,
+  get: StoreGet,
+  args: {
+    text: string;
+    modality: "image" | "video";
+    aspectRatio?: string;
+    modelLabel?: string;
+    provenance?: Provenance;
+    /** Path B: the reference has been consumed, so stop offering it. */
+    clearImplicitReference?: boolean;
+    submit: (ctx: {
+      conversationId: string;
+      messageId: string | null;
+    }) => Promise<api.MediaJob>;
+  }
+): Promise<void> {
+  const state = get();
+  const convId = state.activeConversationId;
+  const text = args.text.trim();
+  if (!convId || state.busy || !text) return;
+  const conv = state.conversations.find((c) => c.id === convId);
+  const isFirstMessage = !conv || conv.messages.length === 0;
+
+  const stepId = `step-${Date.now()}`;
+  const runningStep: AgentStep = {
+    id: stepId,
+    verb: "generated",
+    target: ellipsizeClient(text, 40),
+    status: "running",
+  };
+
+  if (!api.inTauri()) {
+    const assistantId = `a-${Date.now()}`;
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === convId
+          ? {
+              ...c,
+              updatedAt: Date.now(),
+              messages: [
+                ...c.messages,
+                { id: `u-${Date.now()}`, role: "user", text, createdAt: Date.now() },
+                {
+                  id: assistantId,
+                  role: "assistant",
+                  text: "_Run the desktop app to generate media._",
+                  steps: [{ ...runningStep, status: "error" }],
+                  createdAt: Date.now() + 1,
+                },
+              ],
+            }
+          : c
+      ),
+    }));
+    return;
+  }
+
+  set(() => ({ busy: true, presence: "active" }));
+
+  // Persist both turns before submitting: the worker attaches the finished
+  // media to `messageId`, which has to be a row that already exists. These are
+  // local SQLite inserts, so the placeholder still appears immediately.
+  let userId = `u-${Date.now()}`;
+  let assistantId = `a-${Date.now()}`;
+  try {
+    const userRow = await api.appendMessage({ conversationId: convId, role: "user", content: text });
+    userId = userRow.id;
+    const assistantRow = await api.appendMessage({
+      conversationId: convId,
+      role: "assistant",
+      content: "",
+      modelName: args.modelLabel,
+      modelProvenance: args.provenance,
+    });
+    assistantId = assistantRow.id;
+  } catch {
+    /* non-fatal — the turn still runs, it just won't survive a reload */
+  }
+
+  set((s) => ({
+    conversations: s.conversations.map((c) =>
+      c.id === convId
+        ? {
+            ...c,
+            updatedAt: Date.now(),
+            messages: [
+              ...c.messages,
+              { id: userId, role: "user", text, createdAt: Date.now() },
+              {
+                id: assistantId,
+                role: "assistant",
+                text: "",
+                model: args.modelLabel
+                  ? { name: args.modelLabel, provenance: args.provenance ?? "cloud" }
+                  : undefined,
+                steps: [runningStep],
+                pendingMedia: {
+                  modality: args.modality,
+                  aspectRatio: args.aspectRatio,
+                  startedAt: Date.now(),
+                },
+                streaming: true,
+                createdAt: Date.now() + 1,
+              },
+            ],
+          }
+        : c
+    ),
+    ...(args.clearImplicitReference ? { lastMediaArtifact: null } : {}),
+  }));
+  if (isFirstMessage) get().renameConversation(convId, deriveTitle(text));
+
+  try {
+    const job = await args.submit({ conversationId: convId, messageId: assistantId });
+    set((s) => ({
+      mediaJobs: { ...s.mediaJobs, [job.id]: { conversationId: convId, messageId: assistantId, stepId } },
+    }));
+    patchAssistant(set, convId, assistantId, {
+      pendingMedia: {
+        modality: args.modality,
+        aspectRatio: args.aspectRatio,
+        startedAt: job.started_at,
+        jobId: job.id,
+      },
+    });
+  } catch (e) {
+    // The submit itself was refused — no backend, a bad model id, an empty
+    // prompt. Nothing is running, so this turn ends here.
+    patchAssistant(set, convId, assistantId, {
+      text: `That didn't work: ${String(e)}`,
+      streaming: false,
+      pendingMedia: undefined,
+      steps: [{ ...runningStep, status: "error", result: `— ${String(e)}` }],
+    });
+  } finally {
+    set(() => ({ busy: false }));
+  }
+}
 
 /** Patch fields on a specific assistant message inside a conversation. */
 function patchAssistant(
@@ -1905,16 +3036,79 @@ async function ensureEngineForModel(get: () => AppState, model: Model): Promise<
 }
 
 /**
- * The durable self to inject. Turning the Memory skill off silences the fact
- * index and the read tool (MEM-UI-6) — but SOUL.md is the user's own standing
- * text, edited by hand in Settings, so it keeps riding along regardless.
+ * SEM-3: the live, per-turn replacement for the old wholesale-index inject.
+ * Facts stay wholesale (`SCP` narrows that later); lessons and
+ * lessons are retrieved by relevance to `query` when an embedder is ready,
+ * and never shown twice — an entry that surfaces here is *removed* from
+ * `index`, not merely repeated in both places.
+ *
+ * Same toolset-gating as `memoryForPrompt`: off ⇒ soul only, no retrieval
+ * call at all. A failed `recall_for` (engine hiccup) falls back to the last
+ * cached wholesale index rather than dropping memory from the turn.
  */
-function memoryForPrompt(state: AppState): api.MemoryContext | undefined {
+async function recallForPrompt(
+  get: () => AppState,
+  query: string
+): Promise<{
+  memory: api.MemoryContext | undefined;
+  matches: api.SearchHit[];
+  /** Fact names that actually reached the prompt this turn (WHY-2) — empty
+   * whenever recall didn't run through the backend (toolset off, no Tauri, or
+   * a failed call falling back to the cached wholesale index). */
+  injectedFacts: string[];
+}> {
+  const state = get();
   const mc = state.memoryContext;
-  if (!mc) return undefined;
-  if (state.memorySkillEnabled) return mc;
-  if (!mc.soul.trim()) return undefined;
-  return { ...mc, index: "" };
+  if (!mc) return { memory: undefined, matches: [], injectedFacts: [] };
+  if (!state.memoryToolEnabled) {
+    return {
+      memory: mc.soul.trim() || mc.about_you.trim() ? { ...mc, index: "" } : undefined,
+      matches: [],
+      injectedFacts: [],
+    };
+  }
+  if (!api.inTauri()) return { memory: mc, matches: [], injectedFacts: [] };
+  try {
+    const { index, matches, injected_facts } = await api.recallFor(query);
+    return { memory: { ...mc, index }, matches, injectedFacts: injected_facts };
+  } catch {
+    return { memory: mc, matches: [], injectedFacts: [] };
+  }
+}
+
+/** WHY-2: the compact per-message record built from what this turn actually
+ * used — persona id, soul presence, and the exact fact/lesson names
+ * that reached the prompt (never the prompt text itself). */
+function buildContextRefs(opts: {
+  personaId: string | null;
+  memory: api.MemoryContext | undefined;
+  injectedFacts: string[];
+  matches: api.SearchHit[];
+}): api.ContextRefs {
+  return {
+    persona_id: opts.personaId,
+    soul_present: !!opts.memory?.soul?.trim(),
+    about_you_present: !!opts.memory?.about_you?.trim(),
+    facts: opts.injectedFacts,
+    lessons: opts.matches.filter((m) => m.kind === "lesson").map((m) => m.title),
+    files: [],
+  };
+}
+
+/** SEM-5: reuses the `recall` event's shape — a step the timeline renders
+ * exactly like a `search_history` call — for memory that surfaced on its
+ * own, before the turn even started. `null` when nothing was retrieved:
+ * always-injected entries (soul, facts) never announce themselves. */
+function recallStep(matches: api.SearchHit[]): AgentStep | null {
+  if (!matches.length) return null;
+  const target = matches.length === 1 ? matches[0].snippet : `${matches.length} things`;
+  return {
+    id: `recall-${Date.now()}`,
+    verb: "remembered",
+    target,
+    status: "done",
+    matches,
+  };
 }
 
 // ---- context homeostasis (CTX-4) ----
@@ -1936,7 +3130,7 @@ function targetFor(model: Model): api.ChatTarget {
 }
 
 /** Optimistic ids are minted client-side and mean nothing to the backend. */
-function isPersistedId(id: string): boolean {
+export function isPersistedId(id: string): boolean {
   return !id.startsWith("u-") && !id.startsWith("a-");
 }
 
@@ -2016,14 +3210,23 @@ async function streamAssistantTurn(
     turns: api.ChatTurnMessage[];
     model: Model;
     temperature?: number;
+    /** A step already resolved before the turn started (SEM-5's ambient
+     * recall) — shown immediately, not waiting for the first stream event. */
+    initialSteps?: AgentStep[];
+    /** WHY-2: what this turn's prompt was actually built from, stored on the
+     * finalized message so it can be explained later. */
+    contextRefs?: api.ContextRefs;
   }
 ): Promise<void> {
   const { convId, assistantId, persistedAssistantId, turns, model, temperature } = opts;
   let acc = "";
-  const steps: AgentStep[] = [];
+  const steps: AgentStep[] = [...(opts.initialSteps ?? [])];
+  if (steps.length) patchAssistant(set, convId, assistantId, { steps: [...steps] });
   const blocks: BlockView[] = [];
   const proposalIds: string[] = [];
   const artifactIds: string[] = [];
+  /** Media artifacts this turn produced, rendered inline (`STR-1`). */
+  const mediaAttachments: Attachment[] = [];
   const fileChangeIds: string[] = [];
   try {
     await api.agentChat(
@@ -2066,17 +3269,29 @@ async function streamAssistantTurn(
               content: e.content,
               created_at: Date.now(),
               saved_path: null,
+              meta_json: e.meta_json,
             };
             artifactIds.push(e.id);
-            patchAssistant(set, convId, assistantId, { artifactIds: [...artifactIds] });
+            // Media is the deliberate exception (`ART-2`): it's already visible
+            // inline in the stream, so auto-opening the viewer for it would be
+            // redundant motion rather than the strong "look, it's ready" signal
+            // it is for every other artifact kind.
+            const isMedia = e.kind === "image" || e.kind === "video";
+            // …and it is only already visible because the tool path attaches it
+            // to the turn here. Without this the agent's own image showed as a
+            // chip while the composer's showed as a picture — the two paths the
+            // user must never be able to tell apart (`STR-1`).
+            if (isMedia) mediaAttachments.push(mediaAttachmentFor(artifact));
+            patchAssistant(set, convId, assistantId, {
+              artifactIds: [...artifactIds],
+              ...(isMedia ? { attachments: [...mediaAttachments] } : {}),
+            });
             set((st) => {
               const existing = st.artifacts[convId] ?? [];
               return {
                 artifacts: { ...st.artifacts, [convId]: [...existing, artifact] },
-                // Auto-open and preview: the strongest signal that the agent is
-                // working beside you rather than somewhere off-screen.
-                dockOpen: true,
-                selected: { kind: "artifact" as const, id: e.id },
+                dockOpen: isMedia ? st.dockOpen : true,
+                selected: isMedia ? st.selected : { kind: "artifact" as const, id: e.id },
               };
             });
             break;
@@ -2096,6 +3311,21 @@ async function streamAssistantTurn(
             get().refreshTrash().catch(() => {});
             break;
           }
+          case "browser": {
+            // `BRW-UI-1`: the panel replaces its state wholesale — every
+            // field can change on any one action.
+            set((st) => ({
+              browserSessions: { ...st.browserSessions, [convId]: e.state },
+            }));
+            break;
+          }
+          case "mail_sent":
+            // `MAIL-3`: only the `auto` rung reaches here — accepting an
+            // `email` proposal is announced by the card disappearing instead.
+            set(() => ({
+              mailSentToast: `✉ I sent it to ${e.to}. There's no unsending — tell me if that was wrong.`,
+            }));
+            break;
           case "block": {
             // The composed workspace surface streams through the same event but
             // lives in its own slice — never inside a chat message.
@@ -2169,6 +3399,11 @@ async function streamAssistantTurn(
                   undoToken: e.undo_token,
                 },
               }));
+              // SMP-2b: a genuine memory write is the other first-need
+              // moment for the recall helper.
+              get().maybeOfferRecall();
+              // PRO-4: a fact just changed — worth reconsidering the synthesis.
+              if (e.collection === "facts") get().noteGlobalFactChange();
             }
             break;
           }
@@ -2184,6 +3419,44 @@ async function streamAssistantTurn(
             // the timeline row can expand into clickable sources (RCL-UI).
             const s = steps.find((x) => x.id === e.id);
             if (s) s.matches = e.matches;
+            patchAssistant(set, convId, assistantId, { steps: [...steps] });
+            // SMP-7b: explain the ability the first time it actually surfaces
+            // something — `search_folder` and cross-conversation recall share
+            // this event, distinguished by the hits' own `source`.
+            if (e.matches.length > 0) {
+              if (e.matches.every((m) => m.source === "file")) {
+                get().maybeFirstTime(
+                  "retrieval",
+                  "That came from your files — the names under my answer show which."
+                );
+              } else {
+                get().maybeFirstTime(
+                  "recall",
+                  "I brought that up because I remembered it from an earlier chat."
+                );
+              }
+            }
+            break;
+          }
+          case "code": {
+            // `DAT-UI-1`: same idea as "recall" — the snippet hangs off its
+            // step so the `⌄` disclosure can reveal it on demand.
+            const s = steps.find((x) => x.id === e.id);
+            if (s) s.code = { language: e.language, code: e.code };
+            patchAssistant(set, convId, assistantId, { steps: [...steps] });
+            break;
+          }
+          case "untrusted": {
+            // `TRU-UI-1`: a step can wrap more than one source (several
+            // retrieved file excerpts in one `search_folder` call), so this
+            // accumulates rather than replaces.
+            const s = steps.find((x) => x.id === e.id);
+            if (s) {
+              s.untrusted = [
+                ...(s.untrusted ?? []),
+                { label: e.label, risk: e.risk, flags: e.flags, text: e.text },
+              ];
+            }
             patchAssistant(set, convId, assistantId, { steps: [...steps] });
             break;
           }
@@ -2215,7 +3488,14 @@ async function streamAssistantTurn(
     set((st) => ({ busy: false, presence: st.reflectingIds.length ? "reflecting" : "idle" }));
     try {
       const stepsJson = steps.length ? JSON.stringify(steps) : undefined;
-      await api.finalizeMessage(persistedAssistantId, acc, stepsJson);
+      const contextJson = opts.contextRefs ? JSON.stringify(opts.contextRefs) : undefined;
+      await api.finalizeMessage(persistedAssistantId, acc, stepsJson, contextJson);
+      // The message still carries its optimistic client id until this turn
+      // finalizes — swap in the real one so "why this answer?" (WHY-4) can
+      // address it this session, not only after the next reload.
+      if (persistedAssistantId !== assistantId) {
+        patchAssistant(set, convId, assistantId, { id: persistedAssistantId });
+      }
     } catch {
       /* ignore */
     }
@@ -2226,9 +3506,50 @@ async function streamAssistantTurn(
   }
 }
 
+/** PRO-4's daily tick: attempt an automatic rebuild at most once per calendar
+ * date. Fire-and-forget from `bootstrap`; `maybeAutoRebuildProfile` already
+ * covers every "decided not to" case silently, so this is safe to call on
+ * every launch once that date has turned over. */
+async function maybeDailyProfileTick(get: () => AppState) {
+  if (!api.inTauri()) return;
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    const last = await api.getSetting(PROFILE_CHECKED_KEY);
+    if (last === today) return;
+    await api.setSetting(PROFILE_CHECKED_KEY, today);
+    await get().maybeAutoRebuildProfile();
+  } catch {
+    /* try again next launch */
+  }
+}
+
+/** The selected cloud model shaped as a routing target — `undefined` means the
+ * local engine. Reflection, consolidation and `GLD-2`'s before/after checks all
+ * route this way: a self-change on a cloud-only setup would otherwise go
+ * unchecked, since there is no local engine for the guard to fall back to. */
+export function cloudTarget(): api.ChatTarget | undefined {
+  const s = useAppStore.getState();
+  const model = s.models.find((m) => m.id === s.selectedModelId);
+  return model?.provenance === "cloud"
+    ? { provenance: "cloud", provider: model.provider, model: model.cloudModel }
+    : undefined;
+}
+
 /** Subscribe to the self-maintenance processes that run outside a chat stream
  * (REF-3, HEAL-1). Registered once, at bootstrap. */
 function listenForSelfEvents(set: StoreSet, get: () => AppState) {
+  // `JOB-1`: a generation finishing has no chat stream to arrive on — the run
+  // that asked for it has usually ended by then. This is how the picture gets
+  // back into its turn.
+  api.onAppEvent<api.MediaJobEvent>("poiesis-media-job", (e) => {
+    get().applyMediaJobEvent(e);
+  });
+  // `STR-4`: successive partials fill the placeholder in. Kept in their own
+  // slice so a frame arriving every few hundred ms doesn't re-render the
+  // whole transcript.
+  api.onAppEvent<api.MediaPartialEvent>("poiesis-media-partial", (e) => {
+    set((s) => (s.mediaJobs[e.job_id] ? { mediaPartials: { ...s.mediaPartials, [e.job_id]: e.data_uri } } : {}));
+  });
   api.onAppEvent<api.MemoryWriteEvent>("poiesis-memory-write", (e) => {
     get().refreshMemoryContext();
     get().refreshSelf();
@@ -2241,6 +3562,8 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
         undoToken: e.undo_token,
       },
     }));
+    // PRO-4: reflection can write facts outside a live turn too.
+    if (e.collection === "facts") get().noteGlobalFactChange();
   });
   api.onAppEvent<api.HealedEvent>("poiesis-healed", (e) => {
     set(() => ({
@@ -2254,71 +3577,185 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
       set((s) => (s.presence === "healing" ? { presence: "idle" } : {}));
     }, 3000);
   });
+  // SCH-UI-4: the Rail's running-job row and Stop button have no other way
+  // to learn a job started or ended — a scheduled run isn't invoked from the
+  // UI, so there's no channel open to stream it.
+  api.onAppEvent<api.JobStartedEvent>("poiesis-job-started", () => {
+    get().refreshScheduler();
+  });
+  api.onAppEvent<api.JobFinishedEvent>("poiesis-job-finished", () => {
+    get().refreshScheduler();
+  });
+  // TTL-2: short-lived facts let go, at startup or overnight.
+  api.onAppEvent<api.ExpirySweptEvent>("poiesis-expiry-swept", (e) => {
+    set(() => ({
+      expirySweptToast: `I let ${e.count} short-lived note${e.count === 1 ? "" : "s"} go.`,
+    }));
+    get().refreshMemoryContext();
+  });
+  // BRW-1: a browsing session timed out on its own. Nothing is streaming by
+  // then, so the panel can only learn it from an app event.
+  api.onAppEvent<api.BrowserClosedEvent>("poiesis-browser-closed", (e) => {
+    set((s) => {
+      const open = s.browserSessions[e.conversationId];
+      if (!open || open.closed) return {};
+      return {
+        browserSessions: { ...s.browserSessions, [e.conversationId]: { ...open, closed: true } },
+      };
+    });
+  });
+  // GLD-2: a self-change was checked and found to make things worse.
+  api.onAppEvent<api.GoldenRevertedEvent>("poiesis-golden-reverted", (e) => {
+    set(() => ({
+      goldenRevertedToast: `That change made me worse at ${e.count} thing${e.count === 1 ? "" : "s"} — I put it back.`,
+    }));
+    get().refreshSelf();
+  });
 }
 
 // ---- session state helpers (Generative UI, Phase C) ----
 
-/** Append a compact rendering of durable session state to the system prompt. */
-function withSessionState(prompt: string, state: Record<string, unknown> | undefined): string {
-  if (!state || Object.keys(state).length === 0) return prompt;
-  return `${prompt}\n\n## Session state (durable; update with the remember tool)\n${JSON.stringify(state)}`;
+/** PRO-6: the agent's own synthesis of how this user likes to be talked to —
+ * placed first among the memory blocks since it changes slowest of all of
+ * them (a rebuild is debounced and gated), which is what keeps the prefix
+ * cache warm turn to turn. PRO-7: unlike SOUL.md, this is a background
+ * inference, not something the user just decided — a persona always wins. */
+function aboutYouBlock(text: string | undefined): string {
+  const t = text?.trim();
+  if (!t) return "";
+  return `## About you, as I understand it (apply it; don't mention it unless asked; the persona/system prompt above always wins if they conflict)\n${t}`;
+}
+
+/** Standing instructions, framed so the model knows they outrank the persona
+ * prompt above them when the two pull in different directions (SOUL constrains,
+ * persona styles — persona still governs voice/format/depth). */
+function soulBlock(soul: string | undefined): string {
+  const s = soul?.trim();
+  if (!s) return "";
+  return `## Standing instructions (SOUL.md — the user approved these; they take precedence over the persona/system prompt above when the two conflict)\n${s}`;
+}
+
+/** The durable memory index, with a caveat when tools (and so `memory` reads) are off. */
+function memoryIndexBlock(index: string | undefined, toolsEnabled: boolean): string {
+  const i = index?.trim();
+  if (!i) return "";
+  const detail = toolsEnabled
+    ? ""
+    : " Tools are off — treat descriptions as the only available detail.";
+  return `## Your notes about the user (durable facts)\n${i}\n(Read a note's full text with memory(op:"read", name:…) before relying on its details.${detail})`;
+}
+
+/** A compact rendering of durable session state. */
+function sessionStateBlock(state: Record<string, unknown> | undefined): string {
+  if (!state || Object.keys(state).length === 0) return "";
+  return `## Session state (durable; update with the remember tool)\n${JSON.stringify(state)}`;
+}
+
+/** The standing guidance only sent when the model can actually call tools. */
+function toolGuidanceBlock(): string {
+  return `${SURFACE_GUIDANCE}\n\n${BLOCK_GUIDANCE}\n\n${PLAN_FIRST_GUIDANCE}`;
+}
+
+export interface ComposePromptOpts {
+  conv: Conversation | undefined;
+  sessionState: Record<string, unknown> | undefined;
+  toolsEnabled: boolean;
+  surface?: BlockView;
+  /** The durable self (MEM-3). Omitted when the Memory toolset is off. */
+  memory?: api.MemoryContext;
+  /** 7-day tool reliability for this model (HEAL-2). */
+  toolHealth?: api.ToolHealth[];
+  /** Discovered Agent Skills (SKL-2), for the "Skills available" block. */
+  skills?: api.SkillView[];
 }
 
 /** Assemble the full system prompt for a turn: base persona/prompt, then the
  * live workspace-block registry (W3), durable session state, and the
  * block-usage guidance (W4/W5). Kept in one place so `sendMessage` and
  * `sendBlockAction` build identical context. */
-function composeSystemPrompt(
-  base: string,
-  opts: {
-    conv: Conversation | undefined;
-    sessionState: Record<string, unknown> | undefined;
-    toolsEnabled: boolean;
-    surface?: BlockView;
-    /** The durable self (MEM-3). Omitted when the Memory skill is off. */
-    memory?: api.MemoryContext;
-    /** 7-day tool reliability for this model (HEAL-2). */
-    toolHealth?: api.ToolHealth[];
-  }
-): string {
+/** Exported for `store.compose-system-prompt.test.ts` — this is otherwise an
+ * internal helper used only by `sendMessage`/`sendBlockAction`. */
+export function composeSystemPrompt(base: string, opts: ComposePromptOpts): string {
   let out = base;
-  // The durable self comes first, right after the base prompt: standing
+  // The durable self comes first, right after the base prompt. The synthesis
+  // leads (PRO-6) — it's the slowest-changing of these blocks — then standing
   // instructions the user approved, then the index of what's remembered.
-  const soul = opts.memory?.soul.trim();
-  if (soul) {
-    out += `
-
-## Standing instructions (SOUL.md — the user approved these)
-${soul}`;
-  }
-  const index = opts.memory?.index.trim();
-  if (index) {
-    const detail = opts.toolsEnabled
-      ? ""
-      : " Tools are off — treat descriptions as the only available detail.";
-    out +=
-      `
-
-## Your memory index (durable facts about the user)
-${index}
-` +
-      `(Read a fact's full text with memory(op:"read", name:…) before relying on its details.${detail})`;
-  }
+  const aboutYouText = aboutYouBlock(opts.memory?.about_you);
+  if (aboutYouText) out += `\n\n${aboutYouText}`;
+  const soulText = soulBlock(opts.memory?.soul);
+  if (soulText) out += `\n\n${soulText}`;
+  const indexText = memoryIndexBlock(opts.memory?.index, opts.toolsEnabled);
+  if (indexText) out += `\n\n${indexText}`;
   // Only mention blocks/surface machinery when the model can actually call the
   // tools — otherwise it imitates tool-call JSON as prose and it leaks raw.
   if (opts.toolsEnabled) {
+    const skillsText = skillsBlock(opts.skills);
+    if (skillsText) out += `\n\n${skillsText}`;
     const registry = blockRegistry(opts.conv);
     if (registry) out += `\n\n${registry}`;
     const surface = surfaceContext(opts.surface);
     if (surface) out += `\n\n${surface}`;
   }
-  out = withSessionState(out, opts.sessionState);
+  const sessionText = sessionStateBlock(opts.sessionState);
+  if (sessionText) out += `\n\n${sessionText}`;
   if (opts.toolsEnabled) {
-    out += `\n\n${SURFACE_GUIDANCE}\n\n${BLOCK_GUIDANCE}\n\n${PLAN_FIRST_GUIDANCE}`;
+    out += `\n\n${toolGuidanceBlock()}`;
     const cautions = toolCautions(opts.toolHealth);
     if (cautions) out += `\n\n${cautions}`;
   }
   return out;
+}
+
+/** Per-entry cap (description + when_to_use combined) and whole-block cap for
+ * the `SKL-2` stage-1 disclosure — matches the Agent Skills standard's own
+ * numbers, so a skill written for another agent isn't truncated differently
+ * here than it would be there. */
+export const SKILL_ENTRY_CAP = 1536;
+export const SKILLS_BLOCK_CAP = 4000;
+
+/** SKL-2 stage 1: name + description of every *enabled* skill, so the model
+ * knows what exists before spending a turn on `skill` to read one. Lowest
+ * priority (last to fit) is whichever skill sorts last — a full priority
+ * ranking by source isn't worth the complexity at the skill counts this is
+ * ever exercised at. */
+/** `SKL-6`: narrow the advertised list to a persona's allowlist, mirroring the
+ * backend's `skillpack::enabled_names_for_persona`. Without this the model is
+ * told about skills the `skill` tool will then refuse — it would burn a turn
+ * to learn what the prompt could have said. A persona can narrow, never widen:
+ * the global `enabled` flag is still what `skillsBlock` filters on. */
+function skillsForPersona(
+  skills: api.SkillView[],
+  skillsJson: string | null | undefined
+): api.SkillView[] {
+  if (!skillsJson) return skills;
+  try {
+    const allow = JSON.parse(skillsJson) as string[];
+    if (!Array.isArray(allow)) return skills;
+    return skills.filter((s) => allow.includes(s.name));
+  } catch {
+    return skills;
+  }
+}
+
+function skillsBlock(skills: api.SkillView[] | undefined): string {
+  const enabled = (skills ?? []).filter((s) => s.enabled);
+  if (!enabled.length) return "";
+  const header = "Skills available (read one with the `skill` tool before doing the work it covers):";
+  const lines: string[] = [header];
+  let used = header.length;
+  let shown = 0;
+  for (const s of enabled) {
+    const desc = [s.description, s.when_to_use].filter(Boolean).join(" — ");
+    const clipped = desc.length > SKILL_ENTRY_CAP ? `${desc.slice(0, SKILL_ENTRY_CAP)}…` : desc;
+    const line = `- ${s.name}: ${clipped}`;
+    if (used + line.length + 1 > SKILLS_BLOCK_CAP) break;
+    lines.push(line);
+    used += line.length + 1;
+    shown += 1;
+  }
+  const remaining = enabled.length - shown;
+  if (remaining > 0) lines.push(`(+${remaining} more)`);
+  return lines.join("\n");
 }
 
 /** HEAL-2: tell the agent which of its own tools have been failing lately, so
@@ -2359,10 +3796,10 @@ const SURFACE_GUIDANCE = [
   "The Workspace view renders whatever interface tree you pass to `render_ui` — compose a real interface for the task (a dashboard, a board, a picker, a wizard, a tracker) instead of describing things in prose or emitting fixed chat blocks.",
   "Keep the surface CURRENT: as the task evolves, revise it (render_ui with node_id for one region, or re-render the whole tree) rather than accumulating chat.",
   "When a `ui_action` message arrives, it carries the user's bound state — revise the surface to reflect the interaction and reply in at most one sentence.",
-  // ORG-UI-2: the data is already in this prompt (memory index, lessons,
-  // recipes) and render_ui already renders — so "show me what you've learned"
-  // becomes the organism examining itself in its own body, with no new machinery.
-  "If the user asks how you are, what you remember, or what you've learned, you may render your memory index, lessons, and recipes as a workspace surface.",
+  // ORG-UI-2: the data is already in this prompt (notes, lessons)
+  // and render_ui already renders — so "show me what you've learned" becomes
+  // the organism examining itself in its own body, with no new machinery.
+  "If the user asks how you are, what you remember, or what you've learned, you may render your notes and lessons as a workspace surface.",
 ].join("\n");
 
 /** W4/W5: teach the model to treat blocks as the surface, not to narrate them,
@@ -2371,7 +3808,7 @@ const BLOCK_GUIDANCE = [
   "## Presenting blocks",
   "When you present a block (comparison, plan, collection, form, progress, document), the user sees it rendered in full in their workspace. Do NOT restate the block's contents in prose — after presenting, conclude in at most two sentences.",
   "To change a block that already exists, call `present` with that block's existing `block_id` (see the workspace-block list above) rather than creating a new one.",
-  "If the user's message is only a block interaction (a workspace update, or a `nexus-action`), acknowledge it in one short sentence and do not present a menu of follow-up options.",
+  "If the user's message is only a block interaction (a workspace update, or a `poiesis-action`), acknowledge it in one short sentence and do not present a menu of follow-up options.",
 ].join("\n");
 
 /** LOOP-3: a multi-step run reads as deliberate rather than flailing when the
@@ -2494,4 +3931,10 @@ export function useSelectedModel(): Model {
 
 export function useActiveConversation(): Conversation | null {
   return useAppStore((s) => s.conversations.find((c) => c.id === s.activeConversationId) ?? null);
+}
+
+/** SMP-1b: expert-only surfaces render `null` when this is false — no
+ * greying out, no "upgrade to see" affordance. */
+export function useExpert(): boolean {
+  return useAppStore((s) => s.expert);
 }

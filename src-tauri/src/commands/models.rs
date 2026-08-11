@@ -13,12 +13,12 @@ use crate::marketplace::{
 use crate::runtime::download::{download_with_resume, DownloadProgress};
 use crate::runtime::hardware::detect_hardware;
 use crate::runtime::RuntimeManager;
-use crate::NexusError;
+use crate::PoiesisError;
 
-type Cmd<T> = Result<T, NexusError>;
+type Cmd<T> = Result<T, PoiesisError>;
 
-fn err<E: std::fmt::Display>(e: E) -> NexusError {
-    NexusError::Message(e.to_string())
+fn err<E: std::fmt::Display>(e: E) -> PoiesisError {
+    PoiesisError::Message(e.to_string())
 }
 
 /// A catalog model paired with its fit verdict + speed estimate (MKT-2, MKT-4).

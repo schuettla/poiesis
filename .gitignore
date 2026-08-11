@@ -11,7 +11,7 @@ src-tauri/target/
 src-tauri/gen/
 
 # App-data fixtures used in dev (downloaded runtimes/models are large)
-.nexus-data/
+.poiesis-data/
 
 # Editor / OS
 .vscode/*
@@ -21,3 +21,4 @@ src-tauri/gen/
 .DS_Store
 Thumbs.db
 *.log
+/.impeccable

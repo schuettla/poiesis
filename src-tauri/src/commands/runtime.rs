@@ -15,12 +15,12 @@ use crate::runtime::manifest::{select_runtime, Backend, RuntimeSelection, PINNED
 use crate::runtime::process::{EngineConfig, EngineStatus};
 use crate::runtime::proxy::{stream_completion, StreamEvent};
 use crate::runtime::RuntimeManager;
-use crate::NexusError;
+use crate::PoiesisError;
 
-type Cmd<T> = Result<T, NexusError>;
+type Cmd<T> = Result<T, PoiesisError>;
 
-fn err<E: std::fmt::Display>(e: E) -> NexusError {
-    NexusError::Message(e.to_string())
+fn err<E: std::fmt::Display>(e: E) -> PoiesisError {
+    PoiesisError::Message(e.to_string())
 }
 
 /// Settings key holding the user's manual backend override (§7.3.3 step 5).
@@ -38,7 +38,7 @@ fn backend_override(db: &Db, selection: &RuntimeSelection) -> Option<Backend> {
 
 /// The recommended selection for `profile` plus the backend actually in effect
 /// (the override when valid, otherwise the recommendation).
-fn active_selection(profile: &HardwareProfile, db: &Db) -> (RuntimeSelection, Backend) {
+pub(crate) fn active_selection(profile: &HardwareProfile, db: &Db) -> (RuntimeSelection, Backend) {
     let selection = select_runtime(profile);
     let active = backend_override(db, &selection).unwrap_or(selection.backend);
     (selection, active)
@@ -95,11 +95,11 @@ async fn provision_backend(
     }
 
     find_server_binary(&target_dir)
-        .ok_or_else(|| NexusError::Message("engine binary not found after extraction".into()))
+        .ok_or_else(|| PoiesisError::Message("engine binary not found after extraction".into()))
 }
 
 /// Provision whichever backend is in effect for this machine (override-aware).
-async fn provision_active(
+pub(crate) async fn provision_active(
     mgr: &RuntimeManager,
     db: &Db,
     on_progress: &Channel<DownloadProgress>,
@@ -166,6 +166,7 @@ pub async fn load_model_cmd(
         model_path: PathBuf::from(model_path),
         ctx_size: ctx_size.unwrap_or(4096),
         n_gpu_layers: n_gpu_layers.unwrap_or(999), // offload all by default; engine clamps
+        extra_args: Vec::new(),
     };
     let status = mgr.load_model(config).await.map_err(err)?;
     // From here the engine keeps itself alive (HEAL-1).
@@ -248,7 +249,7 @@ pub async fn set_backend_override_cmd(db: State<'_, Db>, backend: Option<String>
     match backend {
         Some(s) => {
             let b = Backend::from_kebab(&s)
-                .ok_or_else(|| NexusError::Message(format!("Unknown backend '{s}'.")))?;
+                .ok_or_else(|| PoiesisError::Message(format!("Unknown backend '{s}'.")))?;
             db.set_setting(BACKEND_OVERRIDE_KEY, b.kebab()).map_err(err)
         }
         None => db.set_setting(BACKEND_OVERRIDE_KEY, "").map_err(err),
@@ -269,7 +270,7 @@ pub async fn start_engine_cmd(
         .map_err(err)?
         .or_else(|| db.list_models().ok().and_then(|m| m.into_iter().next()))
         .ok_or_else(|| {
-            NexusError::Message("No model in your library yet. Download one from Models first.".into())
+            PoiesisError::Message("No model in your library yet. Download one from Models first.".into())
         })?;
     let server_binary = provision_active(&mgr, &db, &on_progress).await?;
     let config = EngineConfig {
@@ -277,6 +278,7 @@ pub async fn start_engine_cmd(
         model_path: PathBuf::from(model.path),
         ctx_size: 4096,
         n_gpu_layers: 999,
+        extra_args: Vec::new(),
     };
     let status = mgr.load_model(config).await.map_err(err)?;
     crate::runtime::watchdog::spawn(app, mgr.generation());
@@ -350,7 +352,7 @@ pub async fn chat_cmd(
     on_event: Channel<StreamEvent>,
 ) -> Cmd<()> {
     let Some((base_url, token)) = mgr.engine_endpoint().await else {
-        return Err(NexusError::Message(
+        return Err(PoiesisError::Message(
             "No model is loaded yet. Pick a model to get started.".into(),
         ));
     };

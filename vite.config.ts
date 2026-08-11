@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // @tauri-apps/cli sets TAURI_DEV_HOST when running `tauri dev` on a device/host.
@@ -32,5 +32,13 @@ export default defineConfig(async () => ({
     target: "chrome105",
     minify: !process.env.TAURI_DEBUG ? "esbuild" : false,
     sourcemap: !!process.env.TAURI_DEBUG,
+  },
+
+  // Unit tests over lib/ logic default to `node` — the frontend is designed to
+  // import cleanly outside the desktop app (see `inTauri()`). The render smoke
+  // test opts into jsdom per-file with a `@vitest-environment` docblock.
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.{ts,tsx}"],
   },
 }));

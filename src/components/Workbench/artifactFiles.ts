@@ -3,7 +3,10 @@ import { save } from "@tauri-apps/plugin-dialog";
 
 /** Best-guess file extension for an artifact, by kind. */
 export function extFor(artifact: Artifact): string {
+  // `ART-3`: a video artifact's `content` is a path too, same as an image's —
+  // the real extension is already sitting right there.
   if (artifact.kind === "image") return artifact.content.split(".").pop()?.toLowerCase() || "png";
+  if (artifact.kind === "video") return artifact.content.split(".").pop()?.toLowerCase() || "mp4";
   switch (artifact.kind) {
     case "html":
       return "html";
@@ -31,7 +34,7 @@ export function slugify(title: string): string {
 export async function downloadArtifact(artifact: Artifact) {
   const ext = extFor(artifact);
   if (!inTauri()) {
-    if (artifact.kind === "image") return;
+    if (artifact.kind === "image" || artifact.kind === "video") return;
     const blob = new Blob([artifact.content], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

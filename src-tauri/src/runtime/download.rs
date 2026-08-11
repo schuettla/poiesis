@@ -16,7 +16,7 @@ use super::manifest::Backend;
 
 /// The upstream repo for the llama.cpp engine assets.
 pub const LLAMA_REPO: &str = "ggml-org/llama.cpp";
-const USER_AGENT: &str = concat!("ProjectNexus/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("ProjectPoiesis/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {

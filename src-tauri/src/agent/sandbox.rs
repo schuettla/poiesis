@@ -1,4 +1,4 @@
-//! A confined subprocess sandbox for the Code Execution skill (TOOL-5).
+//! A confined subprocess sandbox for the Code Execution toolset (TOOL-5).
 //!
 //! Each run gets a dedicated Win32 Job Object (separate from the engine's global
 //! job) configured to **kill-on-close** with a memory cap and an active-process
@@ -9,7 +9,7 @@
 //!
 //! Note: this confines CPU/memory/lifetime and isolates the filesystem to a
 //! scratch dir, but does **not** yet block outbound network on Windows (that
-//! needs an AppContainer profile — tracked as follow-up hardening). The skill is
+//! needs an AppContainer profile — tracked as follow-up hardening). The toolset is
 //! opt-in and every run is logged.
 
 use std::path::Path;
@@ -18,12 +18,39 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
-/// Hard wall-clock limit for a single run.
-const TIMEOUT: Duration = Duration::from_secs(10);
-/// Per-job memory cap (bytes).
+/// Per-job memory cap (bytes) — the same for every profile below.
 const MEM_LIMIT_BYTES: usize = 512 * 1024 * 1024;
 /// Cap on captured stdout/stderr so a noisy script can't blow the context.
 const OUTPUT_CAP: usize = 16 * 1024;
+
+/// What varies between an ad-hoc `run_code` call and a skill's bundled script
+/// (`SKL-3`) — the clock and the environment. Everything else (Job Object,
+/// memory cap, kill-on-drop) is identical between profiles.
+pub struct Profile {
+    pub timeout: Duration,
+    pub extra_env: Vec<(String, String)>,
+}
+
+impl Profile {
+    /// Today's behaviour, unchanged: 10s, a throwaway scratch cwd, no extra env.
+    pub fn ad_hoc() -> Profile {
+        Profile {
+            timeout: Duration::from_secs(10),
+            extra_env: Vec::new(),
+        }
+    }
+
+    /// `SKL-3`: a skill's `scripts/*.py` gets more wall-clock than an ad-hoc
+    /// snippet, and `POIESIS_SKILL_DIR` so it can resolve sibling
+    /// `references/`/`assets/` files without the model guessing an absolute
+    /// path.
+    pub fn skill(skill_dir: &Path) -> Profile {
+        Profile {
+            timeout: Duration::from_secs(120),
+            extra_env: vec![("POIESIS_SKILL_DIR".to_string(), skill_dir.display().to_string())],
+        }
+    }
+}
 
 pub struct SandboxOutput {
     pub stdout: String,
@@ -32,9 +59,18 @@ pub struct SandboxOutput {
     pub timed_out: bool,
 }
 
-/// Run `program args…` in `workdir`, confined and time-limited. Returns captured
-/// output, or a friendly error if the interpreter is missing.
-pub async fn run(program: &str, args: &[String], workdir: &Path) -> Result<SandboxOutput, String> {
+/// Run `program args…` in `workdir`, confined and time-limited. `readable_folder`
+/// is the conversation's attached working folder, if any (`DAT-2`) — passed in
+/// as the `POIESIS_FOLDER` env var so a snippet can open files there directly,
+/// rather than the model having to guess a path. Returns captured output, or a
+/// friendly error if the interpreter is missing.
+pub async fn run(
+    program: &str,
+    args: &[String],
+    workdir: &Path,
+    readable_folder: Option<&Path>,
+    profile: &Profile,
+) -> Result<SandboxOutput, String> {
     let mut cmd = Command::new(program);
     cmd.args(args)
         .current_dir(workdir)
@@ -51,6 +87,19 @@ pub async fn run(program: &str, args: &[String], workdir: &Path) -> Result<Sandb
             cmd.env(key, val);
         }
     }
+    for (key, val) in &profile.extra_env {
+        cmd.env(key, val);
+    }
+    // `DAT-2` reads only: this is advisory, not OS-enforced — same category of
+    // limitation as the network isolation noted above. Confining a Windows
+    // child process's filesystem view needs an AppContainer profile; until
+    // that lands, "read (not write)" is a contract stated in the tool
+    // description, not a wall the sandbox itself builds. Because of that,
+    // `codeexec` withholds this path entirely for a read-only folder and
+    // records any file the snippet did change — see the comments there.
+    if let Some(folder) = readable_folder {
+        cmd.env("POIESIS_FOLDER", folder);
+    }
 
     let child = cmd.spawn().map_err(|e| spawn_error(program, &e))?;
 
@@ -64,7 +113,7 @@ pub async fn run(program: &str, args: &[String], workdir: &Path) -> Result<Sandb
         guard
     };
 
-    match tokio::time::timeout(TIMEOUT, child.wait_with_output()).await {
+    match tokio::time::timeout(profile.timeout, child.wait_with_output()).await {
         Ok(Ok(output)) => Ok(SandboxOutput {
             stdout: cap(String::from_utf8_lossy(&output.stdout).into_owned()),
             stderr: cap(String::from_utf8_lossy(&output.stderr).into_owned()),

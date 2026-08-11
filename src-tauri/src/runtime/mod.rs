@@ -6,6 +6,7 @@
 //! streamed completions back to the UI.
 
 pub mod download;
+pub mod embedserver;
 pub mod hardware;
 pub mod imageengine;
 pub mod jobobject;
@@ -13,6 +14,9 @@ pub mod manager;
 pub mod manifest;
 pub mod process;
 pub mod proxy;
+pub mod rerankserver;
 pub mod watchdog;
 
 pub use manager::RuntimeManager;
+pub use embedserver::EmbedManager;
+pub use rerankserver::RerankManager;

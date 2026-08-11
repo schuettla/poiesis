@@ -32,6 +32,9 @@ pub struct EngineConfig {
     pub ctx_size: u32,
     /// Number of layers to offload to the GPU (`-ngl`). 0 = CPU only.
     pub n_gpu_layers: u32,
+    /// Extra CLI flags appended after the common ones (e.g. the embedding
+    /// engine's `--embeddings --pooling mean`). Empty for a plain chat engine.
+    pub extra_args: Vec<String>,
 }
 
 /// A live engine instance. Dropping it kills the child process (lifecycle
@@ -130,6 +133,7 @@ pub fn spawn_engine(config: &EngineConfig) -> Result<RunningEngine, EngineError>
         // `tools` array with HTTP 500 ("tools param requires --jinja flag")
         // unless this is enabled.
         .arg("--jinja");
+    cmd.args(&config.extra_args);
 
     // On Windows, put the child in its own process group so a stray Ctrl-C in a
     // dev console doesn't also signal it; we manage its lifetime explicitly.

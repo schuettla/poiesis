@@ -9,12 +9,12 @@ use crate::db::{Connector, Db};
 use crate::mcp::{McpClient, McpTool};
 use crate::runtime::RuntimeManager;
 use crate::secrets::{self, SERVICE_MCP};
-use crate::NexusError;
+use crate::PoiesisError;
 
-type Cmd<T> = Result<T, NexusError>;
+type Cmd<T> = Result<T, PoiesisError>;
 
-fn err<E: std::fmt::Display>(e: E) -> NexusError {
-    NexusError::Message(e.to_string())
+fn err<E: std::fmt::Display>(e: E) -> PoiesisError {
+    PoiesisError::Message(e.to_string())
 }
 
 /// Cached discovery result stored in `connectors.config_json`.
@@ -135,7 +135,7 @@ pub async fn test_connector_cmd(
     let connector = db
         .get_connector(&id)
         .map_err(err)?
-        .ok_or_else(|| NexusError::Message("Connector not found.".into()))?;
+        .ok_or_else(|| PoiesisError::Message("Connector not found.".into()))?;
     let Some(url) = connector.url.clone() else {
         return Ok(ConnectorStatus {
             ok: false,
@@ -230,7 +230,7 @@ pub fn export_connectors_cmd(db: State<'_, Db>) -> Cmd<String> {
 #[tauri::command]
 pub fn import_connectors_cmd(db: State<'_, Db>, json: String) -> Cmd<usize> {
     let bundle: ConnectorBundle = serde_json::from_str(&json)
-        .map_err(|e| NexusError::Message(format!("That doesn't look like a valid bundle: {e}")))?;
+        .map_err(|e| PoiesisError::Message(format!("That doesn't look like a valid bundle: {e}")))?;
     let existing = db.list_connectors().map_err(err)?;
     let mut added = 0;
     for entry in bundle.connectors {

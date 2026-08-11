@@ -1,17 +1,17 @@
-//! Built-in Web Search skill (TOOL-4). Privacy-first: the query is issued
+//! Built-in Web Search toolset (TOOL-4). Privacy-first: the query is issued
 //! directly from the user's machine to a **no-key** search endpoint (DuckDuckGo's
-//! HTML site) — there is no Nexus server in the middle and no provider account.
+//! HTML site) — there is no Poiesis server in the middle and no provider account.
 //! The top results (title, URL, snippet) plus the lead result's readable page
 //! text are fed back to the model, with source attribution.
 //!
 //! Searching the web inherently means one network call leaves the device; the
-//! skill defaults off and the UI discloses this (§6.3 privacy posture).
+//! toolset defaults off and the UI discloses this (§6.3 privacy posture).
 
-use super::skills::SkillContext;
+use super::toolsets::{mark_untrusted, ToolContext};
 
 const ENDPOINT: &str = "https://html.duckduckgo.com/html/";
 const USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Nexus/0.1";
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Poiesis/0.1";
 /// How many search hits to summarize back to the model.
 const MAX_RESULTS: usize = 6;
 /// Cap on the lead page's extracted text, so a huge page can't blow the context.
@@ -20,7 +20,7 @@ const PAGE_TEXT_CAP: usize = 3000;
 /// search lead, since the user asked for this exact page.
 const FETCH_URL_CAP: usize = 8000;
 
-/// The OpenAI tool schemas advertised to the model for this skill.
+/// The OpenAI tool schemas advertised to the model for this toolset.
 pub fn tool_specs() -> serde_json::Value {
     serde_json::json!([
         {
@@ -87,7 +87,7 @@ struct SearchHit {
 /// Execute a Web Search tool call: search, optionally read the lead page, and
 /// return a model-readable digest with source attribution.
 pub async fn execute(
-    ctx: &SkillContext<'_>,
+    ctx: &ToolContext<'_>,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {
@@ -111,13 +111,13 @@ pub async fn execute(
         return Ok(format!("No web results found for \"{query}\"."));
     }
 
-    let mut out = format!("Web results for \"{query}\":\n\n");
+    let mut body = String::new();
     for (i, h) in hits.iter().enumerate() {
-        out.push_str(&format!("{}. {}\n   {}\n", i + 1, h.title, h.url));
+        body.push_str(&format!("{}. {}\n   {}\n", i + 1, h.title, h.url));
         if !h.snippet.is_empty() {
-            out.push_str(&format!("   {}\n", h.snippet));
+            body.push_str(&format!("   {}\n", h.snippet));
         }
-        out.push('\n');
+        body.push('\n');
     }
 
     // Best-effort: pull readable text from the lead result so the model has real
@@ -125,17 +125,24 @@ pub async fn execute(
     if let Some(lead) = hits.first() {
         if let Ok(text) = fetch_readable(ctx.client, &lead.url, PAGE_TEXT_CAP).await {
             if !text.is_empty() {
-                out.push_str(&format!("--- Content of {} ---\n{}\n", lead.url, text));
+                body.push_str(&format!("--- Content of {} ---\n{}\n", lead.url, text));
             }
         }
     }
 
-    Ok(out)
+    // TRU-2: one envelope for the whole digest rather than one per hit — DDG's
+    // own titles/snippets are low-fidelity boilerplate, and marking each of up
+    // to `MAX_RESULTS` separately would spend more of the context budget on
+    // fence markers than on content. Any injection text anywhere in the digest
+    // still ends up inside this one marked, scored region.
+    let label = format!("web result: {}", domain_of(&hits[0].url));
+    let wrapped = mark_untrusted(ctx, &label, &body);
+    Ok(format!("Web results for \"{query}\":\n\n{wrapped}"))
 }
 
 /// Execute a `fetch_url` tool call (LOOP-2): read one page the model asked for,
 /// capped for context safety. The URL leaves the device, so it is activity-logged.
-async fn fetch_url(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<String, String> {
+async fn fetch_url(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
     let url = args
         .get("url")
         .and_then(|u| u.as_str())
@@ -151,7 +158,16 @@ async fn fetch_url(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<S
     if text.is_empty() {
         return Ok(format!("The page at {url} had no readable text."));
     }
-    Ok(format!("--- Content of {url} ---\n{text}"))
+    let label = format!("page at {}", domain_of(url));
+    let wrapped = mark_untrusted(ctx, &label, &text);
+    Ok(format!("--- Content of {url} ---\n{wrapped}"))
+}
+
+/// The host portion of a URL, for an untrusted-content label — `domain_of("https://example.com/a/b")`
+/// is `"example.com"`.
+fn domain_of(url: &str) -> String {
+    let without_scheme = url.split("://").nth(1).unwrap_or(url);
+    without_scheme.split('/').next().unwrap_or(without_scheme).to_string()
 }
 
 /// Query DuckDuckGo's no-key HTML endpoint and parse the result list.
@@ -377,6 +393,13 @@ fn percent_decode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn domain_of_strips_scheme_and_path() {
+        assert_eq!(domain_of("https://example.com/a/b?c=1"), "example.com");
+        assert_eq!(domain_of("http://example.com"), "example.com");
+        assert_eq!(domain_of("example.com/a"), "example.com");
+    }
 
     #[test]
     fn parses_ddg_results_and_unwraps_links() {

@@ -1,7 +1,7 @@
 //! Runtime manifest (PRD §7.3.1–7.3.2): maps a [`HardwareProfile`] to the correct
 //! prebuilt `llama-server` asset from upstream `ggml-org/llama.cpp` releases.
 //!
-//! Nexus does not build llama.cpp; it consumes upstream's Windows binaries. This
+//! Poiesis does not build llama.cpp; it consumes upstream's Windows binaries. This
 //! module encodes only *which* asset to pick. Resolving the concrete download URL
 //! (querying the GitHub release for a matching asset name) lives in `download`.
 

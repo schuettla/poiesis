@@ -1,0 +1,42 @@
+[
+  {
+    "query": "how much time off do I get when I start?",
+    "relevant": [
+      "First year: 12 days",
+      "Employees earn paid vacation starting from their hire date."
+    ],
+    "irrelevant": [
+      "Under $25 per meal: no receipt required",
+      "Economy class for flights under 6 hours"
+    ]
+  },
+  {
+    "query": "do I need to keep the receipt for a cheap lunch?",
+    "relevant": [
+      "Under $25 per meal: no receipt required",
+      "$25 and over: itemized receipt required"
+    ],
+    "irrelevant": [
+      "Unused days roll over, up to 5 days, into the next year.",
+      "First year: 12 days"
+    ]
+  },
+  {
+    "query": "how long do I have to file my expenses?",
+    "relevant": [
+      "File expense reports within 30 days of the purchase. Late reports need a manager's sign-off."
+    ],
+    "irrelevant": [
+      "Vacation requests need two weeks' notice except in an emergency.",
+      "After 5 years: 24 days"
+    ]
+  },
+  {
+    "query": "what class do I fly?",
+    "relevant": ["Economy class for flights under 6 hours"],
+    "irrelevant": [
+      "Under $25 per meal: no receipt required",
+      "Unused days roll over, up to 5 days, into the next year."
+    ]
+  }
+]

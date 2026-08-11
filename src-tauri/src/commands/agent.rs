@@ -3,15 +3,16 @@
 use tauri::ipc::Channel;
 use tauri::State;
 
+use crate::agent::browser::BrowserPool;
 use crate::agent::run::{run_agent, AgentEventSink};
-use crate::agent::skills::{self, Skill, SkillInfo};
+use crate::agent::toolsets::{self, Toolset, ToolsetInfo};
 use crate::agent::AgentEvent;
 use crate::cloud::{self, ChatEndpoint, Provider};
 use crate::db::Db;
 use crate::memory::MemoryStore;
 use crate::permissions::{Decision, PermissionManager};
-use crate::runtime::RuntimeManager;
-use crate::NexusError;
+use crate::runtime::{EmbedManager, RerankManager, RuntimeManager};
+use crate::PoiesisError;
 
 /// A turn message whose `content` is either a plain string or an OpenAI-style
 /// content-part array (text + image_url) for multimodal/vision input (CHT-5).
@@ -36,9 +37,12 @@ pub struct ChatTarget {
 #[allow(clippy::too_many_arguments)]
 pub async fn agent_chat_cmd(
     mgr: State<'_, RuntimeManager>,
+    embed_mgr: State<'_, EmbedManager>,
+    rerank_mgr: State<'_, RerankManager>,
     db: State<'_, Db>,
     perms: State<'_, PermissionManager>,
     memory: State<'_, MemoryStore>,
+    browser_pool: State<'_, BrowserPool>,
     conversation_id: String,
     assistant_message_id: Option<String>,
     messages: Vec<TurnMessage>,
@@ -46,7 +50,7 @@ pub async fn agent_chat_cmd(
     tools_enabled: Option<bool>,
     target: Option<ChatTarget>,
     on_event: Channel<AgentEvent>,
-) -> Result<(), NexusError> {
+) -> Result<(), PoiesisError> {
     // Resolve where this turn runs: the local engine, or a cloud provider (CLD-3).
     let target = target.unwrap_or_default();
     let is_cloud = target.provenance.as_deref() == Some("cloud");
@@ -81,7 +85,7 @@ pub async fn agent_chat_cmd(
     // The working folder is described here rather than in the frontend's prompt
     // so it can never drift from what the file tools will actually enforce. Only
     // worth saying when the model has tools to act on it.
-    if tools_enabled.unwrap_or(false) && Skill::FileSystem.is_enabled(&db) {
+    if tools_enabled.unwrap_or(false) && Toolset::FileSystem.is_enabled(&db) {
         if let Some(brief) = crate::agent::filesystem::working_folder_brief(&db, &conversation_id) {
             let at = msgs
                 .iter()
@@ -101,15 +105,30 @@ pub async fn agent_chat_cmd(
             .unwrap_or_else(|| "local".to_string())
     };
 
+    // A toolset's own side call (SCP-1's scope classification) runs here, on
+    // the local engine, whatever the turn itself is running on: work the user
+    // didn't ask for must not land on their cloud bill or leave the machine.
+    // `None` when nothing is loaded locally — the toolset then does without.
+    let local_endpoint = mgr.engine_endpoint().await.map(|(base_url, token)| ChatEndpoint::OpenAi {
+        base_url,
+        api_key: Some(token),
+        model: None,
+    });
+
     let cancel = mgr.new_cancel();
     let sink = AgentEventSink::new(on_event);
-    let images_dir = mgr.generated_images_dir();
+    let images_dir = mgr.generated_media_dir();
     run_agent(
         &mgr.client,
         &endpoint,
+        local_endpoint.as_ref(),
         &db,
+        &mgr,
+        &embed_mgr,
+        &rerank_mgr,
         &perms,
         &memory,
+        Some(&browser_pool),
         &conversation_id,
         assistant_message_id.as_deref(),
         &images_dir,
@@ -117,6 +136,10 @@ pub async fn agent_chat_cmd(
         msgs,
         temperature.unwrap_or(0.7),
         tools_enabled.unwrap_or(false),
+        // Every caller of this command is an interactive turn — headless runs
+        // go through `scheduler::run_job` instead, which calls `run_agent`
+        // directly with `headless: true`.
+        false,
         cancel,
         &sink,
     )
@@ -161,41 +184,42 @@ pub fn resolve_permission_cmd(perms: State<'_, PermissionManager>, id: String, d
     perms.resolve(&id, decision);
 }
 
-/// List the built-in skills with their current enabled state (TOOL-6), for the
-/// Settings surface.
+/// List the built-in toolsets with their current enabled state (TOOL-6, TSET-2),
+/// for the Settings surface.
 #[tauri::command]
-pub fn list_skills_cmd(db: State<'_, Db>) -> Vec<SkillInfo> {
-    skills::all_info(&db)
+pub fn list_toolsets_cmd(db: State<'_, Db>) -> Vec<ToolsetInfo> {
+    toolsets::all_info(&db)
 }
 
-/// How reliably one skill's tools have run lately (LOOP-UI-1), for the muted
+/// How reliably one toolset's tools have run lately (LOOP-UI-1), for the muted
 /// caption under each Settings toggle.
 #[derive(serde::Serialize)]
-pub struct SkillReliability {
+pub struct ToolsetReliability {
     pub skill_id: String,
     pub ok_percent: i64,
     pub calls: i64,
 }
 
-/// Aggregate the last 7 days of `tool_stats` per skill. The skill↔tool mapping
-/// lives here (`Skill::handles`), so the UI just renders what it's given.
+/// Aggregate the last 7 days of `tool_stats` per toolset. The toolset↔tool
+/// mapping lives here (`Toolset::handles`), so the UI just renders what it's
+/// given.
 #[tauri::command]
-pub fn get_tool_stats_cmd(db: State<'_, Db>) -> Vec<SkillReliability> {
+pub fn get_tool_stats_cmd(db: State<'_, Db>) -> Vec<ToolsetReliability> {
     let Ok(rows) = db.tool_stats_since(7) else {
         return Vec::new();
     };
-    Skill::ALL
+    Toolset::ALL
         .into_iter()
-        .filter_map(|skill| {
+        .filter_map(|toolset| {
             let (ok, calls) = rows
                 .iter()
-                .filter(|r| skill.handles(&r.tool_name))
+                .filter(|r| toolset.handles(&r.tool_name))
                 .fold((0, 0), |(o, c), r| (o + r.ok, c + r.total));
             if calls == 0 {
                 return None; // absent when there's no data
             }
-            Some(SkillReliability {
-                skill_id: skill.id().to_string(),
+            Some(ToolsetReliability {
+                skill_id: toolset.id().to_string(),
                 ok_percent: (ok * 100) / calls,
                 calls,
             })
@@ -203,11 +227,11 @@ pub fn get_tool_stats_cmd(db: State<'_, Db>) -> Vec<SkillReliability> {
         .collect()
 }
 
-/// Enable or disable a built-in skill (TOOL-6).
+/// Enable or disable a built-in toolset (TOOL-6, TSET-2).
 #[tauri::command]
-pub fn set_skill_enabled_cmd(db: State<'_, Db>, id: String, enabled: bool) -> Result<(), NexusError> {
-    let skill = Skill::from_id(&id)
-        .ok_or_else(|| NexusError::Message(format!("Unknown skill '{id}'.")))?;
-    skill.set_enabled(&db, enabled);
+pub fn set_toolset_enabled_cmd(db: State<'_, Db>, id: String, enabled: bool) -> Result<(), PoiesisError> {
+    let toolset = Toolset::from_id(&id)
+        .ok_or_else(|| PoiesisError::Message(format!("Unknown toolset '{id}'.")))?;
+    toolset.set_enabled(&db, enabled);
     Ok(())
 }

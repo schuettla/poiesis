@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- The app's dark "Backlit" canvas, not flat black. -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14181a"/>
+      <stop offset="1" stop-color="#0a0d0c"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- The living mark (PoiesisMark.tsx), fully grown: membrane, three earned
+       orbit dots, nucleus, redrawn solid for icon legibility down to 16px
+       (the in-app SVG uses fractional opacity for its animated states, which
+       reads as a smudge at icon scale). Ink color matches the dark theme's
+       ink token (#e3e9e0). -->
+  <g transform="translate(512,512)" fill="none" stroke="#e3e9e0">
+    <circle r="272" stroke-width="34"/>
+    <g fill="#e3e9e0" stroke="none">
+      <circle cx="0" cy="-272" r="54"/>
+      <circle cx="235.6" cy="136" r="54"/>
+      <circle cx="-235.6" cy="136" r="54"/>
+      <circle cx="0" cy="0" r="102"/>
+    </g>
+  </g>
+</svg>

@@ -7,7 +7,9 @@ import Introduction from "../components/Conversation/Introduction";
 import FolderInvite from "../components/Conversation/FolderInvite";
 import Composer from "../components/Composer/Composer";
 import MemoryToast from "../components/Memory/MemoryToast";
+import RecallOffer from "../components/EmbedEngine/RecallOffer";
 import SessionStrip from "../components/Blocks/SessionStrip";
+import SessionMenu from "../components/Conversation/SessionMenu";
 import Workspace from "./Workspace";
 import "../components/Conversation/Conversation.css";
 import "./Chat.css";
@@ -36,6 +38,7 @@ export default function Chat() {
       <>
         <Workspace />
         <MemoryToast />
+        <RecallOffer />
       </>
     );
   }
@@ -43,6 +46,7 @@ export default function Chat() {
   return (
     <>
       <div className="chat-body">
+        <SessionMenu />
         <div className="main" ref={scrollRef}>
           <div className="conversation">
             {!isEmpty && <SessionStrip />}
@@ -78,6 +82,7 @@ export default function Chat() {
       </div>
       <Composer onSend={sendMessage} busy={busy} onStop={stopGenerating} />
       <MemoryToast />
+      <RecallOffer />
     </>
   );
 }

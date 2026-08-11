@@ -1,0 +1,140 @@
+/* PRES-5-style ambient line, sitting just below the composer box — a
+   non-crucial detail, not another control competing in the input row. */
+.context-chip-wrap {
+  position: relative;
+  display: flex;
+  justify-content: flex-start;
+  padding: 4px 4px 0;
+}
+
+.context-chip {
+  background: none;
+  border: none;
+  padding: 1px 4px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.context-chip:hover {
+  color: var(--ink-muted);
+}
+
+.why-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.why-link:hover {
+  color: var(--ink-muted);
+}
+
+.context-panel-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 49;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.context-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 50;
+  width: 480px;
+  max-width: 90vw;
+  max-height: 76vh;
+  overflow-y: auto;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.context-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.context-layer {
+  border: 1px solid var(--paper-edge-2);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.context-layer summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.context-layer[open] summary {
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+.context-layer-label {
+  flex: 1;
+}
+.context-layer-badge {
+  font-weight: 500;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.context-layer-sources {
+  margin: 0 0 6px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.context-layer-text {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.context-layer-empty {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--ink-faint);
+}
+.context-layer-edit {
+  margin-top: 6px;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.context-layer-edit:hover {
+  color: var(--ink-muted);
+}

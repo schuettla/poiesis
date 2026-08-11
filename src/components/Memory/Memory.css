@@ -27,11 +27,38 @@
   color: var(--danger);
 }
 
+/* ---- the untitled synthesis (PRO-UI, SMP-5) ---- */
+.memory-about-you {
+  padding: 2px 0 10px;
+  border-bottom: 1px solid var(--paper-edge-2);
+}
+.memory-about-you.busy .memory-about-you-text {
+  opacity: 0.5;
+}
+.memory-about-you-text {
+  margin: 0 0 4px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+.memory-about-you-empty {
+  color: var(--ink-faint);
+}
+.memory-about-you-meta {
+  margin: 0 0 6px;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.memory-about-you-actions {
+  display: flex;
+  gap: 12px;
+}
+
 /* ---- fact cards ---- */
 .memory-card {
   padding: 12px 14px;
   border: 1px solid var(--paper-edge-2);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
 }
 .memory-card-head {
   display: flex;
@@ -46,7 +73,7 @@
 .memory-kind {
   padding: 1px 6px;
   border: 1px solid var(--paper-edge-2);
-  border-radius: 10px;
+  border-radius: var(--radius);
   color: var(--ink-faint);
   font-size: 11px;
 }
@@ -58,6 +85,48 @@
   margin: 6px 0 2px;
   font-size: 13px;
   color: var(--ink-muted);
+}
+.memory-last-used {
+  margin: 0 0 2px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+/* ---- scope (SCP-UI-1 / SMP-6a) ---- */
+.memory-scope-plain {
+  margin: 0 0 2px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.memory-scope {
+  display: flex;
+  width: fit-content;
+  margin: 2px 0 4px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.memory-scope-segment {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  background: none;
+  border: none;
+  border-left: 1px solid var(--paper-edge-2);
+  color: var(--ink-muted);
+  padding: 4px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.memory-scope-segment:first-child {
+  border-left: none;
+}
+.memory-scope-segment:hover {
+  color: var(--ink);
+}
+.memory-scope-segment.active {
+  background: var(--paper-edge);
+  color: var(--ink);
+  font-weight: 600;
 }
 .memory-body {
   margin: 6px 0 8px;
@@ -76,7 +145,7 @@
   padding: 12px 14px;
   border: 1px solid var(--paper-edge-2);
   border-left: 2px solid var(--ink-muted);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
 }
 .memory-proposal-head {
   margin: 0 0 8px;
@@ -130,7 +199,7 @@
   padding: 10px 14px;
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 2px 14px rgb(0 0 0 / 8%);
 }
 .memory-toast-line {
@@ -145,6 +214,13 @@
   flex: 1;
   font-size: 13px;
   color: var(--ink);
+}
+/* PRO-UI-5: the rebuild toast opens the Self view on click. */
+.memory-toast-clickable {
+  cursor: pointer;
+}
+.memory-toast-clickable:hover {
+  text-decoration: underline;
 }
 .memory-toast-undo {
   border: none;
@@ -163,4 +239,17 @@
   font-size: 12px;
   line-height: 1.5;
   color: var(--ink-faint);
+}
+
+/* ---- recall first-need prompt (SMP-2) ---- */
+.memory-toast-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 8px;
+}
+/* Stacks above the write toast — a memory write is one of this prompt's own
+   triggers, so both can legitimately be on screen at once. */
+.recall-offer {
+  bottom: 160px;
 }

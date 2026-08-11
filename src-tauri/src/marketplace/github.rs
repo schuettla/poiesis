@@ -7,7 +7,7 @@ use serde::Deserialize;
 use super::catalog::CatalogModel;
 
 const GITHUB_API: &str = "https://api.github.com/repos";
-const USER_AGENT: &str = concat!("ProjectNexus/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("ProjectPoiesis/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Deserialize)]
 struct GhAsset {

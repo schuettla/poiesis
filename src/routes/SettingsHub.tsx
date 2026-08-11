@@ -4,7 +4,10 @@ import PoiesisMark from "../components/Mark/PoiesisMark";
 import Models from "./Models";
 import Engine from "./Engine";
 import Apps from "./Apps";
+import Skills from "./Skills";
 import Self from "./Self";
+import Tasks from "./Tasks";
+import Activity from "./Activity";
 import Settings from "./Settings";
 import "./SettingsHub.css";
 
@@ -13,7 +16,10 @@ const TABS: { view: View; label: string; icon: string }[] = [
   { view: "models", label: "Models", icon: "▤" },
   { view: "engine", label: "Engine", icon: "◧" },
   { view: "apps", label: "Apps", icon: "◇" },
+  { view: "skills", label: "Skills", icon: "▦" },
   { view: "self", label: "Self", icon: "" },
+  { view: "tasks", label: "Tasks", icon: "◷" },
+  { view: "activity", label: "Activity", icon: "≡" },
 ];
 
 /** The settings hub: everything that used to be its own rail entry (Models,
@@ -23,10 +29,22 @@ export default function SettingsHub() {
   const view = useAppStore((s) => s.view);
   const setView = useAppStore((s) => s.setView);
   const soulPending = useAppStore((s) => s.changeProposals.some((p) => p.target === "soul"));
-  const selfPending = useAppStore((s) => s.changeProposals.some((p) => p.target !== "soul"));
+  // Every proposal that lands in the skills folder badges the Skills tab —
+  // that's where accepting it writes. `recipe` is one left unanswered from
+  // before skills existed (`SKL-5`); `skill-revision` is a rough skill asking
+  // to revise itself (`OUT-2`). Without them here they'd fall through to the
+  // Self badge below, which points at the wrong tab.
+  const isSkill = (target: string) =>
+    target === "skill" || target === "skill-revision" || target === "recipe";
+  const selfPending = useAppStore((s) =>
+    s.changeProposals.some((p) => p.target !== "soul" && !isSkill(p.target))
+  );
+  const skillPending = useAppStore((s) => s.changeProposals.some((p) => isSkill(p.target)));
   const consolidationPending = useAppStore((s) => s.consolidationPending);
   const badgeFor = (v: View) =>
-    (v === "settings" && soulPending) || (v === "self" && (selfPending || consolidationPending));
+    (v === "settings" && soulPending) ||
+    (v === "self" && (selfPending || consolidationPending)) ||
+    (v === "skills" && skillPending);
 
   return (
     <div className="settings-hub">
@@ -57,7 +75,10 @@ export default function SettingsHub() {
         {view === "models" && <Models />}
         {view === "engine" && <Engine />}
         {view === "apps" && <Apps />}
+        {view === "skills" && <Skills />}
         {view === "self" && <Self />}
+        {view === "tasks" && <Tasks />}
+        {view === "activity" && <Activity />}
       </div>
     </div>
   );

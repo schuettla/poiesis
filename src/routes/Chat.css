@@ -7,6 +7,31 @@
   display: flex;
   min-height: 0;
   overflow: hidden;
+  position: relative;
+}
+
+/* Session actions, pinned to the top-right of the reading area. Outside the
+   scroll container so it stays put as the conversation moves under it. */
+.session-menu-wrap {
+  position: absolute;
+  top: 8px;
+  right: 14px;
+  z-index: 15;
+}
+.session-more {
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  color: var(--ink-muted);
+  width: 26px;
+  height: 26px;
+  line-height: 1;
+  font-size: 13px;
+  cursor: pointer;
+}
+.session-more:hover {
+  border-color: var(--ink-faint);
+  color: var(--ink);
 }
 .main {
   flex: 1;
@@ -44,7 +69,7 @@
   max-width: 46ch;
   padding: 16px 18px;
   border: 1px solid var(--paper-edge-2);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
 }
 .intro-body {
   margin: 0;

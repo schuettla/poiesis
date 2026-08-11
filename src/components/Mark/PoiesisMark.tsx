@@ -37,15 +37,25 @@ export default function PoiesisMark({ size = 20 }: { size?: number }) {
   const presence = useAppStore((s) => s.presence);
   const entries = useAppStore((s) => {
     const v = s.vitality;
-    return v ? v.facts + v.lessons + v.recipes : 0;
+    return v ? v.facts + v.lessons + v.skills : 0;
   });
+  // SCH-UI-2: at most one unread digest, carried as the slow pulse — no dot,
+  // no count, no badge. Only shown while otherwise idle, so it never fights
+  // the working/reflecting/recovering states, which already say more.
+  const digestUnread = useAppStore((s) => s.digest?.unread ?? false);
+  const digestPending = digestUnread && presence === "idle";
 
   const stage = growthStage(entries);
-  const label = `Poiesis Agent — ${LABELS[presence] ?? "resting"}`;
+  const label = digestPending
+    ? "Poiesis Agent — resting, with something to tell you"
+    : `Poiesis Agent — ${LABELS[presence] ?? "resting"}`;
+  const className = ["poiesis-mark", `stage-${stage}`, `state-${presence}`, digestPending && "digest-pending"]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <svg
-      className={`poiesis-mark stage-${stage} state-${presence}`}
+      className={className}
       width={size}
       height={size}
       viewBox="0 0 24 24"

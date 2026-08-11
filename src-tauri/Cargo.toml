@@ -1,5 +1,5 @@
 [package]
-name = "nexus"
+name = "poiesis"
 version = "0.1.0"
 description = "Poiesis — a local-first, agentic desktop LLM application"
 authors = ["Poiesis contributors"]
@@ -8,14 +8,14 @@ rust-version = "1.77"
 
 # The library powers both the desktop binary and (eventually) integration tests.
 [lib]
-name = "nexus_lib"
+name = "poiesis_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
@@ -24,8 +24,11 @@ thiserror = "2"
 
 # Async runtime + HTTP (runtime download, engine proxy, cloud providers)
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 futures-util = "0.3"
+# `dyn MediaBackend` trait objects (Phase 13) need async fns in a trait, which
+# isn't dyn-object-safe on stable without this.
+async-trait = "0.1"
 
 # Runtime management: download verification, archive extraction, randomness
 sha2 = "0.10"
@@ -45,9 +48,41 @@ uuid = { version = "1", features = ["v4"] }
 pdf-extract = "0.7"
 base64 = "0.22"
 
+# Perceptual image hashing for duplicate detection (Perception, PHS-1) — just
+# enough decode support for the formats IDX already recognises as images.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
+
 # Secrets in the OS credential store (Windows Credential Manager) — MCP connector
-# tokens (Phase 6) and cloud provider keys (Phase 7). Never persisted to SQLite.
+# tokens (Phase 6), cloud provider keys (Phase 7), and mail account passwords
+# (Phase 8 MAIL-1). Never persisted to SQLite.
 keyring = "2"
+
+# Mail (MAIL-1): direct IMAP/SMTP, no hosted relay. `imap`/`lettre` are
+# blocking clients — real IMAP/SMTP libraries for Rust are mature on the sync
+# side, so calls run under `tokio::task::spawn_blocking` rather than pulling in
+# async-imap's separate (async-std-oriented) ecosystem for no real gain here.
+imap = "2"
+# `imap`'s `Envelope`/`Address` types are re-exported from here (imap::types::Fetch
+# is imap's own, but the envelope's inner types are imap_proto's) — named directly
+# rather than routed through an unstable re-export path.
+imap-proto = "0.10"
+native-tls = "0.2"
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "native-tls", "hostname", "builder"] }
+mail-parser = "0.11"
+
+# Agent Skills (SKL-1): YAML frontmatter parsing. `serde_yaml` is deprecated;
+# this is its maintained fork.
+serde_yaml_ng = "0.10"
+
+# Browser control (BRW-1): pure-Rust CDP client. We drive the user's already-
+# installed Chrome/Edge over --remote-debugging-port rather than bundling one.
+# `futures-util` (already a dependency, just above) supplies the `StreamExt`
+# the handler loop needs.
+chromiumoxide = "0.9"
+url = "2"
+
+# Screen & app launch (SYS-1): cross-platform display/window capture.
+xcap = "0.9"
 
 # Win32 Job Objects: bind the engine child to a kill-on-close job so an ungraceful
 # parent death (crash) can't leave an orphaned llama-server holding VRAM (§7.4).

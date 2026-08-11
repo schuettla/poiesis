@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useAppStore } from "../../lib/store";
 import { inTauri, searchConversations } from "../../lib/api";
 import type { Conversation } from "../../lib/types";
+import ConfirmDialog from "../Confirm/ConfirmDialog";
 import "./Rail.css";
 
 const DAY = 86400_000;
@@ -11,6 +12,19 @@ function LibraryIcon() {
     <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
       <path
         d="M5.5 3.5h9a1 1 0 0 1 1 1V17l-5.5-3.2L4.5 17V4.5a1 1 0 0 1 1-1z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function MessageIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M3.5 5.5a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H8.5l-3.6 2.8a.5.5 0 0 1-.8-.4V13.5h-.6a1 1 0 0 1-1-1v-7z"
         stroke="currentColor"
         strokeWidth="1.3"
         strokeLinejoin="round"
@@ -57,6 +71,11 @@ function ChatRow({ c, active }: { c: Conversation; active: boolean }) {
   const reflect = useAppStore((s) => s.reflectConversation);
   const reflecting = useAppStore((s) => s.reflectingIds.includes(c.id));
   const digested = useAppStore((s) => s.digestedIds.includes(c.id));
+  const deleteConversation = useAppStore((s) => s.deleteConversation);
+  // A chat is a real thing the user made, so removing it takes two steps: a
+  // menu (right-click, or the ⋯ that appears on hover) and then a confirmation.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
   return (
     <li
@@ -64,6 +83,10 @@ function ChatRow({ c, active }: { c: Conversation; active: boolean }) {
       title={c.title}
       tabIndex={0}
       onClick={() => setActive(c.id)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setMenuOpen(true);
+      }}
       onKeyDown={(e) => {
         if (e.key === "Enter") setActive(c.id);
       }}
@@ -100,6 +123,67 @@ function ChatRow({ c, active }: { c: Conversation; active: boolean }) {
           ◆
         </button>
       )}
+
+      <div className="chat-menu-wrap">
+        <button
+          className="chat-more"
+          aria-label={`More actions for ${c.title}`}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          title="More"
+          onClick={(e) => {
+            e.stopPropagation();
+            setMenuOpen((v) => !v);
+          }}
+        >
+          ⋯
+        </button>
+        {menuOpen && (
+          <>
+            <div
+              className="row-menu-backdrop"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen(false);
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setMenuOpen(false);
+              }}
+            />
+            <div className="row-menu" role="menu">
+              <button
+                className="row-menu-item danger"
+                role="menuitem"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuOpen(false);
+                  setConfirming(true);
+                }}
+              >
+                Delete chat
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {confirming && (
+        // The dialog renders inside the row, so its clicks must not fall
+        // through to the row's "select this chat" handler.
+        <span onClick={(e) => e.stopPropagation()}>
+        <ConfirmDialog
+          title="Delete this chat?"
+          body={`“${c.title}” and everything said in it will be removed. This can't be undone.`}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false);
+            deleteConversation(c.id);
+          }}
+        />
+        </span>
+      )}
     </li>
   );
 }
@@ -121,13 +205,28 @@ export default function Rail() {
     s.changeProposals.some((p) => p.target !== "soul")
   );
   const consolidationPending = useAppStore((s) => s.consolidationPending);
+  // SCH-UI-4: a scheduled job runs unattended, but the user must always be
+  // able to see that it's happening, and end it.
+  const runningJob = useAppStore((s) => s.runningJob);
+  const stopScheduledJob = useAppStore((s) => s.stopScheduledJob);
   // Models, Engine, Apps, Self and Settings now live together in one hub
   // (behind the cog, below) — one badge covers whatever's waiting in any of them.
   const settingsPending = soulPending || selfPending || consolidationPending;
-  const inSettingsHub = ["models", "engine", "apps", "self", "settings"].includes(view);
+  const inSettingsHub = [
+    "models",
+    "engine",
+    "apps",
+    "skills",
+    "self",
+    "tasks",
+    "activity",
+    "settings",
+  ].includes(view);
 
+  const setActive = useAppStore((s) => s.setActiveConversation);
   const [query, setQuery] = useState("");
   const [resultIds, setResultIds] = useState<string[] | null>(null);
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
 
   useEffect(() => {
     const q = query.trim();
@@ -162,9 +261,63 @@ export default function Rail() {
 
   return (
     <nav className={`rail ${collapsed ? "collapsed" : ""}`} aria-label="Conversations and sections">
-      <button className="new-chat" onClick={newConversation} title="New chat">
-        {collapsed ? "+" : "+ New chat"}
-      </button>
+      <div className="rail-top-actions">
+        <button
+          className={`rail-top-btn library-btn ${view === "library" ? "active" : ""}`}
+          onClick={() => setView("library")}
+          title="Library"
+        >
+          <span className="nav-icon" aria-hidden="true"><LibraryIcon /></span>
+          <span className="nav-label">Library</span>
+        </button>
+        <button className="rail-top-btn new-chat" onClick={newConversation} title="New chat">
+          <span className="nav-icon" aria-hidden="true">+</span>
+          <span className="nav-label">New chat</span>
+        </button>
+      </div>
+
+      {collapsed && (
+        <div className="rail-session-collapsed">
+          <button
+            className="rail-session-btn"
+            aria-haspopup="menu"
+            aria-expanded={sessionMenuOpen}
+            title="Chats"
+            onClick={() => setSessionMenuOpen((v) => !v)}
+          >
+            <MessageIcon />
+          </button>
+          {sessionMenuOpen && (
+            <>
+              <div
+                className="row-menu-backdrop"
+                onClick={() => setSessionMenuOpen(false)}
+              />
+              <div className="row-menu rail-session-menu" role="menu">
+                {conversations.length === 0 && (
+                  <span className="row-menu-empty">No chats yet</span>
+                )}
+                {conversations.map((c) => (
+                  <button
+                    key={c.id}
+                    className={`row-menu-item ${
+                      c.id === activeId && view === "chat" ? "active" : ""
+                    }`}
+                    role="menuitem"
+                    title={c.title}
+                    onClick={() => {
+                      setActive(c.id);
+                      setSessionMenuOpen(false);
+                    }}
+                  >
+                    <span className="row-menu-label">{c.title}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       <input
         className="rail-search"
@@ -175,20 +328,20 @@ export default function Rail() {
         onChange={(e) => setQuery(e.target.value)}
       />
 
-      <ul className="rail-nav rail-nav-top">
-        <li
-          className={view === "library" ? "active" : ""}
-          tabIndex={0}
-          onClick={() => setView("library")}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") setView("library");
-          }}
-          title="Library"
-        >
-          <span className="nav-icon" aria-hidden="true"><LibraryIcon /></span>
-          <span className="nav-label">Library</span>
-        </li>
-      </ul>
+      {runningJob && (
+        <div className="rail-job-row" role="status">
+          <span className="rail-job-dot" aria-hidden="true" />
+          <span className="rail-job-label">Running “{runningJob.job_name}”…</span>
+          <button
+            className="rail-job-stop"
+            aria-label={`Stop ${runningJob.job_name}`}
+            title="Stop"
+            onClick={() => stopScheduledJob()}
+          >
+            ■
+          </button>
+        </div>
+      )}
 
       {searching ? (
         <div>

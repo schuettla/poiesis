@@ -3,16 +3,23 @@
 //! are **never** written to SQLite or plaintext config — only here. SQLite holds
 //! a boolean "has a secret" at most.
 //!
-//! Services namespace the secret kinds: `nexus-mcp` for connector auth tokens
-//! (Phase 6), `nexus-cloud` for provider API keys (Phase 7). The `account` is the
+//! Services namespace the secret kinds: `poiesis-mcp` for connector auth tokens
+//! (Phase 6), `poiesis-cloud` for provider API keys (Phase 7). The `account` is the
 //! connector/provider id.
 
 use keyring::Entry;
 
-pub const SERVICE_MCP: &str = "nexus-mcp";
+pub const SERVICE_MCP: &str = "poiesis-mcp";
 // Used by the BYOK cloud providers in Phase 7.
 #[allow(dead_code)]
-pub const SERVICE_CLOUD: &str = "nexus-cloud";
+pub const SERVICE_CLOUD: &str = "poiesis-cloud";
+/// Mail account passwords (`MAIL-1`). `account` is the `mail_accounts.id`.
+pub const SERVICE_MAIL: &str = "poiesis-mail";
+/// Media-only provider keys (Phase 13, `BKD-2`) — providers like fal.ai that
+/// aren't a chat provider and so have no home in `poiesis-cloud`. `account` is
+/// the media backend id (e.g. `"fal"`).
+#[allow(dead_code)]
+pub const SERVICE_MEDIA: &str = "poiesis-media";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {

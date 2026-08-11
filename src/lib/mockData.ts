@@ -1,5 +1,5 @@
 // Placeholder data so the UI is fully explorable before backend phases land.
-// Mirrors the conversation in Project_Nexus_UI_Mockup.html. Replaced by real
+// Mirrors the conversation in Project_Poiesis_UI_Mockup.html. Replaced by real
 // SQLite-backed data in Phase 2.
 
 import type { Conversation, Model } from "./types";

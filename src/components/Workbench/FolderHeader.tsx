@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useActiveConversation, useAppStore } from "../../lib/store";
 import type { FolderTrust } from "../../lib/types";
+import type { IndexProgress, IndexRootView } from "../../lib/api";
 
 /** The three access levels, in order of how much they let the agent do. Reads
  * are free at every level — this only governs what changes bytes. */
@@ -18,6 +19,113 @@ function shortPath(path: string, max = 46): string {
   return `${head}…${tail}`;
 }
 
+/** Middle dot before a relative time, matching the rail's own "· 2h ago" style. */
+function timeAgo(ms: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+/** `IDX-UI-1`'s never-built / building / built / stale line. A plain counting
+ * line while building — no bar, no percentage (per the plan's own rule). */
+function IndexStatusRow({
+  indexState,
+  indexProgress,
+  indexExplained,
+  skippedOpen,
+  setSkippedOpen,
+  onBuild,
+  onCancel,
+}: {
+  indexState: IndexRootView | null;
+  indexProgress: IndexProgress | null;
+  indexExplained: boolean;
+  skippedOpen: boolean;
+  setSkippedOpen: (fn: (o: boolean) => boolean) => void;
+  onBuild: () => void;
+  onCancel: () => void;
+}) {
+  const building = indexProgress !== null || indexState?.state === "building";
+
+  return (
+    <>
+      <div className="wb-head-row wb-index-row">
+        {building ? (
+          <>
+            <span className="wb-index-status">
+              {indexProgress && indexProgress.files_total > 0
+                ? `Reading… ${indexProgress.files_done} of ${indexProgress.files_total}`
+                : "Reading…"}
+            </span>
+            <button className="wb-link" onClick={onCancel}>
+              Stop
+            </button>
+          </>
+        ) : indexState?.state === "stale" ? (
+          <>
+            <span className="wb-index-status">
+              {indexState.changed_count
+                ? `${plural(indexState.changed_count, "file")} changed since I read this`
+                : "This folder may have changed since I read it"}
+            </span>
+            <button className="wb-link" onClick={onBuild}>
+              Read again
+            </button>
+          </>
+        ) : indexState ? (
+          <>
+            <span className="wb-index-status">
+              I've read {plural(indexState.file_count, "file")} here · {timeAgo(indexState.updated_at)}
+            </span>
+            <button className="wb-link" onClick={onBuild}>
+              Read again
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="wb-index-status">I haven't read this folder yet</span>
+            <button className="wb-link" onClick={onBuild}>
+              Read it
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* SMP-4c: the first read says what reading is for, once. */}
+      {building && !indexExplained && (
+        <p className="wb-index-explain">
+          I read the files you give me so I can answer from them. Everything stays on this machine.
+        </p>
+      )}
+
+      {!building && indexState && indexState.skipped.length > 0 && (
+        <div className="wb-index-skipped">
+          <button className="wb-link" onClick={() => setSkippedOpen((o) => !o)}>
+            {plural(indexState.skipped.length, "file")} I couldn't read
+          </button>
+          {skippedOpen && (
+            <ul className="wb-index-skipped-list">
+              {indexState.skipped.map((f) => (
+                <li key={f.path}>
+                  <span className="wb-index-skipped-path">{f.path}</span> — {f.reason}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function FolderHeader() {
   const conversation = useActiveConversation();
   const attachFolder = useAppStore((s) => s.attachFolder);
@@ -27,9 +135,16 @@ export default function FolderHeader() {
   const showHidden = useAppStore((s) => s.showHidden);
   const toggleShowHidden = useAppStore((s) => s.toggleShowHidden);
   const folderError = useAppStore((s) => s.folderError);
+  const indexState = useAppStore((s) => s.indexState);
+  const indexProgress = useAppStore((s) => s.indexProgress);
+  const indexError = useAppStore((s) => s.indexError);
+  const indexExplained = useAppStore((s) => s.indexExplained);
+  const buildFolderIndex = useAppStore((s) => s.buildFolderIndex);
+  const cancelFolderIndex = useAppStore((s) => s.cancelFolderIndex);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDetach, setConfirmDetach] = useState(false);
+  const [skippedOpen, setSkippedOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -118,6 +233,17 @@ export default function FolderHeader() {
       <p className="wb-folder-path" title={folder}>
         {shortPath(folder)}
       </p>
+
+      <IndexStatusRow
+        indexState={indexState}
+        indexProgress={indexProgress}
+        indexExplained={indexExplained}
+        skippedOpen={skippedOpen}
+        setSkippedOpen={setSkippedOpen}
+        onBuild={buildFolderIndex}
+        onCancel={cancelFolderIndex}
+      />
+      {indexError && <p className="wb-error">{indexError}</p>}
 
       {confirmDetach ? (
         <div className="wb-confirm">

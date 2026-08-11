@@ -7,12 +7,12 @@ use crate::commands::agent::{build_cloud_endpoint, ChatTarget};
 use crate::db::{Artifact, Block, Conversation, Db, Message, NewAttachment, NewMessage};
 use crate::runtime::proxy::{CancelFlag, TurnOutcome};
 use crate::runtime::RuntimeManager;
-use crate::NexusError;
+use crate::PoiesisError;
 
-type Cmd<T> = Result<T, NexusError>;
+type Cmd<T> = Result<T, PoiesisError>;
 
-fn err<E: std::fmt::Display>(e: E) -> NexusError {
-    NexusError::Message(e.to_string())
+fn err<E: std::fmt::Display>(e: E) -> PoiesisError {
+    PoiesisError::Message(e.to_string())
 }
 
 #[tauri::command]
@@ -50,8 +50,29 @@ pub fn rename_conversation_cmd(db: State<'_, Db>, id: String, title: String) -> 
 }
 
 #[tauri::command]
-pub fn delete_conversation_cmd(db: State<'_, Db>, id: String) -> Cmd<()> {
-    db.delete_conversation(&id).map_err(err)
+pub fn delete_conversation_cmd(mgr: State<'_, RuntimeManager>, db: State<'_, Db>, id: String) -> Cmd<()> {
+    // Collect generated media before the cascade removes the rows that would
+    // otherwise be the only record these files ever existed (`FIX-2`).
+    let media_dir = mgr.generated_media_dir();
+    let candidates: Vec<String> = db
+        .list_artifacts(&id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| matches!(a.kind.as_str(), "image" | "video"))
+        .filter(|a| std::path::Path::new(&a.content).starts_with(&media_dir))
+        .map(|a| a.content)
+        .collect();
+
+    db.delete_conversation(&id).map_err(err)?;
+
+    for path in candidates {
+        let still_referenced = db.is_known_attachment(&path).unwrap_or(true)
+            || db.is_known_artifact_content(&path).unwrap_or(true);
+        if !still_referenced {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -91,8 +112,9 @@ pub fn finalize_message_cmd(
     id: String,
     content: String,
     steps_json: Option<String>,
+    context_json: Option<String>,
 ) -> Cmd<()> {
-    db.finalize_message(&id, &content, steps_json.as_deref())
+    db.finalize_message(&id, &content, steps_json.as_deref(), context_json.as_deref())
         .map_err(err)
 }
 
@@ -175,10 +197,10 @@ pub async fn compact_conversation_cmd(
 ) -> Cmd<String> {
     let target = target.unwrap_or_default();
     let endpoint = if target.provenance.as_deref() == Some("cloud") {
-        build_cloud_endpoint(&target).map_err(NexusError::Message)?
+        build_cloud_endpoint(&target).map_err(PoiesisError::Message)?
     } else {
         let Some((base_url, token)) = mgr.engine_endpoint().await else {
-            return Err(NexusError::Message(
+            return Err(PoiesisError::Message(
                 "No model is loaded, so older turns can't be summarized.".into(),
             ));
         };
@@ -194,11 +216,11 @@ pub async fn compact_conversation_cmd(
         .map_err(err)?
         .into_iter()
         .find(|c| c.id == conversation_id)
-        .ok_or_else(|| NexusError::Message("That conversation no longer exists.".into()))?;
+        .ok_or_else(|| PoiesisError::Message("That conversation no longer exists.".into()))?;
 
     let messages = db.list_messages_until(&conversation_id, &upto_message_id).map_err(err)?;
     if messages.is_empty() {
-        return Err(NexusError::Message("Nothing to summarize yet.".into()));
+        return Err(PoiesisError::Message("Nothing to summarize yet.".into()));
     }
 
     let transcript = messages
@@ -241,12 +263,12 @@ pub async fn compact_conversation_cmd(
     let summary = match outcome {
         TurnOutcome::Final { content } => content.trim().to_string(),
         TurnOutcome::ToolCalls(_) => {
-            return Err(NexusError::Message("The model tried to use a tool while summarizing.".into()))
+            return Err(PoiesisError::Message("The model tried to use a tool while summarizing.".into()))
         }
-        TurnOutcome::Cancelled => return Err(NexusError::Message("Summarizing was cancelled.".into())),
+        TurnOutcome::Cancelled => return Err(PoiesisError::Message("Summarizing was cancelled.".into())),
     };
     if summary.is_empty() {
-        return Err(NexusError::Message("The model returned an empty summary.".into()));
+        return Err(PoiesisError::Message("The model returned an empty summary.".into()));
     }
 
     db.set_conversation_summary(&conversation_id, &summary, &upto_message_id)

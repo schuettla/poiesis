@@ -143,6 +143,45 @@
   color: var(--danger);
 }
 
+/* ---- folder index status (IDX-UI-1/2/3) ---- */
+
+.wb-index-row {
+  margin: 0 0 8px 22px;
+  justify-content: space-between;
+}
+.wb-index-status {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* SMP-4c: the one-time "what reading is for" line, beneath the reading state. */
+.wb-index-explain {
+  margin: -3px 0 8px 22px;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+.wb-index-skipped {
+  margin: -3px 0 8px 22px;
+}
+.wb-index-skipped-list {
+  margin: 4px 0 0;
+  padding: 0 0 0 14px;
+  list-style: disc;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ink-muted);
+}
+.wb-index-skipped-path {
+  font-family: var(--font-mono);
+  color: var(--ink);
+}
+
 /* ---- trust selector: the per-session access level ---- */
 
 .wb-trust {
@@ -242,6 +281,59 @@
   color: var(--danger) !important;
 }
 
+/* A right-click menu (Tree.tsx's directory rows) rather than one anchored to
+   a toggle button — `.wb-menu`'s look, positioned at the pointer instead. */
+.wb-context-menu {
+  position: fixed;
+}
+
+/* ---- duplicate scan (Perception, PHS-UI-1) ---- */
+.wb-duplicates {
+  padding-bottom: 8px;
+}
+.wb-dup-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 6px 0 0;
+  padding: 0 12px;
+  list-style: none;
+}
+.wb-dup-group {
+  padding: 8px 10px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+}
+.wb-dup-relation {
+  margin: 0 0 6px;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.wb-dup-files {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.wb-dup-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wb-dup-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
 .wb-icon {
   display: flex;
   align-items: center;
@@ -263,6 +355,78 @@
 
 /* Files takes the free height; Artifacts sizes to its content so it never
    crowds out the tree, but can still scroll when there are many. */
+/* ---- the three places: Made / Files / Browser ----
+   Tabs rather than a stack, because each of these wants the column's full
+   height. Underline-only selection, no pills or fills — the panel is quiet
+   furniture and the tab row must not out-shout the content under it. */
+.wb-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--paper-edge-2);
+  flex-shrink: 0;
+}
+.wb-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 7px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+}
+.wb-tab:hover {
+  color: var(--ink-muted);
+}
+.wb-tab.active {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+.wb-tab-count {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  color: var(--ink-faint);
+}
+/* A live page is a state, not a quantity — one dot, ink-toned, and it stops
+   moving for anyone who asked motion to stop. */
+.wb-tab-live {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink-muted);
+  animation: wb-tab-breathe 2.6s ease-in-out infinite;
+}
+@keyframes wb-tab-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wb-tab-live {
+    animation: none;
+    opacity: 0.9;
+  }
+}
+
+.wb-tabpanel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .wb-section-block {
   display: flex;
   flex-direction: column;
@@ -273,8 +437,6 @@
 }
 .wb-artifacts-block {
   flex: 0 1 auto;
-  border-top: 1px solid var(--paper-edge-2);
-  max-height: 40%;
 }
 .wb-artifacts {
   overflow-y: auto;
@@ -667,5 +829,105 @@
 .wb-change-undone {
   flex-shrink: 0;
   font-size: 11px;
+  color: var(--ink-faint);
+}
+
+/* "Schedule this" (SCH): turning the open chat into a recurring task. A quiet
+   full-width action, not a primary button — it's an offer, not the thing you
+   came to this panel to do. */
+.wb-schedule {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--paper-edge-2);
+  padding: 9px 14px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  text-align: left;
+}
+.wb-schedule:hover {
+  background: var(--paper-edge);
+  color: var(--ink);
+}
+.wb-schedule-glyph {
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* `BRW-UI-1`: the browser as a felt presence — a live page, a screenshot,
+   a plain action trail. */
+.wb-browser {
+  border-bottom: 1px solid var(--paper-edge-2);
+  padding-bottom: 10px;
+}
+.wb-browser-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.wb-browser-glyph {
+  color: var(--ink-faint);
+}
+.wb-browser-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-browser-stop {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: var(--radius);
+}
+.wb-browser-stop:hover {
+  color: var(--ink);
+  background: var(--paper-edge);
+}
+.wb-browser-page-title {
+  margin: 2px 14px 0;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.wb-browser-shot {
+  display: block;
+  width: calc(100% - 28px);
+  margin: 8px 14px 0;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: zoom-in;
+}
+.wb-browser-shot img {
+  display: block;
+  width: 100%;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--paper-edge-2);
+  max-height: 140px;
+  object-fit: cover;
+  object-position: top;
+}
+.wb-browser-shot.expanded {
+  cursor: zoom-out;
+}
+.wb-browser-shot.expanded img {
+  max-height: none;
+  object-fit: contain;
+}
+.wb-browser-trail {
+  margin: 8px 14px 0;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
   color: var(--ink-faint);
 }

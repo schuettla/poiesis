@@ -1,10 +1,20 @@
 import { useEffect, useState } from "react";
 import * as api from "../../lib/api";
-import { useAppStore } from "../../lib/store";
+import { cloudTarget, useAppStore, useExpert } from "../../lib/store";
 import "./Memory.css";
 
 /** How long the undo strip stays after a delete. */
 const UNDO_MS = 5000;
+
+/** SEM-UI-4: a quiet relative date, not a ranking — "a date is enough to see
+ * what is alive and what has gone quiet." */
+function ago(ts: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
 
 /**
  * The durable self, laid open (MEM-UI-1). Everything the agent remembers is
@@ -21,20 +31,56 @@ export default function MemoryPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  // PRO-UI: the untitled synthesis at the top of the page (SMP-5).
+  const [profile, setProfile] = useState<api.Profile | null>(null);
+  const [profileEditing, setProfileEditing] = useState(false);
+  const [profileDraft, setProfileDraft] = useState("");
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileError, setProfileError] = useState("");
+
   const refreshMemoryContext = useAppStore((s) => s.refreshMemoryContext);
   const refreshChangeProposals = useAppStore((s) => s.refreshChangeProposals);
   const setActiveConversation = useAppStore((s) => s.setActiveConversation);
   const setView = useAppStore((s) => s.setView);
+  const noteGlobalFactChange = useAppStore((s) => s.noteGlobalFactChange);
+  const expert = useExpert();
 
   async function refresh() {
     try {
       setFacts(await api.listMemoryFacts());
       setPending(await api.getPendingConsolidation());
+      setProfile(await api.getProfile());
     } catch {
       /* memory folder unreadable */
     }
     refreshMemoryContext();
     refreshChangeProposals();
+  }
+
+  /** PRO-UI-2: "Rewrite this" / "Let me rewrite it" — ignores the volume gate,
+   * since the user asked directly. */
+  async function rewriteProfile() {
+    setProfileBusy(true);
+    setProfileError("");
+    try {
+      setProfile(await api.rebuildProfile(true));
+      await refreshMemoryContext();
+    } catch (e) {
+      setProfileError(String(e));
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  function startProfileEdit() {
+    setProfileDraft(profile?.body ?? "");
+    setProfileEditing(true);
+  }
+
+  async function saveProfileEdit() {
+    setProfile(await api.editProfile(profileDraft));
+    setProfileEditing(false);
+    await refreshMemoryContext();
   }
 
   useEffect(() => {
@@ -53,12 +99,23 @@ export default function MemoryPanel() {
     await api.updateMemoryFact(name, draft);
     setEditing(null);
     await refresh();
+    noteGlobalFactChange();
+  }
+
+  /** SCP-UI-1: the user is the final authority on their own standing
+   * instructions, classifier or not. */
+  async function setScope(name: string, scope: "global" | "topical") {
+    await api.setFactScope(name, scope);
+    await refresh();
+    // PRO-4: which facts count as global just changed.
+    noteGlobalFactChange();
   }
 
   async function remove(name: string) {
     const file = await api.forgetMemoryFact(name);
     setUndo({ name, file });
     await refresh();
+    noteGlobalFactChange();
   }
 
   async function restore() {
@@ -72,7 +129,9 @@ export default function MemoryPanel() {
     setBusy(true);
     setError("");
     try {
-      setPending(await api.consolidateMemory());
+      // Proposing a tidy-up is a real model call, routed like any other — a
+      // cloud-only setup has no local engine to fall back to.
+      setPending(await api.consolidateMemory(cloudTarget()));
       refreshChangeProposals();
     } catch (e) {
       setError(String(e));
@@ -82,7 +141,9 @@ export default function MemoryPanel() {
   }
 
   async function resolveConsolidation(accept: boolean) {
-    await api.applyConsolidation(accept);
+    // Applying runs `GLD-2`'s before/after check, which routes to the model
+    // in play the same way a chat turn does.
+    await api.applyConsolidation(accept, cloudTarget());
     setPending(null);
     await refresh();
   }
@@ -178,6 +239,59 @@ export default function MemoryPanel() {
         </div>
       )}
 
+      {/* PRO-UI-1/SMP-5: untitled prose — never a tab, never a labelled card.
+          "About you" is a WHY-2 exception, not a name that belongs here. */}
+      <div className={`memory-about-you ${profileBusy ? "busy" : ""}`}>
+        {profileEditing ? (
+          <>
+            <textarea
+              className="system-prompt"
+              rows={3}
+              value={profileDraft}
+              onChange={(e) => setProfileDraft(e.target.value)}
+            />
+            <div className="setting-actions">
+              <button className="btn-primary" onClick={saveProfileEdit}>
+                Save
+              </button>
+              <button className="btn-text" onClick={() => setProfileEditing(false)}>
+                Cancel
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            {profile ? (
+              <>
+                <p className="memory-about-you-text">{profile.body}</p>
+                {profile.edited && <p className="memory-about-you-meta">you wrote this</p>}
+                {!profile.edited && (
+                  <p className="memory-about-you-meta">
+                    drawn from {profile.source_count} {profile.source_count === 1 ? "thing" : "things"} you've
+                    told me
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="memory-about-you-text memory-about-you-empty">
+                I haven't formed a picture of this yet.
+              </p>
+            )}
+            <div className="memory-about-you-actions">
+              <button className="btn-text" onClick={rewriteProfile} disabled={profileBusy}>
+                {profileBusy ? "Rewriting…" : profile?.edited ? "Let me rewrite it" : "Rewrite this"}
+              </button>
+              {profile && !profileBusy && (
+                <button className="btn-text" onClick={startProfileEdit}>
+                  Edit
+                </button>
+              )}
+            </div>
+            {profileError && <p className="memory-error">{profileError}</p>}
+          </>
+        )}
+      </div>
+
       {facts.length > 0 && (
         <input
           className="field-input memory-search"
@@ -203,6 +317,31 @@ export default function MemoryPanel() {
             <span className="memory-created">{f.created}</span>
           </div>
           <p className="memory-desc">{f.description}</p>
+          {expert ? (
+            <div className="memory-scope" role="group" aria-label={`when "${f.name}" applies`}>
+              <button
+                className={`memory-scope-segment ${f.scope !== "topical" ? "active" : ""}`}
+                aria-pressed={f.scope !== "topical"}
+                onClick={() => setScope(f.name, "global")}
+              >
+                Always
+              </button>
+              <button
+                className={`memory-scope-segment ${f.scope === "topical" ? "active" : ""}`}
+                aria-pressed={f.scope === "topical"}
+                onClick={() => setScope(f.name, "topical")}
+              >
+                When relevant
+              </button>
+            </div>
+          ) : (
+            <p className="memory-scope-plain">
+              {f.scope === "topical" ? "only when it's relevant" : "applies to every answer"}
+            </p>
+          )}
+          {f.last_used_at ? (
+            <p className="memory-last-used">last surfaced {ago(f.last_used_at)}</p>
+          ) : null}
           {editing === f.name ? (
             <>
               <textarea

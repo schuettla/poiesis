@@ -1,4 +1,4 @@
-//! Built-in Recall skill (RCL-2): the agent can search its own past — this
+//! Built-in Recall toolset (RCL-2): the agent can search its own past — this
 //! device's conversations and its durable memory — instead of pretending a
 //! reference to "what we decided last time" is unrecoverable.
 //!
@@ -6,7 +6,7 @@
 //! file. Every search is logged in the visible activity list, and every result
 //! is emitted with provenance so the user can click back to the source.
 
-use super::skills::SkillContext;
+use super::toolsets::ToolContext;
 use super::AgentEvent;
 
 /// Default and hard-cap on results, so a broad query can't flood the context.
@@ -110,7 +110,7 @@ fn as_date(ms: i64) -> String {
 }
 
 pub async fn execute(
-    ctx: &SkillContext<'_>,
+    ctx: &ToolContext<'_>,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {
@@ -121,7 +121,7 @@ pub async fn execute(
     }
 }
 
-fn search_history(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<String, String> {
+fn search_history(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
     let query = args
         .get("query")
         .and_then(|q| q.as_str())
@@ -167,7 +167,7 @@ fn search_history(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<St
     Ok(truncate(out, SEARCH_OUTPUT_CAP))
 }
 
-fn read_conversation(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<String, String> {
+fn read_conversation(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
     let id = args
         .get("conversation_id")
         .and_then(|v| v.as_str())

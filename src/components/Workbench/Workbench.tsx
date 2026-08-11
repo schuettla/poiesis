@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useActiveConversation, useAppStore } from "../../lib/store";
+import BrowserPanel from "./BrowserPanel";
 import FolderHeader from "./FolderHeader";
 import Tree from "./Tree";
 import Artifacts from "./Artifacts";
+import Duplicates from "./Duplicates";
 import RecentChanges from "./RecentChanges";
 import { ArtifactView, FileView } from "./Viewer";
 import { downloadArtifact } from "./artifactFiles";
@@ -53,14 +55,55 @@ function DockResizer() {
   );
 }
 
+/** The Workbench's three places, each a whole thing rather than a slice of a
+ * scroll: what the agent made, the folder on disk, and the live page. */
+type Tab = "artifacts" | "files" | "browser";
+
+/**
+ * Move the panel to whichever tab the agent just did something in.
+ *
+ * Only *transitions* switch the tab — browsing starting, an artifact count
+ * going up — never the mere fact that a session or an artifact exists. A
+ * steady state must not keep yanking the panel back while the user is reading
+ * a different tab. Switching conversations re-arms both, since the new chat's
+ * state isn't a transition the user watched happen.
+ */
+function useFollowTheAgent({
+  convId,
+  browsing,
+  artifactCount,
+  setTab,
+}: {
+  convId: string | null;
+  browsing: boolean;
+  artifactCount: number;
+  setTab: (t: Tab) => void;
+}) {
+  const prev = useRef({ convId, browsing, artifactCount });
+
+  useEffect(() => {
+    const was = prev.current;
+    prev.current = { convId, browsing, artifactCount };
+    // A different chat: adopt its state as the baseline rather than reading
+    // the difference between two unrelated conversations as activity.
+    if (was.convId !== convId) return;
+    if (browsing && !was.browsing) setTab("browser");
+    else if (artifactCount > was.artifactCount) setTab("artifacts");
+  }, [convId, browsing, artifactCount, setTab]);
+}
+
 /**
  * The Workbench: the agent's side of the desk.
  *
- * Two stacked sections, plainly separate. **Files** is the folder on disk.
- * **Artifacts** is what the agent made in this chat — not on disk until you
- * save one, which writes it into the folder and moves it up into the tree.
- * Selecting either opens it in the viewer, which takes over the panel rather
- * than squeezing the lists into a sliver.
+ * **One tab at a time, not a stack.** Artifacts, the folder and the browser
+ * each want the full height of a ~340px column; stacked, every one of them was
+ * a sliver and the interesting one was usually scrolled off. Tabs also give
+ * the panel somewhere to *point*: when the agent starts browsing or makes
+ * something, `useFollowTheAgent` moves to that tab, so the panel tracks what's
+ * happening instead of waiting to be searched.
+ *
+ * Selecting a file or artifact opens the viewer, which takes over the whole
+ * panel — the same reason the tabs exist.
  */
 export default function Workbench() {
   const conversation = useActiveConversation();
@@ -70,25 +113,63 @@ export default function Workbench() {
   const setViewerExpanded = useAppStore((s) => s.setViewerExpanded);
   const revealInSystem = useAppStore((s) => s.revealInSystem);
   const refreshTree = useAppStore((s) => s.refreshTree);
+  const scheduleConversation = useAppStore((s) => s.scheduleConversation);
   const refreshTrash = useAppStore((s) => s.refreshTrash);
   const artifactsMap = useAppStore((s) => s.artifacts);
   const convId = conversation?.id ?? null;
   const folder = conversation?.folderPath ?? null;
 
   const [filter, setFilter] = useState("");
-  const [artifactsOpen, setArtifactsOpen] = useState(true);
+  const browserSession = useAppStore((s) => (convId ? s.browserSessions[convId] : undefined));
+  const refreshBrowserSession = useAppStore((s) => s.refreshBrowserSession);
 
   // Saved artifacts have become files — they belong in the tree, not here.
   const artifacts = useMemo(
     () => (convId ? (artifactsMap[convId] ?? []).filter((a) => !a.saved_path) : []),
     [artifactsMap, convId]
   );
+  // Media artifacts are the deliberate exception to `useFollowTheAgent`
+  // (`ART-2`): they're already visible inline in the stream, so a new one
+  // appearing shouldn't yank the panel to this tab the way any other artifact
+  // does. Still counted in the tab label — just not a "come look" transition.
+  const nonMediaArtifactCount = useMemo(
+    () => artifacts.filter((a) => a.kind !== "image" && a.kind !== "video").length,
+    [artifacts]
+  );
+
+  const browsing = !!browserSession && !browserSession.closed;
+  const tabs: { id: Tab; label: string; count?: number; live?: boolean }[] = [
+    { id: "artifacts", label: "Artifacts", count: artifacts.length },
+    ...(folder ? [{ id: "files" as Tab, label: "Files" }] : []),
+    ...(browserSession ? [{ id: "browser" as Tab, label: "Browser", live: browsing }] : []),
+  ];
+
+  // Default to whichever place actually has something in it, so a fresh chat
+  // with a folder opens on Files rather than an empty Artifacts.
+  const [tab, setTab] = useState<Tab>(() =>
+    artifacts.length > 0 ? "artifacts" : folder ? "files" : "artifacts"
+  );
+
+  // A tab can disappear (the folder is detached, the browser panel dismissed).
+  // Landing on a tab that no longer exists would blank the panel.
+  const available = tabs.map((t) => t.id);
+  const activeTab: Tab = available.includes(tab) ? tab : (available[0] ?? "artifacts");
+
+  useFollowTheAgent({ convId, browsing, artifactCount: nonMediaArtifactCount, setTab });
   const activeArtifact =
     selected?.kind === "artifact" ? artifacts.find((a) => a.id === selected.id) : undefined;
 
   useEffect(() => {
     refreshTrash().catch(() => {});
   }, [convId, refreshTrash]);
+
+  // Asked for here rather than inside `BrowserPanel`, which only mounts once
+  // the Browser tab exists — and the tab only exists once this has answered.
+  // Left in the panel it was a deadlock: a re-opened chat never got its
+  // session back because nothing was mounted to ask for it.
+  useEffect(() => {
+    if (convId) refreshBrowserSession(convId);
+  }, [convId, refreshBrowserSession]);
 
   useEffect(() => {
     if (!viewerExpanded) return;
@@ -200,65 +281,101 @@ export default function Workbench() {
           <>
             <FolderHeader />
 
-            {/* What the agent just made sits at the top, where you look first —
-                it's the newest thing in the panel and the thing you asked for.
-                The folder is the standing context underneath it. */}
-            {artifacts.length > 0 && (
-              <section className={`wb-section-block wb-artifacts-block ${artifactsOpen ? "open" : ""}`}>
-                <button
-                  className="wb-section wb-section-toggle"
-                  aria-expanded={artifactsOpen}
-                  onClick={() => setArtifactsOpen((o) => !o)}
-                >
-                  <span className="wb-row-caret" aria-hidden="true">
-                    {artifactsOpen ? "▾" : "▸"}
-                  </span>
-                  Made in this chat
-                  <span className="wb-section-count">{artifacts.length}</span>
-                </button>
-                {artifactsOpen && <Artifacts artifacts={artifacts} canSave={!!folder} />}
-              </section>
+            {/* Turn this chat into something I do on a schedule. It sits here
+                because this panel is already "everything about this chat" —
+                and because the moment you want a task is usually just after
+                you've had the agent do the thing once, by hand. */}
+            {convId && (
+              <button
+                className="wb-schedule"
+                onClick={() => scheduleConversation(convId)}
+                title="Do this again on a schedule"
+              >
+                <span className="wb-schedule-glyph" aria-hidden="true">
+                  ◷
+                </span>
+                Schedule this
+              </button>
             )}
 
-            {folder && (
-              <section className="wb-section-block wb-files">
-                <div className="wb-section">
-                  Files
+            {tabs.length > 1 && (
+              <div className="wb-tabs" role="tablist" aria-label="Workbench sections">
+                {tabs.map((t) => (
                   <button
-                    className="wb-icon wb-section-action"
-                    title="Refresh"
-                    aria-label="Refresh the file list"
-                    onClick={() => refreshTree()}
+                    key={t.id}
+                    role="tab"
+                    id={`wb-tab-${t.id}`}
+                    aria-selected={activeTab === t.id}
+                    aria-controls={`wb-panel-${t.id}`}
+                    className={`wb-tab ${activeTab === t.id ? "active" : ""}`}
+                    onClick={() => setTab(t.id)}
                   >
-                    <svg width="13" height="13" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                      <path
-                        d="M16 10a6 6 0 1 1-1.8-4.3M16 3v3h-3"
-                        stroke="currentColor"
-                        strokeWidth="1.3"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
+                    {t.label}
+                    {/* A live browser reads as a state, not a quantity — the
+                        one dot the panel is allowed, per "no badges, counts
+                        and words instead of gauges". */}
+                    {t.live && <span className="wb-tab-live" aria-label="live" />}
+                    {!!t.count && <span className="wb-tab-count">{t.count}</span>}
                   </button>
-                </div>
-                <div className="wb-filter-wrap">
-                  <input
-                    className="wb-filter"
-                    placeholder="Filter files"
-                    value={filter}
-                    onChange={(e) => setFilter(e.target.value)}
-                    aria-label="Filter files"
-                  />
-                </div>
-                <Tree filter={filter} />
-              </section>
+                ))}
+              </div>
             )}
 
-            {!folder && artifacts.length === 0 && (
-              <p className="wb-hint">Artifacts the agent makes will show up here.</p>
-            )}
+            <div
+              className="wb-tabpanel"
+              role="tabpanel"
+              id={`wb-panel-${activeTab}`}
+              aria-labelledby={`wb-tab-${activeTab}`}
+            >
+              {activeTab === "browser" && convId && <BrowserPanel conversationId={convId} />}
 
-            <RecentChanges />
+              {activeTab === "artifacts" &&
+                (artifacts.length > 0 ? (
+                  <section className="wb-section-block wb-artifacts-block open">
+                    <Artifacts artifacts={artifacts} canSave={!!folder} />
+                  </section>
+                ) : (
+                  <p className="wb-hint">Artifacts the agent makes will show up here.</p>
+                ))}
+
+              {activeTab === "files" && folder && (
+                <section className="wb-section-block wb-files">
+                  <div className="wb-section">
+                    Files
+                    <button
+                      className="wb-icon wb-section-action"
+                      title="Refresh"
+                      aria-label="Refresh the file list"
+                      onClick={() => refreshTree()}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                        <path
+                          d="M16 10a6 6 0 1 1-1.8-4.3M16 3v3h-3"
+                          stroke="currentColor"
+                          strokeWidth="1.3"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="wb-filter-wrap">
+                    <input
+                      className="wb-filter"
+                      placeholder="Filter files"
+                      value={filter}
+                      onChange={(e) => setFilter(e.target.value)}
+                      aria-label="Filter files"
+                    />
+                  </div>
+                  <Tree filter={filter} />
+                  {/* Both are about the folder, so they belong with it rather
+                      than under every tab as they were when this was a stack. */}
+                  <Duplicates />
+                  <RecentChanges />
+                </section>
+              )}
+            </div>
           </>
         )}
       </aside>

@@ -35,7 +35,7 @@ pub struct RuntimeManager {
 impl RuntimeManager {
     pub fn new(base_dir: PathBuf) -> Self {
         let client = reqwest::Client::builder()
-            .user_agent(concat!("ProjectNexus/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("ProjectPoiesis/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("failed to build HTTP client");
         Self {
@@ -57,10 +57,27 @@ impl RuntimeManager {
     pub fn models_dir(&self) -> PathBuf {
         self.base_dir.join("models")
     }
-    /// Where the Image Generation skill writes generated PNGs (CHT / 9F). Kept
-    /// under app-data so artifacts survive across restarts.
-    pub fn generated_images_dir(&self) -> PathBuf {
+    /// Where generated media (images, and video from Phase 13 on) is written.
+    /// Kept under app-data so artifacts survive across restarts.
+    ///
+    /// **The on-disk name stays `generated-images` deliberately.** This is also
+    /// the agent's `data_dir`, and it is the parent of `trash/` (undo blobs),
+    /// `browser-profiles/` and `browser-screenshots/`. Renaming the directory
+    /// when the accessor was renamed would have pointed every pruner at a fresh
+    /// empty folder — leaking the old blobs and profiles forever — and logged
+    /// users out of every site they'd stayed signed in to. A directory name
+    /// nobody sees is not worth a migration.
+    pub fn generated_media_dir(&self) -> PathBuf {
         self.base_dir.join("generated-images")
+    }
+    /// App-data root, for subsystems (Agent Skills, `SKL-1`) that need it
+    /// directly rather than through a dedicated accessor.
+    pub fn app_data_dir(&self) -> &Path {
+        &self.base_dir
+    }
+    /// Where installed/agent-authored Agent Skills live (`SKL-1`/`SKL-4`).
+    pub fn skills_dir(&self) -> PathBuf {
+        self.base_dir.join("skills")
     }
 
     pub async fn status(&self) -> EngineStatus {

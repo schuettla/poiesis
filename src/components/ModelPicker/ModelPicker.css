@@ -23,6 +23,44 @@
   font-size: 10px;
   margin-left: 2px;
 }
+.model-picker-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- compact variant: the picker's home under the composer ---- */
+.model-picker.compact .model-picker-trigger {
+  gap: 6px;
+  padding: 3px 7px 3px 6px;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  border-color: transparent;
+  max-width: 210px;
+}
+.model-picker.compact .model-picker-trigger:hover,
+.model-picker.compact .model-picker-trigger[aria-expanded="true"] {
+  border-color: var(--paper-edge-2);
+  color: var(--ink);
+}
+.model-picker.compact .provenance-dot {
+  width: 6px;
+  height: 6px;
+}
+.model-picker.compact .caret {
+  font-size: 9px;
+}
+.model-picker.compact .model-dropdown {
+  width: 300px;
+}
+
+/* ---- drop-up: opens above the trigger ---- */
+.model-picker.up .model-dropdown {
+  top: auto;
+  bottom: calc(100% + 6px);
+  max-height: 60vh;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.12);
+}
 
 .provenance-dot {
   width: 7px;
@@ -105,6 +143,11 @@
 .model-option .meta {
   font-size: 11px;
   color: var(--ink-faint);
+}
+.model-option .price {
+  font-size: 11px;
+  color: var(--ink-faint);
+  flex-shrink: 0;
 }
 .model-option.selected {
   background: var(--paper-edge);

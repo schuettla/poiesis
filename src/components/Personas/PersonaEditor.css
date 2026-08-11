@@ -62,6 +62,45 @@
   overflow-wrap: anywhere;
 }
 
+/* ---- role-shaped starting points, not a blank textarea ---- */
+.persona-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--paper-edge);
+}
+.persona-presets-label {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.persona-presets-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.persona-preset-chip {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--ink-muted);
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.persona-preset-chip:hover {
+  background: var(--paper-edge);
+  color: var(--ink);
+}
+.persona-preset-chip:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.persona-preset-chip:disabled:hover {
+  background: none;
+}
+
 .persona-row {
   display: flex;
   align-items: flex-start;
@@ -143,4 +182,35 @@
 .persona-field.narrow {
   flex: 0 0 160px;
   min-width: 140px;
+}
+
+/* ---- per-persona tool allowlist (PER-UI-1, expert-only) ---- */
+.persona-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.persona-tools-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.persona-tools-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.persona-tools-row.disabled {
+  color: var(--ink-faint);
+  cursor: default;
+}
+.persona-tools-note {
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-style: italic;
 }

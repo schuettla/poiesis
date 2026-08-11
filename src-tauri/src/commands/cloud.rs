@@ -5,12 +5,12 @@ use tauri::State;
 
 use crate::cloud::{self, CloudModel, Provider, ProviderInfo};
 use crate::runtime::RuntimeManager;
-use crate::NexusError;
+use crate::PoiesisError;
 
-type Cmd<T> = Result<T, NexusError>;
+type Cmd<T> = Result<T, PoiesisError>;
 
 fn parse_provider(id: &str) -> Cmd<Provider> {
-    Provider::from_id(id).ok_or_else(|| NexusError::Message(format!("Unknown provider '{id}'.")))
+    Provider::from_id(id).ok_or_else(|| PoiesisError::Message(format!("Unknown provider '{id}'.")))
 }
 
 /// Providers and whether a key is stored for each (CLD-2, §5.4.5).
@@ -25,16 +25,16 @@ pub fn set_provider_key_cmd(provider: String, key: String) -> Cmd<()> {
     let provider = parse_provider(&provider)?;
     let key = key.trim();
     if key.is_empty() {
-        return Err(NexusError::Message("The key can't be empty.".into()));
+        return Err(PoiesisError::Message("The key can't be empty.".into()));
     }
-    cloud::set_key(provider, key).map_err(|e| NexusError::Message(e.to_string()))
+    cloud::set_key(provider, key).map_err(|e| PoiesisError::Message(e.to_string()))
 }
 
 /// Remove a stored provider key.
 #[tauri::command]
 pub fn clear_provider_key_cmd(provider: String) -> Cmd<()> {
     let provider = parse_provider(&provider)?;
-    cloud::clear_key(provider).map_err(|e| NexusError::Message(e.to_string()))
+    cloud::clear_key(provider).map_err(|e| PoiesisError::Message(e.to_string()))
 }
 
 /// Discover models across every provider that has a key (CLD-3, CLD-4).

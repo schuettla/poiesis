@@ -9,6 +9,7 @@ import {
 } from "../lib/api";
 import { useAppStore } from "../lib/store";
 import ImageEngine from "../components/ImageModels/ImageEngine";
+import EmbedEngine from "../components/EmbedEngine/EmbedEngine";
 import "./Surface.css";
 import "./Models.css";
 import "./Engine.css";
@@ -23,11 +24,15 @@ function basename(path: string | null): string {
 }
 
 export default function Engine() {
-  const [tab, setTab] = useState<"language" | "image">("language");
+  const [tab, setTab] = useState<"language" | "image" | "recall">("language");
   const [ov, setOv] = useState<RuntimeOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  // SMP-1c: the recall engine's internals are expert-only. Simple mode still
+  // gets recall itself (SMP-2 asks inline, the first time it's needed) — this
+  // only hides the install/model-picker card, not the capability.
+  const expert = useAppStore((s) => s.expert);
 
   const libraryModels = useAppStore((s) => s.libraryModels);
   const loadModelById = useAppStore((s) => s.loadModelById);
@@ -48,6 +53,10 @@ export default function Engine() {
   useEffect(() => {
     refresh();
   }, [refresh, engineReady, loadingModel]);
+
+  useEffect(() => {
+    if (tab === "recall" && !expert) setTab("language");
+  }, [tab, expert]);
 
   const defaultModelId = () =>
     libraryModels.find((m) => m.is_default)?.id ?? libraryModels[0]?.id;
@@ -121,8 +130,8 @@ export default function Engine() {
         <h1>Engine</h1>
         <p className="lede">
           Poiesis Agent runs open models on your PC with local engines that download automatically and are
-          matched to your hardware — the <strong>llama.cpp</strong> engine for chat, and the{" "}
-          <strong>stable-diffusion.cpp</strong> engine for images.
+          matched to your hardware — the <strong>llama.cpp</strong> engine for chat and recall, and
+          the <strong>stable-diffusion.cpp</strong> engine for images.
         </p>
 
         <div className="model-tabs" role="tablist" aria-label="Engine type">
@@ -142,9 +151,20 @@ export default function Engine() {
           >
             Image
           </button>
+          {expert && (
+            <button
+              className={`model-tab ${tab === "recall" ? "on" : ""}`}
+              role="tab"
+              aria-selected={tab === "recall"}
+              onClick={() => setTab("recall")}
+            >
+              Recall
+            </button>
+          )}
         </div>
 
         {tab === "image" && <ImageEngine />}
+        {tab === "recall" && expert && <EmbedEngine />}
 
         {tab === "language" && (
           <>

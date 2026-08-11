@@ -1,14 +1,14 @@
-//! Built-in Artifacts skill (CHT-6). The model calls `create_artifact` to emit a
+//! Built-in Artifacts toolset (CHT-6). The model calls `create_artifact` to emit a
 //! titled, self-contained piece of content — HTML, SVG, markdown, or code — which
-//! Nexus persists and renders in the Canvas side panel (HTML/SVG in a sandboxed
+//! Poiesis persists and renders in the Canvas side panel (HTML/SVG in a sandboxed
 //! iframe). The tool result fed back to the model is only a short confirmation, so
 //! a large artifact doesn't bloat the context window.
 
-use super::skills::SkillContext;
+use super::toolsets::ToolContext;
 
 const KINDS: [&str; 4] = ["html", "svg", "markdown", "code"];
 
-/// The OpenAI tool schema advertised to the model for this skill.
+/// The OpenAI tool schema advertised to the model for this toolset.
 pub fn tool_specs() -> serde_json::Value {
     serde_json::json!([
         {
@@ -50,7 +50,7 @@ pub fn describe(name: &str, args: &serde_json::Value) -> (String, String) {
 
 /// Persist the artifact, emit it to the Canvas panel, and return a short receipt.
 pub async fn execute(
-    ctx: &SkillContext<'_>,
+    ctx: &ToolContext<'_>,
     _name: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {

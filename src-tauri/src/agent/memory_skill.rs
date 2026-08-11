@@ -7,7 +7,7 @@
 //! everywhere; it can only ever propose. Nothing here applies a soul change,
 //! by construction — that requires the user saying yes.
 
-use super::skills::SkillContext;
+use super::toolsets::ToolContext;
 use super::AgentEvent;
 use crate::autonomy::{autonomy_gate, Rung};
 use crate::memory::{Fact, FACTS};
@@ -26,7 +26,8 @@ pub fn tool_specs() -> serde_json::Value {
                         "name": { "type": "string", "description": "short-kebab-case-slug" },
                         "description": { "type": "string", "description": "one line for the index" },
                         "type": { "type": "string", "enum": ["preference", "fact", "decision", "project"] },
-                        "text": { "type": "string", "description": "the fact body, under 1500 chars" }
+                        "text": { "type": "string", "description": "the fact body, under 1500 chars" },
+                        "expires_in_days": { "type": "integer", "description": "optional, op:save only: forget this fact automatically after N days, for something you know is transient" }
                     },
                     "required": ["op"]
                 }
@@ -70,6 +71,27 @@ pub fn describe(name: &str, args: &serde_json::Value) -> (String, String) {
     }
 }
 
+/// `TTL-1`: does this read like something that stops being true soon? A crude
+/// phrase/pattern scan, not a classifier — false positives just mean a fact
+/// gets a 14-day TTL it didn't strictly need, which is recoverable; false
+/// negatives just mean the old always-durable behavior, which is safe too.
+fn looks_transient(body: &str) -> bool {
+    let lower = body.to_lowercase();
+    const MARKERS: &[&str] = &[
+        "currently", "right now", "today", "this week", "latest", "at the moment", "for now",
+        "is down", "is failing", "is broken",
+    ];
+    if MARKERS.iter().any(|m| lower.contains(m)) {
+        return true;
+    }
+    // A price: a $ sign anywhere near a digit.
+    if lower.contains('$') && lower.chars().any(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    const WEATHER: &[&str] = &["weather", "forecast", "raining", "sunny", "temperature"];
+    WEATHER.iter().any(|w| lower.contains(w))
+}
+
 fn required<'a>(args: &'a serde_json::Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
         .and_then(|v| v.as_str())
@@ -79,18 +101,62 @@ fn required<'a>(args: &'a serde_json::Value, key: &str) -> Result<&'a str, Strin
 }
 
 pub async fn execute(
-    ctx: &SkillContext<'_>,
+    ctx: &ToolContext<'_>,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {
     match name {
-        "memory" => memory_op(ctx, args),
+        "memory" => memory_op(ctx, args).await,
         "propose_soul_edit" => propose_soul_edit(ctx, args),
         other => Err(format!("Memory doesn't handle '{other}'.")),
     }
 }
 
-fn memory_op(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<String, String> {
+/// `SCP-1`: one local call, right at save time, asking whether a fact applies
+/// to every answer or only when its subject comes up. `endpoint` is always the
+/// local engine — this is a call the user did not ask for, so it never goes to
+/// a cloud provider even when the turn that triggered it did. `None` on any
+/// failure (bad response, network hiccup) — the fact is simply left
+/// unclassified, which `recall_for` already treats as global (`SCP-2`/`SCP-3`),
+/// and the backfill in `recall_for_cmd` gets another try at it later.
+pub async fn classify_scope(
+    client: &reqwest::Client,
+    endpoint: &crate::cloud::ChatEndpoint,
+    name: &str,
+    description: &str,
+    body: &str,
+) -> Option<String> {
+    let prompt = format!(
+        "A personal note was just saved:\nname: {name}\ndescription: {description}\ntext: {body}\n\n\
+         Does this apply to every response regardless of subject, or only when a specific subject \
+         comes up? Answer with exactly one word: global or topical."
+    );
+    let msgs = vec![serde_json::json!({ "role": "user", "content": prompt })];
+    let outcome = crate::cloud::drive_turn(
+        client,
+        endpoint,
+        &msgs,
+        &[],
+        0.0,
+        &crate::runtime::proxy::CancelFlag::new(),
+        |_| {},
+    )
+    .await
+    .ok()?;
+    let crate::runtime::proxy::TurnOutcome::Final { content } = outcome else {
+        return None;
+    };
+    let lower = content.to_lowercase();
+    if lower.contains("topical") {
+        Some("topical".to_string())
+    } else if lower.contains("global") {
+        Some("global".to_string())
+    } else {
+        None
+    }
+}
+
+async fn memory_op(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
     let op = required(args, "op")?;
     let mem = ctx.memory;
 
@@ -117,6 +183,26 @@ fn memory_op(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<String,
                 .and_then(|t| t.as_str())
                 .filter(|t| !t.trim().is_empty())
                 .unwrap_or("fact");
+            // No local model loaded ⇒ leave it unclassified rather than reach
+            // for the turn's cloud endpoint; `backfill_scope` retries locally.
+            let scope = match ctx.local_endpoint {
+                Some(endpoint) => classify_scope(ctx.client, endpoint, name, description, text).await,
+                None => None,
+            };
+
+            // TTL-1: an explicit expiry from the model wins. Otherwise, a body
+            // that reads as transient gets a 14-day default rather than living
+            // forever — a wrong TTL is recoverable (`.trash/`), a fact nobody
+            // ever revisits is not.
+            let explicit_days = args.get("expires_in_days").and_then(|v| v.as_i64());
+            let (expires_at, ttl_note) = match explicit_days {
+                Some(n) if n > 0 => (Some(crate::memory::expiry_date(n)), String::new()),
+                _ if looks_transient(text) => (
+                    Some(crate::memory::expiry_date(14)),
+                    " I'll let it go in 14 days since it read as temporary.".to_string(),
+                ),
+                _ => (None, String::new()),
+            };
 
             let saved = mem.save(
                 ctx.db,
@@ -127,11 +213,15 @@ fn memory_op(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<String,
                     created: String::new(),
                     source_conversation: Some(ctx.conversation_id.to_string()),
                     body: text.to_string(),
+                    scope,
+                    recurrence: None,
+                    last_seen: None,
+                    expires_at,
                 },
             )?;
             announce(ctx, "save", &saved, description, "");
             Ok(format!(
-                "Saved memory \"{saved}\". It is now in your index in every conversation."
+                "Saved memory \"{saved}\". It is now in your index in every conversation.{ttl_note}"
             ))
         }
         "update" => {
@@ -175,7 +265,7 @@ fn memory_op(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<String,
 /// toast, plus a line in the activity log the user can audit later. `undo_token`
 /// carries the trash filename for a `forget`, so its Undo restores rather than
 /// re-deletes; it is empty for other ops.
-fn announce(ctx: &SkillContext<'_>, op: &str, name: &str, description: &str, undo_token: &str) {
+fn announce(ctx: &ToolContext<'_>, op: &str, name: &str, description: &str, undo_token: &str) {
     ctx.sink.emit(AgentEvent::MemoryWrite {
         op: op.to_string(),
         name: name.to_string(),
@@ -188,7 +278,7 @@ fn announce(ctx: &SkillContext<'_>, op: &str, name: &str, description: &str, und
         .log_activity(Some(ctx.conversation_id), "memory", &format!("{op} {name}"));
 }
 
-fn propose_soul_edit(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<String, String> {
+fn propose_soul_edit(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
     let proposed_text = required(args, "proposed_text")?;
     let rationale = required(args, "rationale")?;
 
@@ -203,7 +293,8 @@ fn propose_soul_edit(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result
 
     let proposal = ctx
         .db
-        .add_change_proposal("soul", None, proposed_text, rationale)
+        // The soul is one body of text with no separate summary of its own.
+        .add_change_proposal("soul", None, proposed_text, rationale, None)
         .map_err(|e| e.to_string())?;
 
     ctx.sink.emit(AgentEvent::Proposal {
@@ -218,4 +309,25 @@ fn propose_soul_edit(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result
     );
 
     Ok("Proposed. The user will review it; continue without assuming it's active.".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transient_markers_are_caught() {
+        assert!(looks_transient("The build is currently failing on main."));
+        assert!(looks_transient("Right now I'm working from the coffee shop."));
+        assert!(looks_transient("The flight costs $340 today."));
+        assert!(looks_transient("The forecast says it'll be raining all week."));
+        assert!(looks_transient("The deploy is down again."));
+    }
+
+    #[test]
+    fn durable_facts_are_not_flagged() {
+        assert!(!looks_transient("Prefers metric units for all measurements."));
+        assert!(!looks_transient("Lives in Berlin and works remotely."));
+        assert!(!looks_transient("The project uses SQLite for local storage."));
+    }
 }

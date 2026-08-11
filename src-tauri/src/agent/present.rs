@@ -1,4 +1,4 @@
-//! Built-in Present skill (Generative UI). The model calls `present` to render a
+//! Built-in Present toolset (Generative UI). The model calls `present` to render a
 //! typed, interactive workspace block — a comparison table, checklist, form,
 //! progress meter, collection, or document reference — inline in the assistant
 //! turn instead of describing data in prose. It calls `remember` to update the
@@ -8,7 +8,7 @@
 //! bloat the context window; the block/state itself streams to the UI via the
 //! event sink.
 
-use super::skills::SkillContext;
+use super::toolsets::ToolContext;
 use crate::db::Db;
 
 /// The six block kinds the renderer understands.
@@ -26,7 +26,7 @@ const SURFACE_TITLE: &str = "Workspace";
 /// Cap on the serialized surface tree.
 const SURFACE_CAP_BYTES: usize = 65536;
 
-/// The OpenAI tool schemas advertised to the model for this skill.
+/// The OpenAI tool schemas advertised to the model for this toolset.
 pub fn tool_specs() -> serde_json::Value {
     serde_json::json!([
         {
@@ -118,7 +118,7 @@ pub fn describe(name: &str, args: &serde_json::Value) -> (String, String) {
 
 /// Execute a Present call. Returns the text fed back to the model.
 pub async fn execute(
-    ctx: &SkillContext<'_>,
+    ctx: &ToolContext<'_>,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {
@@ -126,14 +126,14 @@ pub async fn execute(
         "present" => present(ctx, args),
         "remember" => remember(ctx, args),
         "render_ui" => render_ui(ctx, args),
-        other => Err(format!("Present skill can't handle '{other}'.")),
+        other => Err(format!("Present toolset can't handle '{other}'.")),
     }
 }
 
 /// Compose or revise the conversation's live workspace surface: an arbitrary
 /// interface expressed as a tree of primitive nodes, rendered by one recursive
 /// renderer in the Workspace view. Stored as a single reserved blocks row.
-fn render_ui(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<String, String> {
+fn render_ui(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
     let ui = args
         .get("ui")
         .filter(|u| u.is_object())
@@ -287,7 +287,7 @@ mod tests {
 }
 
 /// Create or update a workspace block.
-fn present(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<String, String> {
+fn present(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
     let kind = args
         .get("kind")
         .and_then(|k| k.as_str())
@@ -357,7 +357,7 @@ fn present(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<String, S
 
 /// Update an existing block's data and emit the in-place update event.
 fn update_existing(
-    ctx: &SkillContext<'_>,
+    ctx: &ToolContext<'_>,
     block_id: &str,
     title: &str,
     data: &serde_json::Value,
@@ -376,7 +376,7 @@ fn update_existing(
 }
 
 /// Apply a JSON merge patch to the conversation's durable session state.
-fn remember(ctx: &SkillContext<'_>, args: &serde_json::Value) -> Result<String, String> {
+fn remember(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
     let patch = args
         .get("patch")
         .filter(|p| p.is_object())

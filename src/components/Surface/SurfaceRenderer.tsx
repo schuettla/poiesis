@@ -23,7 +23,7 @@ export interface SurfaceCtx {
 
 export default function SurfaceRenderer({ tree, ctx }: { tree: UINode; ctx: SurfaceCtx }) {
   // PRES-7: a surface hatches the first time it appears — including one seeded
-  // from a recipe, so a workspace born from a procedure visibly comes to life.
+  // from a skill, so a workspace born from a procedure visibly comes to life.
   // Only the first render: revisions should feel continuous, not restarted.
   const hatched = useRef(false);
   const entering = !hatched.current;

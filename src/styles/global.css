@@ -13,8 +13,26 @@ body,
   height: 100vh;
 }
 
+/* Desktop-app feel: nothing is highlightable by default, the way a native
+   app's chrome and copy never smear under a drag-select. Actual text-entry
+   surfaces opt back in below so typing, cut/copy/paste still work there. */
+* {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"],
+[data-selectable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 html {
-  background: var(--paper);
+  /* The shell sits on the recessed canvas; outlined panels use --paper on top
+     of it, which is what gives the flat LCD layers their separation. */
+  background: var(--canvas);
   color: var(--ink);
   font-family: var(--font-sans);
   transition: background var(--t-mode), color var(--t-mode);
@@ -36,14 +54,87 @@ button {
   color: inherit;
 }
 
+/* Checkboxes and radios — the native controls ship a browser-blue fill that
+   has nothing to do with the palette, so they are drawn from scratch as
+   hairline-outlined boxes matching every other panel. Checked state uses ink,
+   never an accent colour: black highlight is the whole highlight vocabulary.
+   The glyph is drawn with borders rather than a data-URI SVG so it can inherit
+   var(--paper) and stay correct in both modes. */
+input[type="checkbox"],
+input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  flex: none;
+  display: inline-grid;
+  place-content: center;
+  vertical-align: middle;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: 3px;
+  background: var(--paper);
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+
+input[type="radio"] {
+  border-radius: 50%;
+}
+
+input[type="checkbox"]:hover:not(:disabled),
+input[type="radio"]:hover:not(:disabled) {
+  border-color: var(--ink-faint);
+}
+
+input[type="checkbox"]:checked,
+input[type="checkbox"]:indeterminate,
+input[type="radio"]:checked {
+  background: var(--ink);
+  border-color: var(--ink);
+}
+
+input[type="checkbox"]:checked::after {
+  content: "";
+  width: 4px;
+  height: 8px;
+  border: solid var(--paper);
+  border-width: 0 1.5px 1.5px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+
+input[type="checkbox"]:indeterminate::after {
+  content: "";
+  width: 7px;
+  border-top: 1.5px solid var(--paper);
+}
+
+input[type="radio"]:checked::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--paper);
+}
+
+input[type="checkbox"]:disabled,
+input[type="radio"]:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* Subtle scrollbars matching the paper ground. */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-thumb {
   background: var(--paper-edge-2);
-  border-radius: 4px;
+  border-radius: 3px;
+  transition: background var(--t-fast);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-faint);
 }
 ::-webkit-scrollbar-track {
   background: transparent;

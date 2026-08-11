@@ -1,6 +1,6 @@
 //! One-click local image-generation setup (9F): download the hardware-matched
 //! `stable-diffusion.cpp` engine + a default model, then configure + enable the
-//! skill — reusing the Phase-1 runtime download machinery. Mirrors how the
+//! toolset — reusing the Phase-1 runtime download machinery. Mirrors how the
 //! llama.cpp engine is provisioned, so a consumer never touches a file path.
 
 use std::path::PathBuf;
@@ -9,8 +9,9 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::agent::imagegen::{BINARY_KEY, MODEL_KEY};
-use crate::agent::skills::Skill;
+use crate::agent::toolsets::Toolset;
 use crate::db::Db;
+use crate::media;
 use crate::runtime::download::{
     download_with_resume, resolve_asset_from, unpack_zip, DownloadProgress,
 };
@@ -21,12 +22,12 @@ use crate::runtime::imageengine::{
 };
 use crate::runtime::manifest::select_runtime;
 use crate::runtime::RuntimeManager;
-use crate::NexusError;
+use crate::PoiesisError;
 
-type Cmd<T> = Result<T, NexusError>;
+type Cmd<T> = Result<T, PoiesisError>;
 
-fn err<E: std::fmt::Display>(e: E) -> NexusError {
-    NexusError::Message(e.to_string())
+fn err<E: std::fmt::Display>(e: E) -> PoiesisError {
+    PoiesisError::Message(e.to_string())
 }
 
 /// Whether local image generation is ready, and where its pieces live.
@@ -36,7 +37,7 @@ pub struct ImageSetupStatus {
     pub engine_path: Option<String>,
     pub model_installed: bool,
     pub model_path: Option<String>,
-    pub skill_enabled: bool,
+    pub toolset_enabled: bool,
 }
 
 fn setting_path(db: &Db, key: &str) -> Option<String> {
@@ -58,14 +59,14 @@ pub fn image_setup_status_cmd(db: State<'_, Db>) -> ImageSetupStatus {
     ImageSetupStatus {
         engine_installed: engine_path.as_deref().map(|p| PathBuf::from(p).exists()).unwrap_or(false),
         model_installed: model_path.as_deref().map(|p| PathBuf::from(p).exists()).unwrap_or(false),
-        skill_enabled: Skill::ImageGen.is_enabled(&db),
+        toolset_enabled: Toolset::ImageGen.is_enabled(&db),
         engine_path,
         model_path,
     }
 }
 
 /// Download + install the image engine and a default model, then enable the
-/// skill. Streams progress to the UI like the llama.cpp engine download (§5.4.1).
+/// toolset. Streams progress to the UI like the llama.cpp engine download (§5.4.1).
 #[tauri::command]
 pub async fn setup_image_generation_cmd(
     mgr: State<'_, RuntimeManager>,
@@ -108,7 +109,7 @@ pub async fn setup_image_generation_cmd(
             }
 
             find_sd_binary(&sd_dir)
-                .ok_or_else(|| NexusError::Message("Image engine binary not found after extraction.".into()))?
+                .ok_or_else(|| PoiesisError::Message("Image engine binary not found after extraction.".into()))?
         }
     };
     db.set_setting(BINARY_KEY, &binary.to_string_lossy()).map_err(err)?;
@@ -126,14 +127,14 @@ pub async fn setup_image_generation_cmd(
             },
         )
         .await
-        .map_err(|e| NexusError::Message(format!(
+        .map_err(|e| PoiesisError::Message(format!(
             "Couldn't download the default image model: {e}. You can pick a model file manually below."
         )))?;
     }
     db.set_setting(MODEL_KEY, &model_path.to_string_lossy()).map_err(err)?;
 
-    // 4) Turn the skill on so it's usable immediately.
-    Skill::ImageGen.set_enabled(&db, true);
+    // 4) Turn the toolset on so it's usable immediately.
+    Toolset::ImageGen.set_enabled(&db, true);
     let _ = db.log_activity(None, "image", "Set up local image generation");
 
     Ok(image_setup_status_cmd(db))
@@ -179,7 +180,7 @@ pub async fn install_image_engine_cmd(
                 }
             }
             find_sd_binary(&sd_dir)
-                .ok_or_else(|| NexusError::Message("Image engine binary not found after extraction.".into()))?
+                .ok_or_else(|| PoiesisError::Message("Image engine binary not found after extraction.".into()))?
         }
     };
     db.set_setting(BINARY_KEY, &binary.to_string_lossy()).map_err(err)?;
@@ -344,51 +345,61 @@ pub async fn download_image_model_cmd(
     Ok(())
 }
 
-/// Directly generate an image (the primary consumer path — not routed through the
-/// chat model). Returns the path to the produced PNG.
+/// Directly generate an image (the primary consumer path — not routed through
+/// the chat model). Submits a background job and returns it (`JOB-1`); the
+/// artifact arrives on the `poiesis-media-job` event. The artifact itself is
+/// the data-loss fix (`ART-2`) — every image made through the composer used
+/// to exist only as a message attachment, absent from Library and unsaveable.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn generate_image_cmd(
-    mgr: State<'_, RuntimeManager>,
     db: State<'_, Db>,
+    conversation_id: Option<String>,
+    message_id: Option<String>,
     prompt: String,
     model_path: Option<String>,
     negative: Option<String>,
     width: Option<i64>,
     height: Option<i64>,
     steps: Option<i64>,
-) -> Cmd<String> {
+    seed: Option<i64>,
+) -> Cmd<crate::db::MediaJob> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
-        return Err(NexusError::Message("Enter a prompt describing the image.".into()));
+        return Err(PoiesisError::Message("Enter a prompt describing the image.".into()));
     }
-    let binary = setting_path(&db, BINARY_KEY)
-        .ok_or_else(|| NexusError::Message("Install the image engine under Engine → Image first.".into()))?;
-    let model = model_path
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| setting_path(&db, MODEL_KEY))
-        .ok_or_else(|| NexusError::Message("Get an image model under Models → Image first.".into()))?;
+    // `model_path` picks a specific local model; the local backend still reads
+    // the *engine* binary from settings, so this only overrides which model
+    // file it loads if one was already configured.
+    if let Some(model_path) = model_path.filter(|s| !s.trim().is_empty()) {
+        db.set_setting(MODEL_KEY, &model_path).map_err(err)?;
+    }
 
-    let out_path = mgr
-        .generated_images_dir()
-        .join(format!("img-{}.png", uuid::Uuid::new_v4().simple()));
+    let req = media::MediaRequest {
+        prompt: prompt.to_string(),
+        negative: negative.filter(|n| !n.trim().is_empty()),
+        width,
+        height,
+        steps,
+        seed,
+        ..Default::default()
+    };
 
-    crate::agent::imagegen::generate(
-        &binary,
-        &model,
-        &out_path,
-        prompt,
-        negative.as_deref(),
-        width.unwrap_or(512),
-        height.unwrap_or(512),
-        steps.unwrap_or(20),
+    media::jobs::submit(
+        &db,
+        media::jobs::SubmitArgs {
+            conversation_id,
+            message_id,
+            modality: media::Modality::Image,
+            // No declared model: this path is the local engine by way of the
+            // precedence chain, which `model_path` above has already pointed
+            // at the right checkpoint.
+            model_id: None,
+            request: req,
+            parent_artifact_id: None,
+        },
     )
-    .await
-    .map_err(NexusError::Message)?;
-
-    let short = if prompt.len() > 60 { &prompt[..60] } else { prompt };
-    let _ = db.log_activity(None, "image", &format!("generated: {short}"));
-    Ok(out_path.to_string_lossy().into_owned())
+    .map_err(PoiesisError::Message)
 }
 
 #[tauri::command]

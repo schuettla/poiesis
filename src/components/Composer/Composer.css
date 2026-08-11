@@ -59,7 +59,7 @@
   color: var(--ink-muted);
   background: var(--paper-edge);
   border: 1px solid var(--paper-edge-2);
-  border-radius: 12px;
+  border-radius: var(--radius);
   padding: 4px 6px 4px 10px;
 }
 .attachment-kind {
@@ -76,6 +76,204 @@
 }
 .attachment-remove:hover {
   color: var(--ink);
+}
+
+/* `PIK-2`: the declared route's target bar — what sending does now. */
+.media-target-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px;
+  margin-bottom: 6px;
+  background: var(--paper-edge);
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.media-target-glyph {
+  color: var(--cloud);
+}
+.media-target-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.media-target-ratio {
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 2px 4px;
+}
+/* `PIK-4`: the disclosure toggle and the panel it opens. Everything mode
+   only — in Simple mode neither renders at all, per SMP-1b. */
+.media-target-more {
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+.media-target-more:hover {
+  color: var(--ink);
+}
+.media-advanced {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  background: var(--paper-edge);
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+}
+.media-adv-field,
+.media-adv-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.media-adv-field.wide {
+  flex: 1;
+  min-width: 180px;
+}
+.media-adv-field input,
+.media-adv-field select {
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 2px 4px;
+}
+.media-adv-field input[type="number"] {
+  width: 72px;
+}
+.media-adv-field.wide input {
+  flex: 1;
+  min-width: 0;
+}
+.media-target-back {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  white-space: nowrap;
+}
+.media-target-back:hover {
+  color: var(--ink);
+}
+
+/* `PIK-3`: the inferred route's suggestion — dim and hedged at low
+   confidence, never a silent hijack. */
+.media-intent-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px;
+  margin-bottom: 6px;
+  background: var(--paper-edge);
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink);
+}
+.media-intent-chip.low-confidence {
+  color: var(--ink-faint);
+  background: transparent;
+  border: 1px dashed var(--paper-edge-2);
+}
+.mic-label {
+  flex: 1;
+}
+.mic-model {
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 2px 4px;
+  max-width: 160px;
+}
+.mic-dismiss {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  white-space: nowrap;
+}
+.mic-dismiss:hover {
+  color: var(--ink);
+}
+
+/* `EDT-2`: the implicit reference — always visible before send, never a
+   silent attach. */
+.implicit-ref-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  margin-bottom: 6px;
+  background: var(--paper-edge);
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-muted);
+  width: fit-content;
+}
+.implicit-ref-thumb {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: var(--radius);
+  border: 1px solid var(--paper-edge-2);
+}
+.implicit-ref-remove {
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.implicit-ref-remove:hover {
+  color: var(--ink);
+}
+
+/* SKL-UI-2: the `/` skill list anchors to the text field, not to a button, so
+   it opens directly above what's being typed. */
+.composer-input-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+}
+.composer-slash-menu {
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.composer-menu-item.active {
+  background: var(--paper-edge);
 }
 
 .composer input {
@@ -110,13 +308,42 @@
   border-color: var(--ink-faint);
   color: var(--ink);
 }
-.composer .tools-toggle.on {
+.composer .plus-btn {
+  font-size: 16px;
+  line-height: 1;
+}
+.composer .plus-btn.on {
   background: var(--paper-edge);
   border-color: var(--ink-faint);
   color: var(--ink);
 }
 
-.composer .persona-picker {
+/* The row under the box: context chip left, model chooser right. */
+.composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 2px;
+  min-height: 26px;
+}
+.composer-footer .cf-left {
+  min-width: 0;
+  flex: 1;
+}
+.composer-footer .cf-right {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.composer-footer .context-chip-wrap {
+  padding: 0 4px;
+}
+
+/* The image-model select in Create-image mode. Distinct from .model-picker in
+   the footer row below, which chooses the model that answers in chat. */
+.composer .image-model-picker {
   height: 28px;
   max-width: 150px;
   background: none;
@@ -129,7 +356,7 @@
   cursor: pointer;
   flex-shrink: 0;
 }
-.composer .persona-picker:hover {
+.composer .image-model-picker:hover {
   border-color: var(--ink-faint);
   color: var(--ink);
 }
@@ -143,7 +370,7 @@
   color: var(--paper);
 }
 
-/* ---- modes drop-up menu (workspace / tools / create image) ---- */
+/* ---- the `+` drop-up: attach / modes / skills / persona, with submenus ---- */
 .composer-menu-wrap {
   position: relative;
   display: flex;
@@ -209,4 +436,45 @@
   font-family: var(--font-mono);
   color: var(--ink);
   width: 14px;
+}
+/* The affordance that says "this one opens another panel". */
+.composer-menu-item .mi-more {
+  color: var(--ink-faint);
+  width: 14px;
+  text-align: right;
+}
+
+.composer-menu-sep {
+  height: 1px;
+  background: var(--paper-edge);
+  margin: 4px 6px;
+}
+
+/* Submenu panel: replaces the root list in place, headed by the way back. */
+.composer-menu-back {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  margin-bottom: 2px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--paper-edge);
+  border-radius: 0;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+.composer-menu-back:hover {
+  color: var(--ink);
+}
+.composer-submenu {
+  display: flex;
+  flex-direction: column;
+  max-height: 300px;
+  overflow-y: auto;
 }

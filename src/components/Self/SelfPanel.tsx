@@ -3,14 +3,14 @@ import * as api from "../../lib/api";
 import { AUTONOMY_CLASSES, useAppStore } from "../../lib/store";
 import MemoryPanel from "../Memory/MemoryPanel";
 import "../../routes/Models.css";
+import "../Context/Context.css";
 import "./Self.css";
 
-type Tab = "memory" | "lessons" | "recipes" | "health" | "autonomy";
+type Tab = "memory" | "lessons" | "health" | "autonomy";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "memory", label: "Memory" },
   { id: "lessons", label: "Lessons" },
-  { id: "recipes", label: "Recipes" },
   { id: "health", label: "Health" },
   { id: "autonomy", label: "Autonomy" },
 ];
@@ -27,15 +27,25 @@ function formatDate(at: number | null): string {
 }
 
 /**
- * The Self view's body (ORG-UI-1): everything Poiesis is made of, in five
+ * The Self view's body (ORG-UI-1): everything Poiesis is made of, in four
  * plain tabs. Counts and words only — no gauges, no green/red. A page about a
  * self, not a server dashboard.
  */
 export default function SelfPanel() {
   const [tab, setTab] = useState<Tab>("memory");
+  const activeConversationId = useAppStore((s) => s.activeConversationId);
+  const openContextPanel = useAppStore((s) => s.openContextPanel);
 
   return (
     <>
+      {activeConversationId && (
+        <button
+          className="why-link self-why-link"
+          onClick={() => openContextPanel({ conversationId: activeConversationId })}
+        >
+          What I'm working from
+        </button>
+      )}
       {/* The segmented control the rest of the app uses for view switching
           (Models, Engine) — Self is a page like those, so it switches like them. */}
       <div className="model-tabs" role="tablist" aria-label="What I'm made of">
@@ -55,7 +65,6 @@ export default function SelfPanel() {
       <div className="self-tabpanel" role="tabpanel">
         {tab === "memory" && <MemoryPanel />}
         {tab === "lessons" && <LessonsTab />}
-        {tab === "recipes" && <RecipesTab />}
         {tab === "health" && <HealthTab />}
         {tab === "autonomy" && <AutonomyTab />}
       </div>
@@ -75,7 +84,7 @@ function LessonsTab() {
   const refreshSelf = useAppStore((s) => s.refreshSelf);
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  const pending = proposals.filter((p) => p.target === "lesson");
+  const pending = proposals.filter((p) => p.target === "lesson" || p.target === "lesson-critic");
 
   async function answer(id: string, accept: boolean) {
     await resolve(id, accept);
@@ -115,6 +124,11 @@ function LessonsTab() {
           <div className="memory-card-head">
             <span className="memory-name">{l.name}</span>
             <span className="memory-created">{l.created}</span>
+            {/* RPT-2: plain words, no badge or colour — a lesson learned
+                again is a sign it isn't sticking, not an achievement. */}
+            {!!l.recurrence && l.recurrence > 1 && (
+              <span className="memory-created">learned {l.recurrence}×</span>
+            )}
           </div>
           <p className="memory-desc">{l.description}</p>
           {expanded === l.name && <p className="memory-body">{l.body}</p>}
@@ -146,83 +160,6 @@ function LessonsTab() {
   );
 }
 
-/** RCP-UI-1: procedures we developed together, plus anything I've proposed. */
-function RecipesTab() {
-  const recipes = useAppStore((s) => s.recipes);
-  const forget = useAppStore((s) => s.forgetRecipe);
-  const proposals = useAppStore((s) => s.changeProposals);
-  const resolve = useAppStore((s) => s.resolveChangeProposal);
-  const refreshSelf = useAppStore((s) => s.refreshSelf);
-  const startFromRecipe = useAppStore((s) => s.startFromRecipe);
-  const [expanded, setExpanded] = useState<string | null>(null);
-
-  const pending = proposals.filter((p) => p.target === "recipe");
-
-  async function answer(id: string, accept: boolean) {
-    await resolve(id, accept);
-    await refreshSelf();
-  }
-
-  return (
-    <div className="self-list">
-      {pending.map((p) => (
-        <div className="memory-proposal" key={p.id}>
-          <p className="memory-proposal-head">
-            I'd like to keep this procedure: {p.slug} — {p.rationale}
-          </p>
-          <pre className="self-steps">{p.proposed_text}</pre>
-          <div className="setting-actions">
-            <button className="btn-primary" onClick={() => answer(p.id, true)}>
-              Keep it
-            </button>
-            <button className="btn-text" onClick={() => answer(p.id, false)}>
-              Not now
-            </button>
-          </div>
-        </div>
-      ))}
-
-      {!recipes.length && !pending.length && (
-        <p className="empty-hint">
-          No procedures yet. After we finish a multi-step task you're likely to repeat,
-          I'll ask whether to keep it as a recipe.
-        </p>
-      )}
-
-      {recipes.map((r) => (
-        <div className="memory-card" key={r.name}>
-          <div className="memory-card-head">
-            <span className="memory-name">{r.name}</span>
-            {r.surface_json && (
-              <span className="self-chip" title="Starts from a workspace template">
-                ▦
-              </span>
-            )}
-            <span className="memory-kind">used {r.used}×</span>
-            <span className="memory-created">{r.created}</span>
-          </div>
-          <p className="memory-desc">when: {r.trigger}</p>
-          {expanded === r.name && <pre className="self-steps">{r.steps}</pre>}
-          <div className="memory-card-actions">
-            <button
-              className="btn-text"
-              onClick={() => setExpanded(expanded === r.name ? null : r.name)}
-            >
-              {expanded === r.name ? "Hide steps" : "Read the steps"}
-            </button>
-            <button className="btn-text" onClick={() => startFromRecipe(r)}>
-              Start from this
-            </button>
-            <button className="btn-text danger" onClick={() => forget(r.name)}>
-              Delete
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 /** HEAL + REF: how well I'm actually running, and what I set aside. */
 function HealthTab() {
   const vitality = useAppStore((s) => s.vitality);
@@ -232,6 +169,10 @@ function HealthTab() {
   const reflecting = useAppStore((s) => s.reflectingIds.length > 0);
   const autoReflect = useAppStore((s) => s.autoReflect);
   const setAutoReflect = useAppStore((s) => s.setAutoReflect);
+  const goldenStatus = useAppStore((s) => s.goldenStatus);
+  const goldenError = useAppStore((s) => s.goldenError);
+  const checkingGolden = useAppStore((s) => s.checkingGolden);
+  const checkGoldenNow = useAppStore((s) => s.checkGoldenNow);
   const [note, setNote] = useState("");
 
   const latest = conversations[0];
@@ -284,6 +225,35 @@ function HealthTab() {
           </label>
         </div>
         {note && <p className="self-line self-note">{note}</p>}
+      </div>
+
+      <div className="self-block">
+        <p className="self-subhead">Whether a recent change made me worse</p>
+        {goldenStatus ? (
+          <>
+            <p className="self-line">
+              {goldenStatus.passed}/{goldenStatus.total} checks passing, last checked{" "}
+              {formatDate(goldenStatus.checked_at)}.
+            </p>
+            {goldenStatus.failing.length > 0 && (
+              <ul className="self-table">
+                {goldenStatus.failing.map((id) => (
+                  <li key={id}>
+                    <span className="self-tool">{id}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        ) : (
+          <p className="empty-hint">I haven't checked myself yet.</p>
+        )}
+        <div className="setting-actions">
+          <button className="btn-secondary" onClick={checkGoldenNow} disabled={checkingGolden}>
+            {checkingGolden ? "Checking…" : "Check me now"}
+          </button>
+        </div>
+        {goldenError && <p className="self-line self-note">{goldenError}</p>}
       </div>
 
       <div className="self-block">
@@ -364,7 +334,9 @@ function AutonomyTab() {
   );
 }
 
-/** Refresh the Self view's data whenever it is opened. */
+
+/** Refresh the Self view's data whenever it is opened. The digest and its
+ * mark pulse moved to the Tasks section, which is where they're read now. */
 export function useSelfRefresh() {
   const refreshSelf = useAppStore((s) => s.refreshSelf);
   useEffect(() => {

@@ -51,9 +51,9 @@ export default function Workspace() {
           </span>
           {conversation?.title && <span className="ws-title">{conversation.title}</span>}
           {/* RCP-UI-3: this workspace came from a procedure we kept. */}
-          {conversation?.recipeName && (
-            <span className="ws-recipe" title={`Started from the recipe ${conversation.recipeName}`}>
-              · from recipe {conversation.recipeName}
+          {conversation?.skillName && (
+            <span className="ws-recipe" title={`Started from the ${conversation.skillName} skill`}>
+              · from the {conversation.skillName} skill
             </span>
           )}
           <SessionStrip />

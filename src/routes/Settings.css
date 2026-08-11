@@ -183,26 +183,26 @@
 }
 
 /* built-in skills toggles (Phase 9A) */
-.skill-line {
+.toolset-line {
   margin-top: 0;
   padding: 10px 0;
   border-bottom: 1px solid var(--paper-edge);
 }
-.skill-line:last-of-type {
+.toolset-item:last-of-type .toolset-line {
   border-bottom: none;
 }
-.skill-text {
+.toolset-text {
   display: flex;
   flex-direction: column;
   gap: 3px;
 }
-.skill-label {
+.toolset-label {
   display: flex;
   align-items: center;
   gap: 10px;
   font-weight: 600;
 }
-.skill-flag {
+.toolset-flag {
   font-family: var(--font-sans);
   font-size: 10.5px;
   font-weight: 500;
@@ -213,18 +213,47 @@
   border-radius: 10px;
   padding: 1px 8px;
 }
-.skill-desc {
+.toolset-desc {
   font-size: 12.5px;
   color: var(--ink-muted);
   line-height: 1.5;
 }
 /* LOOP-UI-1: how this skill's tools actually performed lately. Quieter than the
    description — a footnote, not a claim. Absent entirely when there's no data. */
-.skill-reliability {
+.toolset-reliability {
   margin-top: 3px;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--ink-faint);
+}
+
+/* IDX-UI-4: indexed folders nested under the Folder reading skill */
+.toolset-subitems {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0 0 0 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.toolset-subitem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+.toolset-subitem-path {
+  font-family: var(--font-mono);
+  color: var(--ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.toolset-subitem-meta {
+  color: var(--ink-faint);
+  flex-shrink: 0;
 }
 
 /* license attribution */
@@ -310,7 +339,19 @@
   flex-shrink: 0;
 }
 
-/* activity log */
+/* activity log — the Activity section (routes/Activity.tsx) reuses this sheet */
+.activity-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.activity-count {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
 .activity-list {
   list-style: none;
   margin: 0;
@@ -374,4 +415,9 @@
 }
 .settings-self-link:hover {
   color: var(--ink);
+}
+
+/* `CST-2`: what the keys above have cost, in the place spending is decided. */
+.media-spend-line {
+  margin-top: 12px;
 }

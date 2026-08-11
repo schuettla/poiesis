@@ -1,6 +1,6 @@
 //! Opt-in, content-free telemetry plumbing (§6.3, NFR privacy).
 //!
-//! Disabled by default. When the user opts in, Nexus records only **aggregate
+//! Disabled by default. When the user opts in, Poiesis records only **aggregate
 //! event counts** (e.g. how many chats were started) — never message content,
 //! file paths, prompts, model names, or any personal data. Counts are kept
 //! locally in the settings table; there is no network transmission in v1, so

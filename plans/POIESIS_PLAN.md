@@ -729,7 +729,8 @@ Frontend (`store.ts`):
 - `composeSystemPrompt` gains `memory: MemoryContext` in its `opts` and
   prepends/appends:
   - `soul` (if non-empty) directly **after the base prompt**:
-    `\n\n## Standing instructions (SOUL.md — the user approved these)\n{soul}`
+    `\n\n## Standing instructions (SOUL.md — the user approved these; they take precedence over the persona/system prompt above when the two conflict)\n{soul}`
+    (precedence clause added by the addendum, CHT-10/SOUL-UI-4 — see end of doc)
   - `index` (if non-empty) after that:
     `\n\n## Your memory index (durable facts about the user)\n{index}\n(Read a fact's full text with memory(op:"read", name:…) before relying on its details.{toolsEnabled ? "" : " Tools are off — treat descriptions as the only available detail."})`
 - Caps already enforced by the store (index sections 2000/1000/800; soul cap:
@@ -1893,3 +1894,62 @@ always local). **Kitsch check:** "dream" appears in the journal filename
 and this spec — UI copy says "while you were away, I reflected", because
 dreams that announce themselves as dreams are precisely the theater §5
 forbids.
+
+---
+
+# Addendum — soul/persona legibility (shipped 2026-07-30)
+
+Small delta on top of MEM-3, CHT-4 and 10D, driven by one question: a user
+looking at Settings sees a *system prompt* box, a *persona* list and a
+*soul* textarea, and cannot tell what distinguishes them. Both tasks make
+the distinction legible rather than documented.
+
+**The rule now stated in the product:** soul *constrains*, persona *styles*.
+Soul is the agent's standing relationship to the user (invariant across
+tasks, slow-changing, agent may only propose edits). Persona is a swappable
+configuration for a kind of work (voice, expertise, output shape, plus the
+pinned model/temperature the `personas` table already carries). The system
+prompt is neither — it is the pipe both are composed into.
+
+### CHT-10 — Role-shaped persona presets
+
+`src/lib/personaPresets.ts`: six presets (Skeptic, Editor, Rubber Duck,
+Socratic Tutor, Ship It, Archaeologist), each a name + prompt + temperature.
+Offered as chips in `PersonaEditor`; a preset disappears once a persona of
+that name exists. Clicking one creates a normal persona — no new storage,
+no preset concept in the DB.
+
+**Deliberately not celebrity personas** (Einstein, Jobs). They teach
+*impersonation* rather than *configuration*, which collides with the soul
+concept and reduces the layer to a costume box; models render them as
+catchphrase cosplay; and a "Jobs" persona's defining trait is contempt for
+the user's work. Role presets are equally legible and useful daily, and
+they motivate the per-persona model/temperature fields that celebrity
+presets would not.
+
+### SOUL-UI-4 — "Prompt info": the composed prompt, by layer
+
+`composeSystemPrompt` was factored into per-block helpers (`soulBlock`,
+`memoryIndexBlock`, `sessionStateBlock`, `toolGuidanceBlock`) so a second
+composer, `composePromptLayers`, can emit the *same* content as labelled
+`PromptLayer[]` instead of one concatenated string. Byte-identical output
+to before, except the soul precedence clause above.
+
+Exposed as `getPromptLayers(conversationId)` on the store; rendered by
+`components/Composer/PromptLayers.tsx` as a quiet "Prompt info" line under
+the composer opening a drop-up of collapsible layers (persona → soul →
+memory → workspace → session → tool guidance).
+
+Two properties worth preserving if this is touched again:
+- **It is a snapshot, not live.** Layers are composed only while the panel
+  is open; the component re-renders on every keystroke in the composer and
+  composing walks the whole message list. Do not hoist the call out of the
+  `open ?` guard.
+- `<details>` expansion is held in local state via `onToggle`, and the
+  handler must read `e.currentTarget.open` **synchronously** — React nulls
+  `currentTarget` before a lazy `setState` updater runs.
+
+Also in this pass: the persona `<select>` in the composer became an
+`icon-btn` + drop-up (matching the modes menu); the leftover
+`.persona-picker` class, by then used only by the Create-image model
+select, was renamed `.image-model-picker`.

@@ -1,6 +1,5 @@
 import { useAppStore } from "../../lib/store";
 import { inTauri } from "../../lib/api";
-import ModelPicker from "../ModelPicker/ModelPicker";
 import PoiesisMark from "../Mark/PoiesisMark";
 import "./TopBar.css";
 
@@ -100,9 +99,10 @@ export default function TopBar() {
           <span>Poiesis Agent</span>
         </div>
       </div>
+      {/* The model chooser now lives under the composer, next to the message
+          it applies to, rather than up here in the window chrome. */}
       <div className="topbar-right">
         <EngineStatus />
-        <ModelPicker />
         <WorkbenchToggle />
       </div>
     </div>

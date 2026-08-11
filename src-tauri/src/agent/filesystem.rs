@@ -1,4 +1,4 @@
-//! Built-in File System skill: a real toolkit over the user's real disk.
+//! Built-in File System toolset: a real toolkit over the user's real disk.
 //!
 //! There is no sandbox. When a conversation has a working folder attached, the
 //! agent reads and writes the actual files in it. Three things keep that safe:
@@ -24,7 +24,7 @@ use crate::permissions::{
 };
 
 use super::run::AgentEventSink;
-use super::skills::SkillContext;
+use super::toolsets::ToolContext;
 use super::trash;
 
 // ---- limits ----
@@ -67,7 +67,7 @@ pub fn is_ignored(name: &str, show_hidden: bool) -> bool {
     !show_hidden && name.starts_with('.')
 }
 
-/// The OpenAI tool schemas advertised to the model for this skill.
+/// The OpenAI tool schemas advertised to the model for this toolset.
 pub fn tool_specs() -> serde_json::Value {
     // Repeated in every description because models read parameter docs far more
     // reliably than they remember the system prompt.
@@ -303,6 +303,7 @@ fn display(path: &Path, folder: Option<&Path>) -> String {
 }
 
 /// The outcome of asking whether an operation may proceed.
+#[derive(Debug)]
 struct Clearance {
     /// True when the path sits inside the attached working folder.
     in_folder: bool,
@@ -313,6 +314,14 @@ struct Clearance {
 /// Order matters: the working folder is consulted first (that is what makes it
 /// feel like a workspace rather than a permission dialog), then the persisted
 /// allowlist, then per-chat grants, and only then do we interrupt the user.
+///
+/// `headless` (SCH-3) turns both prompts into refusals. This is not belt-and-
+/// braces over the caller's own check: a *read* is allowed headlessly and gets
+/// this far, and if its path falls outside the attached folder it lands on the
+/// scope-grant prompt below. Awaiting that would block forever — nothing
+/// resolves a `oneshot` nobody can see — wedging the scheduler's single run
+/// slot until the app restarts, since the cancel flag is only read between
+/// agent steps. It must return instead.
 #[allow(clippy::too_many_arguments)]
 async fn authorize(
     db: &Db,
@@ -324,6 +333,7 @@ async fn authorize(
     path: &Path,
     name: &str,
     detail: Option<String>,
+    headless: bool,
 ) -> Result<Clearance, String> {
     let op_impact = impact(name);
 
@@ -333,6 +343,13 @@ async fn authorize(
             let must_ask = gate(trust, op_impact)?;
             if !must_ask {
                 return Ok(Clearance { in_folder: true });
+            }
+            if headless {
+                return Err(format!(
+                    "Unattended runs can't ask permission, so this stopped instead of \
+                     prompting: changing {} needs an answer nobody is there to give.",
+                    display(path, folder)
+                ));
             }
             let (verb, target) = describe(name, &serde_json::json!({ "path": path.to_string_lossy() }));
             let summary = match &detail {
@@ -379,6 +396,22 @@ async fn authorize(
     }
 
     let root = grant_root(path);
+    if headless {
+        return Err(match folder {
+            Some(f) => format!(
+                "That's outside the folder this job was given ({}), and an unattended run \
+                 can't ask for more access — it stopped instead of prompting. Read what you \
+                 need from inside that folder.",
+                f.display()
+            ),
+            None => format!(
+                "This job wasn't given a folder, so it can't reach {} — and an unattended \
+                 run can't ask for access. Give the job a folder in the Schedule tab if it \
+                 needs to read files.",
+                root.display()
+            ),
+        });
+    }
     let id = format!("perm_{}", uuid::Uuid::new_v4());
     let verb = if mode == Mode::ReadWrite { "write files in" } else { "read files in" };
     let summary = format!("Poiesis wants to {verb} {} to answer this.", root.display());
@@ -415,8 +448,9 @@ fn capitalize(s: &str) -> String {
 // ---- reading helpers ----
 
 /// Is this file text? A NUL byte in the first few kilobytes means no. Returning
-/// a descriptor beats spraying binary into the model's context.
-fn looks_binary(path: &Path) -> bool {
+/// a descriptor beats spraying binary into the model's context. `pub(crate)`
+/// so `agent::index` (IDX-2/3) can reuse the same sniff rather than forking it.
+pub(crate) fn looks_binary(path: &Path) -> bool {
     use std::io::Read;
     let Ok(mut f) = std::fs::File::open(path) else {
         return false;
@@ -709,12 +743,26 @@ pub fn working_folder_brief(db: &Db, conversation_id: &str) -> Option<String> {
 
 /// Execute a File System tool call. Returns the result text fed back to the model.
 pub async fn execute(
-    ctx: &SkillContext<'_>,
+    ctx: &ToolContext<'_>,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {
     let db = ctx.db;
     let conversation_id = ctx.conversation_id;
+
+    // SCH-3: an unattended job has no one to answer a permission prompt, and
+    // "stops and reports" beats "hangs forever waiting on a prompt nobody can
+    // see". Rather than route every impact level through `authorize` and hope
+    // it never reaches the interactive branch, refuse every write/edit/delete/
+    // move outright before touching the disk — reads are the only thing a
+    // headless run can do here.
+    if ctx.headless && impact(name) != Impact::Read {
+        return Err(
+            "Unattended runs can't change files — this would need to ask first, so the job \
+             stopped instead of prompting."
+                .to_string(),
+        );
+    }
 
     let (folder_raw, trust_raw) = db
         .conversation_folder(conversation_id)
@@ -732,6 +780,36 @@ pub async fn execute(
         .ok_or("missing 'path' argument")?;
     let path = resolve(raw_path, folder_ref);
     let shown = display(&path, folder_ref);
+
+    // `SKL-3`: a skill's own folder is readable for the rest of this run once
+    // the `skill` tool has loaded it — no prompt, but never a write. Checked
+    // only outside the working folder, so a skill that happens to live inside
+    // an attached folder is still governed by the folder's ordinary trust.
+    let in_skill_root = (folder_ref.map(|f| !path_within_root(&path, f)).unwrap_or(true))
+        && ctx
+            .extra_read_roots
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|root| path_within_root(&path, root));
+    if in_skill_root {
+        if impact(name) != Impact::Read {
+            return Err(format!("{shown} is inside a skill's folder, which is read-only to me."));
+        }
+        let result = match name {
+            "read_file" => read_windowed(&path, usize_arg("offset"), usize_arg("limit"))?,
+            "list_directory" => list_dir(&path, bool_arg("recursive"))?,
+            "search_files" => search(
+                &path,
+                str_arg("glob"),
+                str_arg("query"),
+                usize_arg("max_results").unwrap_or(40).min(MAX_SEARCH_RESULTS),
+            )?,
+            other => return Err(format!("unknown file tool '{other}'")),
+        };
+        let _ = db.log_activity(Some(conversation_id), "file", &format!("read {} (skill folder)", path.display()));
+        return Ok(result);
+    }
 
     // Prepare the review detail before asking, so the prompt shows the change.
     let mut pending_edit: Option<(String, usize)> = None;
@@ -768,6 +846,7 @@ pub async fn execute(
         &path,
         name,
         detail,
+        ctx.headless,
     )
     .await?;
 
@@ -784,6 +863,7 @@ pub async fn execute(
             &to,
             "write_file",
             None,
+            ctx.headless,
         )
         .await?;
     }
@@ -1035,5 +1115,61 @@ mod tests {
         assert_eq!(impact("move_file"), Impact::Destroy);
         assert_eq!(required_mode("read_file"), Mode::Read);
         assert_eq!(required_mode("write_file"), Mode::ReadWrite);
+    }
+
+    /// SCH-3. A headless *read* is allowed, so it reaches `authorize` — and if
+    /// its path is outside the job's folder it reaches the scope-grant prompt,
+    /// where awaiting an answer nobody can give would hang forever and wedge
+    /// the scheduler's one run slot until the app restarts. The timeout is the
+    /// assertion: a regression here doesn't return a wrong value, it never
+    /// returns at all.
+    #[tokio::test]
+    async fn a_headless_read_outside_its_folder_refuses_rather_than_waiting_forever() {
+        let db = Db::open_in_memory().unwrap();
+        let perms = PermissionManager::new();
+        let sink = AgentEventSink::new(tauri::ipc::Channel::new(|_| Ok(())));
+        let trust = Trust::parse("confirm");
+
+        let root = canonicalize_lenient(&std::env::temp_dir()).join("poiesis-headless-scope");
+        std::fs::create_dir_all(&root).unwrap();
+        let inside = root.join("notes.txt");
+        std::fs::write(&inside, "hello").unwrap();
+        let outside = canonicalize_lenient(&std::env::temp_dir()).join("poiesis-headless-outside.txt");
+        std::fs::write(&outside, "not yours").unwrap();
+
+        let call = |folder: Option<PathBuf>, path: PathBuf| {
+            let (db, perms, sink) = (&db, &perms, &sink);
+            async move {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    authorize(
+                        db,
+                        perms,
+                        sink,
+                        "conv_headless",
+                        folder.as_deref(),
+                        trust,
+                        &path,
+                        "read_file",
+                        None,
+                        true,
+                    ),
+                )
+                .await
+                .expect("a headless run must never block on a prompt")
+            }
+        };
+
+        assert!(
+            call(Some(root.clone()), inside.clone()).await.is_ok(),
+            "reading inside the job's own folder is the one thing it may do"
+        );
+        let err = call(Some(root.clone()), outside.clone()).await.unwrap_err();
+        assert!(err.contains("outside the folder"), "unexpected refusal: {err}");
+        let err = call(None, outside.clone()).await.unwrap_err();
+        assert!(err.contains("wasn't given a folder"), "unexpected refusal: {err}");
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_file(&outside).ok();
     }
 }

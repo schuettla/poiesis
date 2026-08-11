@@ -1,4 +1,4 @@
-//! Bring-your-own-key cloud providers (PRD §7.6, CLD-*). Nexus stays local-first;
+//! Bring-your-own-key cloud providers (PRD §7.6, CLD-*). Poiesis stays local-first;
 //! cloud is opt-in and gated on a key the user supplies, stored in the OS
 //! credential store (never SQLite). Two API shapes are supported:
 //!
@@ -104,11 +104,17 @@ pub struct CloudModel {
 // ---- key management (keyring-backed) ----
 
 pub fn set_key(provider: Provider, key: &str) -> Result<(), secrets::SecretError> {
-    secrets::set_secret(SERVICE_CLOUD, provider.id(), key)
+    let out = secrets::set_secret(SERVICE_CLOUD, provider.id(), key);
+    // A media backend's availability is decided by whether its key is present,
+    // so the cached catalog is wrong the moment one is added or removed.
+    crate::media::invalidate_model_cache();
+    out
 }
 
 pub fn clear_key(provider: Provider) -> Result<(), secrets::SecretError> {
-    secrets::delete_secret(SERVICE_CLOUD, provider.id())
+    let out = secrets::delete_secret(SERVICE_CLOUD, provider.id());
+    crate::media::invalidate_model_cache();
+    out
 }
 
 pub fn get_key(provider: Provider) -> Option<String> {

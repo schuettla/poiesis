@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../lib/store";
 import type { FileNode } from "../../lib/api";
 
@@ -41,21 +42,87 @@ function FileIcon() {
   );
 }
 
+/** Where a right-click on a directory row landed — drives the one context
+ * menu shared by every row, rather than one listener per node. */
+interface CtxMenu {
+  path: string;
+  x: number;
+  y: number;
+}
+
+/** `PHS-UI-1`: the folder-level "Find duplicates" action, plus the reveal
+ * this menu replaces for directories. */
+function DirContextMenu({ menu, onClose }: { menu: CtxMenu; onClose: () => void }) {
+  const revealInSystem = useAppStore((s) => s.revealInSystem);
+  const findDuplicatesIn = useAppStore((s) => s.findDuplicatesIn);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [onClose]);
+
+  return (
+    <div
+      className="wb-menu wb-context-menu"
+      role="menu"
+      ref={ref}
+      style={{ left: menu.x, top: menu.y }}
+    >
+      <button
+        role="menuitem"
+        onClick={() => {
+          revealInSystem(menu.path);
+          onClose();
+        }}
+      >
+        Show in file manager
+      </button>
+      <button
+        role="menuitem"
+        onClick={() => {
+          findDuplicatesIn(menu.path);
+          onClose();
+        }}
+      >
+        Find duplicates
+      </button>
+    </div>
+  );
+}
+
 /** The working folder, one level at a time. Folders sort first, then files. */
 export default function Tree({ filter }: { filter: string }) {
   const root = useAppStore((s) => {
     const conv = s.conversations.find((c) => c.id === s.activeConversationId);
     return conv?.folderPath ?? null;
   });
+  const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null);
   if (!root) return null;
   return (
     <div className="wb-tree" role="tree" aria-label="Files">
-      <Branch path={root} depth={0} needle={filter.trim().toLowerCase()} />
+      <Branch
+        path={root}
+        depth={0}
+        needle={filter.trim().toLowerCase()}
+        onDirContextMenu={(path, x, y) => setCtxMenu({ path, x, y })}
+      />
+      {ctxMenu && <DirContextMenu menu={ctxMenu} onClose={() => setCtxMenu(null)} />}
     </div>
   );
 }
 
-function Branch({ path, depth, needle }: { path: string; depth: number; needle: string }) {
+interface BranchProps {
+  path: string;
+  depth: number;
+  needle: string;
+  onDirContextMenu: (path: string, x: number, y: number) => void;
+}
+
+function Branch({ path, depth, needle, onDirContextMenu }: BranchProps) {
   const children = useAppStore((s) => s.folderTree[path]);
   if (!children) return depth === 0 ? <p className="wb-hint">Reading the folder…</p> : null;
 
@@ -69,13 +136,23 @@ function Branch({ path, depth, needle }: { path: string; depth: number; needle: 
   return (
     <>
       {visible.map((node) => (
-        <Row key={node.path} node={node} depth={depth} needle={needle} />
+        <Row key={node.path} node={node} depth={depth} needle={needle} onDirContextMenu={onDirContextMenu} />
       ))}
     </>
   );
 }
 
-function Row({ node, depth, needle }: { node: FileNode; depth: number; needle: string }) {
+function Row({
+  node,
+  depth,
+  needle,
+  onDirContextMenu,
+}: {
+  node: FileNode;
+  depth: number;
+  needle: string;
+  onDirContextMenu: (path: string, x: number, y: number) => void;
+}) {
   const expanded = useAppStore((s) => s.expandedDirs.includes(node.path));
   const toggleDir = useAppStore((s) => s.toggleDir);
   const selectNode = useAppStore((s) => s.selectNode);
@@ -104,7 +181,11 @@ function Row({ node, depth, needle }: { node: FileNode; depth: number; needle: s
         onKeyDown={(e) => e.key === "Enter" && activate()}
         onContextMenu={(e) => {
           e.preventDefault();
-          revealInSystem(node.path);
+          // A folder gets a small menu (reveal, or PHS-UI-1's "Find
+          // duplicates"); a file keeps the old one-click reveal, since it has
+          // no second action worth a menu.
+          if (node.is_dir) onDirContextMenu(node.path, e.clientX, e.clientY);
+          else revealInSystem(node.path);
         }}
         title={node.path}
       >
@@ -119,7 +200,9 @@ function Row({ node, depth, needle }: { node: FileNode; depth: number; needle: s
           </span>
         )}
       </div>
-      {node.is_dir && expanded && <Branch path={node.path} depth={depth + 1} needle={needle} />}
+      {node.is_dir && expanded && (
+        <Branch path={node.path} depth={depth + 1} needle={needle} onDirContextMenu={onDirContextMenu} />
+      )}
     </>
   );
 }

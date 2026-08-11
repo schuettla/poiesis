@@ -26,7 +26,10 @@ pub const AUTONOMY_DEFAULTS: &[(&str, &str)] = &[
     ("lessons", "auto"),     // reflection saves high-confidence lessons (undoable)
     ("consolidate", "ask"),  // tidy-up apply (already ask-only via the MEM-5 flow)
     ("soul", "ask"),         // standing instructions (identity)
-    ("recipes", "ask"),      // new procedures (identity)
+    ("profile", "auto"),     // synthesized style, derived + regenerable (PRO-8)
+    ("email_send", "ask"),   // mail leaving the machine on the user's behalf (MAIL-3)
+    ("skills", "ask"),       // new Agent Skills (identity, SKL-4)
+    ("screen", "ask"),       // screenshot can contain anything (SYS-1)
 ];
 
 /// Settings key for a class. Public so the frontend and backend can't drift.
@@ -71,8 +74,11 @@ mod tests {
         assert_eq!(autonomy_gate(&db, "facts"), Rung::Auto);
         assert_eq!(autonomy_gate(&db, "lessons"), Rung::Auto);
         assert_eq!(autonomy_gate(&db, "soul"), Rung::Ask);
-        assert_eq!(autonomy_gate(&db, "recipes"), Rung::Ask);
+        assert_eq!(autonomy_gate(&db, "skills"), Rung::Ask);
         assert_eq!(autonomy_gate(&db, "consolidate"), Rung::Ask);
+        assert_eq!(autonomy_gate(&db, "screen"), Rung::Ask);
+        // MAIL-3: mail leaving the machine is never the default.
+        assert_eq!(autonomy_gate(&db, "email_send"), Rung::Ask);
 
         db.set_setting(&setting_key("lessons"), "off").unwrap();
         assert_eq!(autonomy_gate(&db, "lessons"), Rung::Off);

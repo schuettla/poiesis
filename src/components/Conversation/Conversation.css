@@ -29,8 +29,36 @@
   color: var(--ink-muted);
   background: var(--paper-edge);
   border: 1px solid var(--paper-edge-2);
-  border-radius: 12px;
+  border-radius: var(--radius);
   padding: 3px 10px;
+}
+/* `STR-3`: a dropped photo should look like the photo. */
+.user-attachment-thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 64px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.user-attachment-img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: var(--radius);
+  border: 1px solid var(--paper-edge-2);
+}
+.user-attachment-name {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-faint);
+  max-width: 64px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---- agent run: execution log + final prose, one continuous unit ---- */
@@ -38,19 +66,148 @@
   margin-bottom: 36px;
 }
 
-/* inline generated images (9F) */
-.chat-image {
+/* inline generated media (Phase 13, `STR-2`) */
+.chat-media {
+  margin: 6px 0 0;
+}
+.chat-media-el {
   display: block;
+  max-width: 100%;
+  max-height: 512px;
+  width: auto;
+  height: auto;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--paper-edge-2);
+  object-fit: contain;
+}
+.chat-media-note {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  padding: 12px 0;
+}
+/* Holds the final aspect ratio while the image is fetched, so the transcript
+   never reflows when it lands — the detail that separates "feels like
+   ChatGPT" from "feels like a web form" (`STR-2`). */
+.chat-media-skeleton {
   max-width: min(512px, 100%);
   border-radius: var(--radius-lg);
   border: 1px solid var(--paper-edge-2);
-  margin-top: 6px;
+  background: var(--paper-edge);
+  overflow: hidden;
+  position: relative;
 }
-.chat-image-note {
+.chat-media-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 40%, var(--paper-edge-2) 50%, transparent 60%);
+  background-size: 200% 100%;
+  opacity: 0.06;
+  animation: chat-media-shimmer 2s ease-in-out infinite;
+}
+@keyframes chat-media-shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-media-shimmer {
+    animation: none;
+    background: none;
+  }
+}
+/* Only appears once the wait is long enough to notice (3s) — before that a
+   running clock would draw attention to a delay nobody felt. Cancel joins it
+   at 10s, when waiting has become a decision (`STR-2`). */
+/* `STR-4`: a partial fills the tile it will eventually become, so the swap to
+   the finished image is a sharpening rather than a replacement. */
+.chat-media-partial {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.chat-media-waiting {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.chat-media-elapsed {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-timeline);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+.chat-media-cancel {
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
   color: var(--ink-muted);
-  padding: 12px 0;
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.chat-media-cancel:hover {
+  color: var(--ink);
+}
+.chat-media-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  opacity: 0.55;
+  transition: opacity var(--t-fast);
+}
+.chat-media:hover .chat-media-actions,
+.chat-media-actions:focus-within {
+  opacity: 1;
+}
+/* There is no hover on a touch screen, so the quiet state would be the only
+   state — the actions would read as permanently disabled. Show them outright
+   (`STR-2`). */
+@media (hover: none) {
+  .chat-media-actions {
+    opacity: 1;
+  }
+}
+.chat-media-action {
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+  background: transparent;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.chat-media-action:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+.chat-media-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.chat-media-meta {
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-faint);
+  margin-top: 4px;
+}
+.chat-media-error {
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--danger);
+  margin-top: 4px;
 }
 
 .run-header {
@@ -70,7 +227,7 @@
   color: var(--ink-faint);
   padding: 1px 6px;
   border: 1px solid var(--paper-edge-2);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 /* ---- thinking state: shown before the first token/step/block lands ---- */
@@ -79,6 +236,21 @@
   align-items: center;
   gap: 5px;
   padding: 3px 0 6px;
+}
+.thinking-label {
+  margin-left: 4px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+/* A turn that ended silently says so, rather than leaving a blank bubble that
+   can't be told apart from one still running. */
+.run-empty {
+  margin: 2px 0 4px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-faint);
 }
 .thinking-dot {
   width: 6px;
@@ -203,7 +375,7 @@
   gap: 7px;
   padding: 5px 10px;
   border: 1px solid var(--paper-edge-2);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--paper-edge);
   cursor: pointer;
   font-family: var(--font-sans);
@@ -357,6 +529,84 @@
   white-space: nowrap;
 }
 
+/* ---- code disclosure (DAT-UI-1) ---- */
+.code-disclosure {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 2px;
+  padding-left: 10px;
+  border-left: 1px solid var(--paper-edge-2);
+}
+.code-disclosure-lang {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.code-disclosure-source {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+/* ---- untrusted-content marker (TRU-UI-1) — provenance, not an alarm: ink
+   tones only, no red, no triangle ---- */
+.untrusted-chip {
+  flex: none;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  background: none;
+  padding: 1px 8px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--ink-faint);
+}
+.untrusted-chip:hover {
+  color: var(--ink-muted);
+  border-color: var(--ink-faint);
+}
+.untrusted-chip.risk-2,
+.untrusted-chip.risk-3 {
+  color: var(--ink-muted);
+  border-color: var(--ink-muted);
+}
+.untrusted-disclosure {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 2px;
+  padding-left: 10px;
+  border-left: 1px solid var(--paper-edge-2);
+}
+.untrusted-source-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin-bottom: 2px;
+}
+.untrusted-source-text {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
 /* ---- run prose (serif reading column) ---- */
 .run-text {
   font-family: var(--font-serif);
@@ -453,7 +703,7 @@
   padding: 10px 14px;
   border: 1px solid var(--paper-edge-2);
   border-left: 2px solid var(--ink-muted);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
 }
 .proposal-text {
   flex: 1;
@@ -463,7 +713,61 @@
   line-height: 1.55;
   color: var(--ink-muted);
 }
+/* SKL-UI-2: provenance about a skill's contents, in the same ink tone as the
+   rest of the card. No red, no warning triangle — per Part I §4.2 this is
+   information, not an alarm, and it never blocks the install. */
+.proposal-risk {
+  width: 100%;
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-faint, var(--ink-muted));
+}
 .proposal-actions {
   display: flex;
   gap: 12px;
+}
+
+/* Email / skill variants (MAIL-UI-2, SKL-UI-2): the same card, a body that
+   shows what will actually go out instead of only a sentence about it. */
+.proposal-card.wide {
+  flex-direction: column;
+  align-items: stretch;
+}
+.proposal-fields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  font-size: 13px;
+  margin: 2px 0 8px;
+}
+.proposal-field-label {
+  color: var(--ink-faint);
+}
+.proposal-field-value {
+  color: var(--ink);
+  word-break: break-word;
+}
+.proposal-body-preview {
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-muted);
+  margin: 0 0 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.proposal-edit-body {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 8px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+  margin-bottom: 8px;
 }

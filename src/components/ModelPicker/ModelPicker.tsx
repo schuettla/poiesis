@@ -9,7 +9,18 @@ function Dot({ provenance }: { provenance: Model["provenance"] }) {
 
 const CLOUD_LIMIT = 60;
 
-export default function ModelPicker() {
+/**
+ * `compact` shrinks the trigger for its home in the composer's footer row;
+ * `dropUp` opens the list above it, since there is nothing but the window edge
+ * below.
+ */
+export default function ModelPicker({
+  compact = false,
+  dropUp = false,
+}: {
+  compact?: boolean;
+  dropUp?: boolean;
+} = {}) {
   const models = useAppStore((s) => s.models);
   const selected = useSelectedModel();
   const selectModel = useAppStore((s) => s.selectModel);
@@ -37,8 +48,13 @@ export default function ModelPicker() {
     };
   }, [open]);
 
-  const localModels = models.filter((m) => m.provenance === "local");
-  const allCloud = models.filter((m) => m.provenance === "cloud");
+  const isMedia = (m: Model) => m.modality === "image" || m.modality === "video";
+  const localModels = models.filter((m) => m.provenance === "local" && !isMedia(m));
+  const allCloud = models.filter((m) => m.provenance === "cloud" && !isMedia(m));
+  // `PIK-1`: media models get their own group below chat models, not folded
+  // into "On this device" / "Cloud" — picking one changes what *sending*
+  // does, which chat models never do, so they read differently on purpose.
+  const mediaModels = models.filter(isMedia);
   const localOnly = filter === "local";
 
   const q = cloudQuery.trim().toLowerCase();
@@ -59,17 +75,22 @@ export default function ModelPicker() {
   }
 
   return (
-    <div className="model-picker" ref={ref}>
+    <div
+      className={`model-picker ${compact ? "compact" : ""} ${dropUp ? "up" : ""}`}
+      ref={ref}
+    >
       <button
         className="model-picker-trigger"
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-label={`Model: ${selected.name}`}
+        title={`Model: ${selected.name}`}
         onClick={() => setOpen((o) => !o)}
       >
         <Dot provenance={selected.provenance} />
-        <span>{selected.name}</span>
+        <span className="model-picker-name">{selected.name}</span>
         <span className="caret" aria-hidden="true">
-          ▾
+          {dropUp ? "▴" : "▾"}
         </span>
       </button>
 
@@ -132,6 +153,17 @@ export default function ModelPicker() {
               )}
             </>
           )}
+
+          {/* `PIK-1`: omitted entirely when empty, so a fresh install with no
+              engine and no key sees today's picker unchanged. */}
+          {!localOnly && mediaModels.length > 0 && (
+            <>
+              <div className="model-group-label">Images &amp; video</div>
+              {mediaModels.map((m) => (
+                <ModelRow key={m.id} model={m} selected={m.id === selected.id} onClick={() => choose(m)} />
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -164,6 +196,10 @@ function ModelRow({
       <Dot provenance={model.provenance} />
       <span className="name">{model.name}</span>
       {model.meta && <span className="meta">{model.meta}</span>}
+      {model.priceLabel && <span className="price">{model.priceLabel}</span>}
+      {model.modality && model.modality !== "chat" && !model.priceLabel && (
+        <span className="price">free</span>
+      )}
     </div>
   );
 }

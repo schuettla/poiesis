@@ -1,0 +1,67 @@
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--ink) 22%, transparent);
+}
+
+.confirm-card {
+  width: min(380px, calc(100vw - 48px));
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  padding: 18px 20px 16px;
+}
+
+.confirm-title {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.confirm-body {
+  margin: 8px 0 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.55;
+  color: var(--ink-muted);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.confirm-actions button {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.confirm-cancel {
+  background: none;
+  color: var(--ink);
+  border: 1px solid var(--paper-edge-2);
+}
+.confirm-cancel:hover {
+  border-color: var(--ink-faint);
+}
+
+.confirm-go {
+  background: var(--danger);
+  color: var(--paper);
+  border: 1px solid var(--danger);
+}
+.confirm-go:hover {
+  filter: brightness(1.06);
+}

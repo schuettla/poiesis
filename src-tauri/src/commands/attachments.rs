@@ -12,18 +12,18 @@ use tauri::State;
 
 use crate::commands::files::{assert_ui_readable_raw, DialogGrants};
 use crate::db::Db;
-use crate::NexusError;
+use crate::PoiesisError;
 
-type Cmd<T> = Result<T, NexusError>;
+type Cmd<T> = Result<T, PoiesisError>;
 
 /// Attachments are inlined into a request, so an enormous one silently blows up
 /// the turn. Refuse loudly instead.
 const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
 
-fn check_size(path: &Path) -> Result<(), NexusError> {
-    let len = std::fs::metadata(path).map_err(|e| NexusError::Message(e.to_string()))?.len();
+fn check_size(path: &Path) -> Result<(), PoiesisError> {
+    let len = std::fs::metadata(path).map_err(|e| PoiesisError::Message(e.to_string()))?.len();
     if len > MAX_ATTACHMENT_BYTES {
-        return Err(NexusError::Message(format!(
+        return Err(PoiesisError::Message(format!(
             "{} is too large to attach ({} MB).",
             path.display(),
             len / (1024 * 1024)
@@ -62,12 +62,12 @@ pub async fn read_image_data_uri_cmd(
     check_size(&p)?;
 
     tauri::async_runtime::spawn_blocking(move || {
-        let bytes = std::fs::read(&p).map_err(|e| NexusError::Message(e.to_string()))?;
+        let bytes = std::fs::read(&p).map_err(|e| PoiesisError::Message(e.to_string()))?;
         let mime = mime_for(&p);
         Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
     })
     .await
-    .map_err(|e| NexusError::Message(e.to_string()))?
+    .map_err(|e| PoiesisError::Message(e.to_string()))?
 }
 
 /// Save a Canvas artifact to a user-chosen path (CHT-6 download). `dest` comes
@@ -82,15 +82,19 @@ pub async fn save_artifact_cmd(
 ) -> Cmd<()> {
     grants.remember(Path::new(&dest));
     tauri::async_runtime::spawn_blocking(move || {
-        if kind == "image" {
-            std::fs::copy(&content, &dest).map_err(|e| NexusError::Message(e.to_string()))?;
+        // Path-backed kinds (`content` is a file path on disk) get copied;
+        // everything else (`content` is the artifact's actual text) gets
+        // written. A video's `content` is a path too — writing it as text
+        // would put the path string itself into the destination file (`FIX-3`).
+        if matches!(kind.as_str(), "image" | "video") {
+            std::fs::copy(&content, &dest).map_err(|e| PoiesisError::Message(e.to_string()))?;
         } else {
-            std::fs::write(&dest, content).map_err(|e| NexusError::Message(e.to_string()))?;
+            std::fs::write(&dest, content).map_err(|e| PoiesisError::Message(e.to_string()))?;
         }
         Ok(())
     })
     .await
-    .map_err(|e| NexusError::Message(e.to_string()))?
+    .map_err(|e| PoiesisError::Message(e.to_string()))?
 }
 
 /// Extract text from a text-based PDF (CHT-8). Scanned/image-only PDFs return
@@ -111,8 +115,8 @@ pub async fn extract_pdf_text_cmd(
 
     tauri::async_runtime::spawn_blocking(move || {
         pdf_extract::extract_text(&path)
-            .map_err(|e| NexusError::Message(format!("couldn't read that PDF: {e}")))
+            .map_err(|e| PoiesisError::Message(format!("couldn't read that PDF: {e}")))
     })
     .await
-    .map_err(|e| NexusError::Message(e.to_string()))?
+    .map_err(|e| PoiesisError::Message(e.to_string()))?
 }

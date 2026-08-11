@@ -3,12 +3,12 @@
 use tauri::State;
 
 use crate::db::{Db, NewPersona, Persona};
-use crate::NexusError;
+use crate::PoiesisError;
 
-type Cmd<T> = Result<T, NexusError>;
+type Cmd<T> = Result<T, PoiesisError>;
 
-fn err<E: std::fmt::Display>(e: E) -> NexusError {
-    NexusError::Message(e.to_string())
+fn err<E: std::fmt::Display>(e: E) -> PoiesisError {
+    PoiesisError::Message(e.to_string())
 }
 
 #[tauri::command]
@@ -23,12 +23,16 @@ pub fn create_persona_cmd(
     system_prompt: String,
     model_id: Option<String>,
     params_json: Option<String>,
+    tools_json: Option<String>,
+    skills_json: Option<String>,
 ) -> Cmd<Persona> {
     db.create_persona(&NewPersona {
         name,
         system_prompt,
         model_id,
         params_json,
+        tools_json,
+        skills_json,
     })
     .map_err(err)
 }

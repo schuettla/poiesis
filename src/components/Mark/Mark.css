@@ -36,6 +36,12 @@
   .poiesis-mark.state-healing .mark-membrane {
     animation: mark-flicker 1.5s ease-in-out 2;
   }
+  /* SCH-UI-2: an unread digest, while otherwise resting — the same breathe as
+     "working", just slower and shallower, so it reads as quiet rather than
+     busy. Clears itself the moment the Self view is opened. */
+  .poiesis-mark.digest-pending .mark-nucleus {
+    animation: mark-breathe-slow 5s ease-in-out infinite;
+  }
 }
 
 @keyframes mark-breathe {
@@ -62,6 +68,15 @@
   }
   50% {
     opacity: 0.15;
+  }
+}
+@keyframes mark-breathe-slow {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.85;
   }
 }
 

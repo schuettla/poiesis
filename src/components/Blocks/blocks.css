@@ -122,6 +122,35 @@
   color: var(--ink-muted);
 }
 
+/* ---- table (DAT-3) ---- */
+.tbl-scroll {
+  overflow-x: auto;
+}
+.tbl-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+}
+.tbl-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  text-align: left;
+  font-weight: 400;
+  padding: 4px 12px 8px 0;
+}
+.tbl-row {
+  border-top: 1px solid var(--paper-edge);
+}
+.tbl-cell {
+  padding: 8px 12px 8px 0;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
 /* ---- collection ---- */
 .col-filters {
   display: flex;

@@ -1,4 +1,4 @@
-// Shared domain types for the Nexus frontend. These mirror the Rust backend's
+// Shared domain types for the Poiesis frontend. These mirror the Rust backend's
 // serde models; keep field names in sync as backend phases land.
 
 export type Provenance = "local" | "cloud";
@@ -16,6 +16,19 @@ export interface Model {
   /** Cloud routing (CLD-3): the provider id and provider-side model id. */
   provider?: string;
   cloudModel?: string;
+  /** What sending a message to this model produces (`PIK-1`). Absent = chat. */
+  modality?: "chat" | "image" | "video";
+  /** Media only: the backend that serves it, and its price tag. */
+  backendId?: string;
+  backendLabel?: string;
+  priceLabel?: string;
+  supportsEdit?: boolean;
+  supportedAspectRatios?: string[];
+  /** `PIK-4`: the option lists the advanced disclosure is built from, so an
+   * unsupported combination is never offered rather than offered and then
+   * silently remapped. */
+  supportedResolutions?: string[];
+  maxDurationSecs?: number;
 }
 
 export type Role = "user" | "assistant";
@@ -31,6 +44,14 @@ export interface AgentStep {
   result?: string;
   /** Provenance for a recall step (RCL-UI): what was found, and where. */
   matches?: import("./api").SearchHit[];
+  /** The snippet behind a Code Execution step (`DAT-UI-1`), shown only on
+   * demand through the same `⌄` disclosure `matches` uses. */
+  code?: { language: string; code: string };
+  /** Outside content this step fed to the model, wrapped rather than trusted
+   * (`TRU-1`/`TRU-2`). One entry per source a call wrapped — a retrieval call
+   * can wrap several file excerpts in one step. Drives the `◇ from outside`
+   * chip and its disclosure (`TRU-UI-1`). */
+  untrusted?: { label: string; risk: number; flags: string[]; text: string }[];
   status: "running" | "done" | "error";
 }
 
@@ -43,6 +64,7 @@ export type BlockKind =
   | "form"
   | "progress"
   | "document"
+  | "table"
   | "surface";
 
 /** One node of the agent-composed interface tree (the dynamic Workspace
@@ -70,12 +92,17 @@ export interface BlockView {
 
 export interface Attachment {
   id: string;
-  kind: "image" | "pdf";
+  kind: "image" | "pdf" | "video";
   name: string;
   /** Filesystem path (file-picker / native drop). Empty for inline data. */
   path: string;
   /** Inline data URI for clipboard-paste / browser-drop images (no path). */
   dataUri?: string;
+  /** The artifact this attachment renders, for the action row (Refine, Save, …). */
+  artifactId?: string;
+  width?: number;
+  height?: number;
+  durationSecs?: number;
 }
 
 export interface Message {
@@ -99,6 +126,16 @@ export interface Message {
    * that open the file and offer Undo. In-memory only: after a reload the
    * Workbench's "Recent changes" strip is the durable record. */
   fileChangeIds?: string[];
+  /** Set while a generation is in flight so the stream can hold a tile at the
+   *  final aspect ratio instead of reflowing when the media lands (`STR-2`).
+   *  Cleared the moment the attachment arrives — or the turn fails. */
+  pendingMedia?: {
+    modality: "image" | "video";
+    aspectRatio?: string;
+    startedAt: number;
+    /** The background job (`JOB-1`), so the tile can offer Cancel. */
+    jobId?: string;
+  };
   /** True while the assistant turn is still streaming. */
   streaming?: boolean;
   createdAt: number;
@@ -124,9 +161,9 @@ export interface Conversation {
   /** When the agent last reflected on this conversation (REF-2), or null if
    * it hasn't yet. Drives the auto-reflection trigger on leaving. */
   reflectedAt?: number | null;
-  /** Recipe this conversation was started from (RCP-UI-3). In-memory only —
+  /** Skill this conversation was started from (`SKL-5`, was RCP-UI-3). In-memory only —
    * a label on this session, not a fact worth persisting. */
-  recipeName?: string;
+  skillName?: string;
   /** The real folder on disk this conversation works in, if one is attached.
    * The agent's file tools resolve relative paths against it. */
   folderPath?: string | null;
@@ -144,6 +181,16 @@ export interface WorkbenchSelection {
   id: string;
 }
 
-export type View = "chat" | "models" | "engine" | "apps" | "settings" | "library" | "self";
+export type View =
+  | "chat"
+  | "models"
+  | "engine"
+  | "apps"
+  | "settings"
+  | "library"
+  | "self"
+  | "tasks"
+  | "activity"
+  | "skills";
 export type Mode = "light" | "dark";
 export type ModelFilter = "all" | "local";

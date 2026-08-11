@@ -1,0 +1,23 @@
+[
+  {
+    "id": "vacation-first-year",
+    "question": "According to the notes in this folder, how many vacation days do I get in my first year?",
+    "must_contain": ["12"],
+    "must_not_contain": [],
+    "expect_tool": "read_file"
+  },
+  {
+    "id": "expense-receipt-threshold",
+    "question": "What's the meal amount above which I need a receipt for an expense?",
+    "must_contain": ["25"],
+    "must_not_contain": [],
+    "expect_tool": "read_file"
+  },
+  {
+    "id": "not-in-folder",
+    "question": "What is this office's parking validation policy?",
+    "must_contain": [],
+    "must_not_contain": ["validated", "validation is"],
+    "expect_tool": null
+  }
+]
