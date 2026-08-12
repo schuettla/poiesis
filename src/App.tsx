@@ -10,6 +10,7 @@ import PermissionPanel from "./components/SidePanel/PermissionPanel";
 import ContextPanel from "./components/Context/ContextPanel";
 import MediaConsentDialog from "./components/Confirm/MediaConsentDialog";
 import ImageLightbox from "./components/Conversation/ImageLightbox";
+import OnboardingGuide from "./components/Onboarding/OnboardingGuide";
 import "./App.css";
 
 export default function App() {
@@ -66,7 +67,11 @@ export default function App() {
         view === "self" ||
         view === "tasks" ||
         view === "activity" ||
-        view === "settings") && (
+        view === "settings" ||
+        view === "workingdir" ||
+        view === "mail" ||
+        view === "tools" ||
+        view === "about") && (
         <SettingsHub />
       )}
       {view === "library" && <Library />}
@@ -78,6 +83,7 @@ export default function App() {
       <ContextPanel />
       <MediaConsentDialog />
       <ImageLightbox />
+      <OnboardingGuide />
     </div>
   );
 }

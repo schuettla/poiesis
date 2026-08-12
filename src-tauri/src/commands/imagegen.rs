@@ -12,12 +12,14 @@ use crate::agent::imagegen::{BINARY_KEY, MODEL_KEY};
 use crate::agent::toolsets::Toolset;
 use crate::db::Db;
 use crate::media;
+use crate::media::imagecatalog::{self, image_catalog, BundleManifest, ImageCatalogEntry};
 use crate::runtime::download::{
     download_with_resume, resolve_asset_from, unpack_zip, DownloadProgress,
 };
-use crate::runtime::hardware::detect_hardware;
+use crate::runtime::hardware::{classify_fit, detect_hardware, Fit};
 use crate::runtime::imageengine::{
     find_sd_binary, sd_asset_keywords, sd_cudart_keywords, DEFAULT_MODEL_NAME, DEFAULT_MODEL_URL,
+    SD_CUDART_PREFIX, SD_ENGINE_PREFIX,
     SD_PINNED_TAG, SD_REPO,
 };
 use crate::runtime::manifest::select_runtime;
@@ -84,7 +86,7 @@ pub async fn setup_image_generation_cmd(
     let binary = match find_sd_binary(&sd_dir) {
         Some(bin) => bin,
         None => {
-            let asset = resolve_asset_from(&mgr.client, SD_REPO, SD_PINNED_TAG, &sd_asset_keywords(backend))
+            let asset = resolve_asset_from(&mgr.client, SD_REPO, SD_PINNED_TAG, SD_ENGINE_PREFIX, &sd_asset_keywords(backend))
                 .await
                 .map_err(err)?;
             let archive = sd_dir.join(&asset.name);
@@ -97,7 +99,7 @@ pub async fn setup_image_generation_cmd(
 
             // NVIDIA also needs the CUDA runtime DLL package.
             if let Some(cudart_kw) = sd_cudart_keywords(backend) {
-                if let Ok(cudart) = resolve_asset_from(&mgr.client, SD_REPO, SD_PINNED_TAG, &cudart_kw).await {
+                if let Ok(cudart) = resolve_asset_from(&mgr.client, SD_REPO, SD_PINNED_TAG, SD_CUDART_PREFIX, &cudart_kw).await {
                     let cudart_archive = sd_dir.join(&cudart.name);
                     download_with_resume(&mgr.client, &cudart.url, &cudart_archive, "Getting GPU support files", |p| {
                         let _ = on_progress.send(p);
@@ -158,7 +160,7 @@ pub async fn install_image_engine_cmd(
     let binary = match find_sd_binary(&sd_dir) {
         Some(bin) => bin,
         None => {
-            let asset = resolve_asset_from(&mgr.client, SD_REPO, SD_PINNED_TAG, &sd_asset_keywords(backend))
+            let asset = resolve_asset_from(&mgr.client, SD_REPO, SD_PINNED_TAG, SD_ENGINE_PREFIX, &sd_asset_keywords(backend))
                 .await
                 .map_err(err)?;
             let archive = sd_dir.join(&asset.name);
@@ -169,7 +171,7 @@ pub async fn install_image_engine_cmd(
             .map_err(err)?;
             unpack_zip(&archive, &sd_dir).map_err(err)?;
             if let Some(cudart_kw) = sd_cudart_keywords(backend) {
-                if let Ok(cudart) = resolve_asset_from(&mgr.client, SD_REPO, SD_PINNED_TAG, &cudart_kw).await {
+                if let Ok(cudart) = resolve_asset_from(&mgr.client, SD_REPO, SD_PINNED_TAG, SD_CUDART_PREFIX, &cudart_kw).await {
                     let cudart_archive = sd_dir.join(&cudart.name);
                     download_with_resume(&mgr.client, &cudart.url, &cudart_archive, "Getting GPU support files", |p| {
                         let _ = on_progress.send(p);
@@ -196,94 +198,64 @@ pub struct ImageModel {
     pub is_default: bool,
 }
 
-/// A curated, downloadable diffusion model suggestion.
-#[derive(serde::Serialize)]
-pub struct ImageCatalogEntry {
-    pub name: String,
-    pub note: String,
-    pub size_label: String,
-    pub url: String,
-    pub filename: String,
-}
-
 fn diffusion_dir(mgr: &RuntimeManager) -> PathBuf {
     mgr.models_dir().join("diffusion")
 }
 
-/// Curated diffusion models. Every entry is a single, self-contained checkpoint
-/// (UNet + VAE + text encoders in one file) that the engine loads with `-m`, and
-/// every URL is an un-gated Hugging Face `resolve` link — no HF token needed, so
-/// downloads work on any user's machine. Others can still be added by URL (like
-/// the LLM library). Multi-file families (Flux, SD 3.5) are intentionally absent:
-/// they ship as 3–4 separate files and their official repos are license-gated,
-/// which the tokenless downloader can't fetch.
-fn image_catalog() -> Vec<ImageCatalogEntry> {
-    vec![
-        ImageCatalogEntry {
-            name: "Stable Diffusion 1.5".into(),
-            note: "Fast and light. Runs on almost anything — great default.".into(),
-            size_label: "~4 GB".into(),
-            url: DEFAULT_MODEL_URL.into(),
-            filename: DEFAULT_MODEL_NAME.into(),
-        },
-        ImageCatalogEntry {
-            name: "SD-Turbo".into(),
-            note: "Single-step 512px generation — near-instant. Best at 1–4 steps.".into(),
-            size_label: "~4.9 GB".into(),
-            url: "https://huggingface.co/stabilityai/sd-turbo/resolve/main/sd_turbo.safetensors".into(),
-            filename: "sd_turbo.safetensors".into(),
-        },
-        ImageCatalogEntry {
-            name: "SDXL-Turbo".into(),
-            note: "SDXL quality in 1–4 steps. Fast and sharp; the go-to for most users.".into(),
-            size_label: "~6.5 GB".into(),
-            url: "https://huggingface.co/stabilityai/sdxl-turbo/resolve/main/sd_xl_turbo_1.0_fp16.safetensors".into(),
-            filename: "sd_xl_turbo_1.0_fp16.safetensors".into(),
-        },
-        ImageCatalogEntry {
-            name: "Stable Diffusion XL (base 1.0)".into(),
-            note: "The full SDXL base — top all-round quality. Best at 25–40 steps.".into(),
-            size_label: "~6.9 GB".into(),
-            url: "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors".into(),
-            filename: "sd_xl_base_1.0.safetensors".into(),
-        },
-        ImageCatalogEntry {
-            name: "DreamShaper XL (Turbo v2)".into(),
-            note: "Versatile SDXL finetune — art + photoreal, fast at ~6 steps.".into(),
-            size_label: "~6.5 GB".into(),
-            url: "https://huggingface.co/Lykon/dreamshaper-xl-v2-turbo/resolve/main/DreamShaperXL_Turbo_v2_1.safetensors".into(),
-            filename: "DreamShaperXL_Turbo_v2_1.safetensors".into(),
-        },
-        ImageCatalogEntry {
-            name: "Juggernaut XL (v9)".into(),
-            note: "State-of-the-art SDXL photorealism. Best at 30–40 steps.".into(),
-            size_label: "~6.6 GB".into(),
-            url: "https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/main/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors".into(),
-            filename: "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors".into(),
-        },
-        ImageCatalogEntry {
-            name: "RealVisXL (V4.0)".into(),
-            note: "Photorealistic portraits & scenes. Best at 25–35 steps.".into(),
-            size_label: "~6.5 GB".into(),
-            url: "https://huggingface.co/SG161222/RealVisXL_V4.0/resolve/main/RealVisXL_V4.0.safetensors".into(),
-            filename: "RealVisXL_V4.0.safetensors".into(),
-        },
-        ImageCatalogEntry {
-            name: "Playground v2.5".into(),
-            note: "High-aesthetic 1024px generations — vivid color and contrast.".into(),
-            size_label: "~6.5 GB".into(),
-            url: "https://huggingface.co/playgroundai/playground-v2.5-1024px-aesthetic/resolve/main/playground-v2.5-1024px-aesthetic.fp16.safetensors".into(),
-            filename: "playground-v2.5-1024px-aesthetic.fp16.safetensors".into(),
-        },
-    ]
+/// A catalog entry paired with how it will run on *this* machine — the same
+/// verdict the language marketplace shows, from the same classifier.
+#[derive(serde::Serialize)]
+pub struct ImageCatalogItem {
+    #[serde(flatten)]
+    entry: ImageCatalogEntry,
+    fit: Fit,
+    /// Plain-language memory requirement, e.g. "needs ~3.6 GB VRAM".
+    vram_label: String,
 }
+
+const MB: u64 = 1024 * 1024;
 
 #[tauri::command]
-pub fn image_catalog_cmd() -> Vec<ImageCatalogEntry> {
-    image_catalog()
+pub async fn image_catalog_cmd() -> Cmd<Vec<ImageCatalogItem>> {
+    let hw = tauri::async_runtime::spawn_blocking(detect_hardware)
+        .await
+        .map_err(err)?;
+    Ok(image_catalog()
+        .into_iter()
+        .map(|entry| {
+            let vram_mb = entry.vram_bytes() / MB;
+            // The transformer is what has to fit on the card…
+            let mut fit = classify_fit(vram_mb, &hw);
+            // …but the encoders still have to fit in RAM, so a machine that
+            // can't hold them can't run the model however big its GPU is.
+            let host_mb = entry.host_bytes() / MB;
+            if hw.ram_mb < host_mb + 2048 {
+                fit = Fit::WontFit;
+            }
+            let vram_label = format!("needs ~{:.1} GB VRAM", vram_mb as f64 / 1024.0);
+            ImageCatalogItem { entry, fit, vram_label }
+        })
+        .collect())
 }
 
-/// List diffusion models present on disk, marking the active default.
+/// Sum the bytes of a bundle directory's files.
+fn dir_size(dir: &std::path::Path) -> u64 {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|e| e.metadata().ok())
+                .filter(|m| m.is_file())
+                .map(|m| m.len())
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+/// List diffusion models present on disk, marking the active default. A
+/// multi-file model is one directory with a manifest, and is reported as a
+/// single entry — its parts are not models in their own right and listing them
+/// separately would offer the user a VAE to generate with.
 #[tauri::command]
 pub fn list_image_models_cmd(mgr: State<'_, RuntimeManager>, db: State<'_, Db>) -> Vec<ImageModel> {
     let default = setting_path(&db, MODEL_KEY);
@@ -292,21 +264,109 @@ pub fn list_image_models_cmd(mgr: State<'_, RuntimeManager>, db: State<'_, Db>) 
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for e in entries.flatten() {
             let path = e.path();
+            let path_str = path.to_string_lossy().to_string();
+            let is_default = default.as_deref() == Some(path_str.as_str());
+
+            if let Some(manifest) = imagecatalog::read_manifest(&path) {
+                out.push(ImageModel {
+                    name: manifest.name,
+                    size_bytes: dir_size(&path),
+                    is_default,
+                    path: path_str,
+                });
+                continue;
+            }
+
             let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
             if !matches!(ext.as_str(), "safetensors" | "gguf" | "ckpt") {
                 continue;
             }
-            let path_str = path.to_string_lossy().to_string();
             out.push(ImageModel {
                 name: path.file_name().and_then(|n| n.to_str()).unwrap_or("model").to_string(),
                 size_bytes: e.metadata().map(|m| m.len()).unwrap_or(0),
-                is_default: default.as_deref() == Some(path_str.as_str()),
+                is_default,
                 path: path_str,
             });
         }
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// Download a catalog entry — one file or a whole bundle — reporting a single
+/// continuous progress bar across all of its parts. A bundle lands in its own
+/// directory alongside a manifest naming which file plays which role; the
+/// manifest is written last, so an interrupted download is never mistaken for
+/// a usable model.
+#[tauri::command]
+pub async fn download_image_catalog_model_cmd(
+    mgr: State<'_, RuntimeManager>,
+    db: State<'_, Db>,
+    id: String,
+    on_progress: Channel<DownloadProgress>,
+) -> Cmd<()> {
+    let entry = image_catalog()
+        .into_iter()
+        .find(|e| e.id == id)
+        .ok_or_else(|| PoiesisError::Message(format!("Unknown image model \"{id}\".")))?;
+
+    let bundle = entry.arch.is_bundle();
+    let dest_dir = if bundle { diffusion_dir(&mgr).join(&entry.id) } else { diffusion_dir(&mgr) };
+    std::fs::create_dir_all(&dest_dir).map_err(err)?;
+
+    let total = entry.total_bytes;
+    let mut done: u64 = 0;
+    let mut files = std::collections::BTreeMap::new();
+
+    for (i, comp) in entry.components.iter().enumerate() {
+        let dest = dest_dir.join(&comp.filename);
+        files.insert(comp.role.clone(), comp.filename.clone());
+        if dest.exists() {
+            done += comp.size_bytes;
+            continue;
+        }
+        let label = if entry.components.len() > 1 {
+            format!("Downloading {} — part {} of {}", entry.name, i + 1, entry.components.len())
+        } else {
+            format!("Downloading {}", entry.name)
+        };
+        // A sidecar `.part` keeps an interrupted transfer resumable and stops
+        // a half-written file from ever looking like a finished one.
+        let part = dest.with_file_name(format!("{}.part", comp.filename));
+        let base = done;
+        download_with_resume(&mgr.client, &comp.url, &part, &label, |p| {
+            let _ = on_progress.send(DownloadProgress {
+                received: base + p.received,
+                total: Some(total),
+                label: p.label,
+            });
+        })
+        .await
+        .map_err(|e| {
+            PoiesisError::Message(format!("Couldn't download {} ({}): {e}", entry.name, comp.filename))
+        })?;
+        std::fs::rename(&part, &dest).map_err(err)?;
+        done += comp.size_bytes;
+    }
+
+    let model_path = if bundle {
+        let manifest = BundleManifest { name: entry.name.clone(), profile: entry.profile.clone(), files };
+        std::fs::write(
+            dest_dir.join(imagecatalog::MANIFEST_NAME),
+            serde_json::to_string_pretty(&manifest).map_err(err)?,
+        )
+        .map_err(err)?;
+        dest_dir
+    } else {
+        dest_dir.join(&entry.components[0].filename)
+    };
+
+    // First model becomes the default.
+    if setting_path(&db, MODEL_KEY).is_none() {
+        db.set_setting(MODEL_KEY, &model_path.to_string_lossy()).map_err(err)?;
+    }
+    let _ = db.log_activity(None, "image", &format!("Downloaded image model {}", entry.name));
+    Ok(())
 }
 
 /// Download a diffusion model (by URL) into the diffusion dir; make it the
@@ -407,11 +467,49 @@ pub fn set_default_image_model_cmd(db: State<'_, Db>, path: String) -> Cmd<()> {
     db.set_setting(MODEL_KEY, &path).map_err(err)
 }
 
+/// The first diffusion checkpoint still on disk, if any — used to re-home the
+/// default when the current one is deleted. Bundle directories count, since
+/// they are models too.
+fn first_diffusion_model(mgr: &RuntimeManager) -> Option<String> {
+    let mut found: Vec<String> = std::fs::read_dir(diffusion_dir(mgr))
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            if imagecatalog::read_manifest(p).is_some() {
+                return true;
+            }
+            let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+            matches!(ext.as_str(), "safetensors" | "gguf" | "ckpt")
+        })
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+    found.sort();
+    found.into_iter().next()
+}
+
 #[tauri::command]
-pub fn delete_image_model_cmd(db: State<'_, Db>, path: String) -> Cmd<()> {
+pub fn delete_image_model_cmd(
+    mgr: State<'_, RuntimeManager>,
+    db: State<'_, Db>,
+    path: String,
+) -> Cmd<()> {
+    // A multi-file model is a directory; removing only the file it names would
+    // leave tens of gigabytes of orphaned parts behind.
+    if std::path::Path::new(&path).is_dir() {
+        let _ = std::fs::remove_dir_all(&path);
+    }
     let _ = std::fs::remove_file(&path);
-    if setting_path(&db, MODEL_KEY).as_deref() == Some(path.as_str()) {
-        db.set_setting(MODEL_KEY, "").map_err(err)?;
+    // Compare against the *raw* setting, not `setting_path`: that helper hides
+    // paths whose file is missing, and this one has just been deleted — so the
+    // stored default could never match here and was left naming a deleted
+    // checkpoint, which hid every remaining model from the picker too.
+    let current = db.get_setting(MODEL_KEY).ok().flatten().unwrap_or_default();
+    if current == path {
+        // Promote whatever is still on disk, mirroring how the language-model
+        // library re-homes its default in `Db::delete_model`.
+        let next = first_diffusion_model(&mgr).unwrap_or_default();
+        db.set_setting(MODEL_KEY, &next).map_err(err)?;
     }
     Ok(())
 }

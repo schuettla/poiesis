@@ -7,7 +7,7 @@ use crate::agent::browser::BrowserPool;
 use crate::agent::run::{run_agent, AgentEventSink};
 use crate::agent::toolsets::{self, Toolset, ToolsetInfo};
 use crate::agent::AgentEvent;
-use crate::cloud::{self, ChatEndpoint, Provider};
+use crate::cloud::{self, endpoints, ChatEndpoint, Provider};
 use crate::db::Db;
 use crate::memory::MemoryStore;
 use crate::permissions::{Decision, PermissionManager};
@@ -51,29 +51,29 @@ pub async fn agent_chat_cmd(
     target: Option<ChatTarget>,
     on_event: Channel<AgentEvent>,
 ) -> Result<(), PoiesisError> {
-    // Resolve where this turn runs: the local engine, or a cloud provider (CLD-3).
+    // Resolve where this turn runs: the local engine, a cloud provider (CLD-3),
+    // or a user's own connected server.
     let target = target.unwrap_or_default();
-    let is_cloud = target.provenance.as_deref() == Some("cloud");
+    let is_remote = matches!(target.provenance.as_deref(), Some("cloud") | Some("endpoint"));
 
-    let endpoint = if is_cloud {
-        match build_cloud_endpoint(&target) {
-            Ok(ep) => ep,
-            Err(message) => {
-                let _ = on_event.send(AgentEvent::Error { message });
+    let endpoint = match build_remote_endpoint(&db, &target) {
+        Ok(Some(ep)) => ep,
+        Ok(None) => {
+            let Some((base_url, token)) = mgr.engine_endpoint().await else {
+                let _ = on_event.send(AgentEvent::Error {
+                    message: "No model is loaded yet. Pick a model to get started.".into(),
+                });
                 return Ok(());
+            };
+            ChatEndpoint::OpenAi {
+                base_url,
+                api_key: Some(token),
+                model: None,
             }
         }
-    } else {
-        let Some((base_url, token)) = mgr.engine_endpoint().await else {
-            let _ = on_event.send(AgentEvent::Error {
-                message: "No model is loaded yet. Pick a model to get started.".into(),
-            });
+        Err(message) => {
+            let _ = on_event.send(AgentEvent::Error { message });
             return Ok(());
-        };
-        ChatEndpoint::OpenAi {
-            base_url,
-            api_key: Some(token),
-            model: None,
         }
     };
 
@@ -95,9 +95,9 @@ pub async fn agent_chat_cmd(
         }
     }
 
-    // Key for per-model tool reliability stats (GRM-4): the cloud model id, or
-    // the running local model's file stem.
-    let model_name = if is_cloud {
+    // Key for per-model tool reliability stats (GRM-4): the cloud/endpoint
+    // model id, or the running local model's file stem.
+    let model_name = if is_remote {
         target.model.clone().unwrap_or_else(|| "cloud".to_string())
     } else {
         mgr.engine_model_name()
@@ -105,15 +105,22 @@ pub async fn agent_chat_cmd(
             .unwrap_or_else(|| "local".to_string())
     };
 
-    // A toolset's own side call (SCP-1's scope classification) runs here, on
-    // the local engine, whatever the turn itself is running on: work the user
-    // didn't ask for must not land on their cloud bill or leave the machine.
-    // `None` when nothing is loaded locally — the toolset then does without.
-    let local_endpoint = mgr.engine_endpoint().await.map(|(base_url, token)| ChatEndpoint::OpenAi {
-        base_url,
-        api_key: Some(token),
-        model: None,
-    });
+    // A toolset's own side call (SCP-1's scope classification) runs here,
+    // whatever the turn itself is running on: work the user didn't ask for
+    // must not land on their cloud bill or leave the machine. The integrated
+    // engine is preferred when it's loaded; a turn already running against
+    // the user's own connected server satisfies the same rule, so that's the
+    // fallback rather than `None`. Only a bare cloud turn with nothing loaded
+    // locally leaves this `None` — the toolset then does without.
+    let local_endpoint = match mgr.engine_endpoint().await {
+        Some((base_url, token)) => Some(ChatEndpoint::OpenAi {
+            base_url,
+            api_key: Some(token),
+            model: None,
+        }),
+        None if target.provenance.as_deref() == Some("endpoint") => Some(endpoint.clone()),
+        None => None,
+    };
 
     let cancel = mgr.new_cancel();
     let sink = AgentEventSink::new(on_event);
@@ -145,6 +152,35 @@ pub async fn agent_chat_cmd(
     )
     .await;
     Ok(())
+}
+
+/// Resolve a `ChatTarget` to the endpoint that should serve it. `Ok(None)`
+/// means "use the integrated runtime" — the caller still owns that fallback,
+/// since only it knows whether a missing engine is fatal for this call.
+///
+/// This is the one place both remote kinds (BYOK cloud, and a user's own
+/// connected server) are decided, so every call site that used to hand-roll
+/// the `provenance == "cloud"` branch shares this instead.
+pub(crate) fn build_remote_endpoint(db: &Db, target: &ChatTarget) -> Result<Option<ChatEndpoint>, String> {
+    match target.provenance.as_deref() {
+        Some("cloud") => build_cloud_endpoint(target).map(Some),
+        Some("endpoint") => {
+            let endpoint_id = target
+                .provider
+                .as_deref()
+                .ok_or("This model is missing its server id.")?;
+            let model = target
+                .model
+                .clone()
+                .ok_or("This model is missing its model id.")?;
+            let row = db
+                .get_local_endpoint(endpoint_id)
+                .map_err(|e| e.to_string())?
+                .ok_or("That model server is no longer connected. Add it again in Settings.")?;
+            Ok(Some(endpoints::chat_endpoint(&row, model)))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Build the cloud endpoint for a target, fetching the provider key from the OS

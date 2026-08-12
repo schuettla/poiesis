@@ -9,17 +9,25 @@ import Self from "./Self";
 import Tasks from "./Tasks";
 import Activity from "./Activity";
 import Settings from "./Settings";
+import WorkingDir from "./WorkingDir";
+import Mail from "./Mail";
+import Tools from "./Tools";
+import About from "./About";
 import "./SettingsHub.css";
 
 const TABS: { view: View; label: string; icon: string }[] = [
   { view: "settings", label: "General", icon: "⚙" },
   { view: "models", label: "Models", icon: "▤" },
   { view: "engine", label: "Engine", icon: "◧" },
-  { view: "apps", label: "Apps", icon: "◇" },
+  { view: "tools", label: "Tools", icon: "⚒" },
   { view: "skills", label: "Skills", icon: "▦" },
+  { view: "apps", label: "Apps", icon: "◇" },
   { view: "self", label: "Self", icon: "" },
   { view: "tasks", label: "Tasks", icon: "◷" },
+  { view: "mail", label: "Mail", icon: "✉" },
   { view: "activity", label: "Activity", icon: "≡" },
+  { view: "workingdir", label: "Working dir", icon: "▥" },
+  { view: "about", label: "About", icon: "ⓘ" },
 ];
 
 /** The settings hub: everything that used to be its own rail entry (Models,
@@ -72,6 +80,9 @@ export default function SettingsHub() {
       </nav>
       <div className="settings-hub-content">
         {view === "settings" && <Settings />}
+        {view === "workingdir" && <WorkingDir />}
+        {view === "mail" && <Mail />}
+        {view === "tools" && <Tools />}
         {view === "models" && <Models />}
         {view === "engine" && <Engine />}
         {view === "apps" && <Apps />}
@@ -79,6 +90,7 @@ export default function SettingsHub() {
         {view === "self" && <Self />}
         {view === "tasks" && <Tasks />}
         {view === "activity" && <Activity />}
+        {view === "about" && <About />}
       </div>
     </div>
   );

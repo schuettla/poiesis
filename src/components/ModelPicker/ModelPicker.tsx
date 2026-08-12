@@ -50,12 +50,17 @@ export default function ModelPicker({
 
   const isMedia = (m: Model) => m.modality === "image" || m.modality === "video";
   const localModels = models.filter((m) => m.provenance === "local" && !isMedia(m));
+  // A user's own connected server (Ollama, LM Studio, ...) never leaves the
+  // machine, so it counts as "local" for the filter even though it's routed
+  // like a cloud model.
+  const endpointModels = models.filter((m) => m.provenance === "endpoint" && !isMedia(m));
   const allCloud = models.filter((m) => m.provenance === "cloud" && !isMedia(m));
   // `PIK-1`: media models get their own group below chat models, not folded
   // into "On this device" / "Cloud" — picking one changes what *sending*
   // does, which chat models never do, so they read differently on purpose.
   const mediaModels = models.filter(isMedia);
   const localOnly = filter === "local";
+  const visibleMedia = localOnly ? mediaModels.filter((m) => m.provenance === "local") : mediaModels;
 
   const q = cloudQuery.trim().toLowerCase();
   const filteredCloud = q
@@ -118,6 +123,18 @@ export default function ModelPicker({
             <ModelRow key={m.id} model={m} selected={m.id === selected.id} onClick={() => choose(m)} />
           ))}
 
+          {/* A user's own connected server — shown under both filters, since
+              it runs on their machine like the row above. Omitted entirely
+              when nothing is connected, so a fresh install looks unchanged. */}
+          {endpointModels.length > 0 && (
+            <>
+              <div className="model-group-label">Your own servers</div>
+              {endpointModels.map((m) => (
+                <ModelRow key={m.id} model={m} selected={m.id === selected.id} onClick={() => choose(m)} />
+              ))}
+            </>
+          )}
+
           {!localOnly && (
             <>
               <div className="model-group-label">Cloud · your key</div>
@@ -134,7 +151,11 @@ export default function ModelPicker({
                   <a href="#" onClick={(e) => (e.preventDefault(), goToSettings())}>
                     + Add a provider key
                   </a>{" "}
-                  to use cloud models with your own key
+                  to use cloud models with your own key, or{" "}
+                  <a href="#" onClick={(e) => (e.preventDefault(), goToSettings())}>
+                    + connect a local server
+                  </a>{" "}
+                  like Ollama or LM Studio
                 </div>
               ) : (
                 <>
@@ -156,10 +177,10 @@ export default function ModelPicker({
 
           {/* `PIK-1`: omitted entirely when empty, so a fresh install with no
               engine and no key sees today's picker unchanged. */}
-          {!localOnly && mediaModels.length > 0 && (
+          {visibleMedia.length > 0 && (
             <>
               <div className="model-group-label">Images &amp; video</div>
-              {mediaModels.map((m) => (
+              {visibleMedia.map((m) => (
                 <ModelRow key={m.id} model={m} selected={m.id === selected.id} onClick={() => choose(m)} />
               ))}
             </>
@@ -196,6 +217,14 @@ function ModelRow({
       <Dot provenance={model.provenance} />
       <span className="name">{model.name}</span>
       {model.meta && <span className="meta">{model.meta}</span>}
+      {model.tools === false && (
+        <span
+          className="meta no-tools"
+          title="This model can't use tools — it can chat, but it can't search, read files, or run skills."
+        >
+          chat only
+        </span>
+      )}
       {model.priceLabel && <span className="price">{model.priceLabel}</span>}
       {model.modality && model.modality !== "chat" && !model.priceLabel && (
         <span className="price">free</span>

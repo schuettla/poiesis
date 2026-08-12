@@ -8,6 +8,7 @@ pub mod cloud;
 pub mod connectors;
 pub mod conversations;
 pub mod embedgen;
+pub mod endpoints;
 pub mod files;
 pub mod imagegen;
 pub mod index;

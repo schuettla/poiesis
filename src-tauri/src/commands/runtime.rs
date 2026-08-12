@@ -58,9 +58,14 @@ async fn provision_backend(
         return Ok(bin);
     }
 
-    let asset = resolve_asset(&mgr.client, build_tag, &backend.asset_keywords())
-        .await
-        .map_err(err)?;
+    let asset = resolve_asset(
+        &mgr.client,
+        build_tag,
+        Backend::ENGINE_PREFIX,
+        &backend.asset_keywords(),
+    )
+    .await
+    .map_err(err)?;
     let archive_path = target_dir.join(&asset.name);
     download_with_resume(
         &mgr.client,
@@ -74,10 +79,15 @@ async fn provision_backend(
     .await
     .map_err(err)?;
     unpack_zip(&archive_path, &target_dir).map_err(err)?;
+    // The zip is dead weight once unpacked — a few hundred MB per backend, and
+    // resuming a download that already finished is not a thing we need.
+    let _ = std::fs::remove_file(&archive_path);
 
     // NVIDIA backends also need the separate CUDA runtime DLL package.
     if let Some(cudart_kw) = backend.cudart_keywords() {
-        if let Ok(cudart) = resolve_asset(&mgr.client, build_tag, &cudart_kw).await {
+        if let Ok(cudart) =
+            resolve_asset(&mgr.client, build_tag, Backend::CUDART_PREFIX, &cudart_kw).await
+        {
             let cudart_archive = target_dir.join(&cudart.name);
             download_with_resume(
                 &mgr.client,
@@ -91,6 +101,7 @@ async fn provision_backend(
             .await
             .map_err(err)?;
             unpack_zip(&cudart_archive, &target_dir).map_err(err)?;
+            let _ = std::fs::remove_file(&cudart_archive);
         }
     }
 

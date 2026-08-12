@@ -12,8 +12,6 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::manifest::Backend;
-
 /// The upstream repo for the llama.cpp engine assets.
 pub const LLAMA_REPO: &str = "ggml-org/llama.cpp";
 const USER_AGENT: &str = concat!("ProjectPoiesis/", env!("CARGO_PKG_VERSION"));
@@ -24,8 +22,12 @@ pub enum DownloadError {
     Http(#[from] reqwest::Error),
     #[error("filesystem error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("no upstream asset matched backend {0:?} in release {1}")]
-    NoAsset(Backend, String),
+    #[error("no asset in release {tag} matched '{prefix}…{keywords}…zip'")]
+    NoAsset {
+        tag: String,
+        prefix: String,
+        keywords: String,
+    },
     // Constructed by verify_sha256, used from Phase 3 (MKT-3).
     #[allow(dead_code)]
     #[error("checksum mismatch: expected {expected}, got {actual}")]
@@ -63,27 +65,37 @@ pub struct ResolvedAsset {
     pub size: u64,
 }
 
-fn name_matches(name: &str, keywords: &[&str]) -> bool {
+/// Does `name` start with `prefix` and contain every keyword?
+///
+/// The prefix is what separates an engine zip from the CUDA DLL package that
+/// sits beside it in the same release: since upstream dropped the `cu`
+/// discriminator, `llama-b10333-bin-win-cuda-12.4-x64.zip` and
+/// `cudart-llama-bin-win-cuda-12.4-x64.zip` share every substring that matters.
+fn name_matches(name: &str, prefix: &str, keywords: &[&str]) -> bool {
     let lower = name.to_ascii_lowercase();
-    keywords.iter().all(|k| lower.contains(k)) && lower.ends_with(".zip")
+    lower.starts_with(prefix)
+        && lower.ends_with(".zip")
+        && keywords.iter().all(|k| lower.contains(k))
 }
 
 /// Query the pinned llama.cpp release and find the asset matching all keywords.
 pub async fn resolve_asset(
     client: &reqwest::Client,
     build_tag: &str,
+    prefix: &str,
     keywords: &[&str],
 ) -> Result<ResolvedAsset, DownloadError> {
-    resolve_asset_from(client, LLAMA_REPO, build_tag, keywords).await
+    resolve_asset_from(client, LLAMA_REPO, build_tag, prefix, keywords).await
 }
 
 /// Query a specific GitHub repo's release (by tag) and find the asset whose name
-/// matches all keywords. Used for both the llama.cpp engine and the
-/// stable-diffusion.cpp image engine (9F).
+/// starts with `prefix` and matches all keywords. Used for both the llama.cpp
+/// engine and the stable-diffusion.cpp image engine (9F).
 pub async fn resolve_asset_from(
     client: &reqwest::Client,
     repo: &str,
     build_tag: &str,
+    prefix: &str,
     keywords: &[&str],
 ) -> Result<ResolvedAsset, DownloadError> {
     let url = format!("https://api.github.com/repos/{repo}/releases/tags/{build_tag}");
@@ -100,13 +112,17 @@ pub async fn resolve_asset_from(
     release
         .assets
         .into_iter()
-        .find(|a| name_matches(&a.name, keywords))
+        .find(|a| name_matches(&a.name, prefix, keywords))
         .map(|a| ResolvedAsset {
             name: a.name,
             url: a.browser_download_url,
             size: a.size,
         })
-        .ok_or_else(|| DownloadError::NoAsset(Backend::Cpu, build_tag.to_string()))
+        .ok_or_else(|| DownloadError::NoAsset {
+            tag: build_tag.to_string(),
+            prefix: prefix.to_string(),
+            keywords: keywords.join("…"),
+        })
 }
 
 /// Stream `url` to `dest`, resuming from any existing partial file via a Range
@@ -249,11 +265,14 @@ pub fn unpack_zip(archive: &Path, dest_dir: &Path) -> Result<Vec<PathBuf>, Downl
     Ok(written)
 }
 
-/// Find the single asset whose name matches all of `keywords` (test helper /
-/// mirror of the selection done inside [`resolve_asset`]).
+/// Find the single asset matching `prefix` + `keywords` (test helper / mirror of
+/// the selection done inside [`resolve_asset`]).
 #[cfg(test)]
-fn select_asset_name<'a>(names: &[&'a str], keywords: &[&str]) -> Option<&'a str> {
-    names.iter().copied().find(|n| name_matches(n, keywords))
+fn select_asset_name<'a>(names: &[&'a str], prefix: &str, keywords: &[&str]) -> Option<&'a str> {
+    names
+        .iter()
+        .copied()
+        .find(|n| name_matches(n, prefix, keywords))
 }
 
 /// Locate `llama-server.exe` within an extracted runtime directory.
@@ -287,59 +306,100 @@ mod tests {
     use super::*;
     use crate::runtime::manifest::Backend;
 
-    /// The real Windows `.zip` assets published on the pinned `b4585` release
-    /// (`ggml-org/llama.cpp`). Our keyword matcher must resolve each backend to
-    /// exactly the right one of these — this guards against the asset-naming
-    /// drift that broke the CUDA and CPU paths.
-    const B4585_WIN_ASSETS: &[&str] = &[
-        "cudart-llama-bin-win-cu11.7-x64.zip",
-        "cudart-llama-bin-win-cu12.4-x64.zip",
-        "llama-b4585-bin-win-avx-x64.zip",
-        "llama-b4585-bin-win-avx2-x64.zip",
-        "llama-b4585-bin-win-avx512-x64.zip",
-        "llama-b4585-bin-win-cuda-cu11.7-x64.zip",
-        "llama-b4585-bin-win-cuda-cu12.4-x64.zip",
-        "llama-b4585-bin-win-hip-x64-gfx1030.zip",
-        "llama-b4585-bin-win-noavx-x64.zip",
-        "llama-b4585-bin-win-openblas-x64.zip",
-        "llama-b4585-bin-win-sycl-x64.zip",
-        "llama-b4585-bin-win-vulkan-x64.zip",
+    /// The real Windows `.zip` assets published on the pinned release
+    /// (`ggml-org/llama.cpp`). Our matcher must resolve each backend to exactly
+    /// the right one of these — this guards against the asset-naming drift that
+    /// broke the CUDA and CPU paths once already. Keep this list in sync with
+    /// `PINNED_BUILD_TAG` whenever the pin moves.
+    const PINNED_WIN_ASSETS: &[&str] = &[
+        "cudart-llama-bin-win-cuda-12.4-x64.zip",
+        "cudart-llama-bin-win-cuda-13.3-x64.zip",
+        "llama-b10333-bin-win-cpu-arm64.zip",
+        "llama-b10333-bin-win-cpu-x64.zip",
+        "llama-b10333-bin-win-cuda-12.4-x64.zip",
+        "llama-b10333-bin-win-cuda-13.3-x64.zip",
+        "llama-b10333-bin-win-hip-radeon-x64.zip",
+        "llama-b10333-bin-win-opencl-adreno-arm64.zip",
+        "llama-b10333-bin-win-openvino-2026.2.1-x64.zip",
+        "llama-b10333-bin-win-sycl-x64.zip",
+        "llama-b10333-bin-win-vulkan-x64.zip",
     ];
 
+    fn engine_asset(backend: Backend) -> Option<&'static str> {
+        select_asset_name(
+            PINNED_WIN_ASSETS,
+            Backend::ENGINE_PREFIX,
+            &backend.asset_keywords(),
+        )
+    }
+
     #[test]
-    fn engine_keywords_resolve_real_b4585_assets() {
+    fn engine_keywords_resolve_real_pinned_assets() {
         let cases = [
-            (Backend::Cuda12, "llama-b4585-bin-win-cuda-cu12.4-x64.zip"),
-            (Backend::Vulkan, "llama-b4585-bin-win-vulkan-x64.zip"),
-            (Backend::Sycl, "llama-b4585-bin-win-sycl-x64.zip"),
-            (Backend::CpuAvx512, "llama-b4585-bin-win-avx512-x64.zip"),
-            (Backend::CpuAvx2, "llama-b4585-bin-win-avx2-x64.zip"),
-            (Backend::Cpu, "llama-b4585-bin-win-noavx-x64.zip"),
+            (Backend::Cuda12, "llama-b10333-bin-win-cuda-12.4-x64.zip"),
+            (Backend::Cuda13, "llama-b10333-bin-win-cuda-13.3-x64.zip"),
+            (Backend::Vulkan, "llama-b10333-bin-win-vulkan-x64.zip"),
+            (Backend::Sycl, "llama-b10333-bin-win-sycl-x64.zip"),
+            (Backend::Hip, "llama-b10333-bin-win-hip-radeon-x64.zip"),
+            (Backend::Cpu, "llama-b10333-bin-win-cpu-x64.zip"),
         ];
         for (backend, expected) in cases {
-            let got = select_asset_name(B4585_WIN_ASSETS, &backend.asset_keywords());
-            assert_eq!(got, Some(expected), "wrong engine asset for {backend:?}");
+            assert_eq!(
+                engine_asset(backend),
+                Some(expected),
+                "wrong engine asset for {backend:?}"
+            );
+        }
+    }
+
+    /// The regression that motivated the prefix: upstream renamed the CUDA
+    /// builds from `cuda-cu12.4` to `cuda-12.4`, at which point the engine zip
+    /// and the CUDA DLL package became substring-identical.
+    #[test]
+    fn cuda_engine_does_not_match_the_cudart_package() {
+        for backend in [Backend::Cuda12, Backend::Cuda13] {
+            let got = engine_asset(backend).unwrap();
+            assert!(
+                !got.starts_with("cudart"),
+                "matched the cudart package for {backend:?}: {got}"
+            );
         }
     }
 
     #[test]
-    fn cuda_engine_does_not_match_the_cudart_package() {
-        // "cudart" contains the substring "cuda"; the engine match must not be
-        // fooled into picking the DLL package instead of llama-server.
-        let got = select_asset_name(B4585_WIN_ASSETS, &Backend::Cuda12.asset_keywords()).unwrap();
-        assert!(!got.starts_with("cudart"), "matched the cudart package: {got}");
-    }
-
-    #[test]
     fn cudart_keywords_resolve_the_matching_dll_package() {
-        let kw = Backend::Cuda12.cudart_keywords().unwrap();
-        let got = select_asset_name(B4585_WIN_ASSETS, &kw);
-        assert_eq!(got, Some("cudart-llama-bin-win-cu12.4-x64.zip"));
+        let cases = [
+            (Backend::Cuda12, "cudart-llama-bin-win-cuda-12.4-x64.zip"),
+            (Backend::Cuda13, "cudart-llama-bin-win-cuda-13.3-x64.zip"),
+        ];
+        for (backend, expected) in cases {
+            let kw = backend.cudart_keywords().unwrap();
+            let got = select_asset_name(PINNED_WIN_ASSETS, Backend::CUDART_PREFIX, &kw);
+            assert_eq!(got, Some(expected), "wrong cudart package for {backend:?}");
+        }
     }
 
+    /// Every backend ships an arm64 sibling under a near-identical name; `x64`
+    /// is the only thing keeping us off a binary that cannot run here.
     #[test]
-    fn avx2_does_not_match_avx512_or_plain_avx() {
-        let got = select_asset_name(B4585_WIN_ASSETS, &Backend::CpuAvx2.asset_keywords()).unwrap();
-        assert_eq!(got, "llama-b4585-bin-win-avx2-x64.zip");
+    fn never_resolves_an_arm64_asset() {
+        for backend in Backend::ALL {
+            if let Some(got) = engine_asset(backend) {
+                assert!(!got.contains("arm64"), "picked an arm64 build: {got}");
+            }
+        }
+    }
+
+    /// Non-CUDA backends must not drag in a CUDA DLL download.
+    #[test]
+    fn only_cuda_backends_want_the_cudart_package() {
+        for backend in Backend::ALL {
+            let wants = backend.cudart_keywords().is_some();
+            assert_eq!(
+                wants,
+                matches!(backend, Backend::Cuda12 | Backend::Cuda13),
+                "unexpected cudart requirement for {backend:?}"
+            );
+        }
     }
 }

@@ -22,7 +22,7 @@ use tauri::{Emitter, State};
 
 use crate::autonomy::{autonomy_gate, Rung};
 use crate::cloud::{drive_turn, ChatEndpoint};
-use crate::commands::agent::{build_cloud_endpoint, ChatTarget};
+use crate::commands::agent::{build_remote_endpoint, ChatTarget};
 use crate::db::Db;
 use crate::memory::{Fact, MemoryStore, LESSONS};
 use crate::runtime::proxy::{CancelFlag, TurnOutcome};
@@ -107,16 +107,17 @@ pub async fn reflect_conversation_cmd(
     // Nothing to route through — bail quietly rather than surfacing an error
     // for a background process the user didn't ask for.
     let target = target.unwrap_or_default();
-    let endpoint = if target.provenance.as_deref() == Some("cloud") {
-        build_cloud_endpoint(&target).map_err(PoiesisError::Message)?
-    } else {
-        let Some((base_url, token)) = mgr.engine_endpoint().await else {
-            return Ok(Reflection::default());
-        };
-        ChatEndpoint::OpenAi {
-            base_url,
-            api_key: Some(token),
-            model: None,
+    let endpoint = match build_remote_endpoint(&db, &target).map_err(PoiesisError::Message)? {
+        Some(ep) => ep,
+        None => {
+            let Some((base_url, token)) = mgr.engine_endpoint().await else {
+                return Ok(Reflection::default());
+            };
+            ChatEndpoint::OpenAi {
+                base_url,
+                api_key: Some(token),
+                model: None,
+            }
         }
     };
 

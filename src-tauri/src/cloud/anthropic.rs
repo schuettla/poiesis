@@ -6,7 +6,7 @@
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 
-use crate::runtime::proxy::{CancelFlag, ProxyError, ToolCallReq, TurnOutcome};
+use crate::runtime::proxy::{api_error, CancelFlag, ProxyError, ToolCallReq, TurnOutcome};
 
 const ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2023-06-01";
@@ -50,8 +50,10 @@ where
         .header("content-type", "application/json")
         .json(&body)
         .send()
-        .await?
-        .error_for_status()?;
+        .await?;
+    if resp.status().is_client_error() || resp.status().is_server_error() {
+        return Err(api_error(resp).await);
+    }
 
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();

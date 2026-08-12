@@ -24,7 +24,8 @@ body,
 input,
 textarea,
 [contenteditable="true"],
-[data-selectable="true"] {
+[data-selectable="true"],
+[data-selectable="true"] * {
   user-select: text;
   -webkit-user-select: text;
 }

@@ -35,7 +35,7 @@
   font-size: 12px;
   color: var(--ink-muted);
   border: 1px solid var(--paper-edge-2);
-  border-radius: 999px;
+  border-radius: var(--radius);
   padding: 4px 11px;
 }
 .engine-state-badge .dot {
@@ -132,7 +132,7 @@
   font-size: 11px;
   font-family: var(--font-sans);
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   color: var(--ink-muted);
   background: var(--paper-edge);
   border: 1px solid var(--paper-edge-2);

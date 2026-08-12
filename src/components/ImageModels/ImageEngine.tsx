@@ -7,6 +7,7 @@ import {
   type ImageSetupStatus,
   type DownloadProgress,
 } from "../../lib/api";
+import { useAppStore } from "../../lib/store";
 
 /** The "Image" tab of the Engine view: install / status of the local
  * stable-diffusion.cpp engine — the image-gen twin of the llama.cpp engine
@@ -17,13 +18,18 @@ export default function ImageEngine() {
   const [prog, setProg] = useState<DownloadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [advanced, setAdvanced] = useState(false);
+  const refreshMediaModels = useAppStore((s) => s.refreshMediaModels);
 
+  // The local image backend only counts as usable with *both* an engine
+  // binary and a checkpoint on disk, so installing (or repointing) the engine
+  // changes what the model chooser should be offering.
   async function refresh() {
     try {
       setStatus(await imageSetupStatus());
     } catch (e) {
       setError(String(e));
     }
+    await refreshMediaModels();
   }
 
   useEffect(() => {
@@ -35,6 +41,7 @@ export default function ImageEngine() {
     setError(null);
     try {
       setStatus(await installImageEngine((p) => setProg(p)));
+      await refreshMediaModels();
     } catch (e) {
       setError(String(e));
     } finally {

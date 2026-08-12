@@ -19,7 +19,7 @@ pub mod index_roots;
 pub mod phash;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 21;
 
 /// The rationale a skill-revision proposal is written with (`OUT-2`). Only
 /// display text — the proposal is *identified* by its `skill-revision` target,
@@ -231,6 +231,9 @@ pub struct Artifact {
     pub meta_json: Option<String>,
     /// The artifact this one was refined from (Path B), if any.
     pub parent_id: Option<String>,
+    /// The assistant turn that produced this artifact, so a reloaded
+    /// conversation can still show its inline chip in the message stream.
+    pub message_id: Option<String>,
 }
 
 /// What generated media has cost and how much of it there is (`CST-2`).
@@ -325,6 +328,21 @@ pub struct Connector {
     pub transport: String,
     pub enabled: bool,
     pub config_json: Option<String>,
+    pub created_at: i64,
+}
+
+/// A user's own OpenAI-compatible model server (Ollama, LM Studio, or a
+/// remote box). The API key, if any, is **not** stored here — it lives in the
+/// OS credential store (`secrets::SERVICE_ENDPOINT`, account = this row's
+/// `id`); only connection metadata lives in SQLite.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalEndpointRow {
+    pub id: String,
+    pub label: String,
+    pub base_url: String,
+    pub kind: String,
+    pub ctx_size: i64,
+    pub enabled: bool,
     pub created_at: i64,
 }
 
@@ -610,6 +628,89 @@ impl Db {
         // v17 (Phase 13, `JOB-1`): the `media_jobs` table is created by SCHEMA
         // above — a brand-new table needs no `ALTER TABLE` block, same as v13's
         // `tool_fixes` and v14's `browser_sessions`.
+        if current < 18 {
+            // v18: collapse library rows that name the same file. Leaving the
+            // Models view mid-download reverted the button to "Download", so a
+            // second click started a *concurrent* fetch of the same path; each
+            // one registered its own row, and one model appeared two or three
+            // times over. Worse, deleting one copy removed the shared file out
+            // from under the rest. Keep the earliest row per path.
+            conn.execute(
+                "DELETE FROM model_library
+                 WHERE rowid NOT IN (SELECT MIN(rowid) FROM model_library GROUP BY path)",
+                [],
+            )?;
+            // If the row that carried a role's default was one of the copies
+            // just removed, give that role its default back.
+            conn.execute(
+                "UPDATE model_library SET is_default = 1
+                 WHERE rowid IN (
+                     SELECT MIN(rowid) FROM model_library m
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM model_library d
+                         WHERE d.role = m.role AND d.is_default = 1
+                     )
+                     GROUP BY role
+                 )",
+                [],
+            )?;
+        }
+        if current < 19 {
+            // v19: an artifact remembers which assistant turn produced it. Without
+            // this, reopening a conversation loses the link between a non-media
+            // artifact (document/code/svg/html) and its message, so the inline
+            // chip that opened it in the Workbench never comes back — only the
+            // Workbench's own artifact list, which loads independently of any
+            // message, still shows it.
+            Self::add_column(&conn, "artifacts", "message_id", "TEXT")?;
+        }
+        if current < 20 {
+            // v20 backfills what v19 only made room for, and is deliberately its
+            // own version rather than more code in the block above: a database
+            // that already reached 19 would never run that block again, so a
+            // backfill added there strands exactly the conversations it was
+            // written to rescue. Re-running this is harmless — it only ever
+            // touches rows that are still NULL.
+            //
+            // Media needs no guesswork: the attachment row that renders it
+            // already names both the artifact and the message it sits in
+            // (`ART-2`).
+            conn.execute(
+                "UPDATE artifacts SET message_id = (
+                     SELECT at.message_id FROM attachments at
+                     WHERE at.artifact_id = artifacts.id AND at.message_id IS NOT NULL
+                     LIMIT 1
+                 )
+                 WHERE message_id IS NULL
+                   AND EXISTS (
+                       SELECT 1 FROM attachments at WHERE at.artifact_id = artifacts.id
+                   )",
+                [],
+            )?;
+            // A document/code/svg/html artifact has no such link, so fall back to
+            // time. The assistant row is persisted *before* its turn runs, so the
+            // newest assistant message at or before the artifact's timestamp is
+            // the turn that made it. A heuristic — but a chip on a neighbouring
+            // old turn beats an artifact that never appears in the stream again.
+            // `rowid` breaks the tie when two turns share a millisecond, so the
+            // result is at least deterministic rather than whichever row SQLite
+            // happened to reach first.
+            conn.execute(
+                "UPDATE artifacts SET message_id = (
+                     SELECT m.id FROM messages m
+                     WHERE m.conversation_id = artifacts.conversation_id
+                       AND m.role = 'assistant'
+                       AND m.created_at <= artifacts.created_at
+                     ORDER BY m.created_at DESC, m.rowid DESC
+                     LIMIT 1
+                 )
+                 WHERE message_id IS NULL AND conversation_id IS NOT NULL",
+                [],
+            )?;
+        }
+        // v21: `local_endpoints` is created by SCHEMA above — a brand-new
+        // table needs no `ALTER TABLE` block, same as v13's `tool_fixes`,
+        // v14's `browser_sessions`, and v17's `media_jobs`.
         if current < SCHEMA_VERSION {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -1314,6 +1415,37 @@ impl Db {
         Ok(rows)
     }
 
+    /// Look up a library entry by its on-disk path — used to make registering
+    /// a download idempotent. Without this, re-running a download for a model
+    /// that's already fully on disk (e.g. the user re-clicking "Download"
+    /// after navigating away and back) adds a second row for the same file
+    /// instead of recognizing it's already in the library.
+    pub fn find_model_by_path(&self, path: &str) -> Result<Option<ModelEntry>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn
+            .query_row(
+                "SELECT id, name, path, quant, size_bytes, vision, role, is_default, added_at
+                 FROM model_library WHERE path = ?1",
+                [path],
+                Self::map_model,
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Re-record an entry's size after its file was fetched again — used when
+    /// a registered model turned out to be missing or half-written, so the
+    /// repair reuses the existing row instead of adding a second one for the
+    /// same path.
+    pub fn set_model_size(&self, id: &str, size_bytes: Option<i64>) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE model_library SET size_bytes = ?2 WHERE id = ?1",
+            params![id, size_bytes],
+        )?;
+        Ok(())
+    }
+
     /// Delete a model and return the file path to clean up, if any.
     ///
     /// Deleting the role's default promotes the next-newest model of that role
@@ -1912,6 +2044,88 @@ impl Db {
         Ok(())
     }
 
+    // ---- local endpoints (a user's own Ollama/LM Studio/OpenAI-compatible server) ----
+
+    pub fn insert_local_endpoint(
+        &self,
+        label: &str,
+        base_url: &str,
+        ctx_size: i64,
+    ) -> Result<LocalEndpointRow, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let id = new_id();
+        let ts = now_ms();
+        conn.execute(
+            "INSERT INTO local_endpoints(id, label, base_url, kind, ctx_size, enabled, created_at)
+             VALUES(?1, ?2, ?3, 'openai', ?4, 1, ?5)",
+            params![id, label, base_url, ctx_size, ts],
+        )?;
+        Ok(LocalEndpointRow {
+            id,
+            label: label.to_string(),
+            base_url: base_url.to_string(),
+            kind: "openai".to_string(),
+            ctx_size,
+            enabled: true,
+            created_at: ts,
+        })
+    }
+
+    pub fn list_local_endpoints(&self) -> Result<Vec<LocalEndpointRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, label, base_url, kind, ctx_size, enabled, created_at
+             FROM local_endpoints ORDER BY created_at",
+        )?;
+        let rows = stmt
+            .query_map([], Self::map_local_endpoint)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_local_endpoint(&self, id: &str) -> Result<Option<LocalEndpointRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn
+            .query_row(
+                "SELECT id, label, base_url, kind, ctx_size, enabled, created_at
+                 FROM local_endpoints WHERE id = ?1",
+                [id],
+                Self::map_local_endpoint,
+            )
+            .ok();
+        Ok(row)
+    }
+
+    pub fn update_local_endpoint(
+        &self,
+        id: &str,
+        label: &str,
+        base_url: &str,
+        ctx_size: i64,
+    ) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE local_endpoints SET label = ?2, base_url = ?3, ctx_size = ?4 WHERE id = ?1",
+            params![id, label, base_url, ctx_size],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_local_endpoint_enabled(&self, id: &str, enabled: bool) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE local_endpoints SET enabled = ?2 WHERE id = ?1",
+            params![id, enabled as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_local_endpoint(&self, id: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM local_endpoints WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     // ---- mail accounts (MAIL-1) ----
 
     pub fn add_mail_account(&self, a: &NewMailAccount) -> Result<MailAccount, DbError> {
@@ -2004,8 +2218,9 @@ impl Db {
         title: &str,
         kind: &str,
         content: &str,
+        message_id: Option<&str>,
     ) -> Result<Artifact, DbError> {
-        self.add_artifact_with(conversation_id, title, kind, content, None, None)
+        self.add_artifact_with(conversation_id, title, kind, content, None, None, message_id)
     }
 
     /// Like `add_artifact`, plus the media metadata and lineage a generated
@@ -2019,14 +2234,15 @@ impl Db {
         content: &str,
         meta_json: Option<&str>,
         parent_id: Option<&str>,
+        message_id: Option<&str>,
     ) -> Result<Artifact, DbError> {
         let conn = self.conn.lock().unwrap();
         let id = new_id();
         let ts = now_ms();
         conn.execute(
-            "INSERT INTO artifacts(id, conversation_id, title, kind, content, created_at, meta_json, parent_id)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![id, conversation_id, title, kind, content, ts, meta_json, parent_id],
+            "INSERT INTO artifacts(id, conversation_id, title, kind, content, created_at, meta_json, parent_id, message_id)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![id, conversation_id, title, kind, content, ts, meta_json, parent_id, message_id],
         )?;
         Ok(Artifact {
             id,
@@ -2038,6 +2254,7 @@ impl Db {
             saved_path: None,
             meta_json: meta_json.map(|s| s.to_string()),
             parent_id: parent_id.map(|s| s.to_string()),
+            message_id: message_id.map(|s| s.to_string()),
         })
     }
 
@@ -2192,13 +2409,14 @@ impl Db {
             saved_path: r.get(6)?,
             meta_json: r.get(7)?,
             parent_id: r.get(8)?,
+            message_id: r.get(9)?,
         })
     }
 
     pub fn list_artifacts(&self, conversation_id: &str) -> Result<Vec<Artifact>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, title, kind, content, created_at, saved_path, meta_json, parent_id
+            "SELECT id, conversation_id, title, kind, content, created_at, saved_path, meta_json, parent_id, message_id
              FROM artifacts WHERE conversation_id = ?1 ORDER BY created_at ASC",
         )?;
         let rows = stmt
@@ -2210,7 +2428,7 @@ impl Db {
     pub fn list_all_artifacts(&self) -> Result<Vec<Artifact>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, title, kind, content, created_at, saved_path, meta_json, parent_id
+            "SELECT id, conversation_id, title, kind, content, created_at, saved_path, meta_json, parent_id, message_id
              FROM artifacts ORDER BY created_at DESC",
         )?;
         let rows = stmt
@@ -2222,7 +2440,7 @@ impl Db {
     pub fn get_artifact(&self, id: &str) -> Result<Option<Artifact>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, title, kind, content, created_at, saved_path, meta_json, parent_id
+            "SELECT id, conversation_id, title, kind, content, created_at, saved_path, meta_json, parent_id, message_id
              FROM artifacts WHERE id = ?1",
         )?;
         let row = stmt.query_row([id], Self::map_artifact).ok();
@@ -2631,6 +2849,18 @@ impl Db {
         })
     }
 
+    fn map_local_endpoint(row: &rusqlite::Row) -> rusqlite::Result<LocalEndpointRow> {
+        Ok(LocalEndpointRow {
+            id: row.get(0)?,
+            label: row.get(1)?,
+            base_url: row.get(2)?,
+            kind: row.get(3)?,
+            ctx_size: row.get(4)?,
+            enabled: row.get::<_, i64>(5)? != 0,
+            created_at: row.get(6)?,
+        })
+    }
+
     fn map_conversation(row: &rusqlite::Row) -> rusqlite::Result<Conversation> {
         Ok(Conversation {
             id: row.get(0)?,
@@ -2859,11 +3089,93 @@ mod tests {
         assert_eq!(db.conversation_folder("nope").unwrap(), (None, "confirm".into()));
     }
 
+    /// A non-media artifact (document/code/svg/html) has to remember which
+    /// turn made it, or the inline chip that opens it in the Workbench is
+    /// gone the moment the conversation reloads — even though the Workbench's
+    /// own artifact list, which doesn't key off any message, still has it.
+    #[test]
+    fn an_artifact_remembers_the_message_that_made_it() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.create_conversation("Docs", None, false).unwrap();
+        let msg = db
+            .append_message(
+                &c.id,
+                &NewMessage {
+                    role: "assistant".into(),
+                    content: "here you go".into(),
+                    model_name: None,
+                    model_provenance: None,
+                    steps_json: None,
+                    attachments: vec![],
+                },
+            )
+            .unwrap();
+        let art = db
+            .add_artifact(Some(&c.id), "Report", "markdown", "# hi", Some(&msg.id))
+            .unwrap();
+        assert_eq!(art.message_id.as_deref(), Some(msg.id.as_str()));
+
+        let reloaded = db.list_artifacts(&c.id).unwrap();
+        assert_eq!(reloaded[0].message_id.as_deref(), Some(msg.id.as_str()));
+    }
+
+    /// The upgrade has to carry the conversations that already exist, or the
+    /// column only ever describes artifacts made after it landed and every
+    /// older chat stays missing its artifacts in the stream.
+    #[test]
+    fn the_upgrade_backfills_which_message_made_each_artifact() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.create_conversation("Legacy", None, false).unwrap();
+        let assistant = |content: &str| NewMessage {
+            role: "assistant".into(),
+            content: content.into(),
+            model_name: None,
+            model_provenance: None,
+            steps_json: None,
+            attachments: vec![],
+        };
+        let first = db.append_message(&c.id, &assistant("one")).unwrap();
+        let second = db.append_message(&c.id, &assistant("two")).unwrap();
+        let doc = db
+            .add_artifact(Some(&c.id), "Report", "markdown", "# hi", None)
+            .unwrap();
+        let media = db
+            .add_artifact_with(Some(&c.id), "fox", "image", r"C:\m\fox.png", None, None, None)
+            .unwrap();
+        db.add_attachment(&second.id, "image", "fox.png", r"C:\m\fox.png", Some(&media.id))
+            .unwrap();
+
+        // Rewind to the state a real install actually got stuck in: already
+        // stamped 19, so the column exists but nothing ever filled it. Rewinding
+        // to 18 would pass even if the backfill were buried in the v19 block,
+        // which is the very mistake this guards against. Timestamps are pinned so
+        // "the turn that was open when the artifact appeared" is the second one
+        // beyond doubt.
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("UPDATE messages SET created_at = 100 WHERE id = ?1", [&first.id])
+                .unwrap();
+            conn.execute("UPDATE messages SET created_at = 200 WHERE id = ?1", [&second.id])
+                .unwrap();
+            conn.execute("UPDATE artifacts SET message_id = NULL, created_at = 300", [])
+                .unwrap();
+            conn.pragma_update(None, "user_version", 19).unwrap();
+        }
+        db.migrate().unwrap();
+
+        let made_by = |id: &str| db.get_artifact(id).unwrap().unwrap().message_id;
+        // Media is exact — the attachment row already knew both ends.
+        assert_eq!(made_by(&media.id).as_deref(), Some(second.id.as_str()));
+        // The document has only the timestamps to go on, and lands on the turn
+        // that was open rather than the one before it.
+        assert_eq!(made_by(&doc.id).as_deref(), Some(second.id.as_str()));
+    }
+
     #[test]
     fn artifacts_remember_where_they_were_saved() {
         let db = Db::open_in_memory().unwrap();
         let c = db.create_conversation("Art", None, false).unwrap();
-        let a = db.add_artifact(Some(&c.id), "Chart", "svg", "<svg/>").unwrap();
+        let a = db.add_artifact(Some(&c.id), "Chart", "svg", "<svg/>", None).unwrap();
         assert!(a.saved_path.is_none(), "an artifact starts as chat-only");
 
         db.set_artifact_saved_path(&a.id, r"C:\work\thing\chart.svg").unwrap();
@@ -2930,6 +3242,7 @@ mod tests {
                 "image",
                 r"C:\media\fox.png",
                 Some(r#"{"provider_label":"SDXL-Turbo","width":512,"height":512}"#),
+                None,
                 None,
             )
             .unwrap();
@@ -3250,6 +3563,70 @@ mod tests {
             size_bytes: None,
             vision: false,
         }
+    }
+
+    /// Two rows naming one file, as the duplicate-download bug produced: the
+    /// Models view was left mid-download, the button reverted to "Download",
+    /// and the second click registered a second row for the same path.
+    fn a_duplicate() -> NewModelEntry {
+        NewModelEntry {
+            name: "qwen".into(),
+            path: "/models/qwen.gguf".into(),
+            quant: None,
+            size_bytes: None,
+            vision: false,
+        }
+    }
+
+    #[test]
+    fn duplicate_library_rows_for_one_file_collapse_on_upgrade() {
+        let db = Db::open_in_memory().unwrap();
+        let first = db.add_model(&a_duplicate()).unwrap();
+        db.add_model(&a_duplicate()).unwrap();
+        db.add_model(&a_duplicate()).unwrap();
+        let other = db.add_model(&a_model("llama")).unwrap();
+        assert_eq!(db.list_models().unwrap().len(), 4, "three copies plus one real second model");
+
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.pragma_update(None, "user_version", 17).unwrap();
+        }
+        db.migrate().unwrap();
+
+        let rows = db.list_models().unwrap();
+        assert_eq!(rows.len(), 2, "the three copies collapse to one");
+        assert!(rows.iter().any(|m| m.id == first.id), "the earliest row is the one kept");
+        assert!(rows.iter().any(|m| m.id == other.id), "a genuinely different file is untouched");
+    }
+
+    /// The default must survive the collapse: if the row carrying it was one
+    /// of the copies removed, the role would otherwise be left with none.
+    #[test]
+    fn dedupe_gives_a_role_its_default_back() {
+        let db = Db::open_in_memory().unwrap();
+        db.add_model(&a_duplicate()).unwrap();
+        let second = db.add_model(&a_duplicate()).unwrap();
+        db.set_default_model(&second.id).unwrap();
+
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.pragma_update(None, "user_version", 17).unwrap();
+        }
+        db.migrate().unwrap();
+
+        let rows = db.list_models().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].is_default, "the surviving row picks the default back up");
+    }
+
+    /// What makes a repeat download idempotent rather than duplicating.
+    #[test]
+    fn a_model_is_findable_by_its_path() {
+        let db = Db::open_in_memory().unwrap();
+        let added = db.add_model(&a_model("qwen")).unwrap();
+        let found = db.find_model_by_path("/models/qwen.gguf").unwrap();
+        assert_eq!(found.map(|m| m.id), Some(added.id));
+        assert!(db.find_model_by_path("/models/nothing.gguf").unwrap().is_none());
     }
 
     /// One table, three engines: installing an embedder must not disturb the

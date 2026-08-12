@@ -3,17 +3,16 @@ import {
   detectHardware,
   recommendRuntime,
   recommendedCatalog,
-  downloadModel,
   listRepoFiles,
   listGithubModels,
   listModels,
   setDefaultModel,
   deleteModelEntry,
   inTauri,
+  FIT_LABEL,
   type HardwareProfile,
   type RuntimeSelection,
   type CatalogEntry,
-  type Fit,
 } from "../lib/api";
 import { useAppStore } from "../lib/store";
 import ImageModels from "../components/ImageModels/ImageModels";
@@ -27,12 +26,6 @@ function formatVram(mb: number | null): string {
 function formatSize(mb: number): string {
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
 }
-const FIT_LABEL: Record<Fit, string> = {
-  great: "Runs great on your PC",
-  slow: "Runs slowly",
-  "wont-fit": "Won't fit",
-};
-
 interface RepoGroup {
   repo: string;
   files: CatalogEntry[];
@@ -45,7 +38,6 @@ export default function Models() {
   const [rec, setRec] = useState<RuntimeSelection | null>(null);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [discovered, setDiscovered] = useState<RepoGroup[]>([]);
-  const [progress, setProgress] = useState<Record<string, number | "done">>({});
   const [error, setError] = useState<string | null>(null);
   const [repoInput, setRepoInput] = useState("");
   const [finding, setFinding] = useState(false);
@@ -56,6 +48,10 @@ export default function Models() {
   const loadingModel = useAppStore((s) => s.loadingModel);
   const selectedModelId = useAppStore((s) => s.selectedModelId);
   const setView = useAppStore((s) => s.setView);
+  // Lives in the store, not local state, so it survives leaving and
+  // returning to this view instead of resetting to a bare "Download" button.
+  const progress = useAppStore((s) => s.modelDownloads);
+  const downloadCatalogModel = useAppStore((s) => s.downloadCatalogModel);
 
   const haveByUrl = new Set(libraryModels.map((m) => m.path.split(/[\\/]/).pop()));
   const filenameOf = (entry: CatalogEntry) => entry.url.split("?")[0].split("/").pop() ?? "";
@@ -75,24 +71,10 @@ export default function Models() {
   }, []);
 
   async function download(entry: CatalogEntry) {
-    setProgress((p) => ({ ...p, [entry.id]: 0 }));
     try {
-      await downloadModel(
-        { url: entry.url, name: entry.name, quant: entry.quant, vision: entry.vision },
-        (p) => {
-          const pct = p.total ? Math.round((p.received / p.total) * 100) : 0;
-          setProgress((prev) => ({ ...prev, [entry.id]: pct }));
-        }
-      );
-      setProgress((p) => ({ ...p, [entry.id]: "done" }));
-      await refreshLibrary();
+      await downloadCatalogModel(entry);
     } catch (e) {
       setError(String(e));
-      setProgress((p) => {
-        const next = { ...p };
-        delete next[entry.id];
-        return next;
-      });
     }
   }
 
@@ -184,6 +166,46 @@ export default function Models() {
           local library.
         </p>
 
+        {/* Above the tabs on purpose: the same machine runs both kinds of
+            model, and both catalogs judge their downloads against it. Nesting
+            it inside the Language tab hid it exactly when someone was sizing
+            up a 16 GB diffusion model. */}
+        <section className="hw-panel">
+          <h2 className="hw-title">Your PC</h2>
+          {!inTauri() && <p className="hw-note">Hardware detection runs in the desktop app.</p>}
+          {error && <p className="hw-note error">{error}</p>}
+          {hw && (
+            <div className="hw-grid">
+              <div className="hw-row">
+                <span className="hw-label">Processor</span>
+                <span className="hw-value">
+                  {hw.cpu.brand} · {hw.cpu.physical_cores} cores
+                  {hw.cpu.avx512 ? " · AVX-512" : hw.cpu.avx2 ? " · AVX2" : ""}
+                </span>
+              </div>
+              <div className="hw-row">
+                <span className="hw-label">Memory</span>
+                <span className="hw-value">{(hw.ram_mb / 1024).toFixed(1)} GB RAM</span>
+              </div>
+              {hw.gpus.map((g, i) => (
+                <div className="hw-row" key={i}>
+                  <span className="hw-label">Graphics</span>
+                  <span className="hw-value">
+                    {g.name}
+                    {g.vram_mb ? ` · ${formatVram(g.vram_mb)}` : ""}
+                  </span>
+                </div>
+              ))}
+              {rec && (
+                <div className="hw-row">
+                  <span className="hw-label">Engine</span>
+                  <span className="hw-value">{rec.rationale}</span>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
         <div className="model-tabs" role="tablist" aria-label="Model type">
           <button
             className={`model-tab ${tab === "language" ? "on" : ""}`}
@@ -227,42 +249,6 @@ export default function Models() {
             )}
           </section>
         )}
-
-        <section className="hw-panel">
-          <h2 className="hw-title">Your PC</h2>
-          {!inTauri() && <p className="hw-note">Hardware detection runs in the desktop app.</p>}
-          {error && <p className="hw-note error">{error}</p>}
-          {hw && (
-            <div className="hw-grid">
-              <div className="hw-row">
-                <span className="hw-label">Processor</span>
-                <span className="hw-value">
-                  {hw.cpu.brand} · {hw.cpu.physical_cores} cores
-                  {hw.cpu.avx512 ? " · AVX-512" : hw.cpu.avx2 ? " · AVX2" : ""}
-                </span>
-              </div>
-              <div className="hw-row">
-                <span className="hw-label">Memory</span>
-                <span className="hw-value">{(hw.ram_mb / 1024).toFixed(1)} GB RAM</span>
-              </div>
-              {hw.gpus.map((g, i) => (
-                <div className="hw-row" key={i}>
-                  <span className="hw-label">Graphics</span>
-                  <span className="hw-value">
-                    {g.name}
-                    {g.vram_mb ? ` · ${formatVram(g.vram_mb)}` : ""}
-                  </span>
-                </div>
-              ))}
-              {rec && (
-                <div className="hw-row">
-                  <span className="hw-label">Engine</span>
-                  <span className="hw-value">{rec.rationale}</span>
-                </div>
-              )}
-            </div>
-          )}
-        </section>
 
         {/* Your library (MKT-5) */}
         {libraryModels.length > 0 && (

@@ -1,8 +1,10 @@
-//! Unified catalog model + hardware-fit classifier.
+//! Unified catalog model + the language-model speed estimate. The fit
+//! classifier itself now lives in `runtime::hardware`, since the image catalog
+//! asks the same question of the same hardware.
 
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::hardware::HardwareProfile;
+use crate::runtime::hardware::Fit;
 
 /// A model offering normalized across sources (curated, Hugging Face, GitHub).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,30 +24,6 @@ pub struct CatalogModel {
     /// "huggingface" | "github" | "curated".
     pub source: String,
     pub license: Option<String>,
-}
-
-/// Hardware-fit verdict for a model on this machine (MKT-4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Fit {
-    /// Fits comfortably in VRAM — fast.
-    Great,
-    /// Fits in RAM but not VRAM — runs on CPU, slower.
-    Slow,
-    /// Too large for available memory.
-    WontFit,
-}
-
-impl Fit {
-    // The frontend renders its own localized labels; kept for tests/logging.
-    #[allow(dead_code)]
-    pub fn label(&self) -> &'static str {
-        match self {
-            Fit::Great => "Runs great on your PC",
-            Fit::Slow => "Runs slowly",
-            Fit::WontFit => "Won't fit",
-        }
-    }
 }
 
 /// A rough, clearly-approximate tokens/sec band for a model on this machine
@@ -70,26 +48,6 @@ pub fn estimate_speed(size_mb: u64, fit: Fit) -> String {
         Fit::WontFit => "—",
     }
     .to_string()
-}
-
-/// Classify how a model of `size_mb` will run on `hw`. Heuristic: a GGUF needs
-/// roughly its file size plus ~20% headroom for context/KV-cache. If that fits
-/// in GPU VRAM it runs great; else if it fits in system RAM it runs (slowly) on
-/// CPU; otherwise it won't fit.
-pub fn classify_fit(size_mb: u64, hw: &HardwareProfile) -> Fit {
-    let needed = (size_mb as f64 * 1.2) as u64;
-    let vram = hw
-        .primary_gpu()
-        .and_then(|g| g.vram_mb)
-        .unwrap_or(0);
-    if vram >= needed {
-        Fit::Great
-    } else if hw.ram_mb >= needed + 2048 {
-        // Leave ~2 GB for the OS + app shell.
-        Fit::Slow
-    } else {
-        Fit::WontFit
-    }
 }
 
 /// The curated "recommended" overlay for the consumer persona (D-5). Small,
@@ -140,6 +98,146 @@ pub fn recommended_catalog() -> Vec<CatalogModel> {
             ),
             source: "curated".into(),
             license: Some("Llama 3.1 Community".into()),
+        },
+        CatalogModel {
+            id: "curated:gemma-3-4b-q4".into(),
+            name: "Gemma 3 4B Instruct".into(),
+            description: "Google's latest small model — quick and efficient for everyday chat.".into(),
+            quant: "Q4_K_M".into(),
+            size_mb: 2549,
+            vision: false,
+            url: hf_url(
+                "bartowski/google_gemma-3-4b-it-GGUF",
+                "google_gemma-3-4b-it-Q4_K_M.gguf",
+            ),
+            source: "curated".into(),
+            license: Some("Gemma".into()),
+        },
+        CatalogModel {
+            id: "curated:qwen3-8b-q4".into(),
+            name: "Qwen3 8B".into(),
+            description: "Alibaba's newest generation; sharper reasoning than Qwen 2.5 at a similar size.".into(),
+            quant: "Q4_K_M".into(),
+            size_mb: 5151,
+            vision: false,
+            url: hf_url(
+                "bartowski/Qwen_Qwen3-8B-GGUF",
+                "Qwen_Qwen3-8B-Q4_K_M.gguf",
+            ),
+            source: "curated".into(),
+            license: Some("Apache-2.0".into()),
+        },
+        CatalogModel {
+            id: "curated:gemma-3-12b-q4".into(),
+            name: "Gemma 3 12B Instruct".into(),
+            description: "A step up in quality from the 4B — still comfortable on mid-range GPUs.".into(),
+            quant: "Q4_K_M".into(),
+            size_mb: 7475,
+            vision: false,
+            url: hf_url(
+                "bartowski/google_gemma-3-12b-it-GGUF",
+                "google_gemma-3-12b-it-Q4_K_M.gguf",
+            ),
+            source: "curated".into(),
+            license: Some("Gemma".into()),
+        },
+        CatalogModel {
+            id: "curated:qwen3-14b-q4".into(),
+            name: "Qwen3 14B".into(),
+            description: "Strong reasoning and long-context handling for capable machines.".into(),
+            quant: "Q4_K_M".into(),
+            size_mb: 9216,
+            vision: false,
+            url: hf_url(
+                "bartowski/Qwen_Qwen3-14B-GGUF",
+                "Qwen_Qwen3-14B-Q4_K_M.gguf",
+            ),
+            source: "curated".into(),
+            license: Some("Apache-2.0".into()),
+        },
+        CatalogModel {
+            id: "curated:gpt-oss-20b-q4".into(),
+            name: "GPT-OSS 20B".into(),
+            description: "OpenAI's first open-weight model — a mixture-of-experts tuned for reasoning and agentic tasks.".into(),
+            quant: "Q4_K_M".into(),
+            size_mb: 11776,
+            vision: false,
+            url: hf_url(
+                "unsloth/gpt-oss-20b-GGUF",
+                "gpt-oss-20b-Q4_K_M.gguf",
+            ),
+            source: "curated".into(),
+            license: Some("Apache-2.0".into()),
+        },
+        CatalogModel {
+            id: "curated:muse-glimmer-30b-q4".into(),
+            name: "Muse Glimmer 30B".into(),
+            description: "Meta Superintelligence Lab's newest agentic model — reasoning, tool use, and multimodal understanding in one 30B checkpoint. Released days ago; still largely unproven.".into(),
+            quant: "UD-Q4_K_XL".into(),
+            size_mb: 16282,
+            vision: false,
+            url: hf_url(
+                "unsloth/Muse-Glimmer-30B-GGUF",
+                "Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
+            ),
+            source: "curated".into(),
+            license: Some("Apache-2.0".into()),
+        },
+        CatalogModel {
+            id: "curated:gemma-3-27b-q4".into(),
+            name: "Gemma 3 27B Instruct".into(),
+            description: "Google's largest widely-run Gemma — near-flagship quality; needs a high-VRAM GPU.".into(),
+            quant: "Q4_K_M".into(),
+            size_mb: 16947,
+            vision: false,
+            url: hf_url(
+                "bartowski/google_gemma-3-27b-it-GGUF",
+                "google_gemma-3-27b-it-Q4_K_M.gguf",
+            ),
+            source: "curated".into(),
+            license: Some("Gemma".into()),
+        },
+        CatalogModel {
+            id: "curated:gemma-4-26b-a4b-q4".into(),
+            name: "Gemma 4 26B-A4B Instruct".into(),
+            description: "Google's newest generation, mixture-of-experts — flagship quality with lighter compute per token.".into(),
+            quant: "Q4_K_M".into(),
+            size_mb: 17408,
+            vision: false,
+            url: hf_url(
+                "bartowski/google_gemma-4-26B-A4B-it-GGUF",
+                "google_gemma-4-26B-A4B-it-Q4_K_M.gguf",
+            ),
+            source: "curated".into(),
+            license: Some("Gemma".into()),
+        },
+        CatalogModel {
+            id: "curated:qwen3.6-27b-q4".into(),
+            name: "Qwen3.6 27B".into(),
+            description: "Alibaba's latest release; their strongest mid-size model to date.".into(),
+            quant: "Q4_K_M".into(),
+            size_mb: 18432,
+            vision: false,
+            url: hf_url(
+                "bartowski/Qwen_Qwen3.6-27B-GGUF",
+                "Qwen_Qwen3.6-27B-Q4_K_M.gguf",
+            ),
+            source: "curated".into(),
+            license: Some("Apache-2.0".into()),
+        },
+        CatalogModel {
+            id: "curated:qwen3-32b-q4".into(),
+            name: "Qwen3 32B".into(),
+            description: "The largest Qwen3 in this catalog — top-tier reasoning for high-VRAM machines.".into(),
+            quant: "Q4_K_M".into(),
+            size_mb: 20234,
+            vision: false,
+            url: hf_url(
+                "bartowski/Qwen_Qwen3-32B-GGUF",
+                "Qwen_Qwen3-32B-Q4_K_M.gguf",
+            ),
+            source: "curated".into(),
+            license: Some("Apache-2.0".into()),
         },
     ]
 }

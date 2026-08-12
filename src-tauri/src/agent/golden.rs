@@ -19,7 +19,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::cloud::{drive_turn, ChatEndpoint};
-use crate::commands::agent::{build_cloud_endpoint, ChatTarget};
+use crate::commands::agent::{build_remote_endpoint, ChatTarget};
 use crate::db::Db;
 use crate::memory::MemoryStore;
 use crate::runtime::proxy::{CancelFlag, TurnOutcome};
@@ -480,16 +480,18 @@ pub fn load_status(db: &Db) -> Option<GoldenStatus> {
 }
 
 /// Resolve the endpoint a check should run against, routed exactly the way a
-/// chat turn or a reflection pass is: the caller's cloud target when they have
-/// one, otherwise the local engine. Without this, a cloud-only setup — which
-/// this product explicitly supports — would silently get no checking at all.
+/// chat turn or a reflection pass is: the caller's remote target (cloud, or a
+/// connected server) when they have one, otherwise the local engine. Without
+/// this, a cloud-only setup — which this product explicitly supports — would
+/// silently get no checking at all.
 async fn endpoint_for(
     mgr: &RuntimeManager,
+    db: &Db,
     target: Option<&ChatTarget>,
 ) -> Option<ChatEndpoint> {
     if let Some(t) = target {
-        if t.provenance.as_deref() == Some("cloud") {
-            return build_cloud_endpoint(t).ok();
+        if let Ok(Some(ep)) = build_remote_endpoint(db, t) {
+            return Some(ep);
         }
     }
     let (base_url, token) = mgr.engine_endpoint().await?;
@@ -506,7 +508,7 @@ pub async fn check_now(
     mem: &MemoryStore,
     target: Option<&ChatTarget>,
 ) -> Result<GoldenStatus, String> {
-    let endpoint = endpoint_for(mgr, target).await.ok_or_else(|| {
+    let endpoint = endpoint_for(mgr, db, target).await.ok_or_else(|| {
         "No model is loaded, so I can't check myself right now.".to_string()
     })?;
     let cases = load_cases(mgr.app_data_dir());
@@ -538,7 +540,7 @@ where
     if !is_enabled(db) {
         return apply().map(|_| None);
     }
-    let Some(endpoint) = endpoint_for(mgr, target).await else {
+    let Some(endpoint) = endpoint_for(mgr, db, target).await else {
         return apply().map(|_| None);
     };
     let app_data = mgr.app_data_dir();

@@ -72,7 +72,7 @@ pub async fn execute(
 
     let artifact = ctx
         .db
-        .add_artifact(Some(ctx.conversation_id), title, kind, content)
+        .add_artifact(Some(ctx.conversation_id), title, kind, content, ctx.assistant_message_id)
         .map_err(|e| format!("couldn't save the artifact: {e}"))?;
 
     ctx.sink.artifact(&artifact.id, title, kind, content);

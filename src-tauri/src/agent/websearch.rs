@@ -107,8 +107,14 @@ pub async fn execute(
         .log_activity(Some(ctx.conversation_id), "web", &format!("searched: {query}"));
 
     let hits = search(ctx.client, query).await?;
+    // Reached only when the endpoint *did* return a result list that happened to
+    // be empty — a real, if rare, answer about the world. Every other way this
+    // can go wrong is an `Err` above, so the model can tell the two apart.
     if hits.is_empty() {
-        return Ok(format!("No web results found for \"{query}\"."));
+        return Ok(format!(
+            "No web results found for \"{query}\". The search itself went through, so this is a \
+             genuinely empty result set — try different wording."
+        ));
     }
 
     let mut body = String::new();
@@ -170,7 +176,24 @@ fn domain_of(url: &str) -> String {
     without_scheme.split('/').next().unwrap_or(without_scheme).to_string()
 }
 
+/// The marker every DuckDuckGo *results* page carries, whether or not it found
+/// anything. Its absence means the response isn't a result list at all — a
+/// challenge page, an error page, or markup that has moved on without us.
+const RESULT_MARKER: &str = "result__a";
+
 /// Query DuckDuckGo's no-key HTML endpoint and parse the result list.
+///
+/// The distinction this function exists to preserve: **"the web has nothing on
+/// this" and "the search didn't happen" are different answers**, and only the
+/// first is a fact about the world. It used to return `Ok(vec![])` for both,
+/// which `execute` then reported to the model as a confident "No web results
+/// found for …". A model told that four times in a row reasonably concludes the
+/// topic is unsearchable and writes from memory — which is how an analysis ends
+/// up citing ten references nobody fetched.
+///
+/// In practice this endpoint almost never returns a genuinely empty result set;
+/// a query of pure gibberish still comes back with ten hits. So an empty parse
+/// is overwhelmingly likely to be a failure, and is now reported as one.
 async fn search(client: &reqwest::Client, query: &str) -> Result<Vec<SearchHit>, String> {
     let resp = client
         .post(ENDPOINT)
@@ -179,11 +202,32 @@ async fn search(client: &reqwest::Client, query: &str) -> Result<Vec<SearchHit>,
         .send()
         .await
         .map_err(|e| format!("the search request failed: {e}"))?;
+    let status = resp.status();
     let body = resp
         .text()
         .await
         .map_err(|e| format!("couldn't read the search response: {e}"))?;
-    Ok(parse_results(&body))
+    interpret(status, &body)
+}
+
+/// Decide what a search response actually was. Split out from [`search`] so the
+/// three cases can be tested without a network.
+fn interpret(status: reqwest::StatusCode, body: &str) -> Result<Vec<SearchHit>, String> {
+    if !status.is_success() {
+        return Err(format!(
+            "the search endpoint answered {status} — it is most likely rate-limiting this device. \
+             Say so rather than answering from memory, and try again in a minute or two."
+        ));
+    }
+    if !body.contains(RESULT_MARKER) {
+        return Err(
+            "the search endpoint returned a page with no result list — most likely a rate-limit or \
+             challenge page rather than an empty result set. Say the search didn't go through \
+             rather than treating it as \"nothing found\"."
+                .to_string(),
+        );
+    }
+    Ok(parse_results(body))
 }
 
 /// Extract result rows from DuckDuckGo HTML by scanning for the stable
@@ -414,6 +458,39 @@ mod tests {
         assert_eq!(hits[0].url, "https://example.com/page");
         assert_eq!(hits[0].title, "Example & Title");
         assert_eq!(hits[0].snippet, "A short snippet here.");
+    }
+
+    /// The distinction that matters: a search that didn't happen must not reach
+    /// the model as a fact about the world. This is the case that shipped —
+    /// four "No web results found" in a row for ordinary queries, after which
+    /// the model wrote its analysis from memory and cited ten references it had
+    /// never fetched.
+    #[test]
+    fn a_challenge_page_is_a_failure_not_an_empty_result_set() {
+        let challenge = "<html><body><p>Please try again later.</p></body></html>";
+        let err = interpret(reqwest::StatusCode::OK, challenge).expect_err("must not read as empty");
+        assert!(err.contains("didn't go through"), "the model is told what happened: {err}");
+    }
+
+    #[test]
+    fn a_rate_limit_status_is_reported_as_one() {
+        let err = interpret(reqwest::StatusCode::TOO_MANY_REQUESTS, "whatever")
+            .expect_err("a 429 is never a result set");
+        assert!(err.contains("rate-limiting"));
+    }
+
+    /// A real results page still parses, and a real results page with nothing
+    /// in it is still allowed to be empty — the fix must not turn every quiet
+    /// answer into an error.
+    #[test]
+    fn a_real_results_page_still_parses() {
+        let html = r#"<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com">Title</a>"#;
+        let hits = interpret(reqwest::StatusCode::OK, html).expect("a result page is not an error");
+        assert_eq!(hits.len(), 1);
+
+        // The marker is present but nothing survives parsing: genuinely empty.
+        let empty = r#"<div class="result__a-wrapper">result__a</div>"#;
+        assert!(interpret(reqwest::StatusCode::OK, empty).expect("not an error").is_empty());
     }
 
     #[test]

@@ -75,6 +75,14 @@
 .provenance-dot.cloud {
   background: var(--cloud);
 }
+/* A user's own connected server: same "runs on your machine" hue as the
+   integrated engine, but a hollow ring so the two are never mistaken for
+   one another in the picker. */
+.provenance-dot.endpoint {
+  background: transparent;
+  border: 1.5px solid var(--local);
+  box-sizing: border-box;
+}
 
 .model-dropdown {
   position: absolute;
@@ -105,7 +113,7 @@
   color: var(--ink-muted);
   background: none;
   border: 1px solid var(--paper-edge-2);
-  border-radius: 12px;
+  border-radius: var(--radius);
   padding: 4px 10px;
   cursor: pointer;
   user-select: none;
@@ -148,6 +156,12 @@
   font-size: 11px;
   color: var(--ink-faint);
   flex-shrink: 0;
+}
+/* A model the provider won't accept tools for. Same weight as the other
+   qualifiers on the row — it narrows what the model can do, it isn't a fault. */
+.model-option .no-tools {
+  flex-shrink: 0;
+  font-style: italic;
 }
 .model-option.selected {
   background: var(--paper-edge);

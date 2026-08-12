@@ -12,6 +12,7 @@
 //! polling and dimension probing would not be a small file.
 
 pub mod backends;
+pub mod imagecatalog;
 pub mod jobs;
 
 use std::future::Future;
@@ -417,6 +418,7 @@ pub fn record(
     res: &MediaResult,
     parent_id: Option<&str>,
     modality: Modality,
+    message_id: Option<&str>,
 ) -> Result<Artifact, DbError> {
     let title = ellipsize(&req.prompt, 60);
     let meta = serde_json::json!({
@@ -441,6 +443,7 @@ pub fn record(
         &res.path.to_string_lossy(),
         Some(&meta),
         parent_id,
+        message_id,
     )
 }
 
@@ -765,7 +768,7 @@ mod tests {
         let req = MediaRequest { prompt: "a swatch".to_string(), ..Default::default() };
         let res = inferred.generate(&db, &req, dir.path(), &CancelFlag::new()).await.unwrap();
         assert!(res.path.exists());
-        let artifact = record(&db, None, &req, &res, None, Modality::Image).unwrap();
+        let artifact = record(&db, None, &req, &res, None, Modality::Image, None).unwrap();
         assert_eq!(artifact.kind, "image");
         assert_eq!(artifact.title, "a swatch");
     }

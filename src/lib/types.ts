@@ -1,7 +1,7 @@
 // Shared domain types for the Poiesis frontend. These mirror the Rust backend's
 // serde models; keep field names in sync as backend phases land.
 
-export type Provenance = "local" | "cloud";
+export type Provenance = "local" | "cloud" | "endpoint";
 
 export interface Model {
   id: string;
@@ -11,11 +11,23 @@ export interface Model {
   meta?: string;
   /** Whether the model supports image/PDF vision input. */
   vision?: boolean;
+  /** Whether the model can be given tools at all. Absent means "assume yes" —
+   * only the cloud catalog reports this, and only OpenRouter reports it
+   * per-model. A model with `false` here can still chat; it just can't run the
+   * agent loop's tools. */
+  tools?: boolean;
   /** True if a local model is downloaded and ready, or a cloud key is present. */
   available?: boolean;
-  /** Cloud routing (CLD-3): the provider id and provider-side model id. */
+  /** Cloud routing (CLD-3): the provider id and provider-side model id. For an
+   * `"endpoint"` model, `provider` carries the endpoint id instead. */
   provider?: string;
   cloudModel?: string;
+  /** Endpoint-only: which connected server this model came from, and how
+   * much context to send it (`/v1/models` doesn't report a context window,
+   * so this is whatever the user set when they added the endpoint). */
+  endpointId?: string;
+  endpointLabel?: string;
+  ctxSize?: number;
   /** What sending a message to this model produces (`PIK-1`). Absent = chat. */
   modality?: "chat" | "image" | "video";
   /** Media only: the backend that serves it, and its price tag. */
@@ -191,6 +203,10 @@ export type View =
   | "self"
   | "tasks"
   | "activity"
-  | "skills";
+  | "skills"
+  | "workingdir"
+  | "mail"
+  | "tools"
+  | "about";
 export type Mode = "light" | "dark";
 export type ModelFilter = "all" | "local";

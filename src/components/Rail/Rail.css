@@ -5,7 +5,15 @@
   padding: 18px 16px;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+.rail-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 /* SCH-UI-4: a scheduled job running unattended — quiet, but always visible,
@@ -251,7 +259,7 @@
 .rail-divider {
   border: none;
   border-top: 1px solid var(--paper-edge-2);
-  margin: 4px 0 14px;
+  margin: 4px 2px 14px;
   width: auto;
 }
 

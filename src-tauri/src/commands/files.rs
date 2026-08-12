@@ -286,6 +286,66 @@ pub fn list_dir_nodes(dir: &Path, show_hidden: bool) -> std::io::Result<Vec<File
     Ok(out)
 }
 
+// ---- app-data overview (Settings -> Working dir) ----
+
+/// One top-level item under the app-data folder, with its recursive size.
+#[derive(serde::Serialize)]
+pub struct DataDirEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub size_bytes: u64,
+}
+
+/// Poiesis's own working/data folder, for the Working dir settings pane.
+#[derive(serde::Serialize)]
+pub struct DataDirOverview {
+    pub path: String,
+    pub total_bytes: u64,
+    pub entries: Vec<DataDirEntry>,
+}
+
+fn dir_size(path: &Path) -> u64 {
+    let mut total = 0u64;
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    for e in entries.flatten() {
+        let Ok(ft) = e.file_type() else { continue };
+        if ft.is_dir() {
+            total += dir_size(&e.path());
+        } else if let Ok(meta) = e.metadata() {
+            total += meta.len();
+        }
+    }
+    total
+}
+
+/// Size and contents of the app-data folder (models, memory, skills, the
+/// database, …) — everything Poiesis itself keeps on disk. Best-effort: a
+/// locked or vanished entry is just skipped rather than failing the whole
+/// overview.
+#[tauri::command]
+pub fn data_dir_overview_cmd(mgr: State<'_, crate::runtime::RuntimeManager>) -> DataDirOverview {
+    let base = mgr.app_data_dir();
+    let mut entries = Vec::new();
+    let mut total = 0u64;
+    if let Ok(read) = std::fs::read_dir(base) {
+        for e in read.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            let size_bytes = if is_dir {
+                dir_size(&e.path())
+            } else {
+                e.metadata().map(|m| m.len()).unwrap_or(0)
+            };
+            total += size_bytes;
+            entries.push(DataDirEntry { name, is_dir, size_bytes });
+        }
+    }
+    entries.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    DataDirOverview { path: base.to_string_lossy().to_string(), total_bytes: total, entries }
+}
+
 /// One level of the tree. The panel expands lazily, so this is always one level.
 #[tauri::command]
 pub fn read_dir_tree_cmd(

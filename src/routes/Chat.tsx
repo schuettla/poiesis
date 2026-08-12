@@ -57,25 +57,27 @@ export default function Chat() {
                 <FolderInvite />
               </div>
             ) : (
-              conversation!.messages.map((m, i) => {
-                const turn =
-                  m.role === "user" ? (
-                    <UserTurn key={m.id} message={m} />
-                  ) : (
-                    <AgentRun key={m.id} message={m} />
+              <div className="message-stream" data-selectable="true">
+                {conversation!.messages.map((m, i) => {
+                  const turn =
+                    m.role === "user" ? (
+                      <UserTurn key={m.id} message={m} />
+                    ) : (
+                      <AgentRun key={m.id} message={m} />
+                    );
+                  // The boundary sits *after* the last summarized turn, so the
+                  // divider goes before the message that follows it.
+                  const isFirstUnsummarized =
+                    i > 0 && conversation!.messages[i - 1].id === conversation!.summaryUptoMessageId;
+                  if (!isFirstUnsummarized || !conversation!.summary) return turn;
+                  return (
+                    <div key={`div-${m.id}`}>
+                      <CompactDivider summary={conversation!.summary} />
+                      {turn}
+                    </div>
                   );
-                // The boundary sits *after* the last summarized turn, so the
-                // divider goes before the message that follows it.
-                const isFirstUnsummarized =
-                  i > 0 && conversation!.messages[i - 1].id === conversation!.summaryUptoMessageId;
-                if (!isFirstUnsummarized || !conversation!.summary) return turn;
-                return (
-                  <div key={`div-${m.id}`}>
-                    <CompactDivider summary={conversation!.summary} />
-                    {turn}
-                  </div>
-                );
-              })
+                })}
+              </div>
             )}
           </div>
         </div>

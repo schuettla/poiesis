@@ -224,6 +224,14 @@ export function loadModel(
 
 export type Fit = "great" | "slow" | "wont-fit";
 
+/** Shared by both catalogs — the same verdict, worded the same way, whether
+ * the download is a GGUF or a diffusion checkpoint. */
+export const FIT_LABEL: Record<Fit, string> = {
+  great: "Runs great on your PC",
+  slow: "Runs slowly",
+  "wont-fit": "Won't fit",
+};
+
 export interface CatalogEntry {
   id: string;
   name: string;
@@ -371,6 +379,9 @@ export interface Artifact {
   meta_json?: string | null;
   /** The artifact this one was refined from, if any. */
   parent_id?: string | null;
+  /** The assistant turn that produced this artifact, so a reloaded
+   * conversation can still show its inline chip in the message stream. */
+  message_id?: string | null;
 }
 
 /** One hit from the agent's search over its own past (RCL-1), or — once
@@ -455,7 +466,7 @@ export interface ActivityEntry {
 
 /** Run an agentic turn, streaming step + token events to `onEvent`. */
 export interface ChatTarget {
-  provenance: "local" | "cloud";
+  provenance: "local" | "cloud" | "endpoint";
   provider?: string;
   model?: string;
 }
@@ -888,12 +899,44 @@ export interface ImageModel {
   size_bytes: number;
   is_default: boolean;
 }
+/** Model families the local engine can drive. The single-file ones load with
+ * `-m`; the rest are assembled from a directory of parts. */
+export type ImageArchitecture = "sd1" | "sdxl" | "flux" | "z-image" | "qwen-image" | "ideogram4";
+
+/** One file of a model, tagged with the role it plays (`diffusion`, `vae`,
+ * `llm`, `clip_l`, `t5xxl`, `uncond_diffusion`, or `model` for single-file). */
+export interface ImageComponent {
+  role: string;
+  url: string;
+  filename: string;
+  size_bytes: number;
+}
+
+/** The settings a model is actually driven at. Distilled models need a low
+ * cfg and few steps; SDXL and newer need their native 1024px. Getting these
+ * wrong is what makes a good model produce garbage, so they are shown. */
+export interface ImageProfile {
+  arch: ImageArchitecture;
+  cfg_scale: number;
+  steps: number;
+  size: number;
+  sampling: string | null;
+  flow_shift: number | null;
+}
+
 export interface ImageCatalogEntry {
+  id: string;
   name: string;
   note: string;
   size_label: string;
-  url: string;
-  filename: string;
+  arch: ImageArchitecture;
+  components: ImageComponent[];
+  total_bytes: number;
+  profile: ImageProfile;
+  /** How this model runs on the user's machine — judged on the transformer,
+   * which is the part that has to be GPU-resident, not the whole download. */
+  fit: Fit;
+  vram_label: string;
 }
 
 export const imageCatalog = () => invoke<ImageCatalogEntry[]>("image_catalog_cmd");
@@ -1048,6 +1091,18 @@ export function downloadImageModel(
   const ch = new Channel<DownloadProgress>();
   ch.onmessage = onProgress;
   return invoke<void>("download_image_model_cmd", { url, filename, onProgress: ch });
+}
+
+/** Download a catalog entry by id. Multi-file models arrive as one directory
+ * with a manifest, and report a single progress figure across all their parts,
+ * so a four-file download still reads as one download. */
+export function downloadImageCatalogModel(
+  id: string,
+  onProgress: (p: DownloadProgress) => void
+): Promise<void> {
+  const ch = new Channel<DownloadProgress>();
+  ch.onmessage = onProgress;
+  return invoke<void>("download_image_catalog_model_cmd", { id, onProgress: ch });
 }
 
 // ---- embedding engine (Perception, EMB) ----
@@ -1313,6 +1368,10 @@ export interface CloudModel {
   provider: string;
   model: string;
   vision: boolean;
+  /** Whether the provider will accept a `tools` array for this model. False
+   * means the agent loop can't call tools on it — OpenRouter answers such a
+   * request with a bare 404. */
+  tools: boolean;
 }
 
 export const listProviders = () => invoke<ProviderInfo[]>("list_providers_cmd");
@@ -1321,6 +1380,57 @@ export const setProviderKey = (provider: string, key: string) =>
 export const clearProviderKey = (provider: string) =>
   invoke<void>("clear_provider_key_cmd", { provider });
 export const listCloudModels = () => invoke<CloudModel[]>("list_cloud_models_cmd");
+
+// ---- your own model servers (Ollama / LM Studio) ----
+
+export interface EndpointInfo {
+  id: string;
+  label: string;
+  base_url: string;
+  ctx_size: number;
+  enabled: boolean;
+  key_set: boolean;
+}
+export interface EndpointModel {
+  id: string;
+  endpoint_id: string;
+  endpoint_label: string;
+  name: string;
+  model: string;
+  vision: boolean;
+  tools: boolean;
+  ctx_size: number;
+}
+export interface EndpointProbe {
+  ok: boolean;
+  /** `ok` with zero models is a real state: LM Studio answers `/v1/models`
+   * as soon as its server runs, before a model is loaded into it. */
+  model_count: number;
+  error: string | null;
+  /** Set when the typed address failed but a `127.0.0.1` rewrite worked (the
+   * Windows `localhost` → `::1` gotcha). Store this, not what was typed. */
+  resolved_base_url: string | null;
+}
+
+export const listEndpoints = () => invoke<EndpointInfo[]>("list_endpoints_cmd");
+export const addEndpoint = (label: string, baseUrl: string, apiKey?: string, ctxSize?: number) =>
+  invoke<EndpointInfo>("add_endpoint_cmd", { label, baseUrl, apiKey, ctxSize });
+export const updateEndpoint = (
+  id: string,
+  label: string,
+  baseUrl: string,
+  ctxSize: number,
+  apiKey?: string
+) => invoke<void>("update_endpoint_cmd", { id, label, baseUrl, ctxSize, apiKey });
+export const setEndpointEnabled = (id: string, enabled: boolean) =>
+  invoke<void>("set_endpoint_enabled_cmd", { id, enabled });
+export const deleteEndpoint = (id: string) => invoke<void>("delete_endpoint_cmd", { id });
+/** `endpointId` lets an already-saved endpoint be tested with its stored key,
+ * which never leaves the credential store and so can't be passed back here.
+ * A typed `apiKey` wins, so the add form can test a key before saving it. */
+export const testEndpoint = (baseUrl: string, apiKey?: string, endpointId?: string) =>
+  invoke<EndpointProbe>("test_endpoint_cmd", { baseUrl, apiKey, endpointId });
+export const listEndpointModels = () => invoke<EndpointModel[]>("list_endpoint_models_cmd");
 
 // ---- MCP connectors (Phase 6) ----
 
@@ -1407,6 +1517,32 @@ export const openPath = (path: string, conversationId?: string) =>
   invoke<void>("open_path_cmd", { path, conversationId });
 export const revealPath = (path: string, conversationId?: string) =>
   invoke<void>("reveal_path_cmd", { path, conversationId });
+
+// ---- app-data overview (Settings -> Working dir) ----
+
+/** One top-level item under the app-data folder. */
+export interface DataDirEntry {
+  name: string;
+  is_dir: boolean;
+  size_bytes: number;
+}
+
+export interface DataDirOverview {
+  path: string;
+  total_bytes: number;
+  entries: DataDirEntry[];
+}
+
+export const dataDirOverview = () => invoke<DataDirOverview>("data_dir_overview_cmd");
+
+export function formatDiskSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(1)} MB`;
+  return `${(mb / 1024).toFixed(1)} GB`;
+}
 
 /** Materialise an artifact into the working folder. Returns the written path. */
 export const saveArtifactToFolder = (

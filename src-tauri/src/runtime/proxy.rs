@@ -13,6 +13,79 @@ use serde::Serialize;
 pub enum ProxyError {
     #[error("network error: {0}")]
     Http(#[from] reqwest::Error),
+    /// The provider answered, and said why it refused. `reqwest`'s own error for
+    /// a non-2xx status carries only the status line — "HTTP status client error
+    /// (404 Not Found)" — and drops the body, which for every OpenAI-compatible
+    /// provider is the only place the actual reason lives ("No endpoints found
+    /// that support tool use", "insufficient credits", …). Losing it makes a
+    /// failed run undiagnosable from inside the app, so this variant carries it.
+    #[error("{message}")]
+    Api {
+        status: u16,
+        /// The provider's own message, already unwrapped from its JSON envelope.
+        message: String,
+    },
+}
+
+impl ProxyError {
+    /// The provider's HTTP status, when the failure was an answered request.
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            ProxyError::Api { status, .. } => Some(*status),
+            ProxyError::Http(e) => e.status().map(|s| s.as_u16()),
+        }
+    }
+
+    /// The provider's message, for callers matching on what it said (e.g. the
+    /// tool-use retry in `cloud::drive_turn`). Empty for transport errors.
+    pub fn provider_message(&self) -> &str {
+        match self {
+            ProxyError::Api { message, .. } => message,
+            ProxyError::Http(_) => "",
+        }
+    }
+}
+
+/// Turn a non-2xx response into a [`ProxyError::Api`] carrying what the provider
+/// actually said. Consumes the response, so callers check the status first.
+pub async fn api_error(resp: reqwest::Response) -> ProxyError {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    ProxyError::Api {
+        status: status.as_u16(),
+        message: format!("{} — {}", status, provider_message(&body)),
+    }
+}
+
+/// Dig the human-readable reason out of an error body. OpenAI, OpenRouter and
+/// Anthropic all nest it differently (`error.message`, `error`, `message`), and
+/// a provider having a bad day may return no JSON at all — so fall back to the
+/// raw body rather than swallowing it.
+fn provider_message(body: &str) -> String {
+    const CAP: usize = 400;
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return "the provider gave no reason".to_string();
+    }
+    let text = serde_json::from_str::<serde_json::Value>(trimmed)
+        .ok()
+        .and_then(|v| {
+            for path in ["/error/message", "/error", "/message", "/detail"] {
+                if let Some(s) = v.pointer(path).and_then(|m| m.as_str()) {
+                    if !s.trim().is_empty() {
+                        return Some(s.trim().to_string());
+                    }
+                }
+            }
+            None
+        })
+        .unwrap_or_else(|| trimmed.to_string());
+    if text.chars().count() > CAP {
+        let cut: String = text.chars().take(CAP).collect();
+        format!("{cut}…")
+    } else {
+        text
+    }
 }
 
 /// One event in a streamed assistant turn.
@@ -120,7 +193,10 @@ where
     if let Some(token) = token {
         req = req.bearer_auth(token);
     }
-    let resp = req.send().await?.error_for_status()?;
+    let resp = req.send().await?;
+    if resp.status().is_client_error() || resp.status().is_server_error() {
+        return Err(api_error(resp).await);
+    }
 
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
@@ -184,6 +260,41 @@ where
     }
 }
 
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+
+    /// The body OpenRouter actually returns for the failure this shipped for.
+    /// Before, the user saw only "HTTP status client error (404 Not Found)".
+    #[test]
+    fn unwraps_openrouters_error_envelope() {
+        let body = r#"{"error":{"code":404,"message":"No endpoints found that support tool use.","metadata":{"error_type":"not_found"}}}"#;
+        assert_eq!(provider_message(body), "No endpoints found that support tool use.");
+    }
+
+    #[test]
+    fn unwraps_the_other_shapes_providers_use() {
+        assert_eq!(provider_message(r#"{"message":"insufficient credits"}"#), "insufficient credits");
+        assert_eq!(provider_message(r#"{"error":"model not found"}"#), "model not found");
+    }
+
+    /// A provider having a bad day returns an HTML error page or nothing at
+    /// all. Neither may swallow the only evidence there is.
+    #[test]
+    fn falls_back_to_the_raw_body_and_says_so_when_empty() {
+        assert_eq!(provider_message("<html>502 Bad Gateway</html>"), "<html>502 Bad Gateway</html>");
+        assert_eq!(provider_message("   "), "the provider gave no reason");
+    }
+
+    #[test]
+    fn caps_a_runaway_body_on_char_boundaries() {
+        let body = format!(r#"{{"error":{{"message":"{}"}}}}"#, "ä".repeat(900));
+        let msg = provider_message(&body);
+        assert!(msg.ends_with('…'));
+        assert_eq!(msg.chars().count(), 401);
+    }
+}
+
 /// Cheap unique-ish id for tool calls a model didn't id itself.
 fn uuid_like() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -243,11 +354,12 @@ where
         }
     };
 
-    if let Err(e) = resp.error_for_status_ref() {
+    if resp.status().is_client_error() || resp.status().is_server_error() {
+        let err = api_error(resp).await;
         on_event(StreamEvent::Error {
-            message: format!("engine returned an error: {e}"),
+            message: format!("engine returned an error: {err}"),
         });
-        return Err(e.into());
+        return Err(err);
     }
 
     let mut stream = resp.bytes_stream();

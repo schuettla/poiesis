@@ -125,6 +125,12 @@ const DEFAULT_SYSTEM_PROMPT =
 
 interface AppState {
   bootstrapped: boolean;
+  /** True once the model lists (library, cloud, media) have actually come
+   * back at least once. `bootstrapped` flips before they do, so anything
+   * that reasons about "the user has no models and no keys" has to wait for
+   * this instead — otherwise it judges an empty list that simply hasn't
+   * loaded yet. */
+  modelsLoaded: boolean;
 
   // theme
   mode: Mode;
@@ -144,6 +150,10 @@ interface AppState {
    * offers, local and hosted together. */
   mediaModels: api.MediaModel[];
   providers: api.ProviderInfo[];
+  /** A user's own connected model servers (Ollama, LM Studio, ...) and the
+   * models they currently offer, for the picker's "Your own servers" group. */
+  endpoints: api.EndpointInfo[];
+  endpointModels: api.EndpointModel[];
   selectedModelId: string;
   /** The chat model to fall back to when "← Back to chat" is pressed, or a
    * media selection is cleared (`PIK-2`). Set whenever a chat model is chosen;
@@ -159,8 +169,18 @@ interface AppState {
   refreshLibrary: () => Promise<void>;
   refreshCloud: () => Promise<void>;
   refreshMediaModels: () => Promise<void>;
+  refreshEndpoints: () => Promise<void>;
   loadModelById: (id: string) => Promise<void>;
   stopEngine: () => Promise<void>;
+
+  /** Catalog downloads in flight, keyed by catalog entry id — percent
+   * complete, or "done" briefly while the library refreshes. Lives in the
+   * store rather than the Models view's local state so leaving and returning
+   * to that view shows the real state instead of a bare "Download" button
+   * that invites a duplicate click (which used to add the same model to the
+   * library a second time). */
+  modelDownloads: Record<string, number | "done">;
+  downloadCatalogModel: (entry: api.CatalogEntry) => Promise<void>;
 
   // conversations
   conversations: Conversation[];
@@ -615,8 +635,29 @@ function cloudToModels(cm: api.CloudModel[]): Model[] {
     provenance: "cloud",
     meta: PROVIDER_LABELS[m.provider] ?? m.provider,
     vision: m.vision,
+    tools: m.tools,
     available: true,
     provider: m.provider,
+    cloudModel: m.model,
+  }));
+}
+
+function endpointToModels(ems: api.EndpointModel[]): Model[] {
+  return ems.map((m) => ({
+    id: m.id,
+    name: m.name,
+    // Runs on a server the user already has going on their own machine (or
+    // one they've pointed at), so this counts as "on this device" for
+    // filtering purposes even though it's routed like a cloud model.
+    provenance: "endpoint",
+    meta: m.endpoint_label,
+    vision: m.vision,
+    tools: m.tools,
+    ctxSize: m.ctx_size,
+    available: true,
+    provider: m.endpoint_id,
+    endpointId: m.endpoint_id,
+    endpointLabel: m.endpoint_label,
     cloudModel: m.model,
   }));
 }
@@ -641,8 +682,42 @@ function mediaToModels(media: api.MediaModel[]): Model[] {
   }));
 }
 
-function composeModels(lib: api.ModelEntry[], cloud: api.CloudModel[], media: api.MediaModel[] = []): Model[] {
-  return [...localToModels(lib), ...cloudToModels(cloud), ...mediaToModels(media)];
+function composeModels(
+  lib: api.ModelEntry[],
+  cloud: api.CloudModel[],
+  media: api.MediaModel[] = [],
+  endpoints: api.EndpointModel[] = []
+): Model[] {
+  return [...localToModels(lib), ...endpointToModels(endpoints), ...cloudToModels(cloud), ...mediaToModels(media)];
+}
+
+/** Keep the selection pointing at something that still exists.
+ *
+ * Models disappear underneath us — an image checkpoint deleted on the Models
+ * screen, a provider key removed, an engine uninstalled. A `selectedModelId`
+ * left naming one of those resolves to an arbitrary fallback in the picker
+ * while the id actually sent to the backend names nothing, so every refresher
+ * that recomposes `models` has to re-settle the selection through here. */
+function reconcileSelection(
+  models: Model[],
+  libraryModels: api.ModelEntry[],
+  selectedModelId: string,
+  lastChatModelId: string
+): Partial<AppState> {
+  // Prefer the library default, then any chat model — never silently land on
+  // a media model, which would change what pressing send does.
+  const fallback =
+    libraryModels.find((e) => e.is_default)?.id ??
+    models.find((m) => !m.modality || m.modality === "chat")?.id ??
+    models[0]?.id;
+  const patch: Partial<AppState> = {};
+  if (!models.some((m) => m.id === selectedModelId) && fallback) {
+    patch.selectedModelId = fallback;
+  }
+  if (!models.some((m) => m.id === lastChatModelId) && fallback) {
+    patch.lastChatModelId = fallback;
+  }
+  return patch;
 }
 
 /**
@@ -833,6 +908,7 @@ const DEFAULT_LOCAL_CTX = 4096;
 
 export const useAppStore = create<AppState>((set, get) => ({
   bootstrapped: false,
+  modelsLoaded: false,
 
   mode: "light",
   setMode: (mode) => {
@@ -889,15 +965,39 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!api.inTauri()) return;
     const lib = await api.listModels();
     set((s) => {
-      const models = composeModels(lib, s.cloudModels, s.mediaModels);
+      const models = composeModels(lib, s.cloudModels, s.mediaModels, s.endpointModels);
       return {
         libraryModels: lib,
         models,
-        selectedModelId: models.find((m) => m.id === s.selectedModelId)
-          ? s.selectedModelId
-          : lib.find((e) => e.is_default)?.id ?? models[0]?.id ?? s.selectedModelId,
+        ...reconcileSelection(models, lib, s.selectedModelId, s.lastChatModelId),
       };
     });
+  },
+
+  modelDownloads: {},
+  downloadCatalogModel: async (entry) => {
+    // Already downloading this one — the Rust side also guards against a
+    // concurrent duplicate, but bailing out here means a repeat click (after
+    // leaving and returning to the Models view, say) doesn't even fire a
+    // second request.
+    if (get().modelDownloads[entry.id] !== undefined) return;
+    set((s) => ({ modelDownloads: { ...s.modelDownloads, [entry.id]: 0 } }));
+    try {
+      await api.downloadModel(
+        { url: entry.url, name: entry.name, quant: entry.quant, vision: entry.vision },
+        (p) => {
+          const pct = p.total ? Math.round((p.received / p.total) * 100) : 0;
+          set((s) => ({ modelDownloads: { ...s.modelDownloads, [entry.id]: pct } }));
+        }
+      );
+      set((s) => ({ modelDownloads: { ...s.modelDownloads, [entry.id]: "done" } }));
+      await get().refreshLibrary();
+    } finally {
+      set((s) => {
+        const { [entry.id]: _drop, ...rest } = s.modelDownloads;
+        return { modelDownloads: rest };
+      });
+    }
   },
 
   mediaModels: [],
@@ -907,7 +1007,35 @@ export const useAppStore = create<AppState>((set, get) => ({
   refreshMediaModels: async () => {
     if (!api.inTauri()) return;
     const mediaModels = await api.listMediaModels().catch(() => []);
-    set((s) => ({ mediaModels, models: composeModels(s.libraryModels, s.cloudModels, mediaModels) }));
+    set((s) => {
+      const models = composeModels(s.libraryModels, s.cloudModels, mediaModels, s.endpointModels);
+      return {
+        mediaModels,
+        models,
+        ...reconcileSelection(models, s.libraryModels, s.selectedModelId, s.lastChatModelId),
+      };
+    });
+  },
+
+  endpoints: [],
+  endpointModels: [],
+  // Load a user's own connected servers + the models they currently offer
+  // (best-effort per endpoint — a sleeping Ollama box shouldn't block boot).
+  refreshEndpoints: async () => {
+    if (!api.inTauri()) return;
+    const [endpoints, endpointModels] = await Promise.all([
+      api.listEndpoints().catch(() => []),
+      api.listEndpointModels().catch(() => []),
+    ]);
+    set((s) => {
+      const models = composeModels(s.libraryModels, s.cloudModels, s.mediaModels, endpointModels);
+      return {
+        endpoints,
+        endpointModels,
+        models,
+        ...reconcileSelection(models, s.libraryModels, s.selectedModelId, s.lastChatModelId),
+      };
+    });
   },
 
   // Load cloud providers + their models for the unified picker (CLD-3, CLD-4).
@@ -917,11 +1045,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       api.listProviders().catch(() => []),
       api.listCloudModels().catch(() => []),
     ]);
-    set((s) => ({
-      providers,
-      cloudModels,
-      models: composeModels(s.libraryModels, cloudModels, s.mediaModels),
-    }));
+    set((s) => {
+      const models = composeModels(s.libraryModels, cloudModels, s.mediaModels, s.endpointModels);
+      return {
+        providers,
+        cloudModels,
+        models,
+        ...reconcileSelection(models, s.libraryModels, s.selectedModelId, s.lastChatModelId),
+      };
+    });
   },
 
   loadModelById: async (id) => {
@@ -1445,10 +1577,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Reflection is a real turn against a real model — route it the same way a
     // chat turn is routed, so a cloud-only setup can still learn.
     const model = get().models.find((m) => m.id === get().selectedModelId);
-    const target: api.ChatTarget | undefined =
-      model?.provenance === "cloud"
-        ? { provenance: "cloud", provider: model.provider, model: model.cloudModel }
-        : undefined;
+    const target: api.ChatTarget | undefined = isRemoteModel(model) ? targetFor(model) : undefined;
     let learned = 0;
     let proposed = 0;
     try {
@@ -1494,7 +1623,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!api.inTauri()) return;
     const model = get().models.find((m) => m.id === get().selectedModelId);
     const [vitality, lessons, goldenStatus] = await Promise.all([
-      api.getVitality(model?.provenance === "cloud" ? model.cloudModel : undefined).catch(() => null),
+      api.getVitality(isRemoteModel(model) ? model.cloudModel : undefined).catch(() => null),
       api.listLessons().catch(() => [] as api.Fact[]),
       api.getGoldenStatus().catch(() => null),
     ]);
@@ -1542,7 +1671,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!api.inTauri()) return;
     const model = get().models.find((m) => m.id === get().selectedModelId);
     // Health is per model: a tool a small local model fumbles isn't broken.
-    const name = model?.provenance === "cloud" ? model.cloudModel : undefined;
+    const name = isRemoteModel(model) ? model.cloudModel : undefined;
     try {
       set({ toolHealth: await api.getToolHealth(name) });
     } catch {
@@ -1820,10 +1949,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       dockWidth: Math.min(720, Math.max(260, Number(dockWidthRaw) || DEFAULT_DOCK_WIDTH)),
       bootstrapped: true,
     });
-    await get().refreshLibrary();
+    // Swallowed deliberately: a failed library read must not abort the rest of
+    // bootstrap. It used to throw straight out of here, which skipped every
+    // refresh below — including the one that flips `modelsLoaded`, so the
+    // first-run guide could never appear on exactly the broken installs that
+    // needed it most.
+    await get().refreshLibrary().catch(() => {});
     // Cloud models load in the background (network) — don't block startup.
-    get().refreshCloud();
-    get().refreshMediaModels();
+    // `modelsLoaded` flips once they land, so anything that keys off "no
+    // models and no keys" (the first-run guide) judges a list that has
+    // actually arrived rather than one that is merely still empty.
+    Promise.all([get().refreshCloud(), get().refreshMediaModels(), get().refreshEndpoints()]).finally(() =>
+      set({ modelsLoaded: true })
+    );
     get().refreshPersonas();
     get().refreshContextBudget();
     get().refreshMemoryContext();
@@ -1838,6 +1976,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setActiveConversation: async (id) => {
+    // Rail rows call this unconditionally on every click, including a click on
+    // the chat that's already active (e.g. returning to it from Settings) —
+    // so "did the conversation actually change" has to be judged here, before
+    // any of the below overwrites it with itself.
+    const switchingConversation = id !== get().activeConversationId;
+
     // Leaving a conversation is when it becomes reviewable: it's finished
     // enough to learn from, and the user isn't waiting on anything (REF-3).
     // Fire-and-forget — reflection must never sit in the navigation path.
@@ -1861,8 +2005,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     // A media model is sticky across messages but not across conversations
     // (Path E step 6) — "make me a picture" is a session, not a personality.
     // A new session opens on the chat model the user was last talking to.
+    // Gated on an actual switch: re-selecting the already-active conversation
+    // (e.g. clicking its Rail row to return from another view) must not snap
+    // a just-picked media model back to the last chat model.
     const current = get().models.find((m) => m.id === get().selectedModelId);
-    const restoreChatModel = current?.modality && current.modality !== "chat";
+    const restoreChatModel = switchingConversation && current?.modality && current.modality !== "chat";
 
     set({
       activeConversationId: id,
@@ -1911,9 +2058,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch {
       /* ignore */
     }
+    // Load any saved artifacts for the Workbench (CHT-6) and re-attach each one
+    // to the turn that made it, or its inline chip (`ArtifactChips`) vanishes
+    // from the message stream on every reload even though the artifact itself
+    // is still right there in the Workbench's own list.
+    let arts: api.Artifact[] = [];
+    let artifactIdsByMessage: Record<string, string[]> = {};
+    try {
+      arts = await api.listArtifacts(id);
+      for (const a of arts) {
+        if (a.message_id) (artifactIdsByMessage[a.message_id] ??= []).push(a.id);
+      }
+    } catch {
+      /* ignore */
+    }
     const messages = rows.map(toMessage);
     for (const m of messages) {
       if (blocksByMessage[m.id]) m.blocks = blocksByMessage[m.id];
+      if (artifactIdsByMessage[m.id]) m.artifactIds = artifactIdsByMessage[m.id];
     }
     // `JOB-1`: a generation can outlive the view that started it. Re-attach to
     // anything still running so the turn shows its tile and its Cancel again,
@@ -1952,15 +2114,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         c.id === id ? { ...c, messages } : c
       ),
       surfaces: { ...s.surfaces, [id]: surface },
+      // Nothing is selected on arrival — opening a chat shouldn't yank the
+      // viewer onto an old artifact.
+      artifacts: { ...s.artifacts, [id]: arts },
     }));
-    // Load any saved artifacts for the Workbench (CHT-6). Nothing is selected on
-    // arrival — opening a chat shouldn't yank the viewer onto an old artifact.
-    try {
-      const arts = await api.listArtifacts(id);
-      set((s) => ({ artifacts: { ...s.artifacts, [id]: arts } }));
-    } catch {
-      /* ignore */
-    }
     // Load durable session state for context injection + the header strip (Phase C).
     try {
       const raw = await api.getSessionState(id);
@@ -3115,6 +3272,10 @@ function recallStep(matches: api.SearchHit[]): AgentStep | null {
 
 async function resolveBudget(model: Model | undefined): Promise<number> {
   if (model?.provenance === "cloud") return CLOUD_CTX[model.provider ?? ""] ?? 32_000;
+  // The endpoint's own context window (set by the user when they added it) —
+  // `/v1/models` doesn't reliably report one, and `getContextBudget()` below
+  // reports the *integrated* engine's window, which is a different server.
+  if (model?.provenance === "endpoint") return model.ctxSize ?? 8192;
   if (!api.inTauri()) return DEFAULT_LOCAL_CTX;
   try {
     return (await api.getContextBudget()) ?? DEFAULT_LOCAL_CTX;
@@ -3123,10 +3284,20 @@ async function resolveBudget(model: Model | undefined): Promise<number> {
   }
 }
 
+/** True for a model that's routed like a cloud model — a hosted BYOK provider,
+ * or a user's own connected server — as opposed to the integrated engine. */
+function isRemoteModel(model: Model | undefined): model is Model {
+  return model?.provenance === "cloud" || model?.provenance === "endpoint";
+}
+
 function targetFor(model: Model): api.ChatTarget {
-  return model.provenance === "cloud"
-    ? { provenance: "cloud", provider: model.provider, model: model.cloudModel }
-    : { provenance: "local" };
+  if (model.provenance === "cloud") {
+    return { provenance: "cloud", provider: model.provider, model: model.cloudModel };
+  }
+  if (model.provenance === "endpoint") {
+    return { provenance: "endpoint", provider: model.endpointId, model: model.cloudModel };
+  }
+  return { provenance: "local" };
 }
 
 /** Optimistic ids are minted client-side and mean nothing to the backend. */
@@ -3474,10 +3645,7 @@ async function streamAssistantTurn(
         toolsEnabled: get().toolsEnabled,
         temperature,
         assistantMessageId: persistedAssistantId,
-        target:
-          model.provenance === "cloud"
-            ? { provenance: "cloud", provider: model.provider, model: model.cloudModel }
-            : { provenance: "local" },
+        target: targetFor(model),
       }
     );
   } catch (err) {
@@ -3523,16 +3691,15 @@ async function maybeDailyProfileTick(get: () => AppState) {
   }
 }
 
-/** The selected cloud model shaped as a routing target — `undefined` means the
- * local engine. Reflection, consolidation and `GLD-2`'s before/after checks all
- * route this way: a self-change on a cloud-only setup would otherwise go
- * unchecked, since there is no local engine for the guard to fall back to. */
+/** The selected remote model (cloud, or a user's own connected server) shaped
+ * as a routing target — `undefined` means the local engine. Reflection,
+ * consolidation and `GLD-2`'s before/after checks all route this way: a
+ * cloud-only or endpoint-only setup would otherwise go unchecked, since
+ * there is no local engine for the guard to fall back to. */
 export function cloudTarget(): api.ChatTarget | undefined {
   const s = useAppStore.getState();
   const model = s.models.find((m) => m.id === s.selectedModelId);
-  return model?.provenance === "cloud"
-    ? { provenance: "cloud", provider: model.provider, model: model.cloudModel }
-    : undefined;
+  return isRemoteModel(model) ? targetFor(model) : undefined;
 }
 
 /** Subscribe to the self-maintenance processes that run outside a chat stream

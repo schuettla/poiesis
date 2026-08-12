@@ -85,6 +85,12 @@ pub struct ToolContext<'a> {
     /// rest of the run. Shared (not per-call) because a skill activated by
     /// one tool call must stay readable for every later call in the same run.
     pub extra_read_roots: &'a Mutex<Vec<std::path::PathBuf>>,
+    /// `SKL-2`: skills already loaded in this run. A skill's body is static and
+    /// the earlier tool result is still in the transcript, so loading one twice
+    /// buys nothing and costs its full length again — 534 lines, in the run that
+    /// prompted this. Shared across the run (not per-call) for the same reason
+    /// `extra_read_roots` is.
+    pub loaded_skills: &'a Mutex<Vec<String>>,
     /// `BRW-1`: the live per-conversation browser sessions. `None` when the
     /// caller (e.g. `EVL`'s dispatched harness) doesn't wire one up — the
     /// Browser toolset reports itself unavailable rather than panicking.

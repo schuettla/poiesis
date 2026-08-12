@@ -10,7 +10,7 @@ use tauri::State;
 
 use crate::autonomy::{autonomy_gate, Rung};
 use crate::cloud::{drive_turn, ChatEndpoint};
-use crate::commands::agent::{build_cloud_endpoint, ChatTarget};
+use crate::commands::agent::{build_remote_endpoint, ChatTarget};
 use crate::commands::embedgen::embed_texts_or_none;
 use crate::db::vectors::NewVector;
 use crate::db::{ChangeProposal, Db, SearchHit};
@@ -866,18 +866,19 @@ pub async fn consolidate_memory_cmd(
         ));
     }
     let target = target.unwrap_or_default();
-    let endpoint = if target.provenance.as_deref() == Some("cloud") {
-        build_cloud_endpoint(&target).map_err(PoiesisError::Message)?
-    } else {
-        let Some((base_url, token)) = mgr.engine_endpoint().await else {
-            return Err(PoiesisError::Message(
-                "No model is loaded, so memory can't be tidied up right now.".into(),
-            ));
-        };
-        ChatEndpoint::OpenAi {
-            base_url,
-            api_key: Some(token),
-            model: None,
+    let endpoint = match build_remote_endpoint(&db, &target).map_err(PoiesisError::Message)? {
+        Some(ep) => ep,
+        None => {
+            let Some((base_url, token)) = mgr.engine_endpoint().await else {
+                return Err(PoiesisError::Message(
+                    "No model is loaded, so memory can't be tidied up right now.".into(),
+                ));
+            };
+            ChatEndpoint::OpenAi {
+                base_url,
+                api_key: Some(token),
+                model: None,
+            }
         }
     };
 

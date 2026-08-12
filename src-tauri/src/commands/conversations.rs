@@ -3,7 +3,7 @@
 use tauri::State;
 
 use crate::cloud::{drive_turn, ChatEndpoint};
-use crate::commands::agent::{build_cloud_endpoint, ChatTarget};
+use crate::commands::agent::{build_remote_endpoint, ChatTarget};
 use crate::db::{Artifact, Block, Conversation, Db, Message, NewAttachment, NewMessage};
 use crate::runtime::proxy::{CancelFlag, TurnOutcome};
 use crate::runtime::RuntimeManager;
@@ -196,18 +196,19 @@ pub async fn compact_conversation_cmd(
     target: Option<ChatTarget>,
 ) -> Cmd<String> {
     let target = target.unwrap_or_default();
-    let endpoint = if target.provenance.as_deref() == Some("cloud") {
-        build_cloud_endpoint(&target).map_err(PoiesisError::Message)?
-    } else {
-        let Some((base_url, token)) = mgr.engine_endpoint().await else {
-            return Err(PoiesisError::Message(
-                "No model is loaded, so older turns can't be summarized.".into(),
-            ));
-        };
-        ChatEndpoint::OpenAi {
-            base_url,
-            api_key: Some(token),
-            model: None,
+    let endpoint = match build_remote_endpoint(&db, &target).map_err(PoiesisError::Message)? {
+        Some(ep) => ep,
+        None => {
+            let Some((base_url, token)) = mgr.engine_endpoint().await else {
+                return Err(PoiesisError::Message(
+                    "No model is loaded, so older turns can't be summarized.".into(),
+                ));
+            };
+            ChatEndpoint::OpenAi {
+                base_url,
+                api_key: Some(token),
+                model: None,
+            }
         }
     };
 

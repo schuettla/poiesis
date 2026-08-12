@@ -198,6 +198,7 @@ async fn run_job(job_id: String, mut args: SubmitArgs, cancel: CancelFlag) {
                 &result,
                 args.parent_artifact_id.as_deref(),
                 args.modality,
+                args.message_id.as_deref(),
             );
             match artifact {
                 Ok(artifact) => {

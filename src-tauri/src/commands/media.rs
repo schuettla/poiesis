@@ -208,13 +208,13 @@ mod tests {
     fn spend_sums_cost_and_counts_by_kind_ignoring_non_media() {
         let db = Db::open_in_memory().unwrap();
         let with_cost = |cost: f64| format!(r#"{{"cost_usd":{cost}}}"#);
-        db.add_artifact_with(None, "a", "image", "/a.png", Some(&with_cost(0.04)), None).unwrap();
-        db.add_artifact_with(None, "b", "image", "/b.png", Some(&with_cost(0.06)), None).unwrap();
+        db.add_artifact_with(None, "a", "image", "/a.png", Some(&with_cost(0.04)), None, None).unwrap();
+        db.add_artifact_with(None, "b", "image", "/b.png", Some(&with_cost(0.06)), None, None).unwrap();
         // A local generation records no cost at all — it must count as an
         // image without adding to the money.
-        db.add_artifact_with(None, "c", "image", "/c.png", Some(r#"{"seed":1}"#), None).unwrap();
-        db.add_artifact_with(None, "d", "video", "/d.mp4", Some(&with_cost(0.25)), None).unwrap();
-        db.add_artifact_with(None, "e", "markdown", "notes", None, None).unwrap();
+        db.add_artifact_with(None, "c", "image", "/c.png", Some(r#"{"seed":1}"#), None, None).unwrap();
+        db.add_artifact_with(None, "d", "video", "/d.mp4", Some(&with_cost(0.25)), None, None).unwrap();
+        db.add_artifact_with(None, "e", "markdown", "notes", None, None, None).unwrap();
 
         let spend = db.media_spend(0).unwrap();
         assert_eq!(spend.images, 3);

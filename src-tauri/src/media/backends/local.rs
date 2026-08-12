@@ -11,12 +11,12 @@ use tokio::process::Command;
 
 use crate::agent::imagegen::{BINARY_KEY, MODEL_KEY};
 use crate::db::Db;
+use crate::media::imagecatalog::{self, ModelProfile};
 use crate::media::{BackendDescriptor, Credential, MediaBackend, MediaModel, MediaRequest, MediaResult, Modality};
 
-/// Diffusion can take a while; allow a generous wall-clock budget.
-const TIMEOUT: Duration = Duration::from_secs(300);
-const DEFAULT_STEPS: i64 = 20;
-const DEFAULT_SIZE: i64 = 512;
+/// Diffusion can take a while, and the multi-file families are slower to load
+/// than a single SD checkpoint; allow a generous wall-clock budget.
+const TIMEOUT: Duration = Duration::from_secs(900);
 
 static DESCRIPTOR: BackendDescriptor = BackendDescriptor {
     id: "local",
@@ -119,11 +119,27 @@ impl MediaBackend for LocalBackend {
         std::fs::create_dir_all(out_dir).map_err(|e| format!("couldn't create the output directory: {e}"))?;
         let out_path = out_dir.join(format!("img-{}.png", uuid::Uuid::new_v4().simple()));
 
-        let width = req.width.unwrap_or(DEFAULT_SIZE);
-        let height = req.height.unwrap_or(DEFAULT_SIZE);
-        let steps = req.steps.unwrap_or(DEFAULT_STEPS);
+        // What the model needs in order to be any good: its native resolution,
+        // step count and guidance scale. An explicit request still wins — this
+        // only replaces the old one-size-fits-all 512px/20-step/cfg-7 default,
+        // which quietly ruined every SDXL and every distilled model.
+        let profile = imagecatalog::profile_for(Path::new(&model));
+        let width = req.width.unwrap_or(profile.size);
+        let height = req.height.unwrap_or(profile.size);
+        let steps = req.steps.unwrap_or(profile.steps);
 
-        run_cli(&binary, &model, &out_path, &req.prompt, req.negative.as_deref(), width, height, steps).await?;
+        run_cli(
+            &binary,
+            &model,
+            &out_path,
+            &req.prompt,
+            req.negative.as_deref(),
+            width,
+            height,
+            steps,
+            &profile,
+        )
+        .await?;
 
         let model_name = Path::new(&model)
             .file_stem()
@@ -154,6 +170,46 @@ impl MediaBackend for LocalBackend {
     }
 }
 
+/// Build the model-loading half of the command line. A single-file checkpoint
+/// is just `-m`; the newer families are assembled from a directory of parts,
+/// each on its own flag, so the roles recorded in the bundle manifest are what
+/// decide the arguments.
+fn model_args(model: &str, profile: &ModelProfile) -> Result<Vec<String>, String> {
+    let path = Path::new(model);
+    if !profile.arch.is_bundle() {
+        return Ok(vec!["-m".into(), model.to_string()]);
+    }
+
+    let manifest = imagecatalog::read_manifest(path).ok_or_else(|| {
+        format!(
+            "This model's files are incomplete — {} is missing. Re-download it under Models → Image.",
+            imagecatalog::MANIFEST_NAME
+        )
+    })?;
+
+    let mut args = Vec::new();
+    for (role, flag) in [
+        ("diffusion", "--diffusion-model"),
+        ("uncond_diffusion", "--uncond-diffusion-model"),
+        ("vae", "--vae"),
+        ("llm", "--llm"),
+        ("clip_l", "--clip_l"),
+        ("t5xxl", "--t5xxl"),
+    ] {
+        if let Some(name) = manifest.files.get(role) {
+            let part = path.join(name);
+            if !part.exists() {
+                return Err(format!(
+                    "This model is missing its {role} file ({name}). Re-download it under Models → Image."
+                ));
+            }
+            args.push(flag.to_string());
+            args.push(part.to_string_lossy().into_owned());
+        }
+    }
+    Ok(args)
+}
+
 /// Run the diffusion CLI to produce `out_path`.
 #[allow(clippy::too_many_arguments)]
 async fn run_cli(
@@ -165,6 +221,7 @@ async fn run_cli(
     width: i64,
     height: i64,
     steps: i64,
+    profile: &ModelProfile,
 ) -> Result<(), String> {
     if !Path::new(binary).exists() {
         return Err("The image engine isn't installed. Install it under Engine → Image.".into());
@@ -176,21 +233,40 @@ async fn run_cli(
         std::fs::create_dir_all(parent).ok();
     }
 
-    let mut cli_args: Vec<String> = vec![
-        "-m".into(), model.to_string(),
+    let bundle = profile.arch.is_bundle();
+    let mut cli_args = model_args(model, profile)?;
+    cli_args.extend([
         "-p".into(), prompt.to_string(),
         "-o".into(), out_path.to_string_lossy().into_owned(),
         "--steps".into(), steps.to_string(),
         "-W".into(), width.to_string(),
         "-H".into(), height.to_string(),
+        // The engine's built-in default is 7.0 regardless of model. Distilled
+        // models ("Turbo", "schnell") are trained for 1.0 and come out burnt
+        // and oversaturated at 7, so this is never left to the default.
+        "--cfg-scale".into(), format!("{}", profile.cfg_scale),
+        "--vae-tiling".into(),
+    ]);
+    if let Some(sampler) = &profile.sampling {
+        cli_args.push("--sampling-method".into());
+        cli_args.push(sampler.clone());
+    }
+    if let Some(shift) = profile.flow_shift {
+        cli_args.push("--flow-shift".into());
+        cli_args.push(format!("{shift}"));
+    }
+    if bundle {
+        // The multi-file families are far larger than SDXL; the documented way
+        // to fit them on a consumer card is to stage weights through CPU RAM.
+        cli_args.push("--offload-to-cpu".into());
+    } else {
         // Fit consumer GPUs (e.g. a 6 GB GTX 1060) without capping larger ones:
         // keep only the UNet on the GPU by running the text encoder and VAE on
-        // CPU RAM, and decode the VAE in tiles. Without this, sd.cpp loads the
-        // whole fp32 model onto the card and OOMs on <8 GB VRAM. These two are
-        // backend-agnostic (a no-op on a CPU-only build, valid on Vulkan/ROCm).
-        "--backend".into(), "te=cpu,vae=cpu".into(),
-        "--vae-tiling".into(),
-    ];
+        // CPU RAM. Not used for bundles, whose encoders are separate files the
+        // engine places itself.
+        cli_args.push("--backend".into());
+        cli_args.push("te=cpu,vae=cpu".into());
+    }
     // Flash attention further cuts UNet memory but is reliable on CUDA and only
     // sometimes supported on Vulkan/ROCm drivers — enable it only for the CUDA
     // engine build (the backend is encoded in the installed binary's path).
@@ -231,4 +307,118 @@ async fn run_cli(
         return Err(format!("Image generation didn't produce an image. {tail}"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::media::imagecatalog::{Architecture, BundleManifest, MANIFEST_NAME};
+    use std::collections::BTreeMap;
+
+    /// Lay down a bundle directory: the named parts plus a manifest.
+    fn bundle(arch: Architecture, roles: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let mut files = BTreeMap::new();
+        for (role, name) in roles {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+            files.insert(role.to_string(), name.to_string());
+        }
+        let manifest = BundleManifest {
+            name: "Test Model".into(),
+            profile: ModelProfile {
+                arch,
+                cfg_scale: 1.0,
+                steps: 8,
+                size: 1024,
+                sampling: None,
+                flow_shift: None,
+            },
+            files,
+        };
+        std::fs::write(
+            dir.path().join(MANIFEST_NAME),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+        dir
+    }
+
+    fn profile(arch: Architecture) -> ModelProfile {
+        ModelProfile { arch, cfg_scale: 1.0, steps: 8, size: 1024, sampling: None, flow_shift: None }
+    }
+
+    #[test]
+    fn single_file_models_still_load_with_dash_m() {
+        let args = model_args("C:/models/sd15.safetensors", &profile(Architecture::Sd1)).unwrap();
+        assert_eq!(args, vec!["-m".to_string(), "C:/models/sd15.safetensors".to_string()]);
+    }
+
+    #[test]
+    fn z_image_gets_its_three_component_flags() {
+        let dir = bundle(
+            Architecture::ZImage,
+            &[("diffusion", "d.gguf"), ("vae", "ae.safetensors"), ("llm", "q3.gguf")],
+        );
+        let args =
+            model_args(&dir.path().to_string_lossy(), &profile(Architecture::ZImage)).unwrap();
+        let flags: Vec<&String> = args.iter().step_by(2).collect();
+        assert_eq!(flags, vec!["--diffusion-model", "--vae", "--llm"]);
+        // Every flag must be followed by a real path, not a bare filename.
+        for v in args.iter().skip(1).step_by(2) {
+            assert!(Path::new(v).exists(), "{v} should exist");
+        }
+    }
+
+    #[test]
+    fn flux_uses_clip_and_t5_rather_than_llm() {
+        let dir = bundle(
+            Architecture::Flux,
+            &[
+                ("diffusion", "flux.gguf"),
+                ("vae", "ae.safetensors"),
+                ("clip_l", "clip_l.safetensors"),
+                ("t5xxl", "t5.safetensors"),
+            ],
+        );
+        let args = model_args(&dir.path().to_string_lossy(), &profile(Architecture::Flux)).unwrap();
+        let flags: Vec<&String> = args.iter().step_by(2).collect();
+        assert_eq!(flags, vec!["--diffusion-model", "--vae", "--clip_l", "--t5xxl"]);
+    }
+
+    #[test]
+    fn ideogram_passes_its_second_unconditional_transformer() {
+        let dir = bundle(
+            Architecture::Ideogram4,
+            &[
+                ("diffusion", "i4.gguf"),
+                ("uncond_diffusion", "i4_uncond.gguf"),
+                ("vae", "ae.safetensors"),
+                ("llm", "qwen3vl.gguf"),
+            ],
+        );
+        let args =
+            model_args(&dir.path().to_string_lossy(), &profile(Architecture::Ideogram4)).unwrap();
+        let flags: Vec<&String> = args.iter().step_by(2).collect();
+        assert_eq!(
+            flags,
+            vec!["--diffusion-model", "--uncond-diffusion-model", "--vae", "--llm"]
+        );
+    }
+
+    #[test]
+    fn a_missing_part_is_reported_rather_than_handed_to_the_engine() {
+        let dir = bundle(Architecture::ZImage, &[("diffusion", "d.gguf"), ("vae", "ae.safetensors")]);
+        std::fs::remove_file(dir.path().join("ae.safetensors")).unwrap();
+        let err = model_args(&dir.path().to_string_lossy(), &profile(Architecture::ZImage))
+            .unwrap_err();
+        assert!(err.contains("vae"), "error should name the missing role: {err}");
+    }
+
+    #[test]
+    fn a_bundle_without_a_manifest_is_not_silently_run_as_a_single_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let err =
+            model_args(&dir.path().to_string_lossy(), &profile(Architecture::ZImage)).unwrap_err();
+        assert!(err.contains(MANIFEST_NAME), "{err}");
+    }
 }

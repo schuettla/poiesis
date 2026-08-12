@@ -20,6 +20,10 @@ pub const SERVICE_MAIL: &str = "poiesis-mail";
 /// the media backend id (e.g. `"fal"`).
 #[allow(dead_code)]
 pub const SERVICE_MEDIA: &str = "poiesis-media";
+/// API keys for a user's own connected model server (Ollama, LM Studio, or a
+/// remote box) — most of these need no key at all, so this is separate from
+/// `poiesis-cloud`. `account` is the `local_endpoints.id`.
+pub const SERVICE_ENDPOINT: &str = "poiesis-endpoint";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {

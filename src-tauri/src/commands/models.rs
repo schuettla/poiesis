@@ -8,10 +8,10 @@ use tauri::State;
 use crate::db::{Db, ModelEntry, NewModelEntry};
 use crate::marketplace::{
     catalog::{estimate_speed, CatalogModel},
-    classify_fit, github, huggingface, recommended_catalog, Fit,
+    github, huggingface, recommended_catalog,
 };
 use crate::runtime::download::{download_with_resume, DownloadProgress};
-use crate::runtime::hardware::detect_hardware;
+use crate::runtime::hardware::{classify_fit, detect_hardware, Fit};
 use crate::runtime::RuntimeManager;
 use crate::PoiesisError;
 
@@ -108,6 +108,36 @@ pub async fn download_model_cmd(
 ) -> Cmd<ModelEntry> {
     let filename = filename_from_url(&url, &name.replace(' ', "-"));
     let dest = mgr.models_dir().join(&filename);
+    let dest_str = dest.to_string_lossy().to_string();
+
+    // Serialize concurrent requests for the same destination (e.g. the model
+    // view is left mid-download, the user comes back and clicks "Download"
+    // again) so two streams never write to the same file at once.
+    let _guard = mgr.lock_download(&dest).await;
+
+    // Already registered by an earlier call — the common case for a repeat
+    // click once the first request finished in the background. Registering it
+    // again would add a duplicate row for the same file.
+    let existing = db.find_model_by_path(&dest_str).map_err(err)?;
+    if let Some(entry) = &existing {
+        let on_disk = std::fs::metadata(&dest).map(|m| m.len() as i64).ok();
+        match (on_disk, entry.size_bytes) {
+            // Registered and the bytes match what was recorded — nothing to do.
+            (Some(a), Some(b)) if a == b => return Ok(entry.clone()),
+            // The file is there but its size was never recorded, so there is
+            // nothing to contradict it. Deleting on a mere unknown would throw
+            // away a good download.
+            (Some(_), None) => return Ok(entry.clone()),
+            // Recorded as a different size: half-written, or corrupted by the
+            // very concurrent-download bug this guard exists to prevent.
+            // Resuming would append onto bytes we can't vouch for.
+            (Some(_), Some(_)) => {
+                let _ = std::fs::remove_file(&dest);
+            }
+            // Gone from disk entirely — just fetch it again.
+            (None, _) => {}
+        }
+    }
 
     download_with_resume(&mgr.client, &url, &dest, "Getting your model ready", |p| {
         let _ = on_progress.send(p);
@@ -116,9 +146,15 @@ pub async fn download_model_cmd(
     .map_err(err)?;
 
     let size_bytes = std::fs::metadata(&dest).map(|m| m.len() as i64).ok();
+    if let Some(entry) = existing {
+        // Repairing a row that already names this file — update it in place
+        // rather than adding a second one beside it.
+        db.set_model_size(&entry.id, size_bytes).map_err(err)?;
+        return Ok(ModelEntry { size_bytes, ..entry });
+    }
     db.add_model(&NewModelEntry {
         name,
-        path: dest.to_string_lossy().to_string(),
+        path: dest_str,
         quant,
         size_bytes,
         vision: vision.unwrap_or(false),

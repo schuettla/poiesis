@@ -11,17 +11,17 @@
 //! instance for the app) but this cannot share the embedder's process: one
 //! model per `llama-server`, and the two are launched with different flags.
 //!
-//! `RRK-1` — **which path was taken, verified against the pinned build's own
-//! source** (`b4585`, see `manifest.rs`), not assumed:
+//! `RRK-1` — **which path was taken, verified against the pinned build itself**
+//! (see `PINNED_BUILD_TAG` in `manifest.rs`), not assumed:
 //!
 //! * The native `/rerank` endpoint exists at that tag, so no manifest bump and
 //!   no embedding-endpoint workaround: this reuses the same shared binary the
 //!   chat and embedding engines already download.
-//! * The flag is `--reranking` (alias `--rerank`) and it is **mutually
-//!   exclusive with `--embedding`** — `common/arg.cpp` throws
-//!   `"either --embedding or --reranking can be specified, but not both"` — so
-//!   `rerank_extra_args` deliberately passes `--reranking` alone, unlike
-//!   `embedserver`'s `--embeddings --pooling mean`.
+//! * The flag is `--reranking` (alias `--rerank`). `rerank_extra_args` passes it
+//!   alone, unlike `embedserver`'s `--embeddings --pooling mean`: earlier builds
+//!   rejected the two together outright (`common/arg.cpp`: "either --embedding
+//!   or --reranking can be specified, but not both"), and while the pinned build
+//!   no longer refuses, a reranker has no business claiming the embedding path.
 //! * `relevance_score` is the model's **raw classifier logit**, not a
 //!   normalised score: `format_response_rerank` in `examples/server/utils.hpp`
 //!   emits `json_value(rank, "score", 0.0)` with no transform, and bge-style

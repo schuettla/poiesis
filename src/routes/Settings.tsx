@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
-  getAppVersion,
   inTauri,
   listPermissions,
   addPermission,
@@ -10,29 +9,21 @@ import {
   revokeCapabilityGrant,
   setProviderKey,
   clearProviderKey,
-  listToolsets,
-  setToolsetEnabled,
-  getToolStats,
-  listIndexRoots,
   embedEngineStatus,
   rerankEngineStatus,
   installRerankEngine,
   setRerankEnabled,
-  listMailAccounts,
-  type MailSecurity,
-  addMailAccount,
-  testMailAccount,
-  setMailAccountEnabled,
-  deleteMailAccount,
+  addEndpoint,
+  updateEndpoint,
+  setEndpointEnabled,
+  deleteEndpoint,
+  testEndpoint,
   type Grant,
   type CapabilityGrant,
-  type ToolsetInfo,
-  type ToolsetReliability,
-  type IndexRootView,
   type RerankSetupStatus,
   type DownloadProgress,
-  type MailAccount,
-  type MailTestResult,
+  type EndpointInfo,
+  type EndpointProbe,
   mediaSpend as mediaSpendApi,
   type MediaSpendReport,
 } from "../lib/api";
@@ -41,70 +32,6 @@ import { useAppStore, READING_SCALES } from "../lib/store";
 import PersonaEditor from "../components/Personas/PersonaEditor";
 import "./Surface.css";
 import "./Settings.css";
-
-/** `MAIL-1` provider presets: the #1 setup failure is an app-password the
- * user didn't know to create, so each preset carries its own instructions
- * rather than a bare link. */
-const MAIL_PRESETS = {
-  gmail: {
-    label: "Gmail",
-    imapHost: "imap.gmail.com",
-    imapPort: 993,
-    smtpHost: "smtp.gmail.com",
-    smtpPort: 465,
-    security: "tls" as MailSecurity,
-    hint: "Use an app password, not your normal Google password: myaccount.google.com → Security → 2-Step Verification → App passwords.",
-  },
-  icloud: {
-    label: "iCloud",
-    imapHost: "imap.mail.me.com",
-    imapPort: 993,
-    smtpHost: "smtp.mail.me.com",
-    smtpPort: 587,
-    // iCloud submission is 587/STARTTLS — pinning implicit TLS here is what
-    // made this preset unable to connect at all.
-    security: "starttls" as MailSecurity,
-    hint: "Use an app-specific password from appleid.apple.com → Sign-In and Security → App-Specific Passwords.",
-  },
-  fastmail: {
-    label: "Fastmail",
-    imapHost: "imap.fastmail.com",
-    imapPort: 993,
-    smtpHost: "smtp.fastmail.com",
-    smtpPort: 465,
-    security: "tls" as MailSecurity,
-    hint: "Create an app password in Settings → Password & Security → App Passwords.",
-  },
-  protonbridge: {
-    label: "Proton Bridge",
-    imapHost: "127.0.0.1",
-    imapPort: 1143,
-    smtpHost: "127.0.0.1",
-    smtpPort: 1025,
-    // The Bridge listens in the clear and upgrades, with a certificate it
-    // signed itself — accepted only because the host is loopback.
-    security: "starttls" as MailSecurity,
-    hint: "Proton Mail needs the Bridge app running locally first — use the host/port and password it shows you, not your Proton password.",
-  },
-  generic: {
-    label: "Generic",
-    imapHost: "",
-    imapPort: 993,
-    smtpHost: "",
-    smtpPort: 465,
-    security: "tls" as MailSecurity,
-    hint: "Ask your provider for its IMAP/SMTP host and port.",
-  },
-} as const;
-
-const ATTRIBUTIONS = [
-  { name: "llama.cpp", license: "MIT", what: "Local model engine (llama-server)" },
-  { name: "Tauri", license: "MIT / Apache-2.0", what: "Desktop application shell" },
-  { name: "React", license: "MIT", what: "User interface" },
-  { name: "Newsreader, Inter, JetBrains Mono", license: "OFL / MIT", what: "Typefaces" },
-  { name: "rusqlite / SQLite", license: "MIT / Public Domain", what: "Local storage + search" },
-  { name: "Model weights", license: "Per-model (shown on each model)", what: "e.g. Llama Community, Apache-2.0" },
-];
 
 /** `SMP-3`: Simple mode's single Recall control. The embedder and the
  * reranker are two engines and two downloads underneath, but to a Simple-mode
@@ -209,36 +136,369 @@ function RecallModeControl() {
   );
 }
 
+/** Quick-fill presets for the two servers almost everyone means. */
+const ENDPOINT_PRESETS = [
+  { label: "Ollama", baseUrl: "http://localhost:11434" },
+  { label: "LM Studio", baseUrl: "http://localhost:1234" },
+];
+
+/** A user's own OpenAI-compatible model server (Ollama, LM Studio, or a
+ * remote box) — a third model source alongside the integrated runtime and
+ * BYOK cloud providers above. Mirrors the BYOK block's shape and the MCP
+ * connector's test/add flow (`Apps.tsx`). */
+function LocalEndpointsSettings() {
+  const endpoints = useAppStore((s) => s.endpoints);
+  // The picker's live model list, so each row can say how many models its
+  // server is actually serving rather than only that it's switched on.
+  const endpointModels = useAppStore((s) => s.endpointModels);
+  const refreshEndpoints = useAppStore((s) => s.refreshEndpoints);
+
+  const [statuses, setStatuses] = useState<Record<string, EndpointProbe>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const [formOpen, setFormOpen] = useState(false);
+  /** Set while editing an existing endpoint; null means the form adds a new one. */
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [label, setLabel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [ctxSize, setCtxSize] = useState("8192");
+  const [apiKey, setApiKey] = useState("");
+  const [draftStatus, setDraftStatus] = useState<EndpointProbe | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    refreshEndpoints();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function modelCountFor(id: string) {
+    return endpointModels.filter((m) => m.endpoint_id === id).length;
+  }
+
+  function applyPreset(preset: (typeof ENDPOINT_PRESETS)[number]) {
+    setLabel(preset.label);
+    setBaseUrl(preset.baseUrl);
+    setDraftStatus(null);
+    setError(null);
+  }
+
+  function openAddForm() {
+    setFormOpen(true);
+    setEditingId(null);
+    setLabel("");
+    setBaseUrl("");
+    setCtxSize("8192");
+    setApiKey("");
+    setDraftStatus(null);
+    setError(null);
+  }
+
+  function openEditForm(ep: EndpointInfo) {
+    setFormOpen(true);
+    setEditingId(ep.id);
+    setLabel(ep.label);
+    setBaseUrl(ep.base_url);
+    setCtxSize(String(ep.ctx_size));
+    // Never prefill a stored key — it isn't readable, and a blank field here
+    // means "leave it alone", not "clear it".
+    setApiKey("");
+    setShowAdvanced(false);
+    setDraftStatus(null);
+    setError(null);
+  }
+
+  function closeForm() {
+    setFormOpen(false);
+    setEditingId(null);
+    setShowAdvanced(false);
+    setLabel("");
+    setBaseUrl("");
+    setCtxSize("8192");
+    setApiKey("");
+    setDraftStatus(null);
+  }
+
+  async function testDraft() {
+    setError(null);
+    setBusyId("__draft");
+    try {
+      // While editing, fall back to the endpoint's stored key so a keyed
+      // server doesn't report 401 just because the field is (correctly) blank.
+      const status = await testEndpoint(baseUrl, apiKey.trim() || undefined, editingId ?? undefined);
+      setDraftStatus(status);
+      // The Windows `localhost`→`::1` gotcha: the probe found the server at
+      // 127.0.0.1 instead of what was typed, so keep the address that worked.
+      if (status.resolved_base_url) setBaseUrl(status.resolved_base_url);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function saveForm() {
+    setError(null);
+    setSaving(true);
+    try {
+      const ctx = Number(ctxSize) || 8192;
+      const key = apiKey.trim() || undefined;
+      if (editingId) {
+        await updateEndpoint(editingId, label.trim(), baseUrl.trim(), ctx, key);
+      } else {
+        await addEndpoint(label.trim(), baseUrl.trim(), key, ctx);
+      }
+      closeForm();
+      await refreshEndpoints();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function testExisting(ep: EndpointInfo) {
+    setError(null);
+    setBusyId(ep.id);
+    try {
+      const status = await testEndpoint(ep.base_url, undefined, ep.id);
+      setStatuses((s) => ({ ...s, [ep.id]: status }));
+      // A rewritten address (the `localhost` gotcha) is worth saving so the
+      // next test — or the agent's own turn — doesn't hit the same wall.
+      if (status.resolved_base_url && status.resolved_base_url !== ep.base_url) {
+        await updateEndpoint(ep.id, ep.label, status.resolved_base_url, ep.ctx_size);
+      }
+      // Models may have appeared or gone since the last look, so the picker
+      // and this row's count both need re-reading either way.
+      await refreshEndpoints();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function toggleEnabled(ep: EndpointInfo) {
+    setBusyId(ep.id);
+    try {
+      await setEndpointEnabled(ep.id, !ep.enabled);
+      await refreshEndpoints();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function remove(ep: EndpointInfo) {
+    setBusyId(ep.id);
+    try {
+      await deleteEndpoint(ep.id);
+      setStatuses((s) => {
+        const next = { ...s };
+        delete next[ep.id];
+        return next;
+      });
+      await refreshEndpoints();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <section className="setting-block">
+      <h2 className="setting-title">Your own model servers</h2>
+      <p className="setting-help">
+        Already running Ollama or LM Studio? Point Poiesis Agent at it and its models join your
+        picker. Nothing is downloaded twice, and nothing leaves your machine.
+      </p>
+
+      {error && <p className="hw-note error">{error}</p>}
+
+      {endpoints.map((ep) => {
+        const status = statuses[ep.id];
+        const count = modelCountFor(ep.id);
+        return (
+          <div className="provider-row" key={ep.id}>
+            <div className="provider-head">
+              <span className="provider-name">{ep.label}</span>
+              <span className={`provider-status ${ep.enabled && count > 0 ? "set" : ""}`}>
+                {!ep.enabled
+                  ? "Off"
+                  : count > 0
+                    ? `${count} ${count === 1 ? "model" : "models"}`
+                    : "Not reachable"}
+              </span>
+              {ep.key_set && <span className="provider-status">Key saved</span>}
+            </div>
+            <div className="connector-url">{ep.base_url}</div>
+            {status && (
+              <div className={`connector-status ${status.ok ? "ok" : "err"}`}>
+                {!status.ok
+                  ? `Couldn’t connect: ${status.error}`
+                  : status.model_count === 0
+                    ? "Reachable, but it isn’t serving any models yet — load one on the server first."
+                    : `Connected — ${status.model_count} ${status.model_count === 1 ? "model" : "models"} available`}
+              </div>
+            )}
+            <div className="provider-controls">
+              <button className="btn-secondary" onClick={() => testExisting(ep)} disabled={busyId === ep.id}>
+                {busyId === ep.id ? "Checking…" : "Test"}
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => openEditForm(ep)}
+                disabled={busyId === ep.id}
+              >
+                Edit
+              </button>
+              <label className="toggle-line">
+                <input
+                  type="checkbox"
+                  checked={ep.enabled}
+                  disabled={busyId === ep.id}
+                  onChange={() => toggleEnabled(ep)}
+                />
+                <span>{ep.enabled ? "On" : "Off"}</span>
+              </label>
+              <button
+                className="btn-text danger"
+                onClick={() => remove(ep)}
+                disabled={busyId === ep.id}
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        );
+      })}
+
+      {!formOpen ? (
+        <button className="link-button" onClick={openAddForm}>
+          + Add a server
+        </button>
+      ) : (
+        <div className="connect-card">
+          {!editingId && (
+            <div className="connect-actions">
+              {ENDPOINT_PRESETS.map((preset) => (
+                <button key={preset.label} className="btn-secondary" onClick={() => applyPreset(preset)}>
+                  {preset.label} · {preset.baseUrl.replace("http://", "")}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="connect-fields">
+            <label className="field">
+              <span className="field-label">Name</span>
+              <input
+                className="field-input"
+                placeholder="My Ollama"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">
+                Address <span className="field-hint">(Poiesis adds “/v1” itself)</span>
+              </span>
+              <input
+                className="field-input"
+                placeholder="http://localhost:11434"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && testDraft()}
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">
+                Context window{" "}
+                <span className="field-hint">— match what your server is configured for</span>
+              </span>
+              <input
+                className="field-input"
+                type="number"
+                min={512}
+                step={512}
+                value={ctxSize}
+                onChange={(e) => setCtxSize(e.target.value)}
+              />
+            </label>
+          </div>
+
+          <button className="link-button" onClick={() => setShowAdvanced((v) => !v)}>
+            {showAdvanced ? "Hide advanced" : "Advanced"}
+          </button>
+          {showAdvanced && (
+            <label className="field">
+              <span className="field-label">
+                API key{" "}
+                <span className="field-hint">
+                  (optional — Ollama and LM Studio usually don’t need one
+                  {editingId ? "; leave blank to keep the saved one" : ""})
+                </span>
+              </span>
+              <input
+                className="field-input"
+                type="password"
+                placeholder="Only if your server requires one"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
+            </label>
+          )}
+
+          {draftStatus && (
+            <div className={`connector-status ${draftStatus.ok ? "ok" : "err"}`}>
+              {!draftStatus.ok
+                ? `Couldn’t connect: ${draftStatus.error}`
+                : draftStatus.model_count === 0
+                  ? "Reachable, but it isn’t serving any models yet — load one on the server first."
+                  : `Connected — ${draftStatus.model_count} ${draftStatus.model_count === 1 ? "model" : "models"} available`}
+            </div>
+          )}
+
+          <div className="connect-actions">
+            <button
+              className="btn-secondary"
+              onClick={testDraft}
+              disabled={busyId === "__draft" || !baseUrl.trim()}
+            >
+              {busyId === "__draft" ? "Checking…" : "Test connection"}
+            </button>
+            <button
+              className="btn-primary"
+              onClick={saveForm}
+              disabled={saving || !label.trim() || !baseUrl.trim()}
+            >
+              {saving ? "Saving…" : editingId ? "Save" : "Add"}
+            </button>
+            <button className="btn-text" onClick={closeForm}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function Settings() {
   const systemPrompt = useAppStore((s) => s.systemPrompt);
   const setView = useAppStore((s) => s.setView);
   const setSystemPrompt = useAppStore((s) => s.setSystemPrompt);
   const [draft, setDraft] = useState(systemPrompt);
   const [saved, setSaved] = useState(false);
-  const [version, setVersion] = useState("");
   const [grants, setGrants] = useState<Grant[]>([]);
   const [capabilityGrants, setCapabilityGrants] = useState<CapabilityGrant[]>([]);
-  const [toolsets, setToolsets] = useState<ToolsetInfo[]>([]);
-  const [reliability, setReliability] = useState<ToolsetReliability[]>([]);
-  const [indexRoots, setIndexRoots] = useState<IndexRootView[]>([]);
-  const [mailAccounts, setMailAccounts] = useState<MailAccount[]>([]);
-  const [mailBusyId, setMailBusyId] = useState<string | null>(null);
-  const [mailTestResults, setMailTestResults] = useState<Record<string, MailTestResult>>({});
-  const [mailFormOpen, setMailFormOpen] = useState(false);
-  const [mailPreset, setMailPreset] = useState<keyof typeof MAIL_PRESETS>("gmail");
-  const [mailLabel, setMailLabel] = useState("");
-  const [mailEmail, setMailEmail] = useState("");
-  const [mailPassword, setMailPassword] = useState("");
-  const [mailImapHost, setMailImapHost] = useState<string>(MAIL_PRESETS.gmail.imapHost);
-  const [mailImapPort, setMailImapPort] = useState<number>(MAIL_PRESETS.gmail.imapPort);
-  const [mailSmtpHost, setMailSmtpHost] = useState<string>(MAIL_PRESETS.gmail.smtpHost);
-  const [mailSmtpPort, setMailSmtpPort] = useState<number>(MAIL_PRESETS.gmail.smtpPort);
-  const [mailSecurity, setMailSecurity] = useState<MailSecurity>(MAIL_PRESETS.gmail.security);
-  const [mailSaving, setMailSaving] = useState(false);
-  const [mailError, setMailError] = useState<string | null>(null);
-  const forgetFolderIndex = useAppStore((s) => s.forgetFolderIndex);
   const providers = useAppStore((s) => s.providers);
   const refreshCloud = useAppStore((s) => s.refreshCloud);
+  // A provider key gates that provider's *image/video* models as well as its
+  // chat models, so both lists have to be re-read whenever a key changes.
+  const refreshMediaModels = useAppStore((s) => s.refreshMediaModels);
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({});
   const [keyBusy, setKeyBusy] = useState<string | null>(null);
   /** `CST-2`: what generated media has cost, shown under the keys that pay
@@ -249,8 +509,6 @@ export default function Settings() {
   const setMode = useAppStore((s) => s.setMode);
   const readingScale = useAppStore((s) => s.readingScale);
   const setReadingScale = useAppStore((s) => s.setReadingScale);
-  const telemetryEnabled = useAppStore((s) => s.telemetryEnabled);
-  const setTelemetryEnabled = useAppStore((s) => s.setTelemetryEnabled);
   const contextBudget = useAppStore((s) => s.contextBudget);
   const autoCompact = useAppStore((s) => s.autoCompact);
   const setAutoCompact = useAppStore((s) => s.setAutoCompact);
@@ -261,114 +519,11 @@ export default function Settings() {
   useEffect(() => setDraft(systemPrompt), [systemPrompt]);
   useEffect(() => {
     if (!inTauri()) return;
-    getAppVersion().then(setVersion).catch(() => {});
     refreshPermissions();
     listCapabilityGrants().then(setCapabilityGrants).catch(() => {});
     refreshCloud();
-    listToolsets().then(setToolsets).catch(() => {});
-    getToolStats().then(setReliability).catch(() => {});
-    listIndexRoots().then(setIndexRoots).catch(() => {});
-    refreshMailAccounts();
     mediaSpendApi().then(setMediaSpend).catch(() => {});
   }, [refreshCloud]);
-
-  function formatDiskSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    const kb = bytes / 1024;
-    if (kb < 1024) return `${kb.toFixed(1)} KB`;
-    return `${(kb / 1024).toFixed(1)} MB`;
-  }
-
-  async function forgetIndexRoot(path: string) {
-    await forgetFolderIndex(path);
-    setIndexRoots((list) => list.filter((r) => r.path !== path));
-  }
-
-  async function toggleToolset(id: string, enabled: boolean) {
-    // Optimistic; revert on failure.
-    setToolsets((list) => list.map((s) => (s.id === id ? { ...s, enabled } : s)));
-    try {
-      await setToolsetEnabled(id, enabled);
-    } catch {
-      setToolsets((list) => list.map((s) => (s.id === id ? { ...s, enabled: !enabled } : s)));
-    }
-  }
-
-  function refreshMailAccounts() {
-    if (!inTauri()) return;
-    listMailAccounts().then(setMailAccounts).catch(() => {});
-  }
-
-  function applyMailPreset(key: keyof typeof MAIL_PRESETS) {
-    setMailPreset(key);
-    const p = MAIL_PRESETS[key];
-    setMailImapHost(p.imapHost);
-    setMailImapPort(p.imapPort);
-    setMailSmtpHost(p.smtpHost);
-    setMailSmtpPort(p.smtpPort);
-    setMailSecurity(p.security);
-  }
-
-  async function addAccount() {
-    setMailSaving(true);
-    setMailError(null);
-    try {
-      await addMailAccount({
-        label: mailLabel.trim() || MAIL_PRESETS[mailPreset].label,
-        email: mailEmail.trim(),
-        imapHost: mailImapHost.trim(),
-        imapPort: mailImapPort,
-        smtpHost: mailSmtpHost.trim(),
-        smtpPort: mailSmtpPort,
-        username: mailEmail.trim(),
-        password: mailPassword,
-        security: mailSecurity,
-      });
-      setMailLabel("");
-      setMailEmail("");
-      setMailPassword("");
-      setMailFormOpen(false);
-      refreshMailAccounts();
-    } catch (e) {
-      setMailError(String(e));
-    } finally {
-      setMailSaving(false);
-    }
-  }
-
-  async function testAccount(id: string) {
-    setMailBusyId(id);
-    try {
-      const result = await testMailAccount(id);
-      setMailTestResults((r) => ({ ...r, [id]: result }));
-    } catch (e) {
-      setMailTestResults((r) => ({ ...r, [id]: { ok: false, message_count: null, error: String(e) } }));
-    } finally {
-      setMailBusyId(null);
-    }
-  }
-
-  async function toggleMailAccount(a: MailAccount) {
-    setMailBusyId(a.id);
-    setMailAccounts((list) => list.map((x) => (x.id === a.id ? { ...x, enabled: !a.enabled } : x)));
-    try {
-      await setMailAccountEnabled(a.id, !a.enabled);
-    } catch {
-      setMailAccounts((list) => list.map((x) => (x.id === a.id ? { ...x, enabled: a.enabled } : x)));
-    } finally {
-      setMailBusyId(null);
-    }
-  }
-
-  async function removeMailAccount(id: string) {
-    setMailBusyId(id);
-    try {
-      await deleteMailAccount(id);
-      refreshMailAccounts();
-    } finally {
-      setMailBusyId(null);
-    }
-  }
 
   async function saveKey(id: string) {
     const key = (keyDrafts[id] ?? "").trim();
@@ -378,6 +533,7 @@ export default function Settings() {
       await setProviderKey(id, key);
       setKeyDrafts((d) => ({ ...d, [id]: "" }));
       await refreshCloud();
+      await refreshMediaModels();
     } catch {
       /* surfaced inline below would need state; keep simple */
     } finally {
@@ -390,6 +546,7 @@ export default function Settings() {
     try {
       await clearProviderKey(id);
       await refreshCloud();
+      await refreshMediaModels();
     } finally {
       setKeyBusy(null);
     }
@@ -597,210 +754,7 @@ export default function Settings() {
           </section>
         )}
 
-        {inTauri() && toolsets.length > 0 && (
-          <section className="setting-block">
-            <h2 className="setting-title">Tools</h2>
-            <p className="setting-help">
-              What Poiesis Agent can do beyond chatting, when tools are turned on in a chat. Each one is
-              opt-in; those that leave your device or run code are marked.
-            </p>
-            {toolsets.map((s) => {
-              const rel = reliability.find((r) => r.skill_id === s.id);
-              return (
-                <div key={s.id} className="toolset-item">
-                  <label className="toggle-line toolset-line">
-                    <input
-                      type="checkbox"
-                      checked={s.enabled}
-                      onChange={(e) => toggleToolset(s.id, e.target.checked)}
-                    />
-                    <span className="toolset-text">
-                      <span className="toolset-label">
-                        {s.label}
-                        {s.sensitive && <span className="toolset-flag">leaves device / runs code</span>}
-                      </span>
-                      <span className="toolset-desc">{s.description}</span>
-                      {rel && (
-                        <span className="toolset-reliability">
-                          {rel.ok_percent}% ok over {rel.calls} call{rel.calls === 1 ? "" : "s"} this
-                          week
-                        </span>
-                      )}
-                    </span>
-                  </label>
-                  {/* IDX-UI-4: the indexed folders this tool has built, wherever
-                      they were attached from — with the one undo that matters. */}
-                  {s.id === "indexing" && indexRoots.length > 0 && (
-                    <ul className="toolset-subitems">
-                      {indexRoots.map((r) => (
-                        <li key={r.path} className="toolset-subitem">
-                          <span className="toolset-subitem-path" title={r.path}>
-                            {r.path}
-                          </span>
-                          <span className="toolset-subitem-meta">{formatDiskSize(r.size_bytes)}</span>
-                          <button className="link-button" onClick={() => forgetIndexRoot(r.path)}>
-                            Forget this folder
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              );
-            })}
-          </section>
-        )}
-
-        {inTauri() && (
-          <section className="setting-block">
-            <h2 className="setting-title">Mail</h2>
-            <p className="setting-help">
-              Connect an email account so Poiesis Agent can read and, with your approval, send mail
-              for you — direct IMAP/SMTP, credentials in Windows Credential Manager. Nothing goes
-              through a Poiesis server.
-            </p>
-
-            {mailAccounts.map((a) => {
-              const result = mailTestResults[a.id];
-              return (
-                <div key={a.id} className={`toolset-item ${a.enabled ? "" : "disabled"}`}>
-                  <label className="toggle-line toolset-line">
-                    <input
-                      type="checkbox"
-                      checked={a.enabled}
-                      disabled={mailBusyId === a.id}
-                      onChange={() => toggleMailAccount(a)}
-                    />
-                    <span className="toolset-text">
-                      <span className="toolset-label">{a.label}</span>
-                      <span className="toolset-desc">{a.email}</span>
-                      {result && (
-                        <span className={`toolset-reliability ${result.ok ? "" : "error"}`}>
-                          {result.ok
-                            ? `I reached your inbox (${result.message_count ?? 0} messages) and the send server accepted me.`
-                            : `Couldn't connect: ${result.error}`}
-                        </span>
-                      )}
-                    </span>
-                  </label>
-                  <div className="connect-actions">
-                    <button className="btn-secondary" onClick={() => testAccount(a.id)} disabled={mailBusyId === a.id}>
-                      {mailBusyId === a.id ? "Checking…" : "Test"}
-                    </button>
-                    <button className="btn-text danger" onClick={() => removeMailAccount(a.id)} disabled={mailBusyId === a.id}>
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-
-            {!mailFormOpen ? (
-              <button className="btn-secondary" onClick={() => setMailFormOpen(true)}>
-                Add account
-              </button>
-            ) : (
-              <div className="connect-card">
-                <div className="transport-toggle" role="group" aria-label="Mail provider">
-                  {(Object.keys(MAIL_PRESETS) as (keyof typeof MAIL_PRESETS)[]).map((key) => (
-                    <button
-                      key={key}
-                      className={`seg ${mailPreset === key ? "on" : ""}`}
-                      aria-pressed={mailPreset === key}
-                      onClick={() => applyMailPreset(key)}
-                    >
-                      {MAIL_PRESETS[key].label}
-                    </button>
-                  ))}
-                </div>
-                <p className="field-hint">{MAIL_PRESETS[mailPreset].hint}</p>
-                {mailPreset === "generic" && (
-                  <div className="connect-fields">
-                    <label className="field">
-                      <span className="field-label">IMAP host</span>
-                      <input className="field-input" value={mailImapHost} onChange={(e) => setMailImapHost(e.target.value)} />
-                    </label>
-                    <label className="field">
-                      <span className="field-label">SMTP host</span>
-                      <input className="field-input" value={mailSmtpHost} onChange={(e) => setMailSmtpHost(e.target.value)} />
-                    </label>
-                    <label className="field">
-                      <span className="field-label">IMAP port</span>
-                      <input
-                        className="field-input"
-                        type="number"
-                        value={mailImapPort}
-                        onChange={(e) => setMailImapPort(Number(e.target.value))}
-                      />
-                    </label>
-                    <label className="field">
-                      <span className="field-label">SMTP port</span>
-                      <input
-                        className="field-input"
-                        type="number"
-                        value={mailSmtpPort}
-                        onChange={(e) => setMailSmtpPort(Number(e.target.value))}
-                      />
-                    </label>
-                    <label className="field">
-                      <span className="field-label">Connection</span>
-                      <select
-                        className="field-input"
-                        value={mailSecurity}
-                        onChange={(e) => setMailSecurity(e.target.value as MailSecurity)}
-                      >
-                        <option value="tls">TLS (usually ports 993 and 465)</option>
-                        <option value="starttls">STARTTLS (usually ports 143 and 587)</option>
-                      </select>
-                    </label>
-                  </div>
-                )}
-                <div className="connect-fields">
-                  <label className="field">
-                    <span className="field-label">Label</span>
-                    <input
-                      className="field-input"
-                      placeholder="Personal"
-                      value={mailLabel}
-                      onChange={(e) => setMailLabel(e.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">Email</span>
-                    <input
-                      className="field-input"
-                      placeholder="you@example.com"
-                      value={mailEmail}
-                      onChange={(e) => setMailEmail(e.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">App password</span>
-                    <input
-                      className="field-input"
-                      type="password"
-                      value={mailPassword}
-                      onChange={(e) => setMailPassword(e.target.value)}
-                    />
-                  </label>
-                </div>
-                {mailError && <p className="hw-note error">{mailError}</p>}
-                <div className="connect-actions">
-                  <button
-                    className="btn-primary"
-                    onClick={addAccount}
-                    disabled={mailSaving || !mailEmail.trim() || !mailPassword}
-                  >
-                    {mailSaving ? "Adding…" : "Add"}
-                  </button>
-                  <button className="btn-secondary" onClick={() => setMailFormOpen(false)}>
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-          </section>
-        )}
+        {inTauri() && <LocalEndpointsSettings />}
 
         <section className="setting-block">
           <h2 className="setting-title">Memory &amp; context</h2>
@@ -882,42 +836,6 @@ export default function Settings() {
             Open Activity
           </button>
         </section>
-
-        <section className="setting-block">
-          <h2 className="setting-title">Privacy</h2>
-          <p className="setting-help">
-            Poiesis Agent is local-first. Anonymous usage stats are <strong>off</strong> by default and
-            <strong> content-free</strong> — only counts of actions (like how many chats you start),
-            never your messages, files, prompts, or model choices. Nothing is sent anywhere in this
-            version; the counts stay on your PC.
-          </p>
-          <label className="toggle-line">
-            <input
-              type="checkbox"
-              checked={telemetryEnabled}
-              onChange={(e) => setTelemetryEnabled(e.target.checked)}
-            />
-            <span>Help improve Poiesis Agent with anonymous, content-free usage counts</span>
-          </label>
-        </section>
-
-        <section className="setting-block">
-          <h2 className="setting-title">About &amp; licenses</h2>
-          <p className="setting-help">
-            Poiesis Agent is built on open-source software. Thank you to these projects.
-          </p>
-          <ul className="attribution-list">
-            {ATTRIBUTIONS.map((a) => (
-              <li key={a.name} className="attribution-row">
-                <span className="attribution-name">{a.name}</span>
-                <span className="attribution-what">{a.what}</span>
-                <span className="attribution-license">{a.license}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <p className="version-note">{version ? `Poiesis Agent v${version}` : "Browser preview"}</p>
       </div>
     </div>
   );

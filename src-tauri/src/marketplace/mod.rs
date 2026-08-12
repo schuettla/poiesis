@@ -6,4 +6,4 @@ pub mod catalog;
 pub mod huggingface;
 pub mod github;
 
-pub use catalog::{classify_fit, recommended_catalog, Fit};
+pub use catalog::recommended_catalog;

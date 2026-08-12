@@ -313,7 +313,7 @@ fn present(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, St
         if let Some(md) = data.get("markdown").and_then(|m| m.as_str()) {
             let artifact = ctx
                 .db
-                .add_artifact(Some(ctx.conversation_id), title, "markdown", md)
+                .add_artifact(Some(ctx.conversation_id), title, "markdown", md, ctx.assistant_message_id)
                 .map_err(|e| format!("couldn't save the document: {e}"))?;
             ctx.sink.artifact(&artifact.id, title, "markdown", md);
             data = serde_json::json!({ "artifact_id": artifact.id });

@@ -50,6 +50,54 @@ impl HardwareProfile {
             .find(|g| g.vendor != GpuVendor::Unknown)
             .or_else(|| self.gpus.first())
     }
+
+    /// VRAM on the primary GPU, or 0 on a CPU-only machine.
+    pub fn vram_mb(&self) -> u64 {
+        self.primary_gpu().and_then(|g| g.vram_mb).unwrap_or(0)
+    }
+}
+
+/// Hardware-fit verdict for a model on this machine (MKT-4). Lives here rather
+/// than in the language-model marketplace because it is the same question for
+/// any weights at all — a diffusion checkpoint has to fit on the card just as a
+/// GGUF does, and both catalogs answer it with this one classifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Fit {
+    /// Fits comfortably in VRAM — fast.
+    Great,
+    /// Fits in RAM but not VRAM — runs on CPU, slower.
+    Slow,
+    /// Too large for available memory.
+    WontFit,
+}
+
+impl Fit {
+    // The frontend renders its own localized labels; kept for tests/logging.
+    #[allow(dead_code)]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Fit::Great => "Runs great on your PC",
+            Fit::Slow => "Runs slowly",
+            Fit::WontFit => "Won't fit",
+        }
+    }
+}
+
+/// Classify how weights of `size_mb` will run on `hw`. Heuristic: they need
+/// roughly their own size plus ~20% headroom. If that fits in GPU VRAM it runs
+/// great; else if it fits in system RAM it runs (slowly) on CPU; otherwise it
+/// won't fit.
+pub fn classify_fit(size_mb: u64, hw: &HardwareProfile) -> Fit {
+    let needed = (size_mb as f64 * 1.2) as u64;
+    if hw.vram_mb() >= needed {
+        Fit::Great
+    } else if hw.ram_mb >= needed + 2048 {
+        // Leave ~2 GB for the OS + app shell.
+        Fit::Slow
+    } else {
+        Fit::WontFit
+    }
 }
 
 fn detect_cpu(sys: &System) -> CpuInfo {

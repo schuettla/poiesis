@@ -221,6 +221,10 @@ export default function Rail() {
     "tasks",
     "activity",
     "settings",
+    "workingdir",
+    "mail",
+    "tools",
+    "about",
   ].includes(view);
 
   const setActive = useAppStore((s) => s.setActiveConversation);
@@ -319,51 +323,53 @@ export default function Rail() {
         </div>
       )}
 
-      <input
-        className="rail-search"
-        type="search"
-        placeholder="Search chats…"
-        aria-label="Search chats"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
+      <div className="rail-scroll">
+        <input
+          className="rail-search"
+          type="search"
+          placeholder="Search chats…"
+          aria-label="Search chats"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
 
-      {runningJob && (
-        <div className="rail-job-row" role="status">
-          <span className="rail-job-dot" aria-hidden="true" />
-          <span className="rail-job-label">Running “{runningJob.job_name}”…</span>
-          <button
-            className="rail-job-stop"
-            aria-label={`Stop ${runningJob.job_name}`}
-            title="Stop"
-            onClick={() => stopScheduledJob()}
-          >
-            ■
-          </button>
-        </div>
-      )}
+        {runningJob && (
+          <div className="rail-job-row" role="status">
+            <span className="rail-job-dot" aria-hidden="true" />
+            <span className="rail-job-label">Running “{runningJob.job_name}”…</span>
+            <button
+              className="rail-job-stop"
+              aria-label={`Stop ${runningJob.job_name}`}
+              title="Stop"
+              onClick={() => stopScheduledJob()}
+            >
+              ■
+            </button>
+          </div>
+        )}
 
-      {searching ? (
-        <div>
-          <p className="rail-label">{results.length ? "Results" : "No matches"}</p>
-          <ul className="chat-list">
-            {results.map((c) => (
-              <ChatRow key={c.id} c={c} active={c.id === activeId && view === "chat"} />
-            ))}
-          </ul>
-        </div>
-      ) : (
-        groups.map((g) => (
-        <div key={g.label}>
-          <p className="rail-label">{g.label}</p>
-          <ul className="chat-list">
-            {g.items.map((c) => (
-              <ChatRow key={c.id} c={c} active={c.id === activeId && view === "chat"} />
-            ))}
-          </ul>
-        </div>
-        ))
-      )}
+        {searching ? (
+          <div>
+            <p className="rail-label">{results.length ? "Results" : "No matches"}</p>
+            <ul className="chat-list">
+              {results.map((c) => (
+                <ChatRow key={c.id} c={c} active={c.id === activeId && view === "chat"} />
+              ))}
+            </ul>
+          </div>
+        ) : (
+          groups.map((g) => (
+          <div key={g.label}>
+            <p className="rail-label">{g.label}</p>
+            <ul className="chat-list">
+              {g.items.map((c) => (
+                <ChatRow key={c.id} c={c} active={c.id === activeId && view === "chat"} />
+              ))}
+            </ul>
+          </div>
+          ))
+        )}
+      </div>
 
       <hr className="rail-divider" />
 

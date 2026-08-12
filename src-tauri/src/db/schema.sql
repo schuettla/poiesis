@@ -130,6 +130,21 @@ CREATE TABLE IF NOT EXISTS connectors (
   created_at  INTEGER NOT NULL
 );
 
+-- A user's own OpenAI-compatible model server (Ollama, LM Studio, or a remote
+-- box) — a third model source alongside the integrated runtime and BYOK cloud
+-- providers. The API key, if the server even needs one, is **not** stored
+-- here — it lives in the OS credential store (`secrets::SERVICE_ENDPOINT`,
+-- account = this row's `id`); only connection metadata lives in SQLite.
+CREATE TABLE IF NOT EXISTS local_endpoints (
+  id         TEXT PRIMARY KEY,
+  label      TEXT NOT NULL,
+  base_url   TEXT NOT NULL,               -- normalized: no trailing slash, no /v1
+  kind       TEXT NOT NULL DEFAULT 'openai',
+  ctx_size   INTEGER NOT NULL DEFAULT 8192,
+  enabled    INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+
 -- Granted file-access folders (§6.1). Each carries a mode; revocable in Settings.
 CREATE TABLE IF NOT EXISTS permissions (
   id         TEXT PRIMARY KEY,

@@ -22,7 +22,7 @@ use serde::Serialize;
 use crate::autonomy::{autonomy_gate, Rung};
 use crate::db::Db;
 
-use super::toolsets::{mark_untrusted, ToolContext};
+use super::toolsets::{mark_untrusted, set_step_note, ToolContext};
 use super::AgentEvent;
 
 /// Where a skill was found — governs whether its body is marked untrusted
@@ -489,6 +489,21 @@ fn working_folder(ctx: &ToolContext<'_>) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Claim the first load of `name` in this run. `true` means go ahead and send
+/// the body; `false` means this run has already sent it once.
+///
+/// Deliberately a claim rather than a query: the check and the record are one
+/// step under the same lock, so two calls in the same batch can't both decide
+/// they are the first.
+fn claim_load(loaded: &std::sync::Mutex<Vec<String>>, name: &str) -> bool {
+    let mut loaded = loaded.lock().unwrap();
+    if loaded.iter().any(|n| n == name) {
+        return false;
+    }
+    loaded.push(name.to_string());
+    true
+}
+
 async fn use_skill(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
     let name = required(args, "name")?;
     let folder = working_folder(ctx);
@@ -524,6 +539,19 @@ async fn use_skill(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<St
         .any(|n| n == name)
     {
         return Err(format!("this persona doesn't have the \"{name}\" skill turned on"));
+    }
+
+    // Already loaded this run: the body is static and the earlier tool result is
+    // still sitting in the transcript, so re-sending it would spend its whole
+    // length a second time to tell the model something it already has. Answer
+    // with a pointer instead. Checked after the permission gates above, so a
+    // skill the user has since switched off still refuses rather than replaying.
+    if !claim_load(ctx.loaded_skills, name) {
+        set_step_note(ctx, "— already loaded");
+        return Ok(format!(
+            "Skill \"{name}\" is already loaded in this run — its instructions are in the \
+             conversation above. Nothing has changed since; carry on with the work."
+        ));
     }
 
     // `SKL-3`: a skill written for Claude Code (or another agent sharing the
@@ -627,6 +655,18 @@ mod tests {
     fn write_skill(dir: &Path, frontmatter: &str, body: &str) {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("SKILL.md"), format!("---\n{frontmatter}\n---\n{body}")).unwrap();
+    }
+
+    /// The run that prompted this loaded one 534-line skill twice, spending its
+    /// whole length again to tell the model something already in the transcript.
+    #[test]
+    fn a_skill_loads_once_per_run() {
+        let loaded = std::sync::Mutex::new(Vec::new());
+        assert!(claim_load(&loaded, "content-research-writer"), "the first load sends the body");
+        assert!(!claim_load(&loaded, "content-research-writer"), "the second gets a pointer");
+        // A *different* skill is unaffected — this dedups a repeat, not skills.
+        assert!(claim_load(&loaded, "pdf-forms"));
+        assert!(!claim_load(&loaded, "pdf-forms"));
     }
 
     /// `SKL-3`: a skill points at its own bundled files with

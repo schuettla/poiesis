@@ -1,0 +1,143 @@
+/* A small floating checklist, not a blocking modal — sits above whatever
+   view is open and gets out of the way with one click. */
+.onboarding-guide {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  width: 320px;
+  z-index: 35;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  padding: 18px 18px 16px;
+  animation: onboarding-in 0.18s ease;
+}
+@keyframes onboarding-in {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+}
+
+.onboarding-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: none;
+  color: var(--ink-faint);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  line-height: 1;
+  cursor: pointer;
+  border-radius: var(--radius);
+}
+.onboarding-close:hover {
+  color: var(--ink);
+  background: var(--paper-edge);
+}
+
+.onboarding-title {
+  font-family: var(--font-serif);
+  font-size: var(--fs-ui-lg);
+  color: var(--ink);
+  margin: 0 22px 2px 0;
+}
+.onboarding-lede {
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+  margin: 0 0 14px;
+}
+
+.onboarding-steps {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.onboarding-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.onboarding-steps li.optional {
+  opacity: 0.85;
+}
+
+.onboarding-mark {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--paper-edge-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+  margin-top: 1px;
+}
+.onboarding-steps li.done .onboarding-mark {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.onboarding-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+}
+.onboarding-body strong {
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.onboarding-action {
+  align-self: flex-start;
+  margin-top: 2px;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--local);
+  cursor: pointer;
+}
+.onboarding-action:hover {
+  text-decoration: underline;
+}
+
+.onboarding-or {
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 12px;
+}
+
+.onboarding-alt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+}
+.onboarding-alt strong {
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  font-weight: 600;
+}

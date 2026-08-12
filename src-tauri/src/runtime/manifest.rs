@@ -11,7 +11,13 @@ use super::hardware::{GpuVendor, HardwareProfile};
 
 /// The pinned, tested upstream build (Decision D-4: pin rather than track dailies).
 /// Surfaced to the user as an "update available" flow rather than auto-updated.
-pub const PINNED_BUILD_TAG: &str = "b4585";
+///
+/// **A pin is a ceiling on which models can run.** The previous pin, `b4585`
+/// (Jan 2025), predates llama.cpp's Gemma 3 support, so every attempt to load a
+/// `gemma3` GGUF died with "unknown model architecture" before the server ever
+/// bound its port. When bumping this, bump it far enough that the architectures
+/// in the model catalogue actually load.
+pub const PINNED_BUILD_TAG: &str = "b10333";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -21,21 +27,17 @@ pub enum Backend {
     Vulkan,
     Hip,
     Sycl,
-    CpuAvx512,
-    CpuAvx2,
     Cpu,
 }
 
 impl Backend {
     /// Every backend, in display order (for the engine view's picker).
-    pub const ALL: [Backend; 8] = [
+    pub const ALL: [Backend; 6] = [
         Backend::Cuda12,
         Backend::Cuda13,
         Backend::Vulkan,
         Backend::Hip,
         Backend::Sycl,
-        Backend::CpuAvx512,
-        Backend::CpuAvx2,
         Backend::Cpu,
     ];
 
@@ -48,8 +50,6 @@ impl Backend {
             Backend::Vulkan => "vulkan",
             Backend::Hip => "hip",
             Backend::Sycl => "sycl",
-            Backend::CpuAvx512 => "cpu-avx512",
-            Backend::CpuAvx2 => "cpu-avx2",
             Backend::Cpu => "cpu",
         }
     }
@@ -67,9 +67,7 @@ impl Backend {
             Backend::Vulkan => "Vulkan (cross-vendor GPU)",
             Backend::Hip => "AMD HIP/ROCm",
             Backend::Sycl => "Intel SYCL",
-            Backend::CpuAvx512 => "CPU (AVX-512)",
-            Backend::CpuAvx2 => "CPU (AVX2)",
-            Backend::Cpu => "CPU (baseline)",
+            Backend::Cpu => "CPU",
         }
     }
 
@@ -81,36 +79,50 @@ impl Backend {
         matches!(self, Backend::Cuda12 | Backend::Cuda13)
     }
 
+    /// Filename prefix every llama.cpp *engine* asset carries.
+    ///
+    /// This is load-bearing, not decoration. Upstream renamed the CUDA builds
+    /// from `…-cuda-cu12.4-…` to `…-cuda-12.4-…`, which left the engine zip
+    /// (`llama-b10333-bin-win-cuda-12.4-x64.zip`) and the CUDA DLL package
+    /// (`cudart-llama-bin-win-cuda-12.4-x64.zip`) differing *only* in their
+    /// prefix — no set of substrings can tell them apart any more.
+    pub const ENGINE_PREFIX: &'static str = "llama-";
+    /// Filename prefix of the separate CUDA runtime DLL packages.
+    pub const CUDART_PREFIX: &'static str = "cudart-";
+
     /// Lowercase substrings that must all appear in an upstream asset's file
-    /// name for it to match this backend (Windows x64 only in v1).
+    /// name for it to match this backend (Windows x64 only in v1). Applied on
+    /// top of [`Backend::ENGINE_PREFIX`].
     ///
     /// Matched against the real upstream naming, e.g.
-    /// `llama-b4585-bin-win-cuda-cu12.4-x64.zip`,
-    /// `llama-b4585-bin-win-avx2-x64.zip`. Note the `cuda-cu` discriminator on
-    /// the GPU builds: it keeps the engine match from also matching the separate
-    /// `cudart-llama-bin-win-cu12.4-x64.zip` DLL package (which contains the
-    /// substring "cuda" inside "cudart").
+    /// `llama-b10333-bin-win-cuda-12.4-x64.zip`,
+    /// `llama-b10333-bin-win-cpu-x64.zip`. The `x64` term also excludes the
+    /// arm64 builds published under otherwise identical names.
     pub fn asset_keywords(&self) -> Vec<&'static str> {
         match self {
-            Backend::Cuda12 => vec!["win", "cuda-cu12", "x64"],
-            Backend::Cuda13 => vec!["win", "cuda-cu13", "x64"],
+            // Minor version deliberately unpinned: upstream moves the CUDA
+            // toolkit point release (12.4 → 12.x) without warning, and any
+            // 12.x engine runs against the 12.x DLL package we fetch beside it.
+            Backend::Cuda12 => vec!["win", "cuda-12", "x64"],
+            Backend::Cuda13 => vec!["win", "cuda-13", "x64"],
             Backend::Vulkan => vec!["win", "vulkan", "x64"],
             Backend::Hip => vec!["win", "hip", "x64"],
             Backend::Sycl => vec!["win", "sycl", "x64"],
-            // Upstream ships per-ISA CPU Windows builds (avx512 / avx2 / avx /
-            // noavx); pick the one matching detected CPU features (§7.3.2).
-            Backend::CpuAvx512 => vec!["win", "avx512", "x64"],
-            Backend::CpuAvx2 => vec!["win", "avx2", "x64"],
-            Backend::Cpu => vec!["win", "noavx", "x64"],
+            // Upstream no longer ships per-ISA CPU builds. The single CPU zip
+            // carries a `ggml-cpu-<microarch>.dll` per ISA (sandybridge …
+            // zen4, sapphirerapids) and picks one at runtime, which is both
+            // better than our detection and one less thing to get wrong.
+            Backend::Cpu => vec!["win", "cpu", "x64"],
         }
     }
 
     /// Keywords identifying the matching CUDA runtime DLL package, if any.
-    /// Real package names look like `cudart-llama-bin-win-cu12.4-x64.zip`.
+    /// Applied on top of [`Backend::CUDART_PREFIX`]; real package names look
+    /// like `cudart-llama-bin-win-cuda-12.4-x64.zip`.
     pub fn cudart_keywords(&self) -> Option<Vec<&'static str>> {
         match self {
-            Backend::Cuda12 => Some(vec!["cudart", "cu12"]),
-            Backend::Cuda13 => Some(vec!["cudart", "cu13"]),
+            Backend::Cuda12 => Some(vec!["cuda-12", "x64"]),
+            Backend::Cuda13 => Some(vec!["cuda-13", "x64"]),
             _ => None,
         }
     }
@@ -174,17 +186,13 @@ pub fn select_runtime(profile: &HardwareProfile) -> RuntimeSelection {
         }
     }
 
-    // CPU fallback; choose the ISA variant from detection (§7.3.2).
-    let backend = if profile.cpu.avx512 {
-        Backend::CpuAvx512
-    } else if profile.cpu.avx2 {
-        Backend::CpuAvx2
-    } else {
-        Backend::Cpu
-    };
+    // CPU fallback. There is one CPU build to choose; it dispatches to the
+    // right ISA itself, so the detected AVX level is display-only now (§7.3.2).
     RuntimeSelection {
-        backend,
-        alternates: vec![Backend::Cpu],
+        backend: Backend::Cpu,
+        // Vulkan is the one worth offering: it drives GPUs our vendor probe
+        // failed to identify, which is exactly how a machine lands here.
+        alternates: vec![Backend::Vulkan],
         rationale: "No supported GPU detected — running on the CPU. Larger models will be slow."
             .to_string(),
         build_tag,

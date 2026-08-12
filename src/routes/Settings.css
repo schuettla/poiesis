@@ -210,7 +210,7 @@
   letter-spacing: 0.04em;
   color: var(--cloud);
   border: 1px solid color-mix(in srgb, var(--cloud) 40%, transparent);
-  border-radius: 10px;
+  border-radius: var(--radius);
   padding: 1px 8px;
 }
 .toolset-desc {
@@ -398,6 +398,9 @@
   font-size: 13px;
   color: var(--ink-muted);
 }
+.setting-readout.wrap {
+  word-break: break-all;
+}
 
 /* PRES-3: the pointer from Settings to the Self view. A line of prose that
    happens to be clickable, not a button competing with the settings around it. */
@@ -420,4 +423,12 @@
 /* `CST-2`: what the keys above have cost, in the place spending is decided. */
 .media-spend-line {
   margin-top: 12px;
+}
+
+/* The living mark, standing large at the top of About — the only place it's
+   shown at a size worth pausing on rather than as a nav icon. */
+.about-mark {
+  display: flex;
+  justify-content: center;
+  margin: 4px 0 20px;
 }

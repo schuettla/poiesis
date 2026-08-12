@@ -2,12 +2,13 @@
 //! and the app-data layout. Orchestration (download → spawn → health → stream)
 //! is driven by the command layer, which calls into these helpers.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use super::process::{spawn_engine, wait_until_healthy, EngineConfig, EngineError, EngineStatus, RunningEngine};
 use super::proxy::CancelFlag;
@@ -30,6 +31,13 @@ pub struct RuntimeManager {
     restarts_session: AtomicU32,
     /// Set once the limit is spent — the UI says so instead of pretending.
     gave_up: AtomicBool,
+    /// One lock per in-progress download destination (MKT-3 resume): a second
+    /// request for the same file — e.g. the user re-clicking "Download" after
+    /// navigating away and back while the first request is still streaming —
+    /// waits for the first to finish instead of writing to the file at the
+    /// same time, which corrupted the download and left duplicate library
+    /// rows for the one file.
+    download_locks: std::sync::Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
 }
 
 impl RuntimeManager {
@@ -48,7 +56,22 @@ impl RuntimeManager {
             restarts: std::sync::Mutex::new(VecDeque::new()),
             restarts_session: AtomicU32::new(0),
             gave_up: AtomicBool::new(false),
+            download_locks: std::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Acquire the lock for `dest`, serializing concurrent downloads to the
+    /// same destination file. Hold the returned guard for the duration of the
+    /// download (and the "is this already registered" check around it).
+    pub async fn lock_download(&self, dest: &Path) -> OwnedMutexGuard<()> {
+        let entry = {
+            let mut locks = self.download_locks.lock().unwrap();
+            locks
+                .entry(dest.to_path_buf())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        entry.lock_owned().await
     }
 
     pub fn runtimes_dir(&self) -> PathBuf {
