@@ -1,0 +1,109 @@
+{
+  "_readme": "CTX-4's equivalence gate. Both the Rust assembly (agent/context.rs) and the TypeScript one (store.ts + context.ts) build a turn array from this input and must produce prompt-assembly.golden.txt byte for byte. If you change either implementation, this file and the golden must change with it, in the same commit. JSON strings are given as text, not as objects, because JavaScript keeps object keys in insertion order and serde_json sorts them: the point of the test is that neither side re-serializes them.",
+  "base": "You are Poiesis Agent, a local-first assistant. Be concise and clear.",
+  "about_you": "  Prefers short answers and plain English. Works on Windows.  ",
+  "soul": "Never write to disk without asking.",
+  "project_name": "Kitchen rebuild",
+  "project_instructions": "Quotes are in EUR and include VAT. The flat is a 1930s build, so assume no straight walls and check every measurement twice.",
+  "memory_index": "- [Coffee](coffee.md) â€” takes it black\n- [Editor](editor.md) â€” uses Neovim",
+  "fact_count": 2,
+  "tools_enabled": true,
+  "memory_enabled": true,
+  "plan_mode": "auto",
+  "skills": [
+    {
+      "name": "pdf-forms",
+      "description": "Fill in PDF forms",
+      "when_to_use": "when the user attaches a form"
+    },
+    {
+      "name": "changelog",
+      "description": "Write release notes",
+      "when_to_use": null
+    },
+    {
+      "name": "terse",
+      "description": "",
+      "when_to_use": "when the user asks for less"
+    }
+  ],
+  "blocks": [
+    {
+      "id": "blk_plan",
+      "title": "Ship it",
+      "kind": "plan",
+      "data_json": "{\"steps\":[{\"id\":\"1\",\"status\":\"done\"},{\"id\":\"2\",\"status\":\"todo\"},{\"id\":\"3\",\"status\":\"todo\"}]}",
+      "state_json": "{\"checked\":{\"2\":\"done\"}}"
+    },
+    {
+      "id": "blk_cmp",
+      "title": "Which laptop",
+      "kind": "comparison",
+      "data_json": "{\"options\":[{\"name\":\"a\"},{\"name\":\"b\"}]}",
+      "state_json": null
+    },
+    {
+      "id": "blk_doc",
+      "title": "Notes",
+      "kind": "document",
+      "data_json": "{\"body\":\"hello\"}",
+      "state_json": null
+    }
+  ],
+  "surface": {
+    "data_json": "{\"type\":\"stack\",\"children\":[{\"type\":\"text\",\"value\":\"hi\"}]}",
+    "state_json": "{\"zebra\":true,\"apple\":\"picked\"}"
+  },
+  "session_state_json": "{\"decisions\":{\"Which laptop\":\"b\"},\"constraints\":{\"budget\":2000}}",
+  "tool_health": [
+    {
+      "tool_name": "web_search",
+      "ok": 1,
+      "total": 10
+    },
+    {
+      "tool_name": "read_file",
+      "ok": 9,
+      "total": 10
+    },
+    {
+      "tool_name": "browse",
+      "ok": 0,
+      "total": 12
+    },
+    {
+      "tool_name": "rarely_used",
+      "ok": 0,
+      "total": 3
+    }
+  ],
+  "summary": "  The user asked about laptops and picked option b.  ",
+  "budget": 900,
+  "keep_recent": 3,
+  "prior": [
+    {
+      "role": "user",
+      "content": "This is the oldest turn and it should not survive the budget. It is padded out so it costs real tokens rather than a rounding error, which is what makes the drop deliberate instead of accidental."
+    },
+    {
+      "role": "assistant",
+      "content": "An older answer, also padded so that the budget has something to actually push out of the window when it runs the numbers on this fixture."
+    },
+    {
+      "role": "user",
+      "content": "Which laptop should I get?"
+    },
+    {
+      "role": "assistant",
+      "content": "Option b."
+    },
+    {
+      "role": "user",
+      "content": "Why?"
+    }
+  ],
+  "current": {
+    "role": "user",
+    "content": "Order it."
+  }
+}

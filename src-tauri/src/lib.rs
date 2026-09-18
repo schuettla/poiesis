@@ -115,8 +115,23 @@ pub fn run() {
             runtime::rerankserver::spawn_idle_stop(app.handle().clone());
             app.manage(PermissionManager::new());
             app.manage(agent::index::IndexManager::new());
+            // `HRN-1`: every live run, addressable by id — what Stop and
+            // mid-run steering aim at now that a turn can start other turns.
+            app.manage(agent::fleet::Fleet::new());
             app.manage(commands::scheduler::SchedulerState::new());
             commands::scheduler::spawn_ticker(app.handle().clone());
+            // ART-6: artifacts are served from loopback so a preview has a real
+            // origin (and therefore its own CSP, its own storage, and a URL a
+            // real browser can open). Started before the first window asks for
+            // the base URL; a bind failure is survivable — previews fall back to
+            // the old inline rendering.
+            agent::preview::start(app.handle().clone());
+            // `RPC-1`: a second loopback socket, this one for a sandboxed
+            // script calling the run's own tools. Bound here so the port is
+            // known, but it can answer nothing until a `run_code` call arms a
+            // token, and nothing arms one unless the user switched the ability
+            // on in Settings → Tools.
+            agent::toolrpc::start();
             // BRW-1: one browser session per conversation, closed on idle.
             app.manage(agent::browser::BrowserPool::new());
             agent::browser::spawn_idle_sweep(app.handle().clone());
@@ -125,6 +140,11 @@ pub fn run() {
             // placeholder can't spin forever across a restart. Must come after
             // `app.manage(db)` — the sweep reads it.
             media::jobs::init(app.handle().clone());
+            // `SUB-10`: the same arrangement for delegated children that outlive
+            // the turn that started them. Without this handle `delegate
+            // {background: true}` has nothing to spawn into and says so, rather
+            // than accepting work it cannot do.
+            agent::background::init(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -143,6 +163,7 @@ pub fn run() {
             commands::runtime::stop_chat_cmd,
             commands::runtime::get_context_budget_cmd,
             commands::conversations::compact_conversation_cmd,
+            commands::conversations::conversation_summaries_cmd,
             commands::memory::get_memory_context_cmd,
             commands::memory::recall_for_cmd,
             commands::memory::context_manifest_cmd,
@@ -165,6 +186,7 @@ pub fn run() {
             commands::memory::get_pending_consolidation_cmd,
             commands::memory::apply_consolidation_cmd,
             commands::reflect::reflect_conversation_cmd,
+            commands::reflect::catch_up_reflection_cmd,
             commands::reflect::list_lessons_cmd,
             commands::reflect::forget_lesson_cmd,
             commands::organism::get_vitality_cmd,
@@ -182,7 +204,7 @@ pub fn run() {
             commands::conversations::list_messages_cmd,
             commands::conversations::append_message_cmd,
             commands::conversations::finalize_message_cmd,
-            commands::conversations::search_conversations_cmd,
+            commands::conversations::search_messages_cmd,
             commands::conversations::list_artifacts_cmd,
             commands::conversations::list_all_artifacts_cmd,
             commands::conversations::list_blocks_cmd,
@@ -207,8 +229,21 @@ pub fn run() {
             commands::models::delete_model_cmd,
             commands::models::set_default_model_cmd,
             commands::agent::agent_chat_cmd,
+            commands::agent::steer_run_cmd,
+            commands::subagents::list_subagent_runs_cmd,
+            commands::subagents::get_subagent_run_cmd,
+            commands::subagents::stop_run_cmd,
+            commands::subagents::steer_subagent_cmd,
+            commands::subagents::list_agent_types_cmd,
+            commands::usage::usage_summary_cmd,
+            commands::agent::save_kept_result_cmd,
+            commands::agent::resume_run_cmd,
+            commands::agent::fork_conversation_cmd,
             commands::agent::resolve_permission_cmd,
             commands::agent::list_toolsets_cmd,
+            commands::agent::record_artifact_console_cmd,
+            commands::agent::preview_base_url_cmd,
+            commands::agent::clear_artifact_console_cmd,
             commands::agent::get_tool_stats_cmd,
             commands::agent::set_toolset_enabled_cmd,
             commands::imagegen::image_setup_status_cmd,
@@ -267,6 +302,7 @@ pub fn run() {
             commands::connectors::import_connectors_cmd,
             commands::cloud::list_providers_cmd,
             commands::cloud::set_provider_key_cmd,
+            commands::cloud::verify_provider_key_cmd,
             commands::cloud::clear_provider_key_cmd,
             commands::cloud::list_cloud_models_cmd,
             commands::endpoints::list_endpoints_cmd,
@@ -276,6 +312,24 @@ pub fn run() {
             commands::endpoints::delete_endpoint_cmd,
             commands::endpoints::test_endpoint_cmd,
             commands::endpoints::list_endpoint_models_cmd,
+            commands::projects::list_projects_cmd,
+            commands::projects::create_project_cmd,
+            commands::projects::rename_project_cmd,
+            commands::projects::set_project_instructions_cmd,
+            commands::projects::set_project_root_cmd,
+            commands::projects::set_project_trust_cmd,
+            commands::projects::set_project_archived_cmd,
+            commands::projects::set_project_tabs_cmd,
+            commands::projects::set_conversation_project_cmd,
+            commands::projects::list_project_conversations_cmd,
+            commands::projects::project_card_cmd,
+            commands::projects::set_project_exec_policy_cmd,
+            commands::projects::set_project_task_allowed_cmd,
+            commands::projects::set_project_commands_cmd,
+            commands::projects::conversation_changes_cmd,
+            commands::projects::undo_changes_cmd,
+            commands::projects::keep_changes_cmd,
+            commands::projects::run_code_artifact_cmd,
             commands::files::pick_folder_cmd,
             commands::files::pick_files_cmd,
             commands::files::pick_zip_file_cmd,
@@ -284,6 +338,8 @@ pub fn run() {
             commands::files::read_dir_tree_cmd,
             commands::files::data_dir_overview_cmd,
             commands::files::read_text_file_cmd,
+            commands::files::read_file_for_edit_cmd,
+            commands::files::write_text_file_cmd,
             commands::files::open_path_cmd,
             commands::files::reveal_path_cmd,
             commands::files::save_artifact_to_folder_cmd,

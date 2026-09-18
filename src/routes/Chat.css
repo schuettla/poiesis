@@ -46,12 +46,14 @@
 .conversation {
   width: 100%;
   max-width: 700px;
+  /* The gap to the composer lives here, on the scrolled child — not as
+     padding-bottom on `.main`. A flex scroll container's end padding is not
+     reliably part of the scrollable overflow region, so putting it there
+     silently disappears once the stream is long enough to scroll. */
+  padding-bottom: 32px;
 }
 
-.composer-wrap {
-  grid-column: 2;
-  grid-row: 3;
-}
+/* The composer places itself in row 3 of this column — see Composer.css. */
 
 /* empty state — invites action rather than apologizes (§5.6) */
 .empty-state {

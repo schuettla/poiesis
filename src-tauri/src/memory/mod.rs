@@ -110,6 +110,12 @@ pub struct Fact {
     /// transient. `None` means it never expires. Lessons never set this.
     #[serde(default)]
     pub expires_at: Option<String>,
+    /// `PRJ-8`: the project this was learned in, when it was learned inside
+    /// one. `None` means shared — and most memory is, because most of what the
+    /// agent learns about a user is true everywhere. Tagging narrows what
+    /// *other* projects see; it never hides an entry from its own project.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 /// One lesson surfaced by relevance rather than always-injected
@@ -261,6 +267,7 @@ fn parse_entry(name: &str, text: &str) -> Fact {
     let mut recurrence = None;
     let mut last_seen = None;
     let mut expires_at = None;
+    let mut project = None;
 
     for line in header.lines() {
         let Some((key, value)) = line.split_once(':') else { continue };
@@ -283,6 +290,11 @@ fn parse_entry(name: &str, text: &str) -> Fact {
             "recurrence" => recurrence = value.parse().ok(),
             "last_seen" => last_seen = Some(value),
             "expires_at" => expires_at = Some(value),
+            // `PRJ-8`. An unreadable value reads as absent, i.e. shared —
+            // the same tolerance every other field here gets, and the safe
+            // direction: a mis-tagged fact stays reachable instead of
+            // disappearing into a project nobody can name.
+            "project" => project = Some(value),
             _ => {}
         }
     }
@@ -303,6 +315,7 @@ fn parse_entry(name: &str, text: &str) -> Fact {
         recurrence,
         last_seen,
         expires_at,
+        project,
     }
 }
 
@@ -391,6 +404,9 @@ fn render_entry(f: &Fact) -> String {
     }
     if let Some(expires_at) = &f.expires_at {
         out.push_str(&format!("expires_at: {}\n", one_line(expires_at)));
+    }
+    if let Some(project) = &f.project {
+        out.push_str(&format!("project: {}\n", one_line(project)));
     }
     out.push_str("---\n");
     out.push_str(f.body.trim());
@@ -945,7 +961,30 @@ impl MemoryStore {
     /// `index_markdown` unchanged (SEM-4) — every fact, scoped or not, plus
     /// every lesson: one code path, one flag.
     pub fn recall_for(&self, db: &Db, query: Option<(&[f32], &str, i64)>) -> RecallSet {
-        let all_facts = self.list_in(FACTS);
+        self.recall_for_project(db, query, None)
+    }
+
+    /// `PRJ-8`: `recall_for`, narrowed to one project.
+    ///
+    /// The rule is one sentence: **an entry tagged with a different project is
+    /// not eligible; everything else is.** Untagged memory stays shared, so
+    /// what the agent knows about how the user likes to be talked to keeps
+    /// working everywhere and only project-specific knowledge is fenced.
+    ///
+    /// Outside a project (`project` is `None`), tagged entries are still
+    /// excluded — a fact that only makes sense inside one project would be
+    /// noise in a loose chat, and worse, misleading.
+    pub fn recall_for_project(
+        &self,
+        db: &Db,
+        query: Option<(&[f32], &str, i64)>,
+        project: Option<&str>,
+    ) -> RecallSet {
+        let eligible = |f: &Fact| match f.project.as_deref() {
+            None => true,
+            Some(tag) => Some(tag) == project,
+        };
+        let all_facts: Vec<Fact> = self.list_in(FACTS).into_iter().filter(&eligible).collect();
 
         let Some((query_vec, model, dim)) = query else {
             let mut index = String::new();
@@ -955,7 +994,7 @@ impl MemoryStore {
                 index.push_str(&block);
                 injected_facts = kept;
             }
-            let lessons = self.list_in(LESSONS);
+            let lessons: Vec<Fact> = self.list_in(LESSONS).into_iter().filter(&eligible).collect();
             if !lessons.is_empty() {
                 index.push_str(LESSONS_HEADER);
                 index.push_str(&Self::index_section(&lessons, INDEX_CAP_LESSONS).0);
@@ -991,7 +1030,7 @@ impl MemoryStore {
         let mut retrieved_fact_entries: Vec<Fact> = Vec::new();
         for hit in self.retrieve(db, FACTS, "fact", query_vec, model, dim, SEM_FACT_K * SEM_FACT_OVERFETCH) {
             let Some(entry) = self.read(&hit.name) else { continue };
-            if entry.scope.as_deref() != Some("topical") {
+            if entry.scope.as_deref() != Some("topical") || !eligible(&entry) {
                 continue;
             }
             retrieved_facts.push(hit);
@@ -1012,7 +1051,14 @@ impl MemoryStore {
         }
 
         let mut retrieved = retrieved_facts;
-        retrieved.extend(self.retrieve(db, LESSONS, "lesson", query_vec, model, dim, SEM_LESSON_K));
+        // `PRJ-8`: the vector index carries every lesson, tagged or not, so the
+        // filter has to happen on the way out. Read-back is the same cost the
+        // fact path above already pays.
+        retrieved.extend(
+            self.retrieve(db, LESSONS, "lesson", query_vec, model, dim, SEM_LESSON_K)
+                .into_iter()
+                .filter(|hit| self.read_in(LESSONS, &hit.name).is_none_or(|e| eligible(&e))),
+        );
 
         // Retrieval selects; it does not deliver. What came back still has to be
         // written into the block that becomes the prompt — otherwise installing
@@ -1199,6 +1245,7 @@ mod tests {
             recurrence: None,
             last_seen: None,
             expires_at: None,
+            project: None,
         }
     }
 
@@ -1788,6 +1835,52 @@ mod tests {
         );
         assert!(set.injected_facts.contains(&"be-concise".to_string()));
         assert!(set.injected_facts.contains(&"still-unclassified".to_string()));
+    }
+
+    /// `PRJ-8`: an entry tagged with a *different* project is not eligible;
+    /// everything else is. Untagged memory stays shared, because most of what
+    /// the agent learns about a user is true everywhere.
+    #[test]
+    fn recall_fences_memory_tagged_for_another_project_and_shares_the_rest() {
+        let (s, db, _tmp) = store();
+        s.save(&db, &fact("shared-pref", "Answer in metric.")).unwrap();
+        s.save(&db, &Fact { project: Some("p-book".into()), ..fact("book-voice", "Past tense.") })
+            .unwrap();
+        s.save(&db, &Fact { project: Some("p-job".into()), ..fact("job-title", "Wants staff eng.") })
+            .unwrap();
+
+        // Inside the book project: the shared fact and the book's own.
+        let set = s.recall_for_project(&db, None, Some("p-book"));
+        assert!(set.index.contains("shared-pref"), "untagged memory is shared:\n{}", set.index);
+        assert!(set.index.contains("book-voice"), "its own project's memory:\n{}", set.index);
+        assert!(!set.index.contains("job-title"), "another project's is fenced:\n{}", set.index);
+
+        // Outside any project, only the shared one. A fact that only makes
+        // sense inside one project would be noise in a loose chat, and worse,
+        // misleading.
+        let set = s.recall_for_project(&db, None, None);
+        assert!(set.index.contains("shared-pref"));
+        assert!(!set.index.contains("book-voice"));
+        assert!(!set.index.contains("job-title"));
+
+        // And the plain entry point is the unscoped one, unchanged.
+        assert_eq!(s.recall_for(&db, None).index, set.index);
+    }
+
+    /// The tag has to survive the file, or it is not memory — it is a filter
+    /// that forgets itself on the next read.
+    #[test]
+    fn a_project_tag_round_trips_through_the_markdown_file() {
+        let (s, db, _tmp) = store();
+        s.save(&db, &Fact { project: Some("p-1".into()), ..fact("tagged", "body") }).unwrap();
+        assert_eq!(s.read("tagged").unwrap().project.as_deref(), Some("p-1"));
+
+        // A garbled or absent tag reads as shared — the safe direction, since
+        // a mis-tagged fact stays reachable instead of disappearing into a
+        // project nobody can name.
+        assert!(s.read_in(FACTS, "tagged").is_some());
+        let untagged = parse_entry("plain", "---\nname: plain\nproject:\n---\nbody\n");
+        assert!(untagged.project.is_none());
     }
 
     #[test]

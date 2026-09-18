@@ -206,10 +206,10 @@ pub async fn reflect_conversation_cmd(
         serde_json::json!({ "role": "user", "content": prompt }),
     ];
 
-    let outcome = drive_turn(&mgr.client, &endpoint, &msgs, &[], 0.2, &CancelFlag::new(), |_| {})
+    let outcome = drive_turn(&mgr.client, &endpoint, &msgs, &[], 0.2, crate::cloud::Effort::Off, &CancelFlag::new(), |_| {})
         .await
         .map_err(|e| PoiesisError::Message(e.to_string()))?;
-    let TurnOutcome::Final { content } = outcome else {
+    let TurnOutcome::Final { content, .. } = outcome else {
         return Ok(Reflection::default());
     };
 
@@ -353,6 +353,14 @@ pub async fn reflect_conversation_cmd(
                     recurrence: None,
                     last_seen: None,
                     expires_at: None,
+                    // `PRJ-8`: a lesson drawn from a session in a project is
+                    // about that project's work. Reflection runs over one
+                    // conversation, so the tag follows from it.
+                    project: db
+                        .conversation_project(&conversation_id)
+                        .ok()
+                        .flatten()
+                        .map(|p| p.id),
                 };
                 if mem.save_lesson(&db, &fact).is_err() {
                     continue;
@@ -388,6 +396,61 @@ pub async fn reflect_conversation_cmd(
     propose_skill_revisions(&mgr, &endpoint, &db, &conversation_id).await;
 
     Ok(out)
+}
+
+/// Below this a conversation is too slight to have taught anything. Mirrors
+/// `REFLECT_MIN_MESSAGES` in `src/lib/store.ts` — the frontend applies it to the
+/// conversation it is leaving, this applies it to the ones it never got to.
+const CATCH_UP_MIN_MESSAGES: i64 = 8;
+
+/// How many stranded conversations one catch-up pass will digest. Reflection is
+/// two model calls per lesson, so a backlog of twenty must not turn app launch
+/// into a twenty-conversation grind — it drains a few per launch instead.
+const CATCH_UP_BATCH: usize = 2;
+
+/// `REF-3b`: digest conversations that were left behind.
+///
+/// Reflection used to run only when the user switched from one conversation to
+/// another. Starting a new chat and closing the app are both commoner ways to
+/// walk away from one, and neither reflected — so most conversations were never
+/// learned from at all. The frontend now covers the new-chat path directly; this
+/// covers everything already stranded, and everything a quit will strand in
+/// future, without asking a closing app to finish two model calls first.
+///
+/// Runs at launch, after the window is up. Returns how many it reflected on.
+/// Failures are swallowed per conversation: `reflected_at` is stamped before
+/// the model runs, so a conversation that fails is not retried forever.
+#[tauri::command]
+pub async fn catch_up_reflection_cmd(
+    mgr: State<'_, RuntimeManager>,
+    db: State<'_, Db>,
+    mem: State<'_, MemoryStore>,
+    app: tauri::AppHandle,
+    target: Option<ChatTarget>,
+) -> Result<usize, PoiesisError> {
+    if autonomy_gate(&db, "lessons") == Rung::Off {
+        return Ok(0);
+    }
+    let stale = db
+        .unreflected_conversations(CATCH_UP_MIN_MESSAGES)
+        .unwrap_or_default();
+    let mut done = 0;
+    for id in stale.into_iter().take(CATCH_UP_BATCH) {
+        if reflect_conversation_cmd(
+            mgr.clone(),
+            db.clone(),
+            mem.clone(),
+            app.clone(),
+            id,
+            target.clone(),
+        )
+        .await
+        .is_ok()
+        {
+            done += 1;
+        }
+    }
+    Ok(done)
 }
 
 /// `OUT-2`'s trigger: 3 or more of a skill's last 5 (or fewer, if it hasn't
@@ -485,8 +548,8 @@ async fn propose_skill_revisions(
             }),
             serde_json::json!({ "role": "user", "content": prompt }),
         ];
-        let Ok(TurnOutcome::Final { content }) =
-            drive_turn(&mgr.client, endpoint, &msgs, &[], 0.2, &CancelFlag::new(), |_| {}).await
+        let Ok(TurnOutcome::Final { content, .. }) =
+            drive_turn(&mgr.client, endpoint, &msgs, &[], 0.2, crate::cloud::Effort::Off, &CancelFlag::new(), |_| {}).await
         else {
             continue;
         };
@@ -530,10 +593,21 @@ async fn critique(
     transcript: &str,
     draft: &LessonDraft,
 ) -> CriticVerdict {
+    // `CRT-4`: the bar is "would acting on this be wrong", not "can anything be
+    // said against this". The first version of this prompt asked for ok:false on
+    // ANY issue at all, which is a bar no lesson can clear — a reviewer can
+    // always find a nit — so every draft was demoted and the `lessons` rung's
+    // Auto setting never once fired. Three specific failure modes, and silence
+    // otherwise.
     let prompt = format!(
-        "A reflection pass drew the lesson below from the conversation that follows. Judge it: \
-         is it actually supported by what happened, specific enough to act on, and generalizable \
-         beyond this one conversation? If you raise ANY issue, you must answer ok:false.\n\
+        "A reflection pass drew the lesson below from the conversation that follows. \
+         Answer ok:false only if one of these is true:\n\
+         1. It is not supported — the conversation does not show the mistake it claims.\n\
+         2. It is not actionable — following it would not change what the assistant does.\n\
+         3. It is wrong — acting on it would make the assistant worse.\n\
+         Otherwise answer ok:true. Imprecise wording, a narrower scope than you would have \
+         chosen, or a detail you would have phrased differently are NOT reasons to reject: a \
+         roughly-worded lesson that points the right way is worth keeping.\n\
          Lesson \"{}\": {}\n\
          JSON schema: {{\"ok\":true|false,\"reason\":\"one line, only when ok is false\"}}\n\
          Conversation:\n{transcript}",
@@ -542,12 +616,12 @@ async fn critique(
     let msgs = vec![
         serde_json::json!({
             "role": "system",
-            "content": "You are a skeptical reviewer of another process's self-drafted lessons. Output ONLY JSON, no preamble.",
+            "content": "You review another process's self-drafted lessons. You are fair, not adversarial: reject what is unsupported, unactionable, or wrong, and pass the rest. Output ONLY JSON, no preamble.",
         }),
         serde_json::json!({ "role": "user", "content": prompt }),
     ];
-    match drive_turn(&mgr.client, endpoint, &msgs, &[], 0.0, &CancelFlag::new(), |_| {}).await {
-        Ok(TurnOutcome::Final { content }) => parse_critic(&content),
+    match drive_turn(&mgr.client, endpoint, &msgs, &[], 0.0, crate::cloud::Effort::Off, &CancelFlag::new(), |_| {}).await {
+        Ok(TurnOutcome::Final { content, .. }) => parse_critic(&content),
         _ => CriticVerdict {
             ok: false,
             reason: "the critic couldn't be reached".to_string(),

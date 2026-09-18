@@ -1,12 +1,30 @@
+/* The stable results shell: always rendered, so an empty filter can't collapse
+   the page. Height is reserved here rather than on the grid, which disappears
+   whenever a filter matches nothing. */
+.library-results {
+  min-height: 50vh;
+}
+
+/* Fill the full width. `auto-fill` (not `auto-fit`) keeps the empty column
+   tracks when a filter leaves only a few results, so the surviving cards keep
+   the same size instead of stretching — the grid structure is fixed, only the
+   number of filled cells changes. `align-content: start` keeps rows pinned to
+   the top so the block doesn't re-centre vertically as the count changes. */
 .artifact-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  align-content: start;
   gap: 16px;
 }
 
 .artifact-card {
   display: flex;
   flex-direction: column;
+  /* Grid items default to `min-width: auto`, so a long filename in a nowrap
+     title would set the card's floor at its full text width and push the track
+     wider than its share. Without this the Images filter can end up one card
+     per row purely because those titles are long. */
+  min-width: 0;
   border: 1px solid var(--paper-edge-2);
   border-radius: var(--radius-lg);
   overflow: hidden;
@@ -100,6 +118,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
 }
 
 .artifact-title {
@@ -113,6 +132,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;
+  /* Required for the ellipsis to engage: a flex item won't shrink below its
+     min-content width without it, so a long title would widen the card. */
+  min-width: 0;
 }
 
 .artifact-kind {

@@ -1,20 +1,19 @@
 /**
  * @vitest-environment jsdom
  *
- * The Workbench's three places are tabs, and the panel follows the agent.
- *
- * The follow behaviour is the part worth pinning: it must react to a
- * *transition* (browsing started, an artifact appeared) and not to a steady
- * state, or the panel yanks itself back every render while the user is trying
- * to read a different tab.
+ * `SHL-21`..`SHL-23`: the right sidebar navigates its own sub-views
+ * (`dockView` in the store) and the agent may move it there but never focus a
+ * tab. Keeps the regressions the older versions of this file guarded against
+ * — a section that disappears must not blank the panel, and a fresh chat with
+ * a folder lands on Files — plus the follow behaviour's transition-only rule.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import Workbench from "./Workbench";
 import { useAppStore } from "../../lib/store";
-import type { Artifact, BrowserPanelState } from "../../lib/api";
-import type { Conversation } from "../../lib/types";
+import type { Artifact, BrowserPanelState, ChangeSet, FileChange } from "../../lib/api";
+import type { Conversation, SubRun } from "../../lib/types";
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 Element.prototype.scrollTo = () => {};
@@ -56,6 +55,20 @@ function session(overrides: Partial<BrowserPanelState> = {}): BrowserPanelState 
   };
 }
 
+function subRun(): SubRun {
+  return {
+    runId: "r1",
+    conversationId: "child-1",
+    parentConversationId: CONV,
+    agent: "general",
+    task: "do a thing",
+    status: "running",
+    steps: [],
+    text: "",
+    startedAt: Date.now(),
+  };
+}
+
 let container: HTMLDivElement;
 let root: Root;
 
@@ -67,9 +80,33 @@ function seed(over: Partial<ReturnType<typeof useAppStore.getState>> = {}) {
     activeConversationId: CONV,
     artifacts: {},
     browserSessions: {},
+    subRuns: {},
     selected: null,
+    itemTabs: [],
+    activeItemId: null,
+    dockView: "files",
+    changeSets: {},
+    changesFocus: null,
+    trash: [],
     ...over,
   });
+}
+
+function changeSet(paths: string[]): ChangeSet {
+  const files: FileChange[] = paths.map((path) => ({
+    path,
+    display: path.replace("C:\\work\\", ""),
+    status: "modified",
+    from: null,
+    added: 2,
+    removed: 1,
+    hunks: [],
+    binary: false,
+    too_large: false,
+    entry_ids: [],
+    last_at: 0,
+  }));
+  return { files, added: 2 * files.length, removed: files.length, since: 0, this_run: true };
 }
 
 beforeEach(() => {
@@ -88,120 +125,199 @@ const render = () =>
     root.render(<Workbench />);
   });
 
-const tabs = () => Array.from(container.querySelectorAll(".wb-tab"));
-const tabLabels = () => tabs().map((t) => (t.textContent ?? "").trim());
-const activeTab = () => container.querySelector(".wb-tab.active")?.textContent?.trim() ?? "";
+const navTabs = () => Array.from(container.querySelectorAll<HTMLElement>(".wb-tab"));
+const navLabels = () => navTabs().map((t) => (t.textContent ?? "").trim());
+const selectedLabel = () =>
+  (navTabs().find((t) => t.getAttribute("aria-selected") === "true")?.textContent ?? "").trim();
+const clickNav = (startsWith: string) => {
+  const tab = navTabs().find((t) => (t.textContent ?? "").startsWith(startsWith))!;
+  act(() => {
+    tab.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+};
 
-describe("Workbench tabs", () => {
-  it("shows Files and Artifacts when there's a folder, and no Browser tab without a session", () => {
-    seed();
+describe("Workbench sub-views", () => {
+  it("falls back to the artifact list, not the tree, without a folder", () => {
+    seed({
+      conversations: [conversation({ folderPath: null })],
+      artifacts: { [CONV]: [artifact("a1")] },
+    });
     render();
-    expect(tabLabels().some((l) => l.startsWith("Files"))).toBe(true);
-    expect(tabLabels().some((l) => l.startsWith("Artifacts"))).toBe(true);
-    expect(tabLabels().some((l) => l.startsWith("Browser"))).toBe(false);
+    expect(container.querySelector(".wb-files")).toBeNull();
+    expect(container.querySelector(".wb-artifacts")).not.toBeNull();
   });
 
-  it("opens on Files rather than an empty Artifacts", () => {
-    seed();
+  it("offers a folder from the Files section when a folderless chat asks for it", () => {
+    seed({ conversations: [conversation({ folderPath: null })] });
     render();
-    expect(activeTab()).toContain("Files");
+    expect(selectedLabel()).toBe("Artifacts");
+    clickNav("Files");
+    expect(selectedLabel()).toBe("Files");
+    expect(container.textContent).toContain("Give Poiesis a folder to work in");
   });
 
-  it("gains a Browser tab when a session exists", () => {
+  // The core sections hold their places so the row can be learned; only the
+  // live ones (Agents, Browser) come and go.
+  it("lands on Files, with no Browser or Agents section until one exists", () => {
+    seed();
+    render();
+    expect(container.querySelector(".wb-files")).not.toBeNull();
+    expect(navLabels()).toEqual(["Files", "Artifacts", "Changes"]);
+    expect(selectedLabel()).toBe("Files");
+  });
+
+  it("no longer carries the chat's own actions — scheduling lives in the chat's menu", () => {
+    seed();
+    render();
+    expect(container.textContent).not.toContain("Schedule this");
+  });
+
+  it("offers a Browser section once a session exists, without switching to it", () => {
     seed({ browserSessions: { [CONV]: session() } });
     render();
-    expect(tabLabels().some((l) => l.startsWith("Browser"))).toBe(true);
+    // A session that was already open at first render is not a transition.
+    expect(navLabels().some((l) => l.startsWith("Browser"))).toBe(true);
+    expect(selectedLabel()).toBe("Files");
+  });
+
+  it("switches sections from its own nav", () => {
+    seed({ artifacts: { [CONV]: [artifact("a1")] } });
+    render();
+    clickNav("Artifacts");
+    expect(useAppStore.getState().dockView).toBe("artifacts");
+    expect(container.querySelector(".wb-artifacts")).not.toBeNull();
+    expect(container.querySelector(".wb-files")).toBeNull();
   });
 
   it("follows the agent to Browser when browsing starts", () => {
     seed();
     render();
-    expect(activeTab()).toContain("Files");
-
     act(() => {
       useAppStore.setState({ browserSessions: { [CONV]: session() } });
     });
-    expect(activeTab()).toContain("Browser");
+    expect(useAppStore.getState().dockView).toBe("browser");
+    expect(container.querySelector(".wb-browser")).not.toBeNull();
   });
 
-  it("follows the agent to Artifacts when an artifact appears", () => {
-    seed();
-    render();
-    act(() => {
-      useAppStore.setState({ artifacts: { [CONV]: [artifact("a1")] } });
-    });
-    expect(activeTab()).toContain("Artifacts");
-  });
-
-  it("leaves the user's chosen tab alone while nothing new happens", () => {
+  it("leaves a manually picked section alone while nothing new happens", () => {
     seed({ browserSessions: { [CONV]: session() } });
     render();
-    // The user goes to read Files while the browser session stays open.
-    const files = tabs().find((t) => (t.textContent ?? "").startsWith("Files"))!;
-    act(() => {
-      files.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    expect(activeTab()).toContain("Files");
-
-    // An unrelated re-render with the session still live must not steal it back.
+    clickNav("Artifacts");
     act(() => {
       useAppStore.setState({ browserSessions: { [CONV]: session({ title: "Example 2" }) } });
     });
-    expect(activeTab(), "a steady live session is not a transition").toContain("Files");
+    expect(selectedLabel(), "a steady live session is not a transition").toBe("Artifacts");
   });
 
-  it("falls back to a real tab when the active one disappears", () => {
+  it("falls back to real content when the showing section disappears", () => {
     seed({ browserSessions: { [CONV]: session() } });
     render();
-    // Select Browser deliberately — a session that was already open at first
-    // render is not a transition, so nothing auto-selected it.
-    const browser = tabs().find((t) => (t.textContent ?? "").startsWith("Browser"))!;
-    act(() => {
-      browser.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    expect(activeTab()).toContain("Browser");
-
-    // Panel dismissed: the Browser tab goes away underneath the selection.
+    clickNav("Browser");
     act(() => {
       useAppStore.setState({ browserSessions: {} });
     });
-    expect(container.querySelector(".wb-tabpanel")).not.toBeNull();
-    expect(tabLabels().some((l) => l.startsWith("Browser"))).toBe(false);
-    expect(activeTab(), "must land somewhere real, not on a dead tab").not.toBe("");
+    expect(container.querySelector(".wb-browser")).toBeNull();
+    expect(container.querySelector(".wb-files"), "must land somewhere real").not.toBeNull();
   });
 
-  it("shows a finished session's record without jumping to it", () => {
-    // Re-opening a chat that browsed earlier: the record comes back `closed`.
-    // The tab must exist — the panel used to be empty here, beside a
-    // transcript full of visits — but nothing new is happening, so the user
-    // is not yanked away from wherever they were.
+  it("shows a finished session's section without jumping to it", () => {
     seed();
     render();
-    expect(activeTab()).toContain("Files");
-
     act(() => {
-      useAppStore.setState({
-        browserSessions: { [CONV]: session({ closed: true }) },
-      });
+      useAppStore.setState({ browserSessions: { [CONV]: session({ closed: true }) } });
     });
-    expect(tabLabels().some((l) => l.startsWith("Browser"))).toBe(true);
-    expect(activeTab(), "a past session is not activity").toContain("Files");
+    expect(navLabels().some((l) => l.startsWith("Browser"))).toBe(true);
+    expect(selectedLabel(), "a past session is not activity").toBe("Files");
   });
 
-  it("does not follow across a conversation switch", () => {
+  // `SHL-23-T`: the one rule about trust. The agent may move the sidebar's
+  // overview; it may never take focus off an item the user opened, and it may
+  // never change which conversation is live.
+  it("moves the sidebar on a subrun starting and touches no tab", () => {
+    seed({
+      conversations: [conversation(), conversation({ id: "conv-2" })],
+      itemTabs: [{ kind: "file", id: "C:\\work\\notes.md" }],
+      activeItemId: null,
+    });
+    render();
+    const before = useAppStore.getState();
+
+    act(() => {
+      useAppStore.setState({ subRuns: { r1: subRun() } });
+    });
+
+    const s = useAppStore.getState();
+    expect(s.dockView).toBe("agents");
+    expect(s.activeItemId).toBeNull();
+    expect(s.itemTabs).toEqual(before.itemTabs);
+    expect(s.activeConversationId).toBe(before.activeConversationId);
+  });
+
+  // `SHL-24-T`: a row in an overview opens an item tab into the pane beside
+  // this one. The list it came from does not move and is not covered — having
+  // both on screen is the whole point of giving the item its own column.
+  it("opens a run from the Agents list without disturbing the list", () => {
+    seed({ subRuns: { r1: subRun() }, dockView: "agents" });
+    render();
+    const row = container.querySelector<HTMLElement>(".agents-row")!;
+    act(() => {
+      row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const s = useAppStore.getState();
+    expect(s.activeItemId).toBe("run:r1");
+    expect(s.dockView, "the sidebar stays on its list").toBe("agents");
+    // The item renders in its own column, which this panel does not own.
+    expect(container.querySelector(".item-view")).toBeNull();
+    expect(container.querySelector(".agents-row"), "the list is still there").not.toBeNull();
+  });
+});
+
+describe("the Changes sub-view (PRJ-UI-3)", () => {
+  it("is always offered, with no count until something changed", () => {
     seed();
     render();
-    expect(activeTab()).toContain("Files");
+    expect(navLabels()).toContain("Changes");
+  });
 
-    // Another chat that happens to *already* hold artifacts is not this chat
-    // producing one — the count jump must not be read as activity.
-    act(() => {
-      useAppStore.setState({
-        conversations: [conversation(), conversation({ id: "conv-2" })],
-        activeConversationId: "conv-2",
-        artifacts: { "conv-2": [artifact("a1"), artifact("a2")] },
-      });
+  it("is offered with a count of changed files", () => {
+    seed({ changeSets: { [CONV]: changeSet(["C:\\work\\a.rs", "C:\\work\\b.rs"]) } });
+    render();
+    const tab = navLabels().find((l) => l.startsWith("Changes"));
+    expect(tab).toBeDefined();
+    expect(tab).toContain("2");
+  });
+
+  it("explains itself, and lists no patches, in a chat with no folder", () => {
+    seed({
+      conversations: [conversation({ folderPath: null })],
+      changeSets: { [CONV]: changeSet(["C:\\work\\a.rs"]) },
     });
-    expect(activeTab(), "switching chats is not the agent making something").toContain("Files");
+    render();
+    expect(navLabels()).toContain("Changes");
+    clickNav("Changes");
+    expect(container.querySelector(".chg-path")).toBeNull();
+    expect(container.textContent).toContain("No changes to review");
+  });
+
+  it("opens one file's patch as a tab without moving the sidebar", () => {
+    seed({ changeSets: { [CONV]: changeSet(["C:\\work\\a.rs"]) }, dockView: "changes" });
+    render();
+    const path = container.querySelector<HTMLButtonElement>(".chg-path")!;
+    act(() => path.click());
+    const s = useAppStore.getState();
+    expect(s.activeItemId).toBe("diff:C:\\work\\a.rs");
+    expect(s.itemTabs[0]).toMatchObject({ kind: "diff", conversationId: CONV });
+    expect(s.dockView).toBe("changes");
+  });
+
+  it("asks before Undo all rather than putting everything back on one click", () => {
+    seed({ changeSets: { [CONV]: changeSet(["C:\\work\\a.rs"]) }, dockView: "changes" });
+    render();
+    const undoAll = Array.from(container.querySelectorAll<HTMLButtonElement>(".chg-head button")).find(
+      (b) => b.textContent === "Undo all"
+    )!;
+    act(() => undoAll.click());
+    expect(container.textContent).toContain("Put all 1 file back");
+    expect(useAppStore.getState().changeSets[CONV].files).toHaveLength(1);
   });
 });

@@ -4,7 +4,7 @@ use tauri::State;
 
 use crate::cloud::{drive_turn, ChatEndpoint};
 use crate::commands::agent::{build_remote_endpoint, ChatTarget};
-use crate::db::{Artifact, Block, Conversation, Db, Message, NewAttachment, NewMessage};
+use crate::db::{Artifact, Block, Conversation, Db, Message, MessageHit, NewAttachment, NewMessage};
 use crate::runtime::proxy::{CancelFlag, TurnOutcome};
 use crate::runtime::RuntimeManager;
 use crate::PoiesisError;
@@ -65,6 +65,10 @@ pub fn delete_conversation_cmd(mgr: State<'_, RuntimeManager>, db: State<'_, Db>
 
     db.delete_conversation(&id).map_err(err)?;
 
+    // `HRN-8`: tool results kept on disk are this conversation's, and nothing
+    // else refers to them, so they go with it.
+    let _ = std::fs::remove_dir_all(mgr.app_data_dir().join("results").join(&id));
+
     for path in candidates {
         let still_referenced = db.is_known_attachment(&path).unwrap_or(true)
             || db.is_known_artifact_content(&path).unwrap_or(true);
@@ -107,26 +111,62 @@ pub fn append_message_cmd(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn finalize_message_cmd(
     db: State<'_, Db>,
     id: String,
     content: String,
     steps_json: Option<String>,
     context_json: Option<String>,
+    stop_reason: Option<String>,
+    // `PLN-UI-5`: the plan the run worked to, so reopening the conversation
+    // brings it back with the timeline rather than losing it.
+    plan_json: Option<String>,
 ) -> Cmd<()> {
-    db.finalize_message(&id, &content, steps_json.as_deref(), context_json.as_deref())
-        .map_err(err)
+    db.finalize_message(
+        &id,
+        &content,
+        steps_json.as_deref(),
+        context_json.as_deref(),
+        stop_reason.as_deref(),
+        plan_json.as_deref(),
+    )
+    .map_err(err)
+}
+
+/// Each word becomes a quoted prefix term, so punctuation the user types
+/// (`-`, `:`, `(`) is searched for rather than parsed as FTS5 syntax — which
+/// used to fail the whole query and read as "no results".
+fn fts_prefix_query(input: &str) -> Option<String> {
+    let terms: Vec<String> = input
+        .split_whitespace()
+        .map(|t| t.replace('"', ""))
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("\"{t}\"*"))
+        .collect();
+    (!terms.is_empty()).then(|| terms.join(" "))
 }
 
 #[tauri::command]
-pub fn search_conversations_cmd(db: State<'_, Db>, query: String) -> Cmd<Vec<Conversation>> {
-    let trimmed = query.trim();
-    if trimmed.is_empty() {
-        return db.list_conversations().map_err(err);
+pub fn search_messages_cmd(db: State<'_, Db>, query: String) -> Cmd<Vec<MessageHit>> {
+    match fts_prefix_query(&query) {
+        Some(fts) => db.search_messages(&fts, 30).map_err(err),
+        None => Ok(Vec::new()),
     }
-    // Treat the user's text as a prefix-OR query so partial words match.
-    let fts = format!("{}*", trimmed.replace('"', " "));
-    db.search_conversations(&fts).map_err(err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fts_prefix_query;
+
+    #[test]
+    fn quotes_every_term_as_a_prefix() {
+        assert_eq!(fts_prefix_query("  cache  bug "), Some("\"cache\"* \"bug\"*".into()));
+        assert_eq!(fts_prefix_query("foo-bar (x):"), Some("\"foo-bar\"* \"(x):\"*".into()));
+        assert_eq!(fts_prefix_query("say \"hi\""), Some("\"say\"* \"hi\"*".into()));
+        assert_eq!(fts_prefix_query("   "), None);
+        assert_eq!(fts_prefix_query("\"\""), None);
+    }
 }
 
 #[tauri::command]
@@ -257,13 +297,13 @@ pub async fn compact_conversation_cmd(
         serde_json::json!({ "role": "user", "content": prompt }),
     ];
 
-    let outcome = drive_turn(&mgr.client, &endpoint, &msgs, &[], 0.2, &CancelFlag::new(), |_| {})
+    let outcome = drive_turn(&mgr.client, &endpoint, &msgs, &[], 0.2, crate::cloud::Effort::Off, &CancelFlag::new(), |_| {})
         .await
         .map_err(err)?;
 
     let summary = match outcome {
-        TurnOutcome::Final { content } => content.trim().to_string(),
-        TurnOutcome::ToolCalls(_) => {
+        TurnOutcome::Final { content, .. } => content.trim().to_string(),
+        TurnOutcome::ToolCalls { .. } => {
             return Err(PoiesisError::Message("The model tried to use a tool while summarizing.".into()))
         }
         TurnOutcome::Cancelled => return Err(PoiesisError::Message("Summarizing was cancelled.".into())),
@@ -274,5 +314,65 @@ pub async fn compact_conversation_cmd(
 
     db.set_conversation_summary(&conversation_id, &summary, &upto_message_id)
         .map_err(err)?;
+
+    // `CTX-5`: the column above holds only the newest summary, so a second
+    // compaction erases the first. The log keeps every one, with the stretch of
+    // conversation it stands in for, so "what happened to the beginning of this
+    // chat" has an answer that survives being compacted again.
+    let previous = conv.summary_upto_message_id.as_deref();
+    let covered: Vec<&crate::db::Message> = match previous {
+        // Everything after the last boundary, up to this one.
+        Some(prev) => messages
+            .iter()
+            .skip_while(|m| m.id != prev)
+            .skip(1)
+            .collect(),
+        None => messages.iter().collect(),
+    };
+    crate::agent::log::record_compaction(
+        &db,
+        &conversation_id,
+        &crate::agent::log::Compaction {
+            text: summary.clone(),
+            from_message_id: covered.first().map(|m| m.id.clone()),
+            upto_message_id: upto_message_id.clone(),
+            replaced: covered.len(),
+            merged_earlier: conv.summary.is_some(),
+        },
+    );
     Ok(summary)
+}
+
+/// `CTX-5`: every compaction this conversation has been through, oldest first.
+///
+/// Read separately from the conversation itself because it is history, not
+/// state: the chat list loads on every launch and nothing there needs it.
+#[tauri::command]
+pub fn conversation_summaries_cmd(
+    db: State<'_, Db>,
+    conversation_id: String,
+) -> Cmd<Vec<CompactionView>> {
+    Ok(crate::agent::log::compactions(&db, &conversation_id)
+        .into_iter()
+        .map(|(at, c)| CompactionView {
+            at,
+            text: c.text,
+            from_message_id: c.from_message_id,
+            upto_message_id: c.upto_message_id,
+            replaced: c.replaced,
+            merged_earlier: c.merged_earlier,
+        })
+        .collect())
+}
+
+/// One compaction as the UI shows it: the summary, when it happened, and how
+/// much of the conversation it stands in for.
+#[derive(serde::Serialize)]
+pub struct CompactionView {
+    pub at: i64,
+    pub text: String,
+    pub from_message_id: Option<String>,
+    pub upto_message_id: String,
+    pub replaced: usize,
+    pub merged_earlier: bool,
 }

@@ -1,0 +1,132 @@
+/* How hard to think, in the composer footer beside the model picker.
+   Every measurement here is taken from `.model-picker.compact` so the two read
+   as one pair of controls rather than two components that happen to be
+   adjacent: same 11.5px, same muted ink, same transparent border that only
+   appears on hover or when open, same drop-up. What differs is deliberate —
+   this one is quieter, because the model is the decision and this qualifies
+   it. */
+.effort-picker {
+  position: relative;
+}
+
+.effort-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 150px;
+  padding: 3px 7px 3px 6px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+.effort-trigger:hover,
+.effort-trigger[aria-expanded="true"] {
+  border-color: var(--paper-edge-2);
+  color: var(--ink);
+}
+.effort-trigger .caret {
+  font-size: 9px;
+  color: var(--ink-faint);
+  margin-left: 2px;
+}
+.effort-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Three rising bars. The same job the provenance dot does on the model
+   trigger: a small glyph that carries the state without spending words. */
+.effort-meter {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1.5px;
+  height: 9px;
+  flex-shrink: 0;
+}
+.effort-meter i {
+  width: 2.5px;
+  border-radius: 1px;
+  background: var(--paper-edge-2);
+}
+.effort-meter i:nth-child(1) {
+  height: 3px;
+}
+.effort-meter i:nth-child(2) {
+  height: 6px;
+}
+.effort-meter i:nth-child(3) {
+  height: 9px;
+}
+.effort-meter i.on {
+  background: var(--ink-muted);
+}
+/* "Model's default" is not a point on this scale, so it is drawn as an outline
+   rather than as some quantity of bars. */
+.effort-meter i.unknown {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--paper-edge-2);
+}
+.effort-trigger:hover .effort-meter i.on,
+.effort-trigger[aria-expanded="true"] .effort-meter i.on {
+  background: var(--ink);
+}
+
+/* Drop-up, matching `.model-picker.up .model-dropdown`. */
+.effort-dropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  width: 292px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.12);
+  padding: 8px;
+  z-index: 20;
+}
+
+.effort-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 9px;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.effort-option:hover {
+  background: var(--paper-edge);
+}
+.effort-option.selected {
+  background: var(--paper-edge);
+}
+.effort-option .name {
+  font-size: 13.5px;
+  color: var(--ink);
+}
+.effort-option.selected .name {
+  font-weight: 500;
+}
+/* The hint sits under the label in the text column, not beside it: these run
+   to a sentence, and a second column would either wrap raggedly or force the
+   list wider than the model dropdown it sits under. */
+.effort-option .hint {
+  grid-column: 2;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-faint);
+}
+
+.effort-note {
+  margin: 6px 0 0;
+  padding: 8px 8px 2px;
+  border-top: 1px solid var(--paper-edge-2);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-faint);
+}

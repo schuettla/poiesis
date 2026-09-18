@@ -1,6 +1,9 @@
-import { useAppStore } from "../../lib/store";
-import { inTauri } from "../../lib/api";
+import { useActiveConversation, useAppStore, useLiveItems } from "../../lib/store";
+import { HUB_SECTIONS } from "../../lib/types";
+import { SidebarIcon } from "../Icons/Icons";
 import PoiesisMark from "../Mark/PoiesisMark";
+import TabStrip from "./TabStrip";
+import WindowControls, { framelessWindow, onTitleBarMouseDown } from "./WindowControls";
 import "./TopBar.css";
 
 /** Sidebar collapse/expand toggle, lives in the header so it reads as a
@@ -15,10 +18,7 @@ function SidebarToggle() {
       aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
       title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
     >
-      <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-        <rect x="2.5" y="3.5" width="15" height="13" rx="2.5" stroke="currentColor" strokeWidth="1.3" />
-        <line x1="7.7" y1="3.5" x2="7.7" y2="16.5" stroke="currentColor" strokeWidth="1.3" />
-      </svg>
+      <SidebarIcon side="left" size={17} />
     </button>
   );
 }
@@ -48,63 +48,81 @@ function WorkbenchToggle() {
       aria-label={label}
       title={`${label} (Ctrl+\\)`}
     >
-      <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-        <rect x="2.5" y="3.5" width="15" height="13" rx="2.5" stroke="currentColor" strokeWidth="1.3" />
-        <line x1="12.3" y1="3.5" x2="12.3" y2="16.5" stroke="currentColor" strokeWidth="1.3" />
-      </svg>
+      <SidebarIcon side="right" size={17} />
       {unseen && <span className="toggle-badge" aria-hidden="true" />}
     </button>
   );
 }
 
-/**
- * Makes the local runtime visible: a model isn't usable until llama-server is
- * actually running it. Shows starting / ready / idle so it's never ambiguous
- * that an engine must be in place to chat.
- */
-function EngineStatus() {
-  const engineReady = useAppStore((s) => s.engineReady);
-  const loadingModel = useAppStore((s) => s.loadingModel);
-  if (!inTauri()) return null;
-
-  let state = "idle";
-  let label = "Engine idle";
-  if (loadingModel) {
-    state = "starting";
-    label = loadingModel.label || "Starting engine…";
-  } else if (engineReady) {
-    state = "ready";
-    label = "Engine ready";
-  }
+/** Where you are, in words (`SHL-24`).
+ *
+ * With chats and routes out of the strip, the header would otherwise say
+ * nothing about the thing filling most of the window. This is a label, not a
+ * tab: there is nothing to press and nothing to close, because a conversation
+ * and a route are places you are rather than things you hold open.
+ *
+ * `SHL-27`: it yields to the strip the moment anything is open, because the
+ * session tab then names the same chat — two names for one place, one of them
+ * pressable and one not, is worse than either alone. */
+function Location() {
+  const view = useAppStore((s) => s.view);
+  const conversation = useActiveConversation();
+  const projectName = useAppStore((s) =>
+    view === "project" ? s.projects.find((p) => p.id === s.activeProjectId)?.name : undefined
+  );
+  const chat = view === "chat";
+  const label = chat
+    ? conversation?.title || "New chat"
+    : view === "project"
+      ? (projectName ?? "Project")
+      : view === "library"
+        ? "Library"
+        : (HUB_SECTIONS.find((s) => s.view === view)?.label ?? "Settings");
 
   return (
-    <div
-      className={`engine-status ${state}`}
-      title="The local model engine (llama-server) runs on your PC to power chats. It starts automatically when you use a model."
-      aria-label={`Local engine: ${label}`}
-    >
-      <span className="engine-dot" aria-hidden="true" />
-      <span className="engine-label">{label}</span>
+    <div className={`topbar-where ${chat ? "is-chat" : "is-route"}`} title={label}>
+      <span className="topbar-where-label">{label}</span>
     </div>
   );
 }
 
+/**
+ * `SHL-27`: one header across the whole window.
+ *
+ * It used to be four segments, each pinned to the width of the column beneath
+ * it so every divider in the header continued a divider in the shell. That
+ * only pays while each of those columns holds something — with the item pane
+ * gone, the segments were dividing the header into boxes that no longer
+ * matched anything, and the strip's box was the narrowest of them. The header
+ * is now the brand, the strip, and the toggles: the strip gets every pixel
+ * between them, which is what a file tab's path needs.
+ */
 export default function TopBar() {
+  const view = useAppStore((s) => s.view);
+  const { items } = useLiveItems();
+  // Exactly the condition `TabStrip` draws under, asked here so the two cannot
+  // both claim the row — the strip names this chat when it is showing.
+  const strip = view === "chat" && items.length > 0;
+
   return (
-    <div className="topbar">
+    // On Windows the native frame is off and this row is the title bar: empty
+    // space drags the window, and the caption buttons close the row.
+    <div className={`topbar ${framelessWindow() ? "is-titlebar" : ""}`} onMouseDown={onTitleBarMouseDown}>
       <div className="topbar-left">
-        <SidebarToggle />
         <div className="brand">
           <PoiesisMark />
-          <span>Poiesis Agent</span>
+          {/* Matches the mockup's compact wordmark — the fuller "Poiesis
+              Agent" name still applies everywhere outside this cramped
+              232px-wide segment (About, window title, and so on). */}
+          <span>Poiesis</span>
         </div>
+        <SidebarToggle />
       </div>
-      {/* The model chooser now lives under the composer, next to the message
-          it applies to, rather than up here in the window chrome. */}
+      {strip ? <TabStrip /> : <Location />}
       <div className="topbar-right">
-        <EngineStatus />
         <WorkbenchToggle />
       </div>
+      <WindowControls />
     </div>
   );
 }

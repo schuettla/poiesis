@@ -1,0 +1,56 @@
+/* The local engine's state, beside the Settings row at the foot of the Rail.
+   Quieter than it was in the header: no box of its own, because it now stands
+   inside a row that already has edges, and a bordered chip nested in a nav row
+   reads as a control you can press. It is a readout. */
+.engine-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-faint);
+  max-width: 132px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.engine-status .engine-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Dot alone in the collapsed rail: the readout shrinks to the dot rather than
+   keeping a label-shaped gap where the words used to be. */
+.engine-status.dot-only {
+  gap: 0;
+}
+
+.engine-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  flex-shrink: 0;
+}
+.engine-status.ready .engine-dot {
+  background: var(--ok);
+}
+.engine-status.starting .engine-dot {
+  background: var(--local);
+  animation: engine-pulse 1.2s ease-in-out infinite;
+}
+@keyframes engine-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.7);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .engine-status.starting .engine-dot {
+    animation: none;
+  }
+}

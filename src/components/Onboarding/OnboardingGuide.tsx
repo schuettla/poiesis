@@ -57,7 +57,7 @@ export default function OnboardingGuide() {
             1
           </span>
           <span className="onboarding-body">
-            <strong>Install the engine</strong>
+            <strong>Install the runtime</strong>
             <span>Downloads automatically the first time you get a model below.</span>
           </span>
         </li>
@@ -100,7 +100,7 @@ export default function OnboardingGuide() {
             ? "You can already chat through the cloud. A local model also works offline."
             : "Skip local downloads — chat through a provider you already have a key for."}
         </span>
-        <button className="onboarding-action" onClick={() => setView("settings")}>
+        <button className="onboarding-action" onClick={() => setView("providers")}>
           {hasKey ? "Manage keys →" : "Add a key →"}
         </button>
       </div>

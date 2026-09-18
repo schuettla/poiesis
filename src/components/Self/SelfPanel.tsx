@@ -207,8 +207,8 @@ function HealthTab() {
       <div className="self-block">
         <p className="self-line">
           {vitality.engine_restarts_session > 0
-            ? `I've restarted my engine ${vitality.engine_restarts_session}× this session.`
-            : "My engine hasn't needed restarting this session."}
+            ? `I've restarted my runtime ${vitality.engine_restarts_session}× this session.`
+            : "My runtime hasn't needed restarting this session."}
         </p>
         <p className="self-line">Last time I reflected: {formatDate(vitality.last_reflection)}.</p>
         <div className="setting-actions">

@@ -106,3 +106,47 @@ describe("composeSystemPrompt — skills block (SKL-2)", () => {
     expect(prompt).not.toContain("Skills available");
   });
 });
+
+/** `MEM-COLD`: a memory context holding `factCount` facts, nothing else set. */
+function withMemory(factCount: number, memoryEnabled = true, toolsEnabled = true) {
+  return composeSystemPrompt(BASE, {
+    conv: undefined,
+    sessionState: undefined,
+    toolsEnabled,
+    memoryEnabled,
+    memory: {
+      soul: "",
+      about_you: "",
+      index: factCount ? "- likes-metric: prefers metric units" : "",
+      fact_count: factCount,
+    },
+  });
+}
+
+describe("composeSystemPrompt — memory guidance (MEM-COLD)", () => {
+  it("tells the model to save even when nothing is remembered yet", () => {
+    // The bug this exists for: at zero facts `memoryIndexBlock` goes silent, so
+    // the prompt never mentioned memory, so nothing was ever saved, so it
+    // stayed at zero. The cold-start case is the one that must not be quiet.
+    const prompt = withMemory(0);
+    expect(prompt).toContain("## Remembering");
+    expect(prompt).toContain('memory(op:"save")');
+    expect(prompt).toContain("have not saved anything about this user yet");
+  });
+
+  it("drops the cold-start nudge once something is remembered", () => {
+    const prompt = withMemory(3);
+    expect(prompt).toContain("## Remembering");
+    expect(prompt).not.toContain("have not saved anything about this user yet");
+  });
+
+  it("says nothing about remembering when the Memory toolset is off", () => {
+    const prompt = withMemory(0, false);
+    expect(prompt).not.toContain("## Remembering");
+  });
+
+  it("says nothing about remembering when tools are off entirely", () => {
+    const prompt = withMemory(0, true, false);
+    expect(prompt).not.toContain("## Remembering");
+  });
+});

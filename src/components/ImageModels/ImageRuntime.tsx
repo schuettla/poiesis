@@ -9,10 +9,10 @@ import {
 } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 
-/** The "Image" tab of the Engine view: install / status of the local
+/** The "Images" tab of the Runtime view: install / status of the local
  * stable-diffusion.cpp engine — the image-gen twin of the llama.cpp engine
  * management next to it. */
-export default function ImageEngine() {
+export default function ImageRuntime() {
   const [status, setStatus] = useState<ImageSetupStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [prog, setProg] = useState<DownloadProgress | null>(null);
@@ -63,17 +63,17 @@ export default function ImageEngine() {
     <>
       {error && <p className="hw-note error">{error}</p>}
 
-      <section className="engine-card">
-        <div className="engine-card-head">
-          <h2 className="section-title">Image engine</h2>
-          <span className={`engine-state-badge ${status?.engine_installed ? "running" : "idle"}`}>
+      <section className="runtime-card">
+        <div className="runtime-card-head">
+          <h2 className="section-title">Image runtime</h2>
+          <span className={`runtime-state-badge ${status?.engine_installed ? "running" : "idle"}`}>
             <span className="dot" aria-hidden="true" />
             {status?.engine_installed ? "Installed" : "Not installed"}
           </span>
         </div>
-        <p className="engine-sub">
-          The local <strong>stable-diffusion.cpp</strong> engine, matched to your GPU and downloaded
-          automatically — the diffusion-model twin of the llama.cpp engine. Installed once, reused
+        <p className="runtime-sub">
+          The local <strong>stable-diffusion.cpp</strong> runtime, matched to your GPU and downloaded
+          automatically — the diffusion-model twin of the llama.cpp runtime. Installed once, reused
           for every image.
         </p>
         {status?.engine_path && (
@@ -91,9 +91,9 @@ export default function ImageEngine() {
             <span className="dl-pct">{prog.label}</span>
           </div>
         ) : (
-          <div className="engine-actions">
+          <div className="runtime-actions">
             <button className={status?.engine_installed ? "btn-secondary" : "btn-primary"} onClick={install}>
-              {status?.engine_installed ? "Reinstall engine" : "Install image engine"}
+              {status?.engine_installed ? "Reinstall runtime" : "Install image runtime"}
             </button>
           </div>
         )}
@@ -102,13 +102,13 @@ export default function ImageEngine() {
           {advanced ? "Hide advanced" : "Advanced — point at my own binary"}
         </button>
         {advanced && (
-          <div className="engine-actions" style={{ marginTop: 8 }}>
+          <div className="runtime-actions" style={{ marginTop: 8 }}>
             <button className="btn-secondary" onClick={pickBinary}>
-              Choose engine binary…
+              Choose runtime binary…
             </button>
           </div>
         )}
-        <p className="engine-hint">
+        <p className="runtime-hint">
           Get diffusion models under <strong>Models → Image</strong>.
         </p>
       </section>

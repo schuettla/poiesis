@@ -109,11 +109,16 @@ pub struct SubmitArgs {
 /// or no usable backend. Anything that goes wrong after that is reported
 /// through the job's own completion event, because by then the caller has
 /// already been told the work began.
-pub fn submit(db: &Db, args: SubmitArgs) -> Result<MediaJob, String> {
+pub fn submit(db: &Db, mut args: SubmitArgs) -> Result<MediaJob, String> {
     // Resolve up front: "no image backend is set up" is an answer the caller
     // should get synchronously, not thirty seconds later as a failed job.
     {
         let registry = Registry::new();
+        // `MOD-3`: an image request that names no model uses the user's default
+        // image model, when it is still usable. Video has no default.
+        if args.model_id.is_none() && args.modality == super::Modality::Image {
+            args.model_id = super::default_image_model(&registry, db);
+        }
         match &args.model_id {
             Some(id) => {
                 super::resolve_backend_for_model(&registry, id)?;

@@ -2,6 +2,11 @@ export interface PersonaPreset {
   name: string;
   systemPrompt: string;
   temperature?: number;
+  /** Toolset ids this persona is narrowed to (`PER-2`). Absent means every
+   * enabled toolset. Still intersected with Settings, so a preset can never
+   * switch on something the user switched off. */
+  tools?: string[];
+  description?: string;
 }
 
 /** Role-shaped starting points for a persona (CHT-10) — a job description the
@@ -9,6 +14,17 @@ export interface PersonaPreset {
  * an impersonation of a real person. Offered in the persona editor so a new
  * user has somewhere to start besides a blank textarea. */
 export const PERSONA_PRESETS: PersonaPreset[] = [
+  {
+    // `COD-17`: the coding workflow as a voice you can pick. Its tools are the
+    // ones code work needs and nothing else; plans are not a toolset and are
+    // always there.
+    name: "Builder",
+    description: "Works in a project's code: reads before editing, runs the check, says when it has not.",
+    systemPrompt:
+      "You change code in the user's project. Read a file before you edit it, and edit with edit_file rather than rewriting whole files. Keep changes as small as the task allows and match the style of the code around them. After changing code, run the project's check with run_task and read what it reports before you say the change works; fix what it finds. If you could not run it, say plainly that the change is not verified. Before you finish, look at your own patch with changes. Never commit, push, or install anything globally.",
+    temperature: 0.2,
+    tools: ["filesystem", "indexing", "code_exec", "code_run", "subagents"],
+  },
   {
     name: "The Skeptic",
     systemPrompt:

@@ -19,11 +19,14 @@ pub mod models;
 pub mod permissions;
 pub mod organism;
 pub mod personas;
+pub mod projects;
 pub mod reflect;
 pub mod rerankgen;
 pub mod runtime;
 pub mod scheduler;
 pub mod skills;
+pub mod subagents;
+pub mod usage;
 
 /// Returns the running application version. Smoke-test of the IPC bridge and a
 /// real datum for Settings/About.

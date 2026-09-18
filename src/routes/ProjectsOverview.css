@@ -1,0 +1,137 @@
+/* `PRJ-3`: the projects overview — the same card-grid language the Library
+   already reads at (`.artifact-grid`/`.artifact-card`), applied to projects
+   instead of artifacts, so the two "everything of one kind" pages feel like
+   one app. */
+.projects-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.projects-head .lede {
+  margin-bottom: 24px;
+}
+
+.project-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  align-content: start;
+  gap: 16px;
+}
+
+.project-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 10px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  cursor: pointer;
+  background: var(--paper);
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.project-card:hover {
+  border-color: var(--ink-faint);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+.project-card:focus-visible {
+  outline: 2px solid var(--local);
+  outline-offset: 2px;
+}
+
+.project-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.project-card-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-sans);
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card-rename {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-sans);
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--ink-faint);
+  border-radius: var(--radius);
+  padding: 1px 5px;
+  outline: none;
+}
+
+/* The card's own `⋯`, hidden until hovered or focused — same rhythm as the
+   Rail's per-row actions, but scoped to `.project-card` rather than
+   `.chat-list li` since a card is not a list row. */
+.project-card-more {
+  flex: none;
+  background: none;
+  border: none;
+  padding: 2px 3px;
+  line-height: 1;
+  font-size: 13px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  opacity: 0;
+}
+.project-card:hover .project-card-more,
+.project-card:focus-within .project-card-more,
+.project-card-more[aria-expanded="true"] {
+  opacity: 1;
+}
+.project-card-more:hover {
+  color: var(--ink);
+}
+
+.project-card-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.project-card-trust {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.project-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+.project-card-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}

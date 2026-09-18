@@ -98,6 +98,8 @@ export default function MemoryToast() {
   const dismissGoldenReverted = useAppStore((s) => s.dismissGoldenRevertedToast);
   const mailSentMessage = useAppStore((s) => s.mailSentToast);
   const dismissMailSent = useAppStore((s) => s.dismissMailSentToast);
+  const agentDoneMessage = useAppStore((s) => s.agentDoneToast);
+  const dismissAgentDone = useAppStore((s) => s.dismissAgentDoneToast);
   // Latched per toast: marking the flag immediately would hide the explainer
   // on the very toast that's supposed to carry it.
   const [explain, setExplain] = useState(false);
@@ -130,6 +132,11 @@ export default function MemoryToast() {
     }
     if (mailSentMessage) {
       return <ReceiptToast message={mailSentMessage} dismiss={dismissMailSent} />;
+    }
+    // `SUB-12`: an agent that finished on its own, long after the reply that
+    // started it. Nothing else on screen would say so.
+    if (agentDoneMessage) {
+      return <ReceiptToast message={agentDoneMessage} dismiss={dismissAgentDone} />;
     }
     return <ExplainToast />;
   }

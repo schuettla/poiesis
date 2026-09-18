@@ -212,7 +212,10 @@ fn install_from_dir(db: &Db, mgr: &RuntimeManager, src: &std::path::Path) -> Cmd
     let mut total = 0u64;
     copy_dir_checked(src, &dest, &mut total).map_err(err)?;
     skillpack::set_enabled(db, SkillSource::App, &slug, true);
-    let _ = db.log_activity(None, "memory", &format!("installed the skill {slug}"));
+    // "skill", not "memory": filed under memory these rows were the only thing
+    // in that activity kind on a fresh install, which made an untouched memory
+    // look like a working one when auditing what the agent had actually saved.
+    let _ = db.log_activity(None, "skill", &format!("installed the skill {slug}"));
     let installed = skillpack::parse_pack(&dest, SkillSource::App)
         .ok_or_else(|| PoiesisError::Message("installed, but couldn't read it back".into()))?;
     Ok(to_view(db, installed))

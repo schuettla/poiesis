@@ -224,7 +224,7 @@ async fn run_cli(
     profile: &ModelProfile,
 ) -> Result<(), String> {
     if !Path::new(binary).exists() {
-        return Err("The image engine isn't installed. Install it under Engine → Image.".into());
+        return Err("The image runtime isn't installed. Install it under Settings → Runtime → Images.".into());
     }
     if !Path::new(model).exists() {
         return Err("No diffusion model found. Get one under Models → Image.".into());

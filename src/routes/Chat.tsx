@@ -7,12 +7,27 @@ import Introduction from "../components/Conversation/Introduction";
 import FolderInvite from "../components/Conversation/FolderInvite";
 import Composer from "../components/Composer/Composer";
 import MemoryToast from "../components/Memory/MemoryToast";
-import RecallOffer from "../components/EmbedEngine/RecallOffer";
+import RecallOffer from "../components/RecallRuntime/RecallOffer";
 import SessionStrip from "../components/Blocks/SessionStrip";
 import SessionMenu from "../components/Conversation/SessionMenu";
 import Workspace from "./Workspace";
 import "../components/Conversation/Conversation.css";
 import "./Chat.css";
+import type { Message } from "../lib/types";
+
+/** One user turn plus every turn that follows it up to (not including) the
+ * next user turn — a leading run of non-user messages before the first user
+ * turn (rare, but possible) forms its own group. This is the unit `.turn-group`
+ * wraps in the JSX below: it's what a sticky `.turn-user` needs to stay
+ * pinned within so it holds for the whole exchange, not just its own height. */
+function groupTurns(messages: Message[]): Message[][] {
+  const groups: Message[][] = [];
+  for (const m of messages) {
+    if (m.role === "user" || groups.length === 0) groups.push([m]);
+    else groups[groups.length - 1].push(m);
+  }
+  return groups;
+}
 
 export default function Chat() {
   const workspaceMode = useAppStore((s) => s.workspaceMode);
@@ -24,6 +39,7 @@ export default function Chat() {
 
   const msgs = conversation?.messages ?? [];
   const lastMessage = msgs.length ? msgs[msgs.length - 1] : undefined;
+  const messageIndex = new Map(msgs.map((m, i) => [m.id, i]));
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -58,25 +74,43 @@ export default function Chat() {
               </div>
             ) : (
               <div className="message-stream" data-selectable="true">
-                {conversation!.messages.map((m, i) => {
-                  const turn =
-                    m.role === "user" ? (
-                      <UserTurn key={m.id} message={m} />
-                    ) : (
-                      <AgentRun key={m.id} message={m} />
-                    );
-                  // The boundary sits *after* the last summarized turn, so the
-                  // divider goes before the message that follows it.
-                  const isFirstUnsummarized =
-                    i > 0 && conversation!.messages[i - 1].id === conversation!.summaryUptoMessageId;
-                  if (!isFirstUnsummarized || !conversation!.summary) return turn;
-                  return (
-                    <div key={`div-${m.id}`}>
-                      <CompactDivider summary={conversation!.summary} />
-                      {turn}
-                    </div>
-                  );
-                })}
+                {groupTurns(conversation!.messages).map((group) => (
+                  // `.turn-user` (the first, direct child here for any group
+                  // that opens with one) is `position: sticky` — this wrapper
+                  // is what it stays pinned *within*, so it holds for the
+                  // whole exchange rather than unsticking the instant its own
+                  // small box scrolls past.
+                  <div className="turn-group" key={group[0].id}>
+                    {group.map((m) => {
+                      const i = messageIndex.get(m.id)!;
+                      const turn =
+                        m.role === "user" ? (
+                          <UserTurn key={m.id} message={m} />
+                        ) : (
+                          <AgentRun
+                            key={m.id}
+                            message={m}
+                            last={i === conversation!.messages.length - 1}
+                          />
+                        );
+                      // The boundary sits *after* the last summarized turn, so
+                      // the divider goes before the message that follows it.
+                      const isFirstUnsummarized =
+                        i > 0 &&
+                        conversation!.messages[i - 1].id === conversation!.summaryUptoMessageId;
+                      if (!isFirstUnsummarized || !conversation!.summary) return turn;
+                      return (
+                        <div key={`div-${m.id}`}>
+                          <CompactDivider
+                            summary={conversation!.summary}
+                            conversationId={conversation!.id}
+                          />
+                          {turn}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
               </div>
             )}
           </div>

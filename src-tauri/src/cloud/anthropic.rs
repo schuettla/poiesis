@@ -6,10 +6,12 @@
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 
-use crate::runtime::proxy::{api_error, CancelFlag, ProxyError, ToolCallReq, TurnOutcome};
+use crate::runtime::proxy::{
+    api_error, CancelFlag, Delta, ProxyError, ToolCallReq, TurnOutcome, Usage,
+};
 
 const ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
-const API_VERSION: &str = "2023-06-01";
+pub(crate) const API_VERSION: &str = "2023-06-01";
 const MAX_TOKENS: u32 = 4096;
 
 /// Stream one Anthropic turn. `messages`/`tools` are OpenAI-shaped.
@@ -25,7 +27,7 @@ pub async fn stream_turn<F>(
     mut on_token: F,
 ) -> Result<TurnOutcome, ProxyError>
 where
-    F: FnMut(&str),
+    F: FnMut(Delta),
 {
     let (system, anth_messages) = translate_messages(messages);
     let mut body = json!({
@@ -59,6 +61,7 @@ where
     let mut buf = String::new();
     let mut content = String::new();
     let mut blocks: Vec<Block> = Vec::new();
+    let mut usage: Option<Usage> = None;
 
     while let Some(chunk) = stream.next().await {
         if cancel.is_cancelled() {
@@ -77,6 +80,19 @@ where
                 continue;
             }
             if let Ok(evt) = serde_json::from_str::<Value>(payload) {
+                // `OBS-1`: input tokens arrive on `message_start`, output
+                // tokens on `message_delta`. Both are merged into one figure.
+                for pointer in ["/message/usage", "/usage"] {
+                    if let Some(u) = evt.pointer(pointer) {
+                        let entry = usage.get_or_insert_with(Usage::default);
+                        if let Some(n) = u.get("input_tokens").and_then(|v| v.as_u64()) {
+                            entry.prompt_tokens = n;
+                        }
+                        if let Some(n) = u.get("output_tokens").and_then(|v| v.as_u64()) {
+                            entry.output_tokens = n;
+                        }
+                    }
+                }
                 handle_event(&evt, &mut blocks, &mut content, &mut on_token);
             }
         }
@@ -97,9 +113,11 @@ where
         .collect();
 
     if calls.is_empty() {
-        Ok(TurnOutcome::Final { content })
+        // Anthropic's extended thinking arrives as its own content block, which
+        // this parser does not collect, so there is nothing to carry here.
+        Ok(TurnOutcome::Final { content, usage, reasoning: String::new() })
     } else {
-        Ok(TurnOutcome::ToolCalls(calls))
+        Ok(TurnOutcome::ToolCalls { calls, usage })
     }
 }
 
@@ -112,7 +130,7 @@ struct Block {
 }
 
 /// Apply one Anthropic stream event to the accumulators.
-fn handle_event<F: FnMut(&str)>(
+fn handle_event<F: FnMut(Delta)>(
     evt: &Value,
     blocks: &mut Vec<Block>,
     content: &mut String,
@@ -141,7 +159,15 @@ fn handle_event<F: FnMut(&str)>(
                 Some("text_delta") => {
                     if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
                         content.push_str(text);
-                        on_token(text);
+                        on_token(Delta::Answer(text));
+                    }
+                }
+                // Extended thinking. Relayed so a long think reads as work in
+                // progress; still not collected into `content`, which is the
+                // answer and only the answer.
+                Some("thinking_delta") => {
+                    if let Some(text) = delta.get("thinking").and_then(|t| t.as_str()) {
+                        on_token(Delta::Thinking(text));
                     }
                 }
                 Some("input_json_delta") => {
@@ -312,4 +338,40 @@ fn parse_data_uri(url: &str) -> Option<(String, String)> {
     let (meta, data) = rest.split_once(',')?;
     let media_type = meta.split(';').next().unwrap_or("image/png").to_string();
     Some((media_type, data.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Thinking and answer arrive on the same stream and must never merge.
+    /// `content` is what becomes the assistant message; if a `thinking_delta`
+    /// ever lands in it, the app shows the model's private reasoning as its
+    /// reply — which is exactly what stripping `<think>` blocks exists to stop.
+    #[test]
+    fn thinking_is_relayed_but_never_becomes_the_answer() {
+        let mut blocks: Vec<Block> = Vec::new();
+        let mut content = String::new();
+        let mut seen: Vec<(bool, String)> = Vec::new();
+        let mut on_token = |d: Delta| match d {
+            Delta::Answer(t) => seen.push((false, t.to_string())),
+            Delta::Thinking(t) => seen.push((true, t.to_string())),
+        };
+
+        for evt in [
+            json!({ "type": "content_block_delta", "index": 0,
+                    "delta": { "type": "thinking_delta", "thinking": "let me work this out" } }),
+            json!({ "type": "content_block_delta", "index": 0,
+                    "delta": { "type": "text_delta", "text": "42" } }),
+        ] {
+            handle_event(&evt, &mut blocks, &mut content, &mut on_token);
+        }
+
+        assert_eq!(content, "42", "only the answer belongs in the message");
+        assert_eq!(
+            seen,
+            vec![(true, "let me work this out".into()), (false, "42".into())],
+            "both were relayed, each labelled as what it is"
+        );
+    }
 }

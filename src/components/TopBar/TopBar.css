@@ -1,16 +1,30 @@
 .topbar {
+  position: relative;
   grid-column: 1 / -1;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 20px;
-  border-bottom: 1px solid var(--paper-edge-2);
+  align-items: stretch;
+  background: var(--canvas);
 }
 
+/* No horizontal padding on `.topbar` itself — it used to have 20px on each
+   side, which is exactly what was throwing every alignment in this file off:
+   `.topbar-left` at `width: var(--rail-w)` sat 20px right of where the rail
+   actually starts below it, and the doc zone's divider inherited the same
+   20px error against the dock. Padding now lives *inside* the two fixed
+   segments instead, where it can't move an edge that has to land exactly on
+   a boundary drawn by a different component. */
 .topbar-left {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
+  width: var(--rail-w);
+  flex-shrink: 0;
+  padding: 0 8px 0 11px;
+  border-right: 1px solid var(--paper-edge-2);
+  border-bottom: 1px solid var(--paper-edge-2);
+  /* No transition of its own: `--rail-w` is already a registered, animated
+     property on `.app` (see App.css), so this width follows its
+     interpolation live rather than needing a second `width` transition. */
 }
 
 .sidebar-toggle {
@@ -21,9 +35,15 @@
   border: none;
   color: var(--ink-faint);
   cursor: pointer;
-  padding: 5px;
-  margin-left: -5px;
+  padding: 4px;
   border-radius: var(--radius);
+}
+/* The rail toggle sits at the segment's right end, on the rail's own edge —
+   the side the rail closes toward. */
+.topbar-left .sidebar-toggle {
+  flex-shrink: 0;
+  margin-left: auto;
+  margin-right: -2px;
 }
 .sidebar-toggle:hover {
   color: var(--ink);
@@ -52,65 +72,136 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
   font-family: var(--font-serif);
-  font-size: 17px;
+  /* The mockup's 15px wordmark in a 42px header. It was 17px in a 48px one;
+     shrinking the row without shrinking what sits in it is how a "narrower"
+     header ends up merely more cramped. */
+  font-size: 15px;
   letter-spacing: 0.02em;
   font-weight: 500;
-}
-
-.topbar-right {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.engine-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--font-sans);
-  font-size: 12px;
-  color: var(--ink-muted);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  padding: 4px 9px;
-  max-width: 240px;
   white-space: nowrap;
-  overflow: hidden;
 }
-.engine-status .engine-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* Mirrors the rail's own collapsed state (icon only, label hidden) — the
+   brand segment is pinned to `--rail-w` for the strip's alignment, and 52px
+   only fits the mark. */
+.app.rail-collapsed .brand span {
+  display: none;
 }
-.engine-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--ink-faint);
+/* 52px holds one icon, not the mark and the toggle side by side: collapsed,
+   the toggle takes the slot alone, centred over the rail's icon column, so
+   the way back out is where the rail went. */
+.app.rail-collapsed .topbar-left {
+  justify-content: center;
+  padding: 0;
+}
+.app.rail-collapsed .brand {
+  display: none;
+}
+.app.rail-collapsed .topbar-left .sidebar-toggle {
+  margin: 0;
+}
+
+/* `SHL-27`: the toggle, back in the flow at the row's right end.
+   It was taken out of the flow while the header was cut into segments pinned
+   to the shell's columns: 41px had to come from somewhere, and with the
+   sidebar collapsed it came out of whichever segment sat to its left, sliding
+   the strip off the pane it stood over. There are no pinned segments left, so
+   the 41px simply comes off the strip's flexible width and nothing moves. */
+.topbar-right {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 11px;
+  border-bottom: 1px solid var(--paper-edge-2);
 }
-.engine-status.ready .engine-dot {
-  background: var(--ok);
+
+/* ---- the header as title bar (Windows, frameless window) ----
+   Empty header space drags the window (`onTitleBarMouseDown`), so nothing in
+   it should start a text selection on the way. */
+.topbar.is-titlebar {
+  user-select: none;
+  -webkit-user-select: none;
 }
-.engine-status.starting .engine-dot {
-  background: var(--local);
-  animation: engine-pulse 1.2s ease-in-out infinite;
+
+/* Caption buttons: full header height and flush with the window's right
+   edge, the shape Windows gives its own so they're found where the hand
+   expects them — but in the app's ink and paper rather than system blue. */
+.window-controls {
+  flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--paper-edge-2);
 }
-@keyframes engine-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.4;
-    transform: scale(0.7);
-  }
+.wc-btn {
+  width: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--ink-muted);
+  cursor: default;
+  transition: background-color 120ms ease, color 120ms ease;
 }
-@media (prefers-reduced-motion: reduce) {
-  .engine-status.starting .engine-dot {
-    animation: none;
-  }
+.wc-btn:hover {
+  background: var(--paper-edge);
+  color: var(--ink);
+}
+.wc-btn:active {
+  background: var(--paper-edge-2);
+}
+.wc-close:hover,
+.wc-close:active {
+  background: var(--danger);
+  color: var(--paper);
+}
+.wc-btn:focus-visible {
+  outline: 1px solid var(--ink-muted);
+  outline-offset: -3px;
+}
+
+/* `SHL-24`: where you are, stated once, in the space the session tabs used to
+   fill. A label and not a control — no hover, no cursor, nothing to press —
+   because everything it can name is reached from the Rail. Serif for a chat
+   (its title is prose, and the Rail sets it in serif too), sans for a route,
+   the same distinction the strip used to draw with two tab faces.
+
+   `SHL-27`: shown only while the strip is not, so the two never name the same
+   chat twice in one row. */
+.topbar-where {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--paper-edge-2);
+}
+.topbar-where-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink-muted);
+}
+/* Body-LG in serif: the size the session tab carried, kept so that removing
+   the tab did not also quietly demote the title it held. */
+.topbar-where.is-chat .topbar-where-label {
+  font-family: var(--font-serif);
+  font-size: 15px;
+}
+/* Label: a route is a section of the app, and this is how every other section
+   name in the shell is set. */
+.topbar-where.is-route .topbar-where-label {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
 }
 

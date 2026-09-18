@@ -19,7 +19,7 @@ pub mod index_roots;
 pub mod phash;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 21;
+const SCHEMA_VERSION: i64 = 29;
 
 /// The rationale a skill-revision proposal is written with (`OUT-2`). Only
 /// display text — the proposal is *identified* by its `skill-revision` target,
@@ -37,6 +37,12 @@ pub struct Db {
 }
 
 // ---- row models (mirror the frontend `types.ts`) ----
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageHit {
+    pub conversation_id: String,
+    pub snippet: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
@@ -64,6 +70,61 @@ pub struct Conversation {
     /// How much the agent may do inside `folder_path`: "read-only" | "confirm"
     /// | "auto". Reads are always silent; this governs writes and deletes.
     pub folder_trust: String,
+    /// `SUB-3`: set when this conversation is a delegated child's workspace.
+    /// The Rail keeps these out of the top-level list — they belong to the turn
+    /// that started them, not beside it.
+    #[serde(default)]
+    pub parent_conversation_id: Option<String>,
+    /// `PRJ-1`: the project this conversation belongs to, if any. When it is
+    /// set, the project owns the working folder and the trust level and the
+    /// two columns above are ignored — see `Db::conversation_folder`.
+    #[serde(default)]
+    pub project_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// `PRJ-1`: a named group of sessions that share a context.
+///
+/// A working directory is something a project may *have* (`PRJ-1a`), not what
+/// it is — a project about a book, a job or a person is as real as one about a
+/// repository, and none of those live in a folder.
+///
+/// The user never has to think about this either way. Attaching a folder to a
+/// loose chat creates or joins that folder's project (`PRJ-3`), so the second
+/// time you open a folder the trust you granted is already there.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    /// Canonical, and unique across projects — this is what makes attaching a
+    /// known folder a join rather than a duplicate. `None` for a project that
+    /// is not about a directory, which is most of them.
+    pub root_path: Option<String>,
+    /// `PRJ-7`: free text injected into every session in this project, after
+    /// the standing instructions and before the memory index. The persona
+    /// still governs voice, format and depth.
+    pub instructions: Option<String>,
+    /// "read-only" | "confirm" | "auto", the same vocabulary
+    /// `permissions::Trust` parses. The plan's schema wrote "trusted" for the
+    /// top level; the app has always called it "auto" and one name is better
+    /// than two.
+    pub trust: String,
+    /// `COD-7`: "off" | "ask" | "allow", or "inherit" to follow the default
+    /// set in Settings -> Tools. A new project inherits.
+    pub exec_policy: String,
+    /// `COD-1` detection result, unread until Phase 1.
+    pub card_json: Option<String>,
+    pub card_built_at: Option<i64>,
+    /// `COD-7`/`COD-8`: what the user said "always allow" to in this project,
+    /// as `{"tasks": [...], "commands": [...], "run_command": bool}`.
+    pub allow_json: Option<String>,
+    /// `SHELL_PLAN`'s `SHL-17` scope seam: the open tab set for this project.
+    pub tabs_json: Option<String>,
+    /// Archived hides the project and its sessions from the Rail. Nothing on
+    /// disk is ever touched — there is no delete, because the word would be
+    /// read as "delete my code".
+    pub archived: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -88,6 +149,93 @@ pub struct Persona {
     /// `tools_json` — `NULL` means every enabled skill.
     #[serde(default)]
     pub skills_json: Option<String>,
+    /// `SUB-3`: one line saying when to hand this agent a job. This is what the
+    /// lead reads to choose. Empty or `NULL` means it is not offered.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// `SUB-3`: may the agent delegate to this one at all. Off by default.
+    #[serde(default)]
+    pub spawnable: bool,
+}
+
+/// One delegated child run (`SUB-3`). The child's work is a conversation of its
+/// own; this is the link back to the turn that asked for it.
+#[derive(Debug, Clone, Serialize)]
+pub struct SubagentRun {
+    pub id: String,
+    pub parent_conversation_id: String,
+    pub parent_message_id: Option<String>,
+    pub child_conversation_id: String,
+    /// The agent type: a persona's name, or `general`.
+    pub agent: String,
+    pub task: String,
+    /// `running` | `done` | `stopped` | `error`.
+    pub status: String,
+    /// `StopReason::as_str`, once it has one.
+    pub stop_reason: Option<String>,
+    /// The child's final text — what the lead was handed.
+    pub result: Option<String>,
+    pub steps: usize,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+}
+
+/// One row of the session log (`CTX-2`). The payload is kept as text rather
+/// than parsed here: the log's job is to hand back exactly the bytes that went
+/// in, and a parse in the storage layer is a place for them to change.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionEvent {
+    pub seq: i64,
+    pub kind: String,
+    pub payload_json: String,
+    /// When the row was written. Carried because a `summary` row is shown to the
+    /// user as a moment in the conversation ("this is where I compressed the
+    /// earlier part"), and a moment with no time on it cannot be placed.
+    pub created_at: i64,
+}
+
+/// One line of the Usage panel (`OBS-2`): a day, a model, or a conversation.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct UsageBucket {
+    /// The grouping value: a UTC day start in epoch ms, a model name, or a
+    /// conversation id, depending on which list this came from.
+    pub key: String,
+    /// A human name for `key` where one exists — a conversation's title. `None`
+    /// for a conversation that has since been deleted: the spend still counts,
+    /// it just has no name any more.
+    pub label: Option<String>,
+    /// `local` | `cloud` | `endpoint`. On a day or conversation bucket this is
+    /// whichever row landed first, so the UI treats it as a hint, not a fact.
+    pub provenance: String,
+    pub prompt_tokens: u64,
+    pub output_tokens: u64,
+    pub runs: u64,
+}
+
+impl UsageBucket {
+    pub fn total_tokens(&self) -> u64 {
+        self.prompt_tokens + self.output_tokens
+    }
+}
+
+/// What was spent over a window, grouped three ways (`OBS-2`).
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct UsageSummary {
+    pub total: UsageBucket,
+    /// Newest day first.
+    pub by_day: Vec<UsageBucket>,
+    /// Biggest spender first.
+    pub by_model: Vec<UsageBucket>,
+    pub by_conversation: Vec<UsageBucket>,
+}
+
+/// The start of the UTC day `ms` falls in, as epoch ms in a string so it both
+/// sorts and formats. Grouping is UTC; the frontend labels it in local time,
+/// which can put a late-evening run on the next day's line. That is a smaller
+/// wrong than pulling in a timezone database for a spend panel.
+fn day_key(ms: i64) -> String {
+    const DAY: i64 = 86_400_000;
+    (ms - ms.rem_euclid(DAY)).to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,6 +247,10 @@ pub struct NewPersona {
     pub tools_json: Option<String>,
     #[serde(default)]
     pub skills_json: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub spawnable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +263,12 @@ pub struct Message {
     pub model_provenance: Option<String>,
     /// Agent-run timeline, serialized JSON (CHT-9).
     pub steps_json: Option<String>,
+    /// `HRN-3`: why the run behind this turn stopped. `None` on user turns and
+    /// on anything written before the column existed.
+    pub stop_reason: Option<String>,
+    /// `PLN-UI-5`: the plan this turn's run worked to, serialized as
+    /// `agent::plan::Plan`. `None` for a turn that never wrote one.
+    pub plan_json: Option<String>,
     pub created_at: i64,
     /// Attachments on this turn (CHT-5). Populated by `list_messages`.
     #[serde(default)]
@@ -456,6 +614,19 @@ fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// `PRJ-3`: a project created implicitly is named after the folder's last path
+/// segment, which is what the user calls it anyway. Falls back to the whole
+/// path for a drive root, where there is no segment to take.
+pub fn project_name_for(root_path: &str) -> String {
+    root_path
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(root_path)
+        .to_string()
+}
+
 impl Db {
     /// Open (creating if needed) the database at `path` and run migrations.
     pub fn open(path: &Path) -> Result<Self, DbError> {
@@ -711,6 +882,149 @@ impl Db {
         // v21: `local_endpoints` is created by SCHEMA above — a brand-new
         // table needs no `ALTER TABLE` block, same as v13's `tool_fixes`,
         // v14's `browser_sessions`, and v17's `media_jobs`.
+        if current < 22 {
+            // `HRN-3`: why an assistant turn ended. NULL for every row written
+            // before this, which reads as "finished" — the only honest guess,
+            // since a stopped run used to be indistinguishable from a short one.
+            Self::add_column(&conn, "messages", "stop_reason", "TEXT")?;
+        }
+        if current < 23 {
+            // v23 (`SUB-3`): personas become agent types. `description` is what
+            // the lead reads when deciding who to hand a job to, and `spawnable`
+            // is the user's say in whether it may be handed one at all — off by
+            // default, so an upgrade never silently makes every persona
+            // delegatable. `subagent_runs` is created by SCHEMA above.
+            Self::add_column(&conn, "personas", "description", "TEXT")?;
+            Self::add_column(&conn, "personas", "spawnable", "INTEGER NOT NULL DEFAULT 0")?;
+            // A child conversation is a real conversation, so the Rail needs a
+            // way to tell one apart and keep it out of the top-level list.
+            Self::add_column(&conn, "conversations", "parent_conversation_id", "TEXT")?;
+        }
+        if current < 26 {
+            // v26 (`PLN-UI-5`): the plan a run worked to, kept on the turn that
+            // ran it. A plan that vanished on reload was never state, it was
+            // decoration — and the session log cannot stand in for this, since
+            // its rows are keyed by run and the transcript is drawn by message.
+            Self::add_column(&conn, "messages", "plan_json", "TEXT")?;
+        }
+        if current < 27 {
+            // v27 (`PRJ-1`/`PRJ-2`): the project entity. `projects` is created
+            // by SCHEMA above; this links conversations to it and backfills
+            // one project per folder anyone has ever worked in.
+            Self::add_column(&conn, "conversations", "project_id", "TEXT")?;
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conversations_project
+                 ON conversations(project_id)",
+                [],
+            )?;
+            // Every distinct folder becomes a project named after its last
+            // path segment. Where several chats attached the same folder with
+            // different trust levels, the **most restrictive** one wins:
+            // silently widening what the agent may do to somebody's code
+            // because of an upgrade is the one outcome that is not
+            // recoverable.
+            let mut stmt = conn.prepare(
+                "SELECT folder_path,
+                        MIN(CASE folder_trust
+                              WHEN 'read-only' THEN 0
+                              WHEN 'auto' THEN 2
+                              ELSE 1
+                            END)
+                 FROM conversations
+                 WHERE folder_path IS NOT NULL AND folder_path <> ''
+                 GROUP BY folder_path",
+            )?;
+            let folders: Vec<(String, i64)> = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            drop(stmt);
+            let ts = now_ms();
+            for (path, rank) in folders {
+                let trust = match rank {
+                    0 => "read-only",
+                    2 => "auto",
+                    _ => "confirm",
+                };
+                let id = new_id();
+                // `ON CONFLICT DO NOTHING` rather than a lookup first: a row
+                // may already exist if this migration is re-reached on a
+                // database that was rolled forward once before.
+                conn.execute(
+                    "INSERT INTO projects(id, name, root_path, trust, created_at, updated_at)
+                     VALUES(?1, ?2, ?3, ?4, ?5, ?5)
+                     ON CONFLICT(root_path) DO NOTHING",
+                    params![id, project_name_for(&path), path, trust, ts],
+                )?;
+                conn.execute(
+                    "UPDATE conversations
+                     SET project_id = (SELECT id FROM projects WHERE root_path = ?1)
+                     WHERE folder_path = ?1 AND project_id IS NULL",
+                    params![path],
+                )?;
+            }
+        }
+        if current < 28 {
+            // v28 (`PRJ-1a`): a project stops being a folder wearing a
+            // project's clothes. `root_path` becomes nullable so a project can
+            // be about a book, a job, or a person — the things people actually
+            // keep coming back to — and gains `instructions` (`PRJ-7`).
+            //
+            // SQLite cannot relax `NOT NULL` in place, so the table is rebuilt
+            // and every row copied. Guarded on the old shape actually being
+            // there: SCHEMA above already creates the new one on a fresh
+            // database, and rebuilding that would be a no-op that still risks
+            // the copy.
+            let needs_rebuild: bool = {
+                let mut stmt = conn.prepare("PRAGMA table_info(projects)")?;
+                let cols: Vec<(String, i64)> = stmt
+                    .query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, i64>(3)?)))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                cols.iter().any(|(name, notnull)| name == "root_path" && *notnull == 1)
+            };
+            if needs_rebuild {
+                conn.execute_batch(
+                    "CREATE TABLE projects_new (
+                       id            TEXT PRIMARY KEY,
+                       name          TEXT NOT NULL,
+                       root_path     TEXT UNIQUE,
+                       instructions  TEXT,
+                       trust         TEXT NOT NULL DEFAULT 'confirm',
+                       exec_policy   TEXT NOT NULL DEFAULT 'ask',
+                       card_json     TEXT,
+                       card_built_at INTEGER,
+                       tabs_json     TEXT,
+                       archived      INTEGER NOT NULL DEFAULT 0,
+                       created_at    INTEGER NOT NULL,
+                       updated_at    INTEGER NOT NULL
+                     );
+                     INSERT INTO projects_new
+                       (id, name, root_path, trust, exec_policy, card_json,
+                        card_built_at, tabs_json, archived, created_at, updated_at)
+                       SELECT id, name, root_path, trust, exec_policy, card_json,
+                              card_built_at, tabs_json, archived, created_at, updated_at
+                       FROM projects;
+                     DROP TABLE projects;
+                     ALTER TABLE projects_new RENAME TO projects;",
+                )?;
+            } else {
+                // A database that reached the new SCHEMA first still needs the
+                // column, since `CREATE TABLE IF NOT EXISTS` skipped an
+                // existing v27 table that has everything but this.
+                Self::add_column(&conn, "projects", "instructions", "TEXT")?;
+            }
+        }
+        if current < 29 {
+            // v29 (`COD-7`/`COD-8`): the project's allowlist, and `exec_policy`
+            // learns "inherit". Every existing row still carries the column's
+            // old default, which nothing ever read or let the user set, so it
+            // becomes "inherit" rather than being mistaken for a choice.
+            Self::add_column(&conn, "projects", "allow_json", "TEXT")?;
+            conn.execute("UPDATE projects SET exec_policy = 'inherit' WHERE exec_policy = 'ask'", [])?;
+        }
+        // v24 (`OBS-2`): `run_usage` is created by SCHEMA above and has no
+        // columns to add to an existing table, so there is nothing to do here
+        // beyond bumping the version. v25 (`CTX-2`) adds `session_events` the
+        // same way — a new table, no ALTER.
         if current < SCHEMA_VERSION {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -782,6 +1096,8 @@ impl Db {
             reflected_at: None,
             folder_path: None,
             folder_trust: "confirm".to_string(),
+            parent_conversation_id: None,
+            project_id: None,
             created_at: ts,
             updated_at: ts,
         })
@@ -800,33 +1116,112 @@ impl Db {
     // ---- working folder ----
 
     /// Attach (or, with `None`, detach) the real folder this conversation works
-    /// in. Detaching touches nothing on disk — it only forgets the path.
+    /// in. Detaching touches nothing on disk — it only forgets the path, and
+    /// leaves the project and its other sessions alone (`PRJ-3`).
+    ///
+    /// Attaching creates or joins the project for that folder. The path must
+    /// already be canonical; the caller does that, because canonicalising is a
+    /// filesystem question and this layer is not the one to ask it.
     pub fn set_conversation_folder(&self, id: &str, path: Option<&str>) -> Result<(), DbError> {
+        let current = self.conversation_project(id)?;
+        let Some(path) = path.filter(|p| !p.is_empty()) else {
+            // Detaching from *this chat* means this chat leaves (`PRJ-3`). It
+            // deliberately does not clear the project's folder: that control
+            // lives on the chat, and a control on one chat must never change
+            // what every sibling session is working in. Removing the folder
+            // *from the project* is `set_project_root`, in the project view,
+            // where the thing being changed is visibly the project.
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE conversations SET folder_path = NULL, project_id = NULL WHERE id = ?1",
+                params![id],
+            )?;
+            return Ok(());
+        };
+
+        // `PRJ-3a`, the three cases. Guessing between them is how folders get
+        // silently swapped out from under somebody's other sessions.
+        let project_id = match current {
+            // Already this folder: nothing to do but keep the columns honest.
+            Some(p) if p.root_path.as_deref() == Some(path) => p.id,
+            // The project adopts the folder, or moves to the new one. This is
+            // what makes "start a project, add a folder later" work.
+            Some(p) if self.set_project_root(&p.id, Some(path))? => p.id,
+            // Another project already owns that root, and `root_path` is
+            // unique, so the folder's project wins and the conversation moves
+            // to it rather than the folder being stolen.
+            Some(_) => self.project_for_root(path)?.id,
+            // A loose chat creates or joins the folder's project (`PRJ-3`).
+            None => self.project_for_root(path)?.id,
+        };
+
         let conn = self.conn.lock().unwrap();
+        // `folder_path` is written too, not just `project_id`. The project is
+        // the owner now, but the legacy column is what a conversation falls
+        // back to, and leaving the two disagreeing is how a detached project
+        // would resurrect an old folder.
         conn.execute(
-            "UPDATE conversations SET folder_path = ?2 WHERE id = ?1",
-            params![id, path],
+            "UPDATE conversations SET folder_path = ?2, project_id = ?3 WHERE id = ?1",
+            params![id, path, project_id],
         )?;
         Ok(())
     }
 
+    /// The project a conversation belongs to, if any.
+    pub fn conversation_project(&self, id: &str) -> Result<Option<Project>, DbError> {
+        let project_id: Option<String> = {
+            let conn = self.conn.lock().unwrap();
+            conn.query_row("SELECT project_id FROM conversations WHERE id = ?1", [id], |r| r.get(0))
+                .unwrap_or(None)
+        };
+        match project_id {
+            Some(pid) => self.get_project(&pid),
+            None => Ok(None),
+        }
+    }
+
     /// Set how much the agent may do inside the attached folder.
+    ///
+    /// With a project attached this grants trust **for the folder**, once,
+    /// rather than once per chat — which is most of the daily annoyance gone.
     pub fn set_conversation_trust(&self, id: &str, trust: &str) -> Result<(), DbError> {
         let conn = self.conn.lock().unwrap();
+        let project_id: Option<String> = conn
+            .query_row("SELECT project_id FROM conversations WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap_or(None);
+        // Both are written: the project is what `conversation_folder` reads,
+        // and the legacy column keeps the chat honest if it later leaves.
         conn.execute(
             "UPDATE conversations SET folder_trust = ?2 WHERE id = ?1",
             params![id, trust],
         )?;
+        if let Some(project_id) = project_id {
+            conn.execute(
+                "UPDATE projects SET trust = ?2, updated_at = ?3 WHERE id = ?1",
+                params![project_id, trust, now_ms()],
+            )?;
+        }
         Ok(())
     }
 
-    /// The attached folder + trust for one conversation, without loading the rest.
-    /// Hot path: every file tool call consults this.
+    /// `PRJ-2`: the working folder and trust for a conversation — the
+    /// project's when it has one, the legacy per-conversation columns when it
+    /// does not.
+    ///
+    /// Hot path: every file tool call consults this. The signature is
+    /// unchanged, which is the whole point of doing it this way — the project
+    /// entity lands *under* the app rather than through it, and none of the
+    /// callers in `codeexec`, `filesystem`, `retrieval` or `skillpack` had to
+    /// learn a new concept.
     pub fn conversation_folder(&self, id: &str) -> Result<(Option<String>, String), DbError> {
         let conn = self.conn.lock().unwrap();
         let row = conn
             .query_row(
-                "SELECT folder_path, folder_trust FROM conversations WHERE id = ?1",
+                "SELECT COALESCE(p.root_path, c.folder_path),
+                        COALESCE(p.trust, c.folder_trust)
+                 FROM conversations c
+                 LEFT JOIN projects p ON p.id = c.project_id
+                 WHERE c.id = ?1",
                 [id],
                 |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
             )
@@ -834,11 +1229,256 @@ impl Db {
         Ok((row.0, row.1.unwrap_or_else(|| "confirm".to_string())))
     }
 
+    // ---- projects (`PRJ-1`) ----
+
+    /// The project for this canonical root, creating one named after the
+    /// folder if it is new (`PRJ-3`). Un-archives a project that was hidden:
+    /// working in a folder again is the plainest possible statement that you
+    /// still want it.
+    pub fn project_for_root(&self, root_path: &str) -> Result<Project, DbError> {
+        if let Some(existing) = self.project_by_root(root_path)? {
+            if existing.archived {
+                let conn = self.conn.lock().unwrap();
+                conn.execute(
+                    "UPDATE projects SET archived = 0, updated_at = ?2 WHERE id = ?1",
+                    params![existing.id, now_ms()],
+                )?;
+            }
+            return Ok(Project { archived: false, ..existing });
+        }
+        self.create_project(&project_name_for(root_path), Some(root_path))
+    }
+
+    pub fn project_by_root(&self, root_path: &str) -> Result<Option<Project>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn
+            .query_row(
+                "SELECT id, name, root_path, instructions, trust, exec_policy, card_json,
+                        card_built_at, tabs_json, archived, created_at, updated_at, allow_json
+                 FROM projects WHERE root_path = ?1",
+                [root_path],
+                Self::map_project,
+            )
+            .ok();
+        Ok(row)
+    }
+
+    pub fn get_project(&self, id: &str) -> Result<Option<Project>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn
+            .query_row(
+                "SELECT id, name, root_path, instructions, trust, exec_policy, card_json,
+                        card_built_at, tabs_json, archived, created_at, updated_at, allow_json
+                 FROM projects WHERE id = ?1",
+                [id],
+                Self::map_project,
+            )
+            .ok();
+        Ok(row)
+    }
+
+    /// `PRJ-3` explicit create. `root_path` is optional (`PRJ-1a`): most
+    /// projects are not about a directory.
+    ///
+    /// A second call for the same root returns the project that is already
+    /// there rather than failing on the unique index — "New project" on a
+    /// folder you already have open should land you in it. Two folderless
+    /// projects with the same name are two projects, because there is nothing
+    /// to say they are the same one.
+    pub fn create_project(&self, name: &str, root_path: Option<&str>) -> Result<Project, DbError> {
+        if let Some(root) = root_path {
+            if let Some(existing) = self.project_by_root(root)? {
+                return Ok(existing);
+            }
+        }
+        let ts = now_ms();
+        let project = Project {
+            id: new_id(),
+            name: name.to_string(),
+            root_path: root_path.map(|s| s.to_string()),
+            instructions: None,
+            trust: "confirm".to_string(),
+            exec_policy: "inherit".to_string(),
+            card_json: None,
+            card_built_at: None,
+            allow_json: None,
+            tabs_json: None,
+            archived: false,
+            created_at: ts,
+            updated_at: ts,
+        };
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO projects(id, name, root_path, trust, exec_policy, archived, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, 0, ?6, ?6)",
+            params![
+                project.id,
+                project.name,
+                project.root_path,
+                project.trust,
+                project.exec_policy,
+                ts
+            ],
+        )?;
+        Ok(project)
+    }
+
+    /// `PRJ-7`: the instructions every session in this project carries.
+    pub fn set_project_instructions(&self, id: &str, text: Option<&str>) -> Result<(), DbError> {
+        let text = text.map(str::trim).filter(|t| !t.is_empty());
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE projects SET instructions = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, text, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// `PRJ-3a`: give a project a working folder, or with `None` take it away.
+    ///
+    /// The folder is a property of the project, so removing it leaves both the
+    /// project and its sessions exactly where they are. Returns `false` when
+    /// another project already owns that root — the caller then moves the
+    /// conversation there instead, because `root_path` is unique and the
+    /// folder's own project has to win.
+    pub fn set_project_root(&self, id: &str, root_path: Option<&str>) -> Result<bool, DbError> {
+        if let Some(root) = root_path {
+            if let Some(other) = self.project_by_root(root)? {
+                if other.id != id {
+                    return Ok(false);
+                }
+            }
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            // A different folder is a different card (`COD-1`): the old one
+            // described files that are no longer the project's.
+            "UPDATE projects SET root_path = ?2, card_json = NULL, card_built_at = NULL, updated_at = ?3
+             WHERE id = ?1 AND root_path IS NOT ?2",
+            params![id, root_path, now_ms()],
+        )?;
+        // The sessions' own fallback column follows, so a chat that later
+        // leaves the project does not resurrect a folder the project dropped.
+        conn.execute(
+            "UPDATE conversations SET folder_path = ?2 WHERE project_id = ?1",
+            params![id, root_path],
+        )?;
+        Ok(true)
+    }
+
+    /// Every project, archived ones only when asked for. Newest activity
+    /// first, matching how the Rail orders everything else.
+    pub fn list_projects(&self, include_archived: bool) -> Result<Vec<Project>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, root_path, instructions, trust, exec_policy, card_json,
+                    card_built_at, tabs_json, archived, created_at, updated_at, allow_json
+             FROM projects
+             WHERE ?1 OR archived = 0
+             ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt
+            .query_map([include_archived], Self::map_project)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn rename_project(&self, id: &str, name: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE projects SET name = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, name, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// `COD-1`: the detected project card, or `None` to have it detected again.
+    pub fn set_project_card(&self, id: &str, card_json: Option<&str>) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE projects SET card_json = ?2, card_built_at = ?3 WHERE id = ?1",
+            params![id, card_json, card_json.map(|_| now_ms())],
+        )?;
+        Ok(())
+    }
+
+    /// `COD-7`: "off" | "ask" | "allow" | "inherit". The caller validates.
+    pub fn set_project_exec_policy(&self, id: &str, policy: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE projects SET exec_policy = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, policy, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// `COD-7`/`COD-8`: the project's standing "always allow" answers.
+    pub fn set_project_allow(&self, id: &str, allow_json: Option<&str>) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE projects SET allow_json = ?2 WHERE id = ?1",
+            params![id, allow_json],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_project_trust(&self, id: &str, trust: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE projects SET trust = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, trust, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// `PRJ-3`: archive hides the project and its sessions. There is no
+    /// delete, and nothing on disk is touched either way.
+    pub fn set_project_archived(&self, id: &str, archived: bool) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE projects SET archived = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, archived as i64, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// The open tab set for a project (`SHL-17`'s scope seam, filled by
+    /// `PRJ-UI-2`). One project's tabs never reach another's.
+    pub fn set_project_tabs(&self, id: &str, tabs_json: Option<&str>) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE projects SET tabs_json = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, tabs_json, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Put a conversation in a project (or, with `None`, take it out of one).
+    /// Joining carries the project's root onto the chat so the two never
+    /// disagree about which folder is open.
+    pub fn set_conversation_project(
+        &self,
+        conversation_id: &str,
+        project_id: Option<&str>,
+    ) -> Result<(), DbError> {
+        let root = match project_id {
+            Some(pid) => self.get_project(pid)?.map(|p| p.root_path),
+            None => None,
+        };
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE conversations SET project_id = ?2, folder_path = ?3 WHERE id = ?1",
+            params![conversation_id, project_id, root],
+        )?;
+        Ok(())
+    }
+
     pub fn list_conversations(&self) -> Result<Vec<Conversation>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, title, model_id, persona_id, overrides_json, workspace, created_at, updated_at,
-                    summary, summary_upto_message_id, reflected_at, folder_path, folder_trust
+                    summary, summary_upto_message_id, reflected_at, folder_path, folder_trust,
+                    parent_conversation_id, project_id
              FROM conversations ORDER BY updated_at DESC",
         )?;
         let rows = stmt
@@ -915,6 +1555,10 @@ impl Db {
             model_name: msg.model_name.clone(),
             model_provenance: msg.model_provenance.clone(),
             steps_json: msg.steps_json.clone(),
+            stop_reason: None,
+            // A turn is appended before its run starts; the plan arrives with
+            // `finalize_message`, once the run has one.
+            plan_json: None,
             created_at: ts,
             attachments: saved,
         })
@@ -931,11 +1575,21 @@ impl Db {
         content: &str,
         steps_json: Option<&str>,
         context_json: Option<&str>,
+        // `HRN-3`. `None` leaves the column alone rather than clearing it, so a
+        // caller that doesn't know can't erase what the run reported.
+        stop_reason: Option<&str>,
+        // `PLN-UI-5`, and `COALESCE` for the same reason: most turns have no
+        // plan, and none of them should be able to wipe one that exists.
+        plan_json: Option<&str>,
     ) -> Result<(), DbError> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE messages SET content = ?2, steps_json = ?3, context_json = ?4 WHERE id = ?1",
-            params![id, content, steps_json, context_json],
+            "UPDATE messages
+                SET content = ?2, steps_json = ?3, context_json = ?4,
+                    stop_reason = COALESCE(?5, stop_reason),
+                    plan_json = COALESCE(?6, plan_json)
+              WHERE id = ?1",
+            params![id, content, steps_json, context_json, stop_reason, plan_json],
         )?;
         Ok(())
     }
@@ -958,7 +1612,8 @@ impl Db {
         let row = conn
             .query_row(
                 "SELECT id, title, model_id, persona_id, overrides_json, workspace, created_at, updated_at,
-                        summary, summary_upto_message_id, reflected_at, folder_path, folder_trust
+                        summary, summary_upto_message_id, reflected_at, folder_path, folder_trust,
+                        parent_conversation_id, project_id
                  FROM conversations WHERE id = ?1",
                 [id],
                 Self::map_conversation,
@@ -972,7 +1627,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let row = conn
             .query_row(
-                "SELECT id, name, system_prompt, model_id, params_json, is_default, created_at, updated_at, tools_json, skills_json
+                "SELECT id, name, system_prompt, model_id, params_json, is_default, created_at, updated_at, tools_json, skills_json, description, spawnable
                  FROM personas WHERE id = ?1",
                 [id],
                 Self::map_persona,
@@ -984,7 +1639,7 @@ impl Db {
     pub fn list_messages(&self, conversation_id: &str) -> Result<Vec<Message>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, created_at
+            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json
              FROM messages WHERE conversation_id = ?1 ORDER BY created_at ASC",
         )?;
         let mut rows = stmt
@@ -1024,7 +1679,7 @@ impl Db {
     pub fn list_messages_until(&self, conversation_id: &str, upto_id: &str) -> Result<Vec<Message>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, created_at
+            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json
              FROM messages
              WHERE conversation_id = ?1
                AND rowid <= (SELECT rowid FROM messages WHERE id = ?2)
@@ -1064,6 +1719,28 @@ impl Db {
         Ok(())
     }
 
+    /// `REF-3b`: conversations that are finished, substantial enough to teach
+    /// something (`min_messages`), and were never reflected on — newest first.
+    ///
+    /// The frontend cannot ask this question itself: `list_conversations` hands
+    /// it rows with empty `messages`, so a client-side sweep would judge every
+    /// conversation as too slight and reflect none of them. Counting here, where
+    /// the messages actually live, is what makes the catch-up pass possible.
+    pub fn unreflected_conversations(
+        &self,
+        min_messages: i64,
+    ) -> Result<Vec<String>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT c.id FROM conversations c
+             WHERE c.reflected_at IS NULL
+               AND (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) >= ?1
+             ORDER BY c.updated_at DESC",
+        )?;
+        let rows = stmt.query_map(params![min_messages], |r| r.get::<_, String>(0))?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
     /// The most recent moment any conversation was reflected on (ORG-1).
     pub fn last_reflection(&self) -> Result<Option<i64>, DbError> {
         let conn = self.conn.lock().unwrap();
@@ -1073,21 +1750,588 @@ impl Db {
     }
 
     /// Full-text search returning matching conversations, most-recent first (CHT-3).
-    pub fn search_conversations(&self, query: &str) -> Result<Vec<Conversation>, DbError> {
+    /// Best-matching message per top-level conversation, with an excerpt around
+    /// the match. The match is wrapped in `\u{2}`…`\u{3}` so the frontend can
+    /// mark it without ever treating message text as markup.
+    pub fn search_messages(&self, query: &str, limit: usize) -> Result<Vec<MessageHit>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT DISTINCT c.id, c.title, c.model_id, c.persona_id, c.overrides_json, c.workspace, c.created_at, c.updated_at,
-                    c.summary, c.summary_upto_message_id, c.reflected_at, c.folder_path, c.folder_trust
-             FROM conversations c
-             JOIN messages m ON m.conversation_id = c.id
-             JOIN messages_fts f ON f.rowid = m.rowid
-             WHERE messages_fts MATCH ?1
-             ORDER BY c.updated_at DESC",
+            "SELECT m.conversation_id, snippet(messages_fts, 0, char(2), char(3), '…', 12)
+             FROM messages_fts
+             JOIN messages m ON m.rowid = messages_fts.rowid
+             JOIN conversations c ON c.id = m.conversation_id
+             WHERE messages_fts MATCH ?1 AND c.parent_conversation_id IS NULL
+             ORDER BY bm25(messages_fts)
+             LIMIT 500",
+        )?;
+        let rows = stmt.query_map([query], |r| {
+            Ok(MessageHit { conversation_id: r.get(0)?, snippet: r.get(1)? })
+        })?;
+        let mut seen = std::collections::HashSet::new();
+        let mut hits = Vec::new();
+        for row in rows {
+            let hit = row?;
+            if seen.insert(hit.conversation_id.clone()) {
+                hits.push(hit);
+                if hits.len() == limit {
+                    break;
+                }
+            }
+        }
+        Ok(hits)
+    }
+
+    // ---- delegated child runs (`SUB-3`) ----
+
+    /// Mark this conversation as a delegated child's workspace.
+    pub fn set_conversation_parent(&self, id: &str, parent: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE conversations SET parent_conversation_id = ?2 WHERE id = ?1",
+            params![id, parent],
+        )?;
+        Ok(())
+    }
+
+    /// Record a child run at the moment it starts, so it is visible while it
+    /// works rather than only once it finishes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_subagent_run(
+        &self,
+        id: &str,
+        parent_conversation_id: &str,
+        parent_message_id: Option<&str>,
+        child_conversation_id: &str,
+        agent: &str,
+        task: &str,
+    ) -> Result<SubagentRun, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let ts = now_ms();
+        conn.execute(
+            "INSERT INTO subagent_runs(id, parent_conversation_id, parent_message_id,
+                                       child_conversation_id, agent, task, status, started_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, 'running', ?7)",
+            params![id, parent_conversation_id, parent_message_id, child_conversation_id, agent, task, ts],
+        )?;
+        Ok(SubagentRun {
+            id: id.to_string(),
+            parent_conversation_id: parent_conversation_id.to_string(),
+            parent_message_id: parent_message_id.map(str::to_string),
+            child_conversation_id: child_conversation_id.to_string(),
+            agent: agent.to_string(),
+            task: task.to_string(),
+            status: "running".to_string(),
+            stop_reason: None,
+            result: None,
+            steps: 0,
+            started_at: ts,
+            ended_at: None,
+        })
+    }
+
+    /// Move a child between the states it can be in before it ends
+    /// (`SUB-12`: `queued` while it waits for a pool slot, `running` once it
+    /// has one). Deliberately separate from `finish_subagent_run`, which is
+    /// the only writer of `ended_at` and must stay the one place a run ends.
+    pub fn set_subagent_status(&self, id: &str, status: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE subagent_runs SET status = ?2 WHERE id = ?1 AND ended_at IS NULL",
+            params![id, status],
+        )?;
+        Ok(())
+    }
+
+    pub fn finish_subagent_run(
+        &self,
+        id: &str,
+        status: &str,
+        stop_reason: &str,
+        result: &str,
+        steps: usize,
+    ) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE subagent_runs
+                SET status = ?2, stop_reason = ?3, result = ?4, steps = ?5, ended_at = ?6
+              WHERE id = ?1",
+            params![id, status, stop_reason, result, steps as i64, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Close out children a restart orphaned (`SUB-12`).
+    ///
+    /// The background queue lives in memory, so a run left `queued` or
+    /// `running` when the process died is not coming back. Settling them at
+    /// startup is what lets every reader simply believe the row: an unfinished
+    /// one means a child that is genuinely still working.
+    pub fn fail_interrupted_subagent_runs(&self) -> Result<usize, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE subagent_runs
+                SET status = 'stopped', stop_reason = 'aborted', ended_at = ?1,
+                    result = COALESCE(result, 'It was still going when the app closed.')
+              WHERE ended_at IS NULL",
+            params![now_ms()],
+        )?;
+        Ok(n)
+    }
+
+    /// Every child this conversation started, oldest first — the order the lead
+    /// asked for them in, which is the order the Fleet card shows.
+    pub fn list_subagent_runs(&self, conversation_id: &str) -> Result<Vec<SubagentRun>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, parent_conversation_id, parent_message_id, child_conversation_id,
+                    agent, task, status, stop_reason, result, steps, started_at, ended_at
+             FROM subagent_runs WHERE parent_conversation_id = ?1
+             ORDER BY started_at ASC, rowid ASC",
         )?;
         let rows = stmt
-            .query_map([query], Self::map_conversation)?
+            .query_map([conversation_id], Self::map_subagent_run)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    pub fn get_subagent_run(&self, id: &str) -> Result<Option<SubagentRun>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn
+            .query_row(
+                "SELECT id, parent_conversation_id, parent_message_id, child_conversation_id,
+                        agent, task, status, stop_reason, result, steps, started_at, ended_at
+                 FROM subagent_runs WHERE id = ?1",
+                [id],
+                Self::map_subagent_run,
+            )
+            .ok();
+        Ok(row)
+    }
+
+    fn map_subagent_run(row: &rusqlite::Row) -> rusqlite::Result<SubagentRun> {
+        Ok(SubagentRun {
+            id: row.get(0)?,
+            parent_conversation_id: row.get(1)?,
+            parent_message_id: row.get(2)?,
+            child_conversation_id: row.get(3)?,
+            agent: row.get(4)?,
+            task: row.get(5)?,
+            status: row.get(6)?,
+            stop_reason: row.get(7)?,
+            result: row.get(8)?,
+            steps: row.get::<_, i64>(9)? as usize,
+            started_at: row.get(10)?,
+            ended_at: row.get(11)?,
+        })
+    }
+
+    // ---- what runs cost (`OBS-2`) ----
+
+    /// Record one finished run's usage.
+    ///
+    /// A run with no reported tokens is still written. This used to return
+    /// early on the reasoning that "no row" and "zero tokens" mean the same
+    /// thing — they do not. Plenty of providers report no usage at all (several
+    /// free tiers, and any OpenAI-compatible server that ignores
+    /// `include_usage`), and dropping those rows left the Usage panel blank
+    /// after a day of real work, as though nothing had been run. Zero is a
+    /// measurement we did not get; the panel says so rather than showing an
+    /// empty page.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_run_usage(
+        &self,
+        run_id: &str,
+        conversation_id: &str,
+        model_name: &str,
+        provenance: &str,
+        prompt_tokens: u64,
+        output_tokens: u64,
+        turns: usize,
+    ) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO run_usage(run_id, conversation_id, model_name, provenance,
+                                   prompt_tokens, output_tokens, turns, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                run_id,
+                conversation_id,
+                model_name,
+                provenance,
+                prompt_tokens as i64,
+                output_tokens as i64,
+                turns as i64,
+                now_ms()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Usage since `since` (epoch ms), grouped three ways. One pass over the
+    /// rows rather than three queries — the table is small and the grouping is
+    /// what the Usage panel shows all at once anyway.
+    pub fn usage_summary(&self, since: i64) -> Result<UsageSummary, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT conversation_id, model_name, provenance, prompt_tokens, output_tokens, created_at
+             FROM run_usage WHERE created_at >= ?1",
+        )?;
+        let rows = stmt.query_map(params![since], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)? as u64,
+                r.get::<_, i64>(4)? as u64,
+                r.get::<_, i64>(5)?,
+            ))
+        })?;
+
+        use std::collections::HashMap;
+        let mut by_day: HashMap<String, UsageBucket> = HashMap::new();
+        let mut by_model: HashMap<String, UsageBucket> = HashMap::new();
+        let mut by_conversation: HashMap<String, UsageBucket> = HashMap::new();
+        let mut total = UsageBucket::default();
+
+        for row in rows {
+            let (conversation_id, model_name, provenance, prompt, output, created_at) = row?;
+            let day = day_key(created_at);
+            for (map, key, provenance) in [
+                (&mut by_day, day, provenance.clone()),
+                (&mut by_model, model_name.clone(), provenance.clone()),
+                (&mut by_conversation, conversation_id.clone(), provenance.clone()),
+            ] {
+                let bucket = map.entry(key.clone()).or_insert_with(|| UsageBucket {
+                    key,
+                    provenance,
+                    ..Default::default()
+                });
+                bucket.prompt_tokens += prompt;
+                bucket.output_tokens += output;
+                bucket.runs += 1;
+            }
+            total.prompt_tokens += prompt;
+            total.output_tokens += output;
+            total.runs += 1;
+        }
+
+        // Titles for the conversation breakdown, skipping any that have since
+        // been deleted — the spend still counts, it just has no name any more.
+        for (id, bucket) in by_conversation.iter_mut() {
+            let title: Option<String> = conn
+                .query_row("SELECT title FROM conversations WHERE id = ?1", params![id], |r| r.get(0))
+                .ok();
+            bucket.label = title;
+        }
+
+        let sorted = |map: HashMap<String, UsageBucket>, newest_first: bool| {
+            let mut v: Vec<UsageBucket> = map.into_values().collect();
+            if newest_first {
+                v.sort_by(|a, b| b.key.cmp(&a.key));
+            } else {
+                v.sort_by_key(|b| std::cmp::Reverse(b.total_tokens()));
+            }
+            v
+        };
+
+        Ok(UsageSummary {
+            total,
+            by_day: sorted(by_day, true),
+            by_model: sorted(by_model, false),
+            by_conversation: sorted(by_conversation, false),
+        })
+    }
+
+    /// `CTX-5`/`HRN-UI-5`: branch a conversation just before one assistant turn.
+    ///
+    /// The new conversation keeps everything the old one had — persona, model,
+    /// overrides, working folder and its trust — because a fork the user has to
+    /// re-configure is not the same question asked again. Messages are copied up
+    /// to but not including the turn being redone, and the user turn that
+    /// prompted it is handed back rather than copied: the caller sends it, which
+    /// is the one path that also builds a fresh prompt and a fresh run.
+    ///
+    /// Returns `(new conversation, the user turn to resend)`. The turn is `None`
+    /// when the fork point has no user message before it, which leaves the caller
+    /// with an ordinary empty branch instead of a broken rerun.
+    pub fn fork_conversation(
+        &self,
+        conversation_id: &str,
+        message_id: &str,
+    ) -> Result<(Conversation, Option<String>), DbError> {
+        let cutoff: i64 = {
+            let conn = self.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT created_at FROM messages WHERE id = ?1 AND conversation_id = ?2",
+                params![message_id, conversation_id],
+                |r| r.get(0),
+            )?
+        };
+        let source = self
+            .get_conversation(conversation_id)?
+            .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        let upto_seq = self.seq_at_time(conversation_id, cutoff)?;
+
+        let conn = self.conn.lock().unwrap();
+        let new_conv_id = new_id();
+        let ts = now_ms();
+        let title = format!("{} (again)", source.title);
+        conn.execute(
+            "INSERT INTO conversations(id, title, model_id, persona_id, overrides_json, workspace,
+                                      folder_path, folder_trust, project_id, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+            params![
+                new_conv_id,
+                title,
+                source.model_id,
+                source.persona_id,
+                source.overrides_json,
+                source.workspace as i64,
+                source.folder_path,
+                source.folder_trust,
+                // A fork of a project session is another session in that
+                // project, not a loose chat that happens to point at the folder.
+                source.project_id,
+                ts
+            ],
+        )?;
+
+        // Everything before the turn being redone, oldest first.
+        let mut stmt = conn.prepare(
+            "SELECT id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json
+             FROM messages WHERE conversation_id = ?1 AND created_at < ?2 ORDER BY created_at",
+        )?;
+        // `PLN-T4`: `plan_json` travels with the turn, so a branch shows the
+        // plan the run it copied was working to rather than a blank card.
+        type Row = (String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, i64, Option<String>);
+        let mut rows: Vec<Row> = stmt
+            .query_map(params![conversation_id, cutoff], |r| {
+                Ok((
+                    r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        // The trailing user turn is the one to resend, so it is not copied —
+        // otherwise it would appear twice the moment the caller sends it.
+        let resend = match rows.last() {
+            Some(last) if last.1 == "user" => rows.pop().map(|r| r.2),
+            _ => None,
+        };
+
+        // Where the source's summary boundary lands in the copy. The fork's
+        // messages get fresh ids, so carrying the old boundary id across
+        // unchanged would point at a message this conversation does not have.
+        let mut new_boundary: Option<String> = None;
+        for row in &rows {
+            let new_msg_id = new_id();
+            if source.summary_upto_message_id.as_deref() == Some(row.0.as_str()) {
+                new_boundary = Some(new_msg_id.clone());
+            }
+            conn.execute(
+                "INSERT INTO messages(id, conversation_id, role, content, model_name, model_provenance,
+                                      steps_json, stop_reason, created_at, plan_json)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![new_msg_id, new_conv_id, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8],
+            )?;
+            conn.execute(
+                "INSERT INTO attachments(id, message_id, kind, name, path, artifact_id)
+                 SELECT lower(hex(randomblob(16))), ?2, kind, name, path, artifact_id
+                 FROM attachments WHERE message_id = ?1",
+                params![row.0, new_msg_id],
+            )?;
+        }
+
+        // A summary the fork can still account for travels with it. Without
+        // this, forking a long conversation throws away work the user already
+        // paid a model to do: the copy would arrive with no summary, resend
+        // every old turn verbatim, overflow again, and compact a second time.
+        //
+        // It travels only when its boundary was copied. A summary whose boundary
+        // sits at or after the cut covers turns this conversation does not have,
+        // and a summary of messages that are not there is worse than none.
+        let forked_summary = new_boundary.as_ref().and(source.summary.clone());
+        if let (Some(text), Some(boundary)) = (&forked_summary, &new_boundary) {
+            conn.execute(
+                "UPDATE conversations SET summary = ?2, summary_upto_message_id = ?3 WHERE id = ?1",
+                params![new_conv_id, text, boundary],
+            )?;
+        }
+        drop(conn);
+
+        // The model's own view of the same cut. Best effort: a fork whose
+        // history is intact for the user is still worth having if the log copy
+        // fails, and the next run rebuilds the log from the messages anyway.
+        let _ = self.fork_session_events(conversation_id, &new_conv_id, upto_seq);
+
+        Ok((
+            Conversation {
+                id: new_conv_id,
+                title,
+                model_id: source.model_id,
+                persona_id: source.persona_id,
+                overrides_json: source.overrides_json,
+                workspace: source.workspace,
+                summary: forked_summary,
+                summary_upto_message_id: new_boundary,
+                reflected_at: None,
+                folder_path: source.folder_path,
+                folder_trust: source.folder_trust,
+                parent_conversation_id: None,
+                project_id: source.project_id,
+                created_at: ts,
+                updated_at: ts,
+            },
+            resend,
+        ))
+    }
+
+    // ---- the session log (`CTX-2`) ----
+
+    /// Append one event to a conversation's log and return its `seq`.
+    ///
+    /// The sequence is allocated inside the same lock as the insert, so two runs
+    /// writing to one conversation cannot land on the same number — which the
+    /// unique index would refuse anyway, but as a lost event rather than as a
+    /// retry.
+    pub fn append_session_event(
+        &self,
+        conversation_id: &str,
+        run_id: Option<&str>,
+        kind: &str,
+        payload: &serde_json::Value,
+    ) -> Result<i64, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let seq: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM session_events WHERE conversation_id = ?1",
+                [conversation_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(1);
+        conn.execute(
+            "INSERT INTO session_events(id, conversation_id, run_id, seq, kind, payload_json, created_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![new_id(), conversation_id, run_id, seq, kind, payload.to_string(), now_ms()],
+        )?;
+        Ok(seq)
+    }
+
+    /// The rows one run wrote, oldest first. This is what resume replays.
+    pub fn session_events_for_run(&self, run_id: &str) -> Result<Vec<SessionEvent>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT seq, kind, payload_json, created_at FROM session_events WHERE run_id = ?1 ORDER BY seq",
+        )?;
+        let rows = stmt
+            .query_map([run_id], |r| {
+                Ok(SessionEvent {
+                    seq: r.get(0)?,
+                    kind: r.get(1)?,
+                    payload_json: r.get(2)?,
+                    created_at: r.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// A whole conversation's log, oldest first — what a fork copies and what a
+    /// test checks a fork against.
+    pub fn session_events(&self, conversation_id: &str) -> Result<Vec<SessionEvent>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT seq, kind, payload_json, created_at FROM session_events
+             WHERE conversation_id = ?1 ORDER BY seq",
+        )?;
+        let rows = stmt
+            .query_map([conversation_id], |r| {
+                Ok(SessionEvent {
+                    seq: r.get(0)?,
+                    kind: r.get(1)?,
+                    payload_json: r.get(2)?,
+                    created_at: r.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// The last run this conversation logged, and how it ended. `None` for the
+    /// reason means the run never wrote a `stop` row — it was killed with the
+    /// app, which is exactly the case resume exists for.
+    pub fn last_logged_run(&self, conversation_id: &str) -> Result<Option<(String, Option<String>)>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let run_id: Option<String> = conn
+            .query_row(
+                "SELECT run_id FROM session_events
+                 WHERE conversation_id = ?1 AND run_id IS NOT NULL
+                 ORDER BY seq DESC LIMIT 1",
+                [conversation_id],
+                |r| r.get(0),
+            )
+            .ok()
+            .flatten();
+        let Some(run_id) = run_id else { return Ok(None) };
+        let reason: Option<String> = conn
+            .query_row(
+                "SELECT payload_json FROM session_events WHERE run_id = ?1 AND kind = 'stop'
+                 ORDER BY seq DESC LIMIT 1",
+                [&run_id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|p| {
+                serde_json::from_str::<serde_json::Value>(&p)
+                    .ok()
+                    .and_then(|v| v["reason"].as_str().map(str::to_string))
+            });
+        Ok(Some((run_id, reason)))
+    }
+
+    /// `CTX-T3`: copy a conversation's log up to `seq` into another conversation,
+    /// and nothing after it. Sequence numbers are renumbered from 1 so the fork
+    /// reads as its own history rather than as a slice of someone else's.
+    pub fn fork_session_events(&self, from: &str, to: &str, upto_seq: i64) -> Result<usize, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT run_id, kind, payload_json, created_at FROM session_events
+             WHERE conversation_id = ?1 AND seq <= ?2 ORDER BY seq",
+        )?;
+        let rows = stmt
+            .query_map(params![from, upto_seq], |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (n, (run_id, kind, payload, created_at)) in rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO session_events(id, conversation_id, run_id, seq, kind, payload_json, created_at)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![new_id(), to, run_id, (n + 1) as i64, kind, payload, created_at],
+            )?;
+        }
+        Ok(rows.len())
+    }
+
+    /// The highest `seq` written for a conversation at or before `at_ms`. This is
+    /// how a fork point expressed in the UI's terms — "this message" — becomes a
+    /// point in the model's log.
+    pub fn seq_at_time(&self, conversation_id: &str, at_ms: i64) -> Result<i64, DbError> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT COALESCE(MAX(seq), 0) FROM session_events
+                 WHERE conversation_id = ?1 AND created_at <= ?2",
+                params![conversation_id, at_ms],
+                |r| r.get(0),
+            )
+            .unwrap_or(0))
     }
 
     // ---- agent-proposed self-changes (SOUL-2 / RCP-2) ----
@@ -1347,7 +2591,7 @@ impl Db {
     pub fn list_messages_window(&self, conversation_id: &str, max: usize) -> Result<Vec<Message>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, created_at
+            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json
              FROM messages WHERE conversation_id = ?1
              ORDER BY rowid DESC LIMIT ?2",
         )?;
@@ -2447,6 +3691,20 @@ impl Db {
         Ok(row)
     }
 
+    /// Replace an existing artifact's content in place (`ART-4`). The id stays
+    /// the same, so everything already pointing at it — the Canvas selection,
+    /// the timeline chip, the message that produced it — keeps pointing at the
+    /// same thing, instead of the panel filling with near-identical copies
+    /// every time the model fixes a bug in one.
+    pub fn update_artifact(&self, id: &str, title: Option<&str>, content: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE artifacts SET content = ?2, title = COALESCE(?3, title) WHERE id = ?1",
+            params![id, content, title],
+        )?;
+        Ok(())
+    }
+
     /// Record where an artifact was materialised on disk (promotion, §3.5F).
     pub fn set_artifact_saved_path(&self, id: &str, path: &str) -> Result<(), DbError> {
         let conn = self.conn.lock().unwrap();
@@ -2567,6 +3825,35 @@ impl Db {
             .query_map(params![conversation_id, limit], Self::map_trash)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// `COD-11`: every change recorded in a conversation at or after `since`,
+    /// oldest first — the order a change set is replayed in.
+    pub fn trash_since(&self, conversation_id: &str, since: i64) -> Result<Vec<TrashEntry>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, conversation_id, op, path, prev_path, blob_path, created_at, undone
+             FROM file_trash WHERE conversation_id = ?1 AND created_at >= ?2
+             ORDER BY created_at ASC, rowid ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![conversation_id, since], Self::map_trash)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// When a run's first session event was written: the start of that run as
+    /// far as anything on disk can tell.
+    pub fn run_started_at(&self, run_id: &str) -> Result<Option<i64>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT MIN(created_at) FROM session_events WHERE run_id = ?1",
+                [run_id],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten())
     }
 
     pub fn get_trash_entry(&self, id: &str) -> Result<Option<TrashEntry>, DbError> {
@@ -2748,9 +4035,9 @@ impl Db {
         let id = new_id();
         let ts = now_ms();
         conn.execute(
-            "INSERT INTO personas(id, name, system_prompt, model_id, params_json, tools_json, skills_json, is_default, created_at, updated_at)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?8)",
-            params![id, p.name, p.system_prompt, p.model_id, p.params_json, p.tools_json, p.skills_json, ts],
+            "INSERT INTO personas(id, name, system_prompt, model_id, params_json, tools_json, skills_json, description, spawnable, is_default, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?10)",
+            params![id, p.name, p.system_prompt, p.model_id, p.params_json, p.tools_json, p.skills_json, p.description, p.spawnable as i64, ts],
         )?;
         Ok(Persona {
             id,
@@ -2763,13 +4050,15 @@ impl Db {
             updated_at: ts,
             tools_json: p.tools_json.clone(),
             skills_json: p.skills_json.clone(),
+            description: p.description.clone(),
+            spawnable: p.spawnable,
         })
     }
 
     pub fn list_personas(&self) -> Result<Vec<Persona>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, system_prompt, model_id, params_json, is_default, created_at, updated_at, tools_json, skills_json
+            "SELECT id, name, system_prompt, model_id, params_json, is_default, created_at, updated_at, tools_json, skills_json, description, spawnable
              FROM personas ORDER BY is_default DESC, name ASC",
         )?;
         let rows = stmt
@@ -2782,9 +4071,10 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE personas SET name = ?2, system_prompt = ?3, model_id = ?4, params_json = ?5,
-                                 tools_json = ?6, skills_json = ?7, updated_at = ?8
+                                 tools_json = ?6, skills_json = ?7, description = ?8,
+                                 spawnable = ?9, updated_at = ?10
              WHERE id = ?1",
-            params![p.id, p.name, p.system_prompt, p.model_id, p.params_json, p.tools_json, p.skills_json, now_ms()],
+            params![p.id, p.name, p.system_prompt, p.model_id, p.params_json, p.tools_json, p.skills_json, p.description, p.spawnable as i64, now_ms()],
         )?;
         Ok(())
     }
@@ -2834,6 +4124,8 @@ impl Db {
             updated_at: row.get(7)?,
             tools_json: row.get(8)?,
             skills_json: row.get(9)?,
+            description: row.get(10)?,
+            spawnable: row.get::<_, i64>(11)? != 0,
         })
     }
 
@@ -2878,6 +4170,26 @@ impl Db {
             folder_trust: row
                 .get::<_, Option<String>>(12)?
                 .unwrap_or_else(|| "confirm".to_string()),
+            parent_conversation_id: row.get(13)?,
+            project_id: row.get(14)?,
+        })
+    }
+
+    fn map_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
+        Ok(Project {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            root_path: row.get(2)?,
+            instructions: row.get(3)?,
+            trust: row.get(4)?,
+            exec_policy: row.get(5)?,
+            card_json: row.get(6)?,
+            card_built_at: row.get(7)?,
+            tabs_json: row.get(8)?,
+            archived: row.get::<_, i64>(9)? != 0,
+            created_at: row.get(10)?,
+            updated_at: row.get(11)?,
+            allow_json: row.get(12)?,
         })
     }
 
@@ -2904,7 +4216,9 @@ impl Db {
             model_name: row.get(4)?,
             model_provenance: row.get(5)?,
             steps_json: row.get(6)?,
-            created_at: row.get(7)?,
+            stop_reason: row.get(7)?,
+            created_at: row.get(8)?,
+            plan_json: row.get(9)?,
             attachments: Vec::new(),
         })
     }
@@ -3027,6 +4341,42 @@ mod tests {
         assert!(!db.has_capability_grant("domain", "example.com").unwrap());
     }
 
+    /// `REF-3b`: the catch-up pass has to find exactly the conversations that
+    /// were left behind — long enough to have taught something, never digested.
+    #[test]
+    fn finds_unreflected_conversations_worth_digesting() {
+        let db = Db::open_in_memory().unwrap();
+        let msg = |content: &str| NewMessage {
+            role: "user".into(),
+            content: content.into(),
+            model_name: None,
+            model_provenance: None,
+            steps_json: None,
+            attachments: Vec::new(),
+        };
+
+        let slight = db.create_conversation("one question", None, false).unwrap();
+        db.append_message(&slight.id, &msg("explain ai")).unwrap();
+
+        let stranded = db.create_conversation("a real session", None, false).unwrap();
+        for i in 0..4 {
+            db.append_message(&stranded.id, &msg(&format!("turn {i}"))).unwrap();
+        }
+
+        let done = db.create_conversation("already digested", None, false).unwrap();
+        for i in 0..4 {
+            db.append_message(&done.id, &msg(&format!("turn {i}"))).unwrap();
+        }
+        db.set_conversation_reflected(&done.id, now_ms()).unwrap();
+
+        let stale = db.unreflected_conversations(4).unwrap();
+        assert_eq!(stale, vec![stranded.id.clone()], "too short, or already reflected, is not stale");
+
+        // Once it has had its turn it never comes back, however it went.
+        db.set_conversation_reflected(&stranded.id, now_ms()).unwrap();
+        assert!(db.unreflected_conversations(4).unwrap().is_empty());
+    }
+
     #[test]
     fn persists_and_searches() {
         let db = Db::open_in_memory().unwrap();
@@ -3052,11 +4402,40 @@ mod tests {
         let convs = db.list_conversations().unwrap();
         assert!(convs[0].workspace, "workspace flag persists and round-trips");
 
-        let hits = db.search_conversations("endpoint").unwrap();
+        let hits = db.search_messages("endpoint*", 20).unwrap();
         assert_eq!(hits.len(), 1, "FTS should find the conversation by message content");
+        assert_eq!(hits[0].conversation_id, c.id);
+        assert!(
+            hits[0].snippet.contains("\u{2}endpoint\u{3}"),
+            "the match is fenced for the frontend to mark: {:?}",
+            hits[0].snippet
+        );
 
-        let miss = db.search_conversations("nonexistentterm").unwrap();
+        let miss = db.search_messages("nonexistentterm*", 20).unwrap();
         assert!(miss.is_empty());
+    }
+
+    #[test]
+    fn message_search_is_one_hit_per_top_level_conversation() {
+        let db = Db::open_in_memory().unwrap();
+        let msg = |text: &str| NewMessage {
+            role: "user".into(),
+            content: text.into(),
+            model_name: None,
+            model_provenance: None,
+            steps_json: None,
+            attachments: Vec::new(),
+        };
+        let parent = db.create_conversation("parent", None, false).unwrap();
+        db.append_message(&parent.id, &msg("the cache invalidation bug")).unwrap();
+        db.append_message(&parent.id, &msg("still the cache, again")).unwrap();
+        let child = db.create_conversation("child run", None, false).unwrap();
+        db.append_message(&child.id, &msg("cache warmed by a delegated run")).unwrap();
+        db.set_conversation_parent(&child.id, &parent.id).unwrap();
+
+        let hits = db.search_messages("cache*", 20).unwrap();
+        assert_eq!(hits.len(), 1, "two matching messages, one conversation, child excluded");
+        assert_eq!(hits[0].conversation_id, parent.id);
     }
 
     #[test]
@@ -3414,6 +4793,285 @@ mod tests {
         assert_eq!(db.list_messages_window(&c.id, 2).unwrap().len(), 2);
     }
 
+    /// `OBS-T1`: usage lands where the panel reads it, grouped three ways, and
+    /// a run that reported nothing records nothing rather than a zero row that
+    /// would read as a free run.
+    #[test]
+    fn usage_is_recorded_per_run_and_grouped_for_the_panel() {
+        let db = Db::open_in_memory().unwrap();
+        let a = db.create_conversation("one", None, false).unwrap();
+        let b = db.create_conversation("two", None, false).unwrap();
+
+        db.record_run_usage("r1", &a.id, "claude-sonnet-4-5", "cloud", 1000, 200, 3).unwrap();
+        db.record_run_usage("r2", &a.id, "claude-sonnet-4-5", "cloud", 500, 100, 2).unwrap();
+        db.record_run_usage("r3", &b.id, "qwen3-8b", "local", 4000, 900, 5).unwrap();
+        // A provider that reported nothing. The run still happened.
+        db.record_run_usage("r4", &b.id, "qwen3-8b", "local", 0, 0, 1).unwrap();
+
+        let s = db.usage_summary(0).unwrap();
+        assert_eq!(s.total.runs, 4, "a run whose tokens went unreported is still a run");
+        assert_eq!(s.total.prompt_tokens, 5500);
+        assert_eq!(s.total.output_tokens, 1200);
+
+        // Biggest first, so the local run leads.
+        assert_eq!(s.by_model[0].key, "qwen3-8b");
+        assert_eq!(s.by_model[0].provenance, "local");
+        assert_eq!(s.by_model[1].runs, 2, "the two cloud runs fold into one row");
+
+        let lead = s.by_conversation.iter().find(|r| r.key == a.id).unwrap();
+        assert_eq!(lead.label.as_deref(), Some("one"));
+        assert_eq!(lead.total_tokens(), 1800);
+
+        // Every run here fell on one day, whichever day that is.
+        assert_eq!(s.by_day.len(), 1);
+        assert_eq!(s.by_day[0].runs, 4);
+
+        // A window that starts after the rows sees none of them.
+        assert_eq!(db.usage_summary(now_ms() + 1000).unwrap().total.runs, 0);
+    }
+
+    /// The bug behind an empty Usage panel: a run whose provider reported no
+    /// usage was dropped entirely, so somebody using a free tier that reports
+    /// nothing saw a blank page after a day of real work. A run counted with no
+    /// tokens is honest — "I do not know what this cost" — where no row at all
+    /// claims the run never happened.
+    #[test]
+    fn a_run_the_provider_never_priced_is_still_a_run() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.create_conversation("silent provider", None, false).unwrap();
+
+        db.record_run_usage("r1", &c.id, "some-free-model", "cloud", 0, 0, 4).unwrap();
+
+        let s = db.usage_summary(0).unwrap();
+        assert_eq!(s.total.runs, 1);
+        assert_eq!(s.total.total_tokens(), 0, "zero means unmeasured, not free");
+        assert_eq!(s.by_model.len(), 1);
+        assert_eq!(s.by_model[0].key, "some-free-model");
+        assert_eq!(s.by_conversation[0].label.as_deref(), Some("silent provider"));
+    }
+
+    /// `CTX-T3` at the conversation level: a fork is the same chat asked again
+    /// from a point, so it keeps the settings, keeps the history before the cut,
+    /// drops everything from the cut on, and hands back the question to re-ask
+    /// rather than copying it — copying it would show it twice the moment the
+    /// caller sends it.
+    #[test]
+    fn forking_branches_a_conversation_just_before_one_answer() {
+        let db = Db::open_in_memory().unwrap();
+        let source = db.create_conversation("Planning", None, true).unwrap();
+        db.set_conversation_folder(&source.id, Some("C:\\work")).unwrap();
+        db.set_conversation_trust(&source.id, "full").unwrap();
+
+        let msg = |role: &str, content: &str| NewMessage {
+            role: role.into(),
+            content: content.into(),
+            model_name: None,
+            model_provenance: None,
+            steps_json: None,
+            attachments: vec![],
+        };
+        db.append_message(&source.id, &msg("user", "first question")).unwrap();
+        db.append_message(&source.id, &msg("assistant", "first answer")).unwrap();
+        db.append_message(&source.id, &msg("user", "the question to redo")).unwrap();
+        let redo = db.append_message(&source.id, &msg("assistant", "the answer to redo")).unwrap();
+        db.append_message(&source.id, &msg("user", "after the fork point")).unwrap();
+
+        let (fork, resend) = db.fork_conversation(&source.id, &redo.id).unwrap();
+        assert_eq!(resend.as_deref(), Some("the question to redo"));
+        assert_eq!(fork.title, "Planning (again)");
+        assert!(fork.workspace, "a fork of a workspace chat is a workspace chat");
+        assert_eq!(fork.folder_path.as_deref(), Some("C:\\work"));
+        assert_eq!(fork.folder_trust, "full", "re-granting trust is not part of asking again");
+
+        let copied = db.list_messages(&fork.id).unwrap();
+        assert_eq!(
+            copied.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(),
+            vec!["first question", "first answer"],
+            "everything before the cut, and neither the turn being redone nor what followed it"
+        );
+        assert_eq!(
+            db.list_messages(&source.id).unwrap().len(),
+            5,
+            "the original is untouched"
+        );
+    }
+
+    /// `CTX-5`: a summary the fork can still account for travels with it.
+    ///
+    /// Without this, forking a long conversation silently throws away work the
+    /// user already paid a model to do: the copy arrives with no summary,
+    /// resends every old turn word for word, overflows, and compacts again.
+    /// The boundary has to be re-pointed, because the fork's messages are copies
+    /// with new ids and the old id names nothing here.
+    #[test]
+    fn a_fork_keeps_the_summary_it_can_still_account_for() {
+        let db = Db::open_in_memory().unwrap();
+        let source = db.create_conversation("Planning", None, false).unwrap();
+        let msg = |role: &str, content: &str| NewMessage {
+            role: role.into(),
+            content: content.into(),
+            model_name: None,
+            model_provenance: None,
+            steps_json: None,
+            attachments: vec![],
+        };
+        let early = db.append_message(&source.id, &msg("user", "the old beginning")).unwrap();
+        db.append_message(&source.id, &msg("assistant", "the old answer")).unwrap();
+        db.append_message(&source.id, &msg("user", "the question to redo")).unwrap();
+        let redo = db.append_message(&source.id, &msg("assistant", "the answer to redo")).unwrap();
+
+        db.set_conversation_summary(&source.id, "FACTS: the old beginning", &early.id).unwrap();
+
+        let (fork, _) = db.fork_conversation(&source.id, &redo.id).unwrap();
+        assert_eq!(fork.summary.as_deref(), Some("FACTS: the old beginning"));
+
+        // Re-pointed, not copied: the boundary names a message in *this*
+        // conversation, and it is the same turn it named in the original.
+        let boundary = fork.summary_upto_message_id.clone().expect("a boundary came across");
+        assert_ne!(boundary, early.id, "the fork's messages are copies with their own ids");
+        let copied = db.list_messages(&fork.id).unwrap();
+        assert_eq!(
+            copied.iter().find(|m| m.id == boundary).map(|m| m.content.as_str()),
+            Some("the old beginning")
+        );
+
+        // And it survives a reload, not just the returned struct.
+        let reloaded = db.get_conversation(&fork.id).unwrap().unwrap();
+        assert_eq!(reloaded.summary_upto_message_id.as_deref(), Some(boundary.as_str()));
+    }
+
+    /// The other half: a summary whose boundary is at or past the cut covers
+    /// turns the fork does not have. Carrying it across would tell the model
+    /// that messages it cannot see were already summarized, so it is dropped and
+    /// the fork sends its short history in full — which is correct and cheap.
+    #[test]
+    fn a_fork_drops_a_summary_that_covers_turns_it_does_not_have() {
+        let db = Db::open_in_memory().unwrap();
+        let source = db.create_conversation("Planning", None, false).unwrap();
+        let msg = |role: &str, content: &str| NewMessage {
+            role: role.into(),
+            content: content.into(),
+            model_name: None,
+            model_provenance: None,
+            steps_json: None,
+            attachments: vec![],
+        };
+        db.append_message(&source.id, &msg("user", "the old beginning")).unwrap();
+        let redo = db.append_message(&source.id, &msg("assistant", "the answer to redo")).unwrap();
+        let late = db.append_message(&source.id, &msg("user", "after the fork point")).unwrap();
+
+        db.set_conversation_summary(&source.id, "FACTS: everything", &late.id).unwrap();
+
+        let (fork, _) = db.fork_conversation(&source.id, &redo.id).unwrap();
+        assert!(fork.summary.is_none());
+        assert!(fork.summary_upto_message_id.is_none());
+    }
+
+    /// `SUB-T8`: v23 applies on a fresh database, and children come back in the
+    /// order they were started — the order the lead asked for them in, not the
+    /// order they happened to finish.
+    #[test]
+    fn subagent_runs_come_back_in_start_order() {
+        let db = Db::open_in_memory().unwrap();
+        let parent = db.create_conversation("lead", None, false).unwrap();
+        let other = db.create_conversation("elsewhere", None, false).unwrap();
+
+        let mut ids = Vec::new();
+        for (i, agent) in ["general", "researcher", "reviewer"].iter().enumerate() {
+            let child = db.create_conversation(agent, None, false).unwrap();
+            db.set_conversation_parent(&child.id, &parent.id).unwrap();
+            let id = format!("run_{i}");
+            db.create_subagent_run(&id, &parent.id, Some("msg_1"), &child.id, agent, "do a thing")
+                .unwrap();
+            ids.push(id);
+        }
+        // A child of another conversation must not appear in this one's list.
+        let stranger = db.create_conversation("stranger", None, false).unwrap();
+        db.create_subagent_run("run_x", &other.id, None, &stranger.id, "general", "elsewhere")
+            .unwrap();
+
+        let rows = db.list_subagent_runs(&parent.id).unwrap();
+        assert_eq!(rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>(), ids);
+        assert!(rows.iter().all(|r| r.status == "running" && r.ended_at.is_none()));
+
+        // The child conversation knows whose it is, so the Rail can hide it.
+        let child_conv = db.get_conversation(&rows[0].child_conversation_id).unwrap().unwrap();
+        assert_eq!(child_conv.parent_conversation_id.as_deref(), Some(parent.id.as_str()));
+
+        db.finish_subagent_run(&ids[1], "stopped", "aborted", "half of it", 4).unwrap();
+        let stopped = db.get_subagent_run(&ids[1]).unwrap().unwrap();
+        assert_eq!(stopped.status, "stopped");
+        assert_eq!(stopped.stop_reason.as_deref(), Some("aborted"));
+        assert_eq!(stopped.result.as_deref(), Some("half of it"));
+        assert_eq!(stopped.steps, 4);
+        assert!(stopped.ended_at.is_some());
+
+        // Deleting the turn's conversation takes its children's records with it.
+        db.delete_conversation(&parent.id).unwrap();
+        assert!(db.list_subagent_runs(&parent.id).unwrap().is_empty());
+    }
+
+    /// `SUB-12`: a background child waits in a queue before it runs, and the
+    /// row is what says so. The part worth pinning is the end: once a run has
+    /// ended, a late status write must not reopen it — the pool and the run
+    /// itself both write here, and a pump that lost a race could otherwise mark
+    /// a finished child "running" forever.
+    #[test]
+    fn a_queued_child_becomes_running_and_a_finished_one_stays_finished() {
+        let db = Db::open_in_memory().unwrap();
+        let parent = db.create_conversation("lead", None, false).unwrap();
+        let child = db.create_conversation("worker", None, false).unwrap();
+        db.create_subagent_run("run_1", &parent.id, None, &child.id, "general", "a long job")
+            .unwrap();
+
+        db.set_subagent_status("run_1", "queued").unwrap();
+        assert_eq!(db.get_subagent_run("run_1").unwrap().unwrap().status, "queued");
+        db.set_subagent_status("run_1", "running").unwrap();
+        assert_eq!(db.get_subagent_run("run_1").unwrap().unwrap().status, "running");
+
+        db.finish_subagent_run("run_1", "done", "completed", "the answer", 6).unwrap();
+        db.set_subagent_status("run_1", "running").unwrap();
+        let row = db.get_subagent_run("run_1").unwrap().unwrap();
+        assert_eq!(row.status, "done");
+        assert_eq!(row.result.as_deref(), Some("the answer"));
+    }
+
+    /// `SUB-12`: the background queue lives in memory, so a child left waiting
+    /// or working when the app closed is never coming back. Settling those at
+    /// startup is what lets every reader believe an unfinished row — without
+    /// it, one crash leaves a Fleet card spinning on nothing forever.
+    #[test]
+    fn a_restart_settles_children_it_orphaned_and_leaves_the_rest_alone() {
+        let db = Db::open_in_memory().unwrap();
+        let parent = db.create_conversation("lead", None, false).unwrap();
+        for (i, status) in ["queued", "running"].iter().enumerate() {
+            let child = db.create_conversation("worker", None, false).unwrap();
+            let id = format!("run_{i}");
+            db.create_subagent_run(&id, &parent.id, None, &child.id, "general", "a job")
+                .unwrap();
+            db.set_subagent_status(&id, status).unwrap();
+        }
+        let finished = db.create_conversation("worker", None, false).unwrap();
+        db.create_subagent_run("run_done", &parent.id, None, &finished.id, "general", "a job")
+            .unwrap();
+        db.finish_subagent_run("run_done", "done", "completed", "all of it", 3).unwrap();
+
+        assert_eq!(db.fail_interrupted_subagent_runs().unwrap(), 2);
+        for id in ["run_0", "run_1"] {
+            let row = db.get_subagent_run(id).unwrap().unwrap();
+            assert_eq!(row.status, "stopped", "{id}");
+            assert_eq!(row.stop_reason.as_deref(), Some("aborted"));
+            assert!(row.ended_at.is_some());
+            assert!(row.result.is_some(), "it has to say why it has no answer");
+        }
+        // A run that already ended keeps everything it said.
+        let done = db.get_subagent_run("run_done").unwrap().unwrap();
+        assert_eq!(done.status, "done");
+        assert_eq!(done.result.as_deref(), Some("all of it"));
+        // And a second startup finds nothing left to settle.
+        assert_eq!(db.fail_interrupted_subagent_runs().unwrap(), 0);
+    }
+
     /// v7 (Perception): fresh installs get the vector tables and every v7
     /// column exists, on a plain SCHEMA-only apply (no upgrade path involved).
     #[test]
@@ -3448,6 +5106,286 @@ mod tests {
                 .unwrap();
             assert!(names.contains(&column.to_string()), "{table}.{column} should exist");
         }
+    }
+
+    /// `PRJ-2-T`: three chats over two folders become two projects, every chat
+    /// is backfilled onto the right one, and where the same folder was trusted
+    /// differently in different chats the **most restrictive** level wins.
+    /// Widening what the agent may do to somebody's code as a side effect of an
+    /// upgrade is the one outcome that cannot be taken back.
+    #[test]
+    fn the_project_migration_makes_one_project_per_folder_and_keeps_the_tightest_trust() {
+        let db = Db::open_in_memory().unwrap();
+        let a1 = db.create_conversation("a1", None, false).unwrap();
+        let a2 = db.create_conversation("a2", None, false).unwrap();
+        let b1 = db.create_conversation("b1", None, false).unwrap();
+        let loose = db.create_conversation("loose", None, false).unwrap();
+
+        // Simulate a pre-v27 install: folders on the conversations, no
+        // projects, and the version rolled back so the block runs again.
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("DELETE FROM projects", []).unwrap();
+            for (id, path, trust) in [
+                (&a1.id, r"C:\work\alpha", "auto"),
+                (&a2.id, r"C:\work\alpha", "read-only"),
+                (&b1.id, r"C:\work\beta", "confirm"),
+            ] {
+                conn.execute(
+                    "UPDATE conversations
+                     SET folder_path = ?2, folder_trust = ?3, project_id = NULL
+                     WHERE id = ?1",
+                    params![id, path, trust],
+                )
+                .unwrap();
+            }
+            conn.pragma_update(None, "user_version", 26).unwrap();
+        }
+
+        db.migrate().unwrap();
+
+        let projects = db.list_projects(false).unwrap();
+        assert_eq!(projects.len(), 2, "one project per distinct folder, not per chat");
+
+        let alpha = db.project_by_root(r"C:\work\alpha").unwrap().expect("alpha exists");
+        assert_eq!(alpha.name, "alpha", "named from the folder's last segment");
+        assert_eq!(alpha.trust, "read-only", "the most restrictive of auto and read-only");
+        assert_eq!(alpha.exec_policy, "inherit", "COD-7: a project follows the Settings default until told otherwise");
+
+        let beta = db.project_by_root(r"C:\work\beta").unwrap().expect("beta exists");
+        assert_eq!(beta.trust, "confirm");
+
+        for (id, expected) in [(&a1.id, &alpha.id), (&a2.id, &alpha.id), (&b1.id, &beta.id)] {
+            let conv = db.get_conversation(id).unwrap().unwrap();
+            assert_eq!(conv.project_id.as_ref(), Some(expected), "{} backfilled", conv.title);
+        }
+        let loose = db.get_conversation(&loose.id).unwrap().unwrap();
+        assert!(loose.project_id.is_none(), "a chat with no folder gets no project");
+    }
+
+    /// `PRJ-2-T2`: the resolver every file tool already calls returns the
+    /// project's folder and trust when the conversation has one, and the legacy
+    /// per-conversation columns when it does not. This is what lets the project
+    /// entity land under the app instead of through it.
+    #[test]
+    fn the_folder_resolver_prefers_the_project_and_falls_back_to_the_conversation() {
+        let db = Db::open_in_memory().unwrap();
+        let conv = db.create_conversation("c", None, false).unwrap();
+
+        // No project: the legacy columns answer.
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE conversations SET folder_path = ?2, folder_trust = 'auto' WHERE id = ?1",
+                params![conv.id, r"C:\legacy"],
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            db.conversation_folder(&conv.id).unwrap(),
+            (Some(r"C:\legacy".to_string()), "auto".to_string())
+        );
+
+        // With a project, the project answers — including its trust, which is
+        // the whole reason trust moved off the conversation.
+        let project = db.create_project("owned", Some(r"C:\owned")).unwrap();
+        db.set_conversation_project(&conv.id, Some(&project.id)).unwrap();
+        db.set_project_trust(&project.id, "read-only").unwrap();
+        assert_eq!(
+            db.conversation_folder(&conv.id).unwrap(),
+            (Some(r"C:\owned".to_string()), "read-only".to_string())
+        );
+
+        // Leaving puts the conversation back on its own columns, and leaves the
+        // project standing.
+        db.set_conversation_project(&conv.id, None).unwrap();
+        assert_eq!(db.conversation_folder(&conv.id).unwrap(), (None, "auto".to_string()));
+        assert!(db.get_project(&project.id).unwrap().is_some(), "the project survives");
+    }
+
+    /// `PRJ-3-T`: attaching a folder that is already a project joins it rather
+    /// than making a second one, and the trust granted the first time is
+    /// already there the second time. That is the daily payoff of the entity.
+    #[test]
+    fn attaching_a_known_folder_joins_its_project_and_inherits_the_trust() {
+        let db = Db::open_in_memory().unwrap();
+        let first = db.create_conversation("first", None, false).unwrap();
+        let second = db.create_conversation("second", None, false).unwrap();
+
+        db.set_conversation_folder(&first.id, Some(r"C:\work\shared")).unwrap();
+        db.set_conversation_trust(&first.id, "auto").unwrap();
+
+        db.set_conversation_folder(&second.id, Some(r"C:\work\shared")).unwrap();
+
+        assert_eq!(db.list_projects(false).unwrap().len(), 1, "joined, not duplicated");
+        assert_eq!(
+            db.conversation_folder(&second.id).unwrap(),
+            (Some(r"C:\work\shared".to_string()), "auto".to_string()),
+            "the second chat inherits the trust the first one granted"
+        );
+
+        // Detaching forgets the folder for that chat only.
+        db.set_conversation_folder(&second.id, None).unwrap();
+        assert_eq!(db.conversation_folder(&second.id).unwrap().0, None);
+        assert_eq!(
+            db.conversation_folder(&first.id).unwrap().0,
+            Some(r"C:\work\shared".to_string()),
+            "the other session in the project is untouched"
+        );
+        assert_eq!(db.list_projects(false).unwrap().len(), 1, "the project is untouched");
+    }
+
+    /// Archiving hides a project without touching a byte on disk — and working
+    /// in the folder again brings it back, because that is the plainest
+    /// possible statement that you still want it.
+    #[test]
+    fn an_archived_project_is_hidden_until_the_folder_is_opened_again() {
+        let db = Db::open_in_memory().unwrap();
+        let project = db.create_project("thing", Some(r"C:\work\thing")).unwrap();
+        db.set_project_archived(&project.id, true).unwrap();
+
+        assert!(db.list_projects(false).unwrap().is_empty(), "hidden from the Rail");
+        assert_eq!(db.list_projects(true).unwrap().len(), 1, "still there when asked for");
+
+        let conv = db.create_conversation("back", None, false).unwrap();
+        db.set_conversation_folder(&conv.id, Some(r"C:\work\thing")).unwrap();
+        assert_eq!(db.list_projects(false).unwrap().len(), 1, "opening the folder un-archives it");
+    }
+
+    /// `PRJ-1a`: a project stops being a folder wearing a project's clothes.
+    /// The rebuild has to carry every column of every row across — a migration
+    /// that quietly dropped somebody's trust level or tab set would be worse
+    /// than one that failed.
+    #[test]
+    fn the_rebuild_makes_root_path_optional_and_preserves_every_row() {
+        let db = Db::open_in_memory().unwrap();
+        let project = db.create_project("alpha", Some(r"C:\work\alpha")).unwrap();
+        db.set_project_trust(&project.id, "read-only").unwrap();
+        db.set_project_tabs(&project.id, Some(r#"{"sessionTabs":["a"]}"#)).unwrap();
+
+        // Roll back so the v28 block runs again over a table that is already
+        // the new shape — the idempotency the ladder relies on.
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.pragma_update(None, "user_version", 27).unwrap();
+        }
+        db.migrate().unwrap();
+
+        let after = db.get_project(&project.id).unwrap().expect("still there");
+        assert_eq!(after.root_path.as_deref(), Some(r"C:\work\alpha"));
+        assert_eq!(after.trust, "read-only", "trust survived the rebuild");
+        assert_eq!(after.tabs_json.as_deref(), Some(r#"{"sessionTabs":["a"]}"#));
+
+        // And the point of the whole exercise: a project with no folder.
+        let book = db.create_project("The book", None).unwrap();
+        assert!(book.root_path.is_none());
+        assert!(db.get_project(&book.id).unwrap().unwrap().root_path.is_none());
+
+        // Two of them coexist — SQLite treats NULLs as distinct under a unique
+        // index, which is the whole reason `root_path` could stay UNIQUE.
+        let job = db.create_project("Job hunt", None).unwrap();
+        assert_ne!(job.id, book.id);
+        assert_eq!(db.list_projects(false).unwrap().len(), 3);
+    }
+
+    /// `PRJ-3a`: the three ways attaching a folder can land, each asserted.
+    /// Guessing between them is how a folder gets silently swapped out from
+    /// under somebody's other sessions.
+    #[test]
+    fn attaching_a_folder_adopts_moves_or_joins_depending_on_the_project() {
+        let db = Db::open_in_memory().unwrap();
+
+        // 1. A chat in a folderless project: the *project* adopts the folder,
+        //    which is what makes "start a project, add a folder later" work.
+        let book = db.create_project("The book", None).unwrap();
+        let chat = db.create_conversation("c", None, false).unwrap();
+        db.set_conversation_project(&chat.id, Some(&book.id)).unwrap();
+        db.set_conversation_folder(&chat.id, Some(r"C:\work\book")).unwrap();
+
+        assert_eq!(db.list_projects(false).unwrap().len(), 1, "no second project appeared");
+        let book = db.get_project(&book.id).unwrap().unwrap();
+        assert_eq!(book.root_path.as_deref(), Some(r"C:\work\book"));
+        assert_eq!(db.conversation_project(&chat.id).unwrap().unwrap().id, book.id);
+
+        // 2. A different folder, owned by nobody: the project moves to it.
+        db.set_conversation_folder(&chat.id, Some(r"C:\work\book2")).unwrap();
+        assert_eq!(
+            db.get_project(&book.id).unwrap().unwrap().root_path.as_deref(),
+            Some(r"C:\work\book2")
+        );
+        assert_eq!(db.conversation_project(&chat.id).unwrap().unwrap().id, book.id);
+
+        // 3. A folder another project already owns: `root_path` is unique, so
+        //    the folder's project wins and the *conversation* moves to it
+        //    rather than the folder being stolen.
+        let other = db.create_project("other", Some(r"C:\work\other")).unwrap();
+        db.set_conversation_folder(&chat.id, Some(r"C:\work\other")).unwrap();
+        assert_eq!(db.conversation_project(&chat.id).unwrap().unwrap().id, other.id);
+        assert_eq!(
+            db.get_project(&other.id).unwrap().unwrap().root_path.as_deref(),
+            Some(r"C:\work\other"),
+            "the folder's own project kept it"
+        );
+    }
+
+    /// Two gestures, two scopes, and keeping them apart is the point.
+    ///
+    /// Detaching from a *chat* takes that chat out of the project and leaves
+    /// its siblings working exactly where they were — a control that sits on
+    /// one chat must never change what every other session is working in.
+    /// Removing the folder from the *project* is the one that reaches them
+    /// all, and it lives in the project view where the thing being changed is
+    /// visibly the project.
+    #[test]
+    fn detaching_a_chat_and_removing_a_projects_folder_are_different_scopes() {
+        let db = Db::open_in_memory().unwrap();
+        let a = db.create_conversation("a", None, false).unwrap();
+        let b = db.create_conversation("b", None, false).unwrap();
+        db.set_conversation_folder(&a.id, Some(r"C:\work\thing")).unwrap();
+        let project = db.conversation_project(&a.id).unwrap().unwrap();
+        db.set_conversation_project(&b.id, Some(&project.id)).unwrap();
+
+        // The chat leaves; the project and its other session stand.
+        db.set_conversation_folder(&a.id, None).unwrap();
+        assert!(db.conversation_project(&a.id).unwrap().is_none(), "a left the project");
+        assert_eq!(db.conversation_folder(&a.id).unwrap().0, None);
+        assert_eq!(
+            db.conversation_folder(&b.id).unwrap().0,
+            Some(r"C:\work\thing".to_string()),
+            "b is untouched"
+        );
+        assert!(db.get_project(&project.id).unwrap().unwrap().root_path.is_some());
+
+        // Removing the project's folder reaches every session in it, and
+        // removes none of them from it — the folder was a property, and
+        // dropping a property is not leaving.
+        db.set_project_root(&project.id, None).unwrap();
+        assert!(db.get_project(&project.id).unwrap().unwrap().root_path.is_none());
+        assert_eq!(
+            db.conversation_project(&b.id).unwrap().map(|p| p.id).as_ref(),
+            Some(&project.id),
+            "b stayed in the project"
+        );
+        assert_eq!(db.conversation_folder(&b.id).unwrap().0, None, "and lost the folder");
+    }
+
+    /// `PRJ-7`: instructions round-trip, and empty is stored as absent rather
+    /// than as an empty string that would render a heading with nothing in it.
+    #[test]
+    fn project_instructions_round_trip_and_blank_reads_as_none() {
+        let db = Db::open_in_memory().unwrap();
+        let p = db.create_project("book", None).unwrap();
+        assert!(p.instructions.is_none(), "nothing to say by default");
+
+        db.set_project_instructions(&p.id, Some("  Quotes are in EUR.  ")).unwrap();
+        assert_eq!(
+            db.get_project(&p.id).unwrap().unwrap().instructions.as_deref(),
+            Some("Quotes are in EUR."),
+            "trimmed"
+        );
+
+        db.set_project_instructions(&p.id, Some("   ")).unwrap();
+        assert!(db.get_project(&p.id).unwrap().unwrap().instructions.is_none());
     }
 
     /// `TSET-3`: a toolset a user disabled before the `Skill`→`Toolset` rename

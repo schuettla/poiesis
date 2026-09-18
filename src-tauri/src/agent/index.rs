@@ -33,6 +33,12 @@ const MAX_CHUNKS_PER_FILE: usize = 60;
 const CHUNK_CHARS: usize = 1200;
 const CHUNK_OVERLAP: usize = 200;
 
+// `COD-15`: code chunks follow symbols, so they get a larger budget than a
+// prose window; a function is worth keeping whole. Only one bigger than
+// `CODE_MAX_SYMBOL` is cut, on line boundaries.
+const CODE_CHUNK_BYTES: usize = 2400;
+const CODE_MAX_SYMBOL: usize = 4800;
+
 /// Files past this are skipped as "too large" outright — indexing has no
 /// windowed-read escape hatch the way `read_file` does, so there's no partial
 /// path worth taking.
@@ -254,7 +260,7 @@ pub(crate) fn has_ext(path: &Path, exts: &[&str]) -> bool {
 /// Text sniffing + PDF text layer (IDX-3). Images and text-less (scanned)
 /// PDFs are always `NeedsVision` this phase — `VIS`/`OCR` are deferred, and
 /// this is the one branch that changes when they land.
-fn extract(path: &Path) -> Extracted {
+fn extract(path: &Path, display: &str) -> Extracted {
     let Ok(meta) = std::fs::metadata(path) else {
         return Extracted::Skip(SkipReason::NotText);
     };
@@ -277,7 +283,8 @@ fn extract(path: &Path) -> Extracted {
     }
     match std::fs::read_to_string(path) {
         Ok(text) => {
-            let chunks = chunk_text(&text);
+            let chunks = super::symbols::code_chunks(display, path, &text, CODE_CHUNK_BYTES, CODE_MAX_SYMBOL, MAX_CHUNKS_PER_FILE)
+                .unwrap_or_else(|| chunk_text(&text));
             if chunks.is_empty() {
                 Extracted::Skip(SkipReason::NotText)
             } else {
@@ -366,7 +373,7 @@ pub async fn build_index<F: FnMut(IndexProgress)>(
             let _ = db.delete_vectors_for_ref("file", &scope_key, &ref_key);
         }
 
-        match extract(path) {
+        match extract(path, &display) {
             Extracted::Skip(reason) => {
                 skipped.push(SkippedFile { path: display, reason: reason.text().to_string() });
             }
@@ -462,7 +469,7 @@ mod tests {
     fn image_extensions_need_vision_regardless_of_content() {
         let f = std::env::temp_dir().join(format!("poiesis_idx_{}.png", uuid::Uuid::new_v4()));
         std::fs::write(&f, b"not actually a png").unwrap();
-        assert!(matches!(extract(&f), Extracted::Skip(SkipReason::NeedsVision)));
+        assert!(matches!(extract(&f, "f"), Extracted::Skip(SkipReason::NeedsVision)));
         std::fs::remove_file(&f).ok();
     }
 
@@ -470,7 +477,7 @@ mod tests {
     fn a_text_file_extracts_its_own_content_as_one_chunk() {
         let f = std::env::temp_dir().join(format!("poiesis_idx_{}.md", uuid::Uuid::new_v4()));
         std::fs::write(&f, "hello world").unwrap();
-        match extract(&f) {
+        match extract(&f, "f") {
             Extracted::Chunks(chunks) => assert_eq!(chunks, vec!["hello world".to_string()]),
             Extracted::Skip(r) => panic!("expected chunks, got skip: {r:?}"),
         }
@@ -481,7 +488,7 @@ mod tests {
     fn binary_files_are_skipped_as_not_text() {
         let f = std::env::temp_dir().join(format!("poiesis_idx_{}.dat", uuid::Uuid::new_v4()));
         std::fs::write(&f, [0x00, 0x01, 0x02, 0x00]).unwrap();
-        assert!(matches!(extract(&f), Extracted::Skip(SkipReason::NotText)));
+        assert!(matches!(extract(&f, "f"), Extracted::Skip(SkipReason::NotText)));
         std::fs::remove_file(&f).ok();
     }
 
@@ -492,7 +499,7 @@ mod tests {
         // real bytes in a small loop rather than seeking (portable, still fast).
         let chunk = "x".repeat(1024 * 1024);
         std::fs::write(&f, chunk.repeat(6)).unwrap();
-        assert!(matches!(extract(&f), Extracted::Skip(SkipReason::TooLarge)));
+        assert!(matches!(extract(&f, "f"), Extracted::Skip(SkipReason::TooLarge)));
         std::fs::remove_file(&f).ok();
     }
 

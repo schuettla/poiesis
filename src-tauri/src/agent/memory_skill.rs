@@ -12,6 +12,15 @@ use super::AgentEvent;
 use crate::autonomy::{autonomy_gate, Rung};
 use crate::memory::{Fact, FACTS};
 
+/// `PRJ-8`: the project this turn is happening in, if any.
+///
+/// Nothing is asked of the model. A memory saved inside a project belongs to
+/// it, the same way the working folder follows from the conversation rather
+/// than from a tool argument the model has to remember to pass.
+fn project_of(ctx: &ToolContext<'_>) -> Option<String> {
+    ctx.db.conversation_project(ctx.conversation_id).ok().flatten().map(|p| p.id)
+}
+
 pub fn tool_specs() -> serde_json::Value {
     serde_json::json!([
         {
@@ -138,12 +147,13 @@ pub async fn classify_scope(
         &msgs,
         &[],
         0.0,
+        crate::cloud::Effort::Off,
         &crate::runtime::proxy::CancelFlag::new(),
         |_| {},
     )
     .await
     .ok()?;
-    let crate::runtime::proxy::TurnOutcome::Final { content } = outcome else {
+    let crate::runtime::proxy::TurnOutcome::Final { content, .. } = outcome else {
         return None;
     };
     let lower = content.to_lowercase();
@@ -217,12 +227,20 @@ async fn memory_op(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<St
                     recurrence: None,
                     last_seen: None,
                     expires_at,
+                    // `PRJ-8`: a memory saved inside a project belongs to it.
+                    // Nothing is asked of the model — the tag follows from
+                    // where the turn is happening, the same way the working
+                    // folder does.
+                    project: project_of(ctx),
                 },
             )?;
             announce(ctx, "save", &saved, description, "");
-            Ok(format!(
-                "Saved memory \"{saved}\". It is now in your index in every conversation.{ttl_note}"
-            ))
+            let where_note = if project_of(ctx).is_some() {
+                " It is in your index in every chat in this project."
+            } else {
+                " It is now in your index in every conversation."
+            };
+            Ok(format!("Saved memory \"{saved}\".{where_note}{ttl_note}"))
         }
         "update" => {
             let name = required(args, "name")?;

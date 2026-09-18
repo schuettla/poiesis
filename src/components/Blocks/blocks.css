@@ -470,3 +470,11 @@
 .session-clear:hover {
   color: var(--danger);
 }
+
+/* COD-UI-3: a diagnostics block with nothing in it. */
+.block-empty {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}

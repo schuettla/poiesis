@@ -17,6 +17,7 @@ pub fn list_personas_cmd(db: State<'_, Db>) -> Cmd<Vec<Persona>> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn create_persona_cmd(
     db: State<'_, Db>,
     name: String,
@@ -25,6 +26,8 @@ pub fn create_persona_cmd(
     params_json: Option<String>,
     tools_json: Option<String>,
     skills_json: Option<String>,
+    description: Option<String>,
+    spawnable: Option<bool>,
 ) -> Cmd<Persona> {
     db.create_persona(&NewPersona {
         name,
@@ -33,6 +36,8 @@ pub fn create_persona_cmd(
         params_json,
         tools_json,
         skills_json,
+        description,
+        spawnable: spawnable.unwrap_or(false),
     })
     .map_err(err)
 }

@@ -107,5 +107,14 @@ describe("AgentRun — is it still working?", () => {
     // without a sentence. That's a different failure and reads differently.
     render(message({ streaming: false, steps: [step()] }));
     expect(empty()).toBeNull();
+    // It reads differently: the work is there, only the answer is missing.
+    expect(container.querySelector(".run-no-answer")).not.toBeNull();
+  });
+
+  it("does not flag a missing answer while the turn is still running, or once it has one", () => {
+    render(message({ streaming: true, steps: [step()] }));
+    expect(container.querySelector(".run-no-answer")).toBeNull();
+    render(message({ streaming: false, steps: [step()], text: "Two tests fail." }));
+    expect(container.querySelector(".run-no-answer")).toBeNull();
   });
 });

@@ -199,6 +199,13 @@ pub trait MediaBackend: Send + Sync {
     fn is_ready(&self, _db: &Db) -> bool {
         true
     }
+
+    /// `PRV-3`: prove a `Credential::Media` key works before it is saved.
+    /// The default accepts it: a backend with no cheap authenticated call
+    /// can't check, and the first real request will say so instead.
+    async fn verify_key(&self, _client: &reqwest::Client, _key: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Owns construction and credential checks. Adding a provider is: write a
@@ -217,6 +224,53 @@ impl Registry {
                 Box::new(backends::openai::OpenAiBackend::new()),
             ],
         }
+    }
+
+    /// Every card on the Providers page (`PRV-2`): the chat providers, with
+    /// what their key also unlocks here, then every media-only backend. A new
+    /// `Credential::Media` backend gets its card from this without any UI
+    /// change, which is what `BKD-2` promised and never had.
+    pub fn provider_cards(&self) -> Vec<crate::cloud::ProviderInfo> {
+        let kinds = |pred: &dyn Fn(&Credential) -> bool| -> Vec<String> {
+            let mut out: Vec<String> = Vec::new();
+            for b in &self.backends {
+                let d = b.descriptor();
+                if pred(&d.credential) {
+                    for m in d.modalities {
+                        let k = m.as_kind().to_string();
+                        if !out.contains(&k) {
+                            out.push(k);
+                        }
+                    }
+                }
+            }
+            out
+        };
+        let mut cards = crate::cloud::provider_infos(|p| {
+            kinds(&|c| matches!(c, Credential::Cloud(q) if *q == p))
+        });
+        for b in &self.backends {
+            let d = b.descriptor();
+            if let Credential::Media { key_hint } = d.credential {
+                cards.push(crate::cloud::ProviderInfo {
+                    id: d.id.to_string(),
+                    name: d.label.to_string(),
+                    kind: "media".to_string(),
+                    key_set: credential_present(d),
+                    key_hint: key_hint.to_string(),
+                    console_url: d.console_url.unwrap_or_default().to_string(),
+                    unlocks: d.modalities.iter().map(|m| m.as_kind().to_string()).collect(),
+                    last_error: crate::cloud::last_error(d.id),
+                });
+            }
+        }
+        cards
+    }
+
+    /// The media-only backend with this id, if there is one.
+    pub fn media_keyed(&self, backend_id: &str) -> Option<&dyn MediaBackend> {
+        self.get(backend_id)
+            .filter(|b| matches!(b.descriptor().credential, Credential::Media { .. }))
     }
 
     pub fn get(&self, backend_id: &str) -> Option<&dyn MediaBackend> {
@@ -337,6 +391,55 @@ fn credential_present(descriptor: &BackendDescriptor) -> bool {
     }
 }
 
+/// `MOD-3`: the user's default image model (set on the Models page), as a
+/// `media:<backend>/<slug>` id, but only while its backend can run. Anything
+/// else is `None` and the inferred route decides, as before.
+pub const DEFAULT_IMAGE_MODEL_KEY: &str = "default_model.image";
+
+/// `MOD-4`: the ordered favorites of the Images & video tab.
+pub const MEDIA_FAVORITES_KEY: &str = "models.favorites.media";
+
+/// The default image model, else the first image favorite that can run, else
+/// `None` (the inferred route decides). Video favorites are skipped: a
+/// backend that does both only counts when the catalog says the id is an
+/// image model.
+pub fn default_image_model(registry: &Registry, db: &Db) -> Option<String> {
+    let available = registry.available(db);
+    let usable_image = |id: &str| -> bool {
+        let Some((backend_id, _)) = parse_model_id(id) else { return false };
+        let Some(b) = available.iter().find(|b| b.descriptor().id == backend_id) else { return false };
+        match b.descriptor().modalities {
+            [Modality::Image] => true,
+            m if m.contains(&Modality::Image) => cached_model(id).is_some_and(|c| c.modality == Modality::Image),
+            _ => false,
+        }
+    };
+    let default = db.get_setting(DEFAULT_IMAGE_MODEL_KEY).ok().flatten().filter(|s| !s.is_empty());
+    if let Some(id) = default.filter(|id| usable_image(id)) {
+        return Some(id);
+    }
+    let favorites: Vec<String> = db
+        .get_setting(MEDIA_FAVORITES_KEY)
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+    favorites.into_iter().find(|id| usable_image(id))
+}
+
+/// Store or remove a media-only backend's key (`Credential::Media`).
+pub fn set_media_key(backend_id: &str, key: &str) -> Result<(), secrets::SecretError> {
+    let out = secrets::set_secret(SERVICE_MEDIA, backend_id, key);
+    invalidate_model_cache();
+    out
+}
+
+pub fn clear_media_key(backend_id: &str) -> Result<(), secrets::SecretError> {
+    let out = secrets::delete_secret(SERVICE_MEDIA, backend_id);
+    invalidate_model_cache();
+    out
+}
+
 /// Parse a `media:<backend_id>/<slug>` id into its parts.
 pub fn parse_model_id(model_id: &str) -> Option<(&str, &str)> {
     model_id.strip_prefix("media:")?.split_once('/')
@@ -402,10 +505,10 @@ pub fn resolve_backend<'a>(registry: &'a Registry, db: &Db, modality: Modality) 
 
     usable.into_iter().next().ok_or_else(|| match modality {
         Modality::Image => {
-            "No image backend is set up yet. Install the local image engine under Engine → Image, or add a cloud key in Settings → Cloud."
+            "No image backend is set up yet. Install the local image runtime under Settings → Runtime → Images, or connect an account in Settings → Providers."
                 .to_string()
         }
-        Modality::Video => "No video backend is set up yet. Add an OpenRouter key in Settings → Cloud.".to_string(),
+        Modality::Video => "No video backend is set up yet. Connect an OpenRouter account in Settings → Providers.".to_string(),
     })
 }
 
@@ -771,6 +874,70 @@ mod tests {
         let artifact = record(&db, None, &req, &res, None, Modality::Image, None).unwrap();
         assert_eq!(artifact.kind, "image");
         assert_eq!(artifact.title, "a swatch");
+    }
+
+    /// `MOD-3`: the default image model is used only while its backend runs.
+    #[test]
+    fn the_default_image_model_is_used_only_when_usable() {
+        let db = Db::open_in_memory().unwrap();
+        let registry = registry_with_test_backend();
+        assert_eq!(default_image_model(&registry, &db), None, "unset means the inferred route");
+        db.set_setting(DEFAULT_IMAGE_MODEL_KEY, "media:test/swatch").unwrap();
+        assert_eq!(default_image_model(&registry, &db).as_deref(), Some("media:test/swatch"));
+        db.set_setting(DEFAULT_IMAGE_MODEL_KEY, "media:gone/model").unwrap();
+        assert_eq!(default_image_model(&registry, &db), None, "a removed backend falls back");
+        // `MOD-4`: then the first image favorite that can run, in order.
+        db.set_setting(MEDIA_FAVORITES_KEY, r#"["media:gone/x","media:test/swatch"]"#).unwrap();
+        assert_eq!(default_image_model(&registry, &db).as_deref(), Some("media:test/swatch"));
+    }
+
+    /// `PRV-2`: a `Credential::Media` backend gets a Providers card from its
+    /// descriptor alone, with what it unlocks, next to the chat providers.
+    #[test]
+    fn a_media_keyed_backend_gets_a_provider_card() {
+        struct Keyed;
+        static KEYED: BackendDescriptor = BackendDescriptor {
+            id: "keyed",
+            label: "Keyed Media",
+            modalities: &[Modality::Image, Modality::Video],
+            credential: Credential::Media { key_hint: "Starts with “km-…”" },
+            supports_references: false,
+            supports_edit: false,
+            is_async: true,
+            console_url: Some("https://example.com/keys"),
+        };
+        #[async_trait]
+        impl MediaBackend for Keyed {
+            fn descriptor(&self) -> &'static BackendDescriptor {
+                &KEYED
+            }
+            async fn list_models(&self, _db: &Db) -> Result<Vec<MediaModel>, String> {
+                Ok(vec![])
+            }
+            async fn generate(
+                &self,
+                _db: &Db,
+                _r: &MediaRequest,
+                _o: &Path,
+                _c: &CancelFlag,
+            ) -> Result<MediaResult, String> {
+                Err("unused".into())
+            }
+        }
+
+        let registry = Registry { backends: vec![Box::new(TestBackend), Box::new(Keyed)] };
+        let cards = registry.provider_cards();
+        // Every chat provider, then the media one; a local backend has no card.
+        assert_eq!(cards.len(), crate::cloud::Provider::ALL.len() + 1);
+        let card = cards.iter().find(|c| c.id == "keyed").expect("media card listed");
+        assert_eq!(card.kind, "media");
+        assert_eq!(card.name, "Keyed Media");
+        assert_eq!(card.unlocks, ["image", "video"]);
+        assert_eq!(card.console_url, "https://example.com/keys");
+        assert!(registry.media_keyed("keyed").is_some());
+        assert!(registry.media_keyed("test").is_none(), "a local backend takes no key");
+        // A chat provider always unlocks chat.
+        assert!(cards.iter().filter(|c| c.kind == "cloud").all(|c| c.unlocks[0] == "chat"));
     }
 
     #[tokio::test]

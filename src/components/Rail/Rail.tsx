@@ -1,94 +1,234 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAppStore } from "../../lib/store";
-import { inTauri, searchConversations } from "../../lib/api";
-import type { Conversation } from "../../lib/types";
+import type { Conversation, Project, View } from "../../lib/types";
+import { groupByBucket, shortTime } from "../../lib/time";
 import ConfirmDialog from "../Confirm/ConfirmDialog";
+import ProjectMenuItems from "../Conversation/ProjectMenuItems";
+import EngineStatus from "../EngineStatus/EngineStatus";
+import { PALETTE_SHORTCUT } from "../CommandPalette/CommandPalette";
+import {
+  BookmarkIcon,
+  ChevronIcon,
+  FolderIcon,
+  KebabIcon,
+  MessageIcon,
+  PlusIcon,
+  SearchIcon,
+  SettingsIcon,
+} from "../Icons/Icons";
 import "./Rail.css";
 
-const DAY = 86400_000;
-
-function LibraryIcon() {
+/** The ⋯ and its menu, shared by chat and project rows. It sits in the row's
+ * trailing slot on top of the timestamp (or count), which it replaces on
+ * hover — so the actions cost the title no width at rest. */
+function RowMenu({
+  label,
+  open,
+  setOpen,
+  children,
+}: {
+  label: string;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  children: ReactNode;
+}) {
   return (
-    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <path
-        d="M5.5 3.5h9a1 1 0 0 1 1 1V17l-5.5-3.2L4.5 17V4.5a1 1 0 0 1 1-1z"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <div className="chat-menu-wrap">
+      <button
+        className="chat-more"
+        aria-label={`More actions for ${label}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="More"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(!open);
+        }}
+      >
+        <KebabIcon size={14} />
+      </button>
+      {open && (
+        <>
+          <div
+            className="row-menu-backdrop"
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setOpen(false);
+            }}
+          />
+          <div className="row-menu" role="menu" onClick={(e) => e.stopPropagation()}>
+            {children}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
-function MessageIcon() {
+/** `PRJ-UI-1`: one project, and its sessions in place of the flat list when it
+ * is expanded. A group, not a second navigation model — the row behaves like a
+ * chat row (click opens, ⋯ for the rest), because the Rail keeps being the
+ * Rail. */
+function ProjectRow({
+  project,
+  sessions,
+  activeId,
+  activeProjectId,
+  view,
+  now,
+}: {
+  project: Project;
+  sessions: Conversation[];
+  activeId: string | null;
+  activeProjectId: string | null;
+  view: View;
+  now: number;
+}) {
+  const expanded = useAppStore((s) => s.expandedProjects.includes(project.id));
+  const toggle = useAppStore((s) => s.toggleProjectExpanded);
+  // `PRJ-UI-4`: clicking a project opens *the project*, not one of its chats.
+  const openProject = useAppStore((s) => s.openProjectView);
+  const renameProject = useAppStore((s) => s.renameProject);
+  const archiveProject = useAppStore((s) => s.archiveProject);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [draftName, setDraftName] = useState<string | null>(null);
+  const current = view === "project" && activeProjectId === project.id;
+  const containsActive = view === "chat" && sessions.some((c) => c.id === activeId);
+
   return (
-    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <path
-        d="M3.5 5.5a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H8.5l-3.6 2.8a.5.5 0 0 1-.8-.4V13.5h-.6a1 1 0 0 1-1-1v-7z"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <li className={`project-row-wrap ${expanded ? "expanded" : ""}`}>
+      <div
+        className={`project-row ${current ? "current" : ""} ${containsActive ? "contains-active" : ""}`}
+        title={project.rootPath ?? project.name}
+        tabIndex={0}
+        aria-current={current ? "page" : undefined}
+        onClick={() => openProject(project.id)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenuOpen(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === "Enter") openProject(project.id);
+          if (e.key === "ArrowRight" && !expanded) toggle(project.id);
+          if (e.key === "ArrowLeft" && expanded) toggle(project.id);
+        }}
+      >
+        {/* Only shows what is inside; the row itself opens the project. */}
+        <button
+          className="project-twisty"
+          aria-label={expanded ? `Collapse ${project.name}` : `Expand ${project.name}`}
+          aria-expanded={expanded}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggle(project.id);
+          }}
+        >
+          <ChevronIcon dir="right" size={12} strokeWidth={1.6} />
+        </button>
+        {/* `PRJ-UI-1a`: filled with a working folder, hollow without. */}
+        <span
+          className={`project-dot ${project.rootPath ? "has-folder" : ""}`}
+          aria-hidden="true"
+        />
+        {draftName === null ? (
+          <span className="chat-title">{project.name}</span>
+        ) : (
+          <input
+            className="project-rename"
+            value={draftName}
+            autoFocus
+            aria-label={`Rename ${project.name}`}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => setDraftName(e.target.value)}
+            onBlur={() => {
+              renameProject(project.id, draftName);
+              setDraftName(null);
+            }}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") setDraftName(null);
+            }}
+          />
+        )}
+        <span className="row-slot">
+          <span className="row-stamp project-count" aria-label={`${sessions.length} sessions`}>
+            {sessions.length}
+          </span>
+          <RowMenu label={project.name} open={menuOpen} setOpen={setMenuOpen}>
+            <button
+              className="row-menu-item"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                setDraftName(project.name);
+              }}
+            >
+              Rename project
+            </button>
+            {/* Archive, never delete: nothing here touches a byte on disk. */}
+            <button
+              className="row-menu-item"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                archiveProject(project.id);
+              }}
+            >
+              Archive project
+            </button>
+          </RowMenu>
+        </span>
+      </div>
+
+      {expanded && (
+        <ul className="chat-list project-sessions">
+          {sessions.length === 0 && <li className="project-empty">No sessions yet</li>}
+          {sessions.map((c) => (
+            <ChatRow key={c.id} c={c} active={c.id === activeId && view === "chat"} now={now} />
+          ))}
+        </ul>
+      )}
+    </li>
   );
 }
 
-function SettingsIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <circle cx="10" cy="10" r="2.6" stroke="currentColor" strokeWidth="1.3" />
-      <path
-        d="M10 2.8v2.3M10 14.9v2.3M17.2 10h-2.3M5.1 10H2.8M15.1 4.9l-1.6 1.6M6.5 13.5l-1.6 1.6M15.1 15.1l-1.6-1.6M6.5 6.5 4.9 4.9"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function groupConversations(convs: Conversation[]): { label: string; items: Conversation[] }[] {
-  const now = Date.now();
-  const today: Conversation[] = [];
-  const earlier: Conversation[] = [];
-  for (const c of convs) {
-    if (now - c.updatedAt < DAY) today.push(c);
-    else earlier.push(c);
-  }
-  const groups: { label: string; items: Conversation[] }[] = [];
-  if (today.length) groups.push({ label: "Today", items: today });
-  if (earlier.length) groups.push({ label: "Earlier", items: earlier });
-  return groups;
-}
-
-
-/** One conversation row, with its digestion state (PRES-2) and the manual
- * "reflect now" affordance (REF-UI-2). The `◆` is one element in three states:
- * an offer, a pulse while I'm reading the conversation back, and a quiet mark
- * once it taught me something. */
-function ChatRow({ c, active }: { c: Conversation; active: boolean }) {
-  const setActive = useAppStore((s) => s.setActiveConversation);
+/** One conversation. At rest: the title, the `◆` if reflection taught me
+ * something (PRES-2), and when it was last touched. On hover the time gives
+ * its slot to the ⋯, which holds everything you can *do* to the chat —
+ * including "reflect now" (REF-UI-2), which used to be a second hover button
+ * reserving its own width on every row. */
+function ChatRow({ c, active, now }: { c: Conversation; active: boolean; now: number }) {
+  // `SHL-24`: a chat is a destination. Selecting one here goes to it.
+  const openSession = useAppStore((s) => s.openSession);
   const reflect = useAppStore((s) => s.reflectConversation);
   const reflecting = useAppStore((s) => s.reflectingIds.includes(c.id));
   const digested = useAppStore((s) => s.digestedIds.includes(c.id));
   const deleteConversation = useAppStore((s) => s.deleteConversation);
-  // A chat is a real thing the user made, so removing it takes two steps: a
-  // menu (right-click, or the ⋯ that appears on hover) and then a confirmation.
+  const scheduleConversation = useAppStore((s) => s.scheduleConversation);
+  // Removing a chat takes two steps: the menu, then a confirmation.
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
   return (
     <li
-      className={active ? "active" : ""}
+      className={`chat-row ${active ? "active" : ""}`}
       title={c.title}
       tabIndex={0}
-      onClick={() => setActive(c.id)}
+      aria-current={active ? "page" : undefined}
+      onClick={() => openSession(c.id)}
       onContextMenu={(e) => {
         e.preventDefault();
         setMenuOpen(true);
       }}
       onKeyDown={(e) => {
-        if (e.key === "Enter") setActive(c.id);
+        if (e.key === "Enter" && e.target === e.currentTarget) openSession(c.id);
       }}
     >
       {c.workspace && (
@@ -101,103 +241,125 @@ function ChatRow({ c, active }: { c: Conversation; active: boolean }) {
         <span className="chat-digest reflecting" role="status" aria-label="I'm reflecting on this conversation">
           ◆
         </span>
-      ) : digested ? (
-        <span
-          className="chat-digest learned"
-          role="img"
-          aria-label="I learned something from this conversation"
-          title="I learned something from this conversation"
-        >
-          ◆
-        </span>
       ) : (
-        <button
-          className="chat-digest offer"
-          title="Reflect on this conversation"
-          aria-label={`Reflect on ${c.title}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            reflect(c.id);
-          }}
-        >
-          ◆
-        </button>
+        digested && (
+          <span
+            className="chat-digest"
+            role="img"
+            aria-label="I learned something from this conversation"
+            title="I learned something from this conversation"
+          >
+            ◆
+          </span>
+        )
       )}
-
-      <div className="chat-menu-wrap">
-        <button
-          className="chat-more"
-          aria-label={`More actions for ${c.title}`}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          title="More"
-          onClick={(e) => {
-            e.stopPropagation();
-            setMenuOpen((v) => !v);
-          }}
-        >
-          ⋯
-        </button>
-        {menuOpen && (
-          <>
-            <div
-              className="row-menu-backdrop"
-              onClick={(e) => {
-                e.stopPropagation();
+      <span className="row-slot">
+        <time className="row-stamp" dateTime={new Date(c.updatedAt).toISOString()}>
+          {shortTime(c.updatedAt, now)}
+        </time>
+        <RowMenu label={c.title} open={menuOpen} setOpen={setMenuOpen}>
+          {!reflecting && !digested && (
+            <button
+              className="row-menu-item"
+              role="menuitem"
+              onClick={() => {
                 setMenuOpen(false);
+                reflect(c.id);
               }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setMenuOpen(false);
-              }}
-            />
-            <div className="row-menu" role="menu">
-              <button
-                className="row-menu-item danger"
-                role="menuitem"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setMenuOpen(false);
-                  setConfirming(true);
-                }}
-              >
-                Delete chat
-              </button>
-            </div>
-          </>
-        )}
-      </div>
+            >
+              Reflect on this chat
+            </button>
+          )}
+          <button
+            className="row-menu-item"
+            role="menuitem"
+            onClick={() => {
+              setMenuOpen(false);
+              scheduleConversation(c.id);
+            }}
+          >
+            Schedule this…
+          </button>
+          <ProjectMenuItems conversationId={c.id} onDone={() => setMenuOpen(false)} />
+          <hr className="row-menu-sep" />
+          <button
+            className="row-menu-item danger"
+            role="menuitem"
+            onClick={() => {
+              setMenuOpen(false);
+              setConfirming(true);
+            }}
+          >
+            Delete chat
+          </button>
+        </RowMenu>
+      </span>
 
       {confirming && (
-        // The dialog renders inside the row, so its clicks must not fall
-        // through to the row's "select this chat" handler.
+        // Rendered inside the row, so its clicks must not reach the row.
         <span onClick={(e) => e.stopPropagation()}>
-        <ConfirmDialog
-          title="Delete this chat?"
-          body={`“${c.title}” and everything said in it will be removed. This can't be undone.`}
-          onCancel={() => setConfirming(false)}
-          onConfirm={() => {
-            setConfirming(false);
-            deleteConversation(c.id);
-          }}
-        />
+          <ConfirmDialog
+            title="Delete this chat?"
+            body={`“${c.title}” and everything said in it will be removed. This can't be undone.`}
+            onCancel={() => setConfirming(false)}
+            onConfirm={() => {
+              setConfirming(false);
+              deleteConversation(c.id);
+            }}
+          />
         </span>
       )}
     </li>
   );
 }
 
+/** Re-render once a minute, so `now` and `12m` don't go stale on a rail
+ * that nothing else happens to touch. Only a trigger: the time itself is read
+ * at render, so it is never older than the data it is compared with. */
+function useMinuteTick(): void {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+}
+
 export default function Rail() {
-  const conversations = useAppStore((s) => s.conversations);
+  // `SUB-3`: a delegated child belongs to the turn that started it — the Fleet
+  // card and the Agents tab are where it is opened from.
+  const allConversations = useAppStore((s) => s.conversations);
+  // Filtered outside the selector: a selector that builds a new array every
+  // call never compares equal, and zustand re-renders forever.
+  const conversations = useMemo(
+    () => allConversations.filter((c) => !c.parentConversationId),
+    [allConversations]
+  );
+  // `PRJ-UI-1`: sessions in a project are listed under it, so the date groups
+  // below hold only the loose chats.
+  const projects = useAppStore((s) => s.projects);
+  const newProject = useAppStore((s) => s.newProject);
+  const looseConversations = useMemo(
+    () => conversations.filter((c) => !c.projectId),
+    [conversations]
+  );
+  const sessionsByProject = useMemo(() => {
+    const byProject = new Map<string, Conversation[]>();
+    for (const c of conversations) {
+      if (!c.projectId) continue;
+      const list = byProject.get(c.projectId);
+      if (list) list.push(c);
+      else byProject.set(c.projectId, [c]);
+    }
+    return byProject;
+  }, [conversations]);
   const activeId = useAppStore((s) => s.activeConversationId);
+  const activeProjectId = useAppStore((s) => s.activeProjectId);
   const view = useAppStore((s) => s.view);
   const setView = useAppStore((s) => s.setView);
   const newConversation = useAppStore((s) => s.newConversation);
+  const setPaletteOpen = useAppStore((s) => s.setPaletteOpen);
   const collapsed = useAppStore((s) => s.railCollapsed);
-  // Something about the agent's self is waiting on an answer (SOUL-UI-3). The
-  // dot goes where the answer is given: soul edits are reviewed in Settings →
-  // Personas, everything else in the Self panel.
+  // Something about the agent's self is waiting on an answer (SOUL-UI-3).
   const soulPending = useAppStore((s) =>
     s.changeProposals.some((p) => p.target === "soul")
   );
@@ -209,12 +371,11 @@ export default function Rail() {
   // able to see that it's happening, and end it.
   const runningJob = useAppStore((s) => s.runningJob);
   const stopScheduledJob = useAppStore((s) => s.stopScheduledJob);
-  // Models, Engine, Apps, Self and Settings now live together in one hub
-  // (behind the cog, below) — one badge covers whatever's waiting in any of them.
   const settingsPending = soulPending || selfPending || consolidationPending;
   const inSettingsHub = [
     "models",
-    "engine",
+    "providers",
+    "runtime",
     "apps",
     "skills",
     "self",
@@ -227,57 +388,58 @@ export default function Rail() {
     "about",
   ].includes(view);
 
-  const setActive = useAppStore((s) => s.setActiveConversation);
-  const [query, setQuery] = useState("");
-  const [resultIds, setResultIds] = useState<string[] | null>(null);
+  const setActive = useAppStore((s) => s.openSession);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
-
-  useEffect(() => {
-    const q = query.trim();
-    if (!q) {
-      setResultIds(null);
-      return;
-    }
-    let active = true;
-    const run = setTimeout(() => {
-      if (inTauri()) {
-        searchConversations(q)
-          .then((rows) => active && setResultIds(rows.map((r) => r.id)))
-          .catch(() => active && setResultIds([]));
-      } else {
-        const lower = q.toLowerCase();
-        setResultIds(
-          conversations.filter((c) => c.title.toLowerCase().includes(lower)).map((c) => c.id)
-        );
-      }
-    }, 180);
-    return () => {
-      active = false;
-      clearTimeout(run);
-    };
-  }, [query, conversations]);
-
-  const searching = resultIds !== null;
-  const results = searching
-    ? conversations.filter((c) => resultIds!.includes(c.id))
-    : [];
-  const groups = groupConversations(conversations);
+  useMinuteTick();
+  const now = Date.now();
+  const groups = groupByBucket(looseConversations, now);
 
   return (
     <nav className={`rail ${collapsed ? "collapsed" : ""}`} aria-label="Conversations and sections">
       <div className="rail-top-actions">
+        <button className="rail-top-btn new-chat" onClick={newConversation} title="New chat">
+          <span className="nav-icon" aria-hidden="true"><PlusIcon /></span>
+          <span className="nav-label">New chat</span>
+        </button>
+        {/* Search lives in the palette: chats by title *and* message text,
+            projects, the library and commands, in one list. */}
+        <button
+          className="rail-top-btn search-btn"
+          onClick={() => setPaletteOpen(true)}
+          title={`Search (${PALETTE_SHORTCUT})`}
+        >
+          <span className="nav-icon" aria-hidden="true"><SearchIcon /></span>
+          <span className="nav-label">Search</span>
+          <kbd className="kbd rail-kbd">{PALETTE_SHORTCUT}</kbd>
+        </button>
         <button
           className={`rail-top-btn library-btn ${view === "library" ? "active" : ""}`}
           onClick={() => setView("library")}
           title="Library"
         >
-          <span className="nav-icon" aria-hidden="true"><LibraryIcon /></span>
+          <span className="nav-icon" aria-hidden="true"><BookmarkIcon /></span>
           <span className="nav-label">Library</span>
         </button>
-        <button className="rail-top-btn new-chat" onClick={newConversation} title="New chat">
-          <span className="nav-icon" aria-hidden="true">+</span>
-          <span className="nav-label">New chat</span>
-        </button>
+        {/* `PRJ-3`: the overview is the destination; the `+` extension is the
+            quick create the button used to be. */}
+        <div className="rail-top-btn-row">
+          <button
+            className={`rail-top-btn projects-btn ${view === "projects" ? "active" : ""}`}
+            onClick={() => setView("projects")}
+            title="Projects"
+          >
+            <span className="nav-icon" aria-hidden="true"><FolderIcon /></span>
+            <span className="nav-label">Projects</span>
+          </button>
+          <button
+            className="rail-top-btn-add"
+            onClick={newProject}
+            title="New project"
+            aria-label="New project"
+          >
+            <PlusIcon size={13} />
+          </button>
+        </div>
       </div>
 
       {collapsed && (
@@ -323,16 +485,9 @@ export default function Rail() {
         </div>
       )}
 
+      {/* `SHL-16` is withdrawn: this column lists conversations and projects,
+          whatever route is focused. */}
       <div className="rail-scroll">
-        <input
-          className="rail-search"
-          type="search"
-          placeholder="Search chats…"
-          aria-label="Search chats"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-
         {runningJob && (
           <div className="rail-job-row" role="status">
             <span className="rail-job-dot" aria-hidden="true" />
@@ -348,27 +503,37 @@ export default function Rail() {
           </div>
         )}
 
-        {searching ? (
-          <div>
-            <p className="rail-label">{results.length ? "Results" : "No matches"}</p>
-            <ul className="chat-list">
-              {results.map((c) => (
-                <ChatRow key={c.id} c={c} active={c.id === activeId && view === "chat"} />
+        {/* `PRJ-UI-1`: a group above the date-grouped chats. Absent entirely
+            with no projects, so a user who never made one sees only chats. */}
+        {projects.length > 0 && (
+          <div className="rail-group">
+            <p className="rail-label">Projects</p>
+            <ul className="chat-list project-list">
+              {projects.map((p) => (
+                <ProjectRow
+                  key={p.id}
+                  project={p}
+                  sessions={sessionsByProject.get(p.id) ?? []}
+                  activeId={activeId}
+                  activeProjectId={activeProjectId}
+                  view={view}
+                  now={now}
+                />
               ))}
             </ul>
           </div>
-        ) : (
-          groups.map((g) => (
-          <div key={g.label}>
+        )}
+
+        {groups.map((g) => (
+          <div className="rail-group" key={g.label}>
             <p className="rail-label">{g.label}</p>
             <ul className="chat-list">
               {g.items.map((c) => (
-                <ChatRow key={c.id} c={c} active={c.id === activeId && view === "chat"} />
+                <ChatRow key={c.id} c={c} active={c.id === activeId && view === "chat"} now={now} />
               ))}
             </ul>
           </div>
-          ))
-        )}
+        ))}
       </div>
 
       <hr className="rail-divider" />
@@ -393,6 +558,9 @@ export default function Rail() {
               title="Changes waiting for review"
             />
           )}
+          {/* The local engine's state, beside the cog: the row you press when
+              the engine is what you want to do something about. */}
+          <EngineStatus dotOnly={collapsed} />
         </li>
       </ul>
     </nav>

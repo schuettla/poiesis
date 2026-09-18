@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../lib/store";
 import type { FileNode } from "../../lib/api";
+import { FileIcon, TreeFolderIcon } from "../Icons/Icons";
 
 /** "2m", "3h" — enough to place a change in time without a clock. */
 function ago(ts: number): string {
@@ -9,37 +10,6 @@ function ago(ts: number): string {
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
-}
-
-function FolderIcon({ open }: { open: boolean }) {
-  return (
-    <svg width="13" height="13" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <path
-        d={
-          open
-            ? "M2.5 15V6A1.5 1.5 0 0 1 4 4.5h3.2l1.4 1.8H15A1.5 1.5 0 0 1 16.5 8H5.6L2.5 15z"
-            : "M2.5 6A1.5 1.5 0 0 1 4 4.5h3.2l1.4 1.8H16A1.5 1.5 0 0 1 17.5 8v6A1.5 1.5 0 0 1 16 15.5H4A1.5 1.5 0 0 1 2.5 14z"
-        }
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function FileIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <path
-        d="M5 3.5h6L15 7.5v9H5z"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <path d="M11 3.5v4h4" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-    </svg>
-  );
 }
 
 /** Where a right-click on a directory row landed — drives the one context
@@ -192,7 +162,7 @@ function Row({
         <span className="wb-row-caret" aria-hidden="true">
           {node.is_dir ? (expanded ? "▾" : "▸") : ""}
         </span>
-        <span className="wb-row-icon">{node.is_dir ? <FolderIcon open={expanded} /> : <FileIcon />}</span>
+        <span className="wb-row-icon">{node.is_dir ? <TreeFolderIcon open={expanded} size={13} /> : <FileIcon size={13} />}</span>
         <span className="wb-row-name">{node.name}</span>
         {touched && (
           <span className="wb-touched" title="Changed in this session">

@@ -154,7 +154,7 @@
 }
 /* Tighter type than the reading column — this is a record, not the page. */
 .ws-turns .run-text {
-  font-size: calc(var(--fs-reading) * 0.82);
+  font-size: calc(var(--fs-answer) * 0.9);
 }
 .ws-turns .turn-user .body {
   font-size: var(--fs-ui-lg);

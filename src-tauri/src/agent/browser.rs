@@ -429,6 +429,11 @@ pub fn spawn_idle_sweep(app: tauri::AppHandle) {
             // otherwise the Browser panel keeps claiming to be looking at a
             // page whose Chrome process is long gone.
             for conversation_id in pool.sweep().await {
+                // A preview session was never on screen (`ART-6`), so its
+                // closing is not news the Browser panel can use.
+                if is_preview_key(&conversation_id) {
+                    continue;
+                }
                 let _ = tauri::Emitter::emit(
                     &app,
                     "poiesis-browser-closed",
@@ -971,6 +976,116 @@ async fn settle(session: &mut BrowserSession) {
         .unwrap_or_default();
 }
 
+// ---- ART-6: running one of our own artifacts ----
+
+/// What a preview run actually did. Text only, on purpose: handing the model a
+/// screenshot needs tool results that can carry image parts (they carry strings
+/// today) *and* a vision-capable model, and neither is true for the small local
+/// models this runs on. Everything below is readable by any model.
+#[derive(Debug, Clone)]
+pub struct PageReport {
+    pub title: String,
+    /// Where the page ended up. Not always where it was sent — a page can
+    /// navigate itself, and if it left, nothing else in this report describes
+    /// the artifact any more.
+    pub final_url: String,
+    /// The first of the page's visible text, so "blank screen" is a fact rather
+    /// than an inference.
+    pub text: String,
+    pub elements: u64,
+    pub console: Vec<super::artifacts::ConsoleEntry>,
+}
+
+impl PageReport {
+    pub fn errors(&self) -> usize {
+        self.console
+            .iter()
+            .filter(|e| e.level == "error" || e.level == "uncaught")
+            .count()
+    }
+}
+
+/// Read back everything the injected bridge recorded, plus enough about the
+/// rendered document to tell a working page from an empty one.
+const REPORT_JS: &str = r#"
+JSON.stringify({
+  title: document.title || "",
+  text: ((document.body && document.body.innerText) || "").replace(/\s+/g, " ").trim().slice(0, 600),
+  elements: document.getElementsByTagName("*").length,
+  console: (window.__poiesis_console || []).slice(-50)
+})
+"#;
+
+/// `ART-6`: load an artifact's own preview URL and report what it did.
+///
+/// Deliberately **not** routed through `browse`: there is no domain to approve
+/// (the page is this app's own artifact, served from loopback under a policy we
+/// wrote), so there is no prompt, which is what lets this work in an unattended
+/// run — the case where nobody has the Canvas open and the console buffer is
+/// therefore empty. It also keeps its own session, so checking a preview never
+/// disturbs the page the Browser panel is showing.
+///
+/// `refused_host` is not consulted and must not be loosened to accommodate this:
+/// loopback stays refused for anything the *model* names. This URL is one we
+/// constructed.
+pub async fn inspect_local(
+    pool: &BrowserPool,
+    conversation_id: &str,
+    profile_root: &std::path::Path,
+    url: &str,
+    settle: Duration,
+) -> Result<PageReport, String> {
+    let key = preview_key(conversation_id);
+    pool.ensure(&key, profile_root).await?;
+
+    let page = {
+        let mut sessions = pool.sessions.lock().await;
+        let session = sessions.get_mut(&key).ok_or("the preview browser session closed")?;
+        session.last_used = Instant::now();
+        session.page.clone()
+    };
+
+    page.goto(url).await.map_err(|e| e.to_string())?;
+    let _ = page.wait_for_navigation().await;
+    // Give the page its own time: `load` fires before a script that renders on
+    // the first frame has drawn anything, and a report taken too early would
+    // call a working page blank.
+    tokio::time::sleep(settle).await;
+
+    let raw: String = page
+        .evaluate(REPORT_JS)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_value()
+        .map_err(|e| e.to_string())?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+
+    Ok(PageReport {
+        title: parsed.get("title").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        final_url: page.url().await.ok().flatten().unwrap_or_default(),
+        text: parsed.get("text").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        elements: parsed.get("elements").and_then(|v| v.as_u64()).unwrap_or(0),
+        console: parsed
+            .get("console")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default(),
+    })
+}
+
+/// The pool key a conversation's preview session uses. Separate from the
+/// conversation's own browsing session so a `check_preview` can't navigate the
+/// page the user is watching in the Browser panel.
+fn preview_key(conversation_id: &str) -> String {
+    format!("preview-{conversation_id}")
+}
+
+/// Is this pool entry a preview session rather than a browsing one? The idle
+/// sweep tells the frontend when a session closes, and the Browser panel has
+/// nothing to say about a session it never showed.
+fn is_preview_key(key: &str) -> bool {
+    key.starts_with("preview-")
+}
+
 async fn visible_text(page: &Page) -> Result<String, String> {
     page.evaluate("document.body ? document.body.innerText : ''")
         .await
@@ -992,7 +1107,6 @@ fn clamp(s: &str, cap: usize) -> String {
 mod tests {
     use super::*;
 
-    #[test]
     /// The click matcher interpolates the model's text into a script that runs
     /// in the page. JSON string escaping is the only thing standing between
     /// that text and arbitrary script execution, so it gets its own test.

@@ -23,13 +23,13 @@ import {
   type DownloadProgress,
 } from "../../lib/api";
 
-/** The "Recall" tab of the Engine view: install / status of the local recall
+/** The "Recall" tab of the Runtime view: install / status of the local recall
  * helper — a second, CPU-only `llama-server` that turns text into vectors for
  * recall and folder search.
  *
  * User-facing copy here follows SMP-8a: no *embedding*, *vector*, *index*,
  * *reranker* or *chunk* on screen, in either mode. */
-export default function EmbedEngine() {
+export default function RecallRuntime() {
   const [status, setStatus] = useState<EmbedSetupStatus | null>(null);
   const [catalog, setCatalog] = useState<EmbedCatalogEntry[]>([]);
   const [models, setModels] = useState<ModelEntry[]>([]);
@@ -112,10 +112,10 @@ export default function EmbedEngine() {
     <>
       {error && <p className="hw-note error">{error}</p>}
 
-      <section className="engine-card">
-        <div className="engine-card-head">
-          <h2 className="section-title">Recall</h2>
-          <span className={`engine-state-badge ${status?.running ? "running" : "idle"}`}>
+      <section className="runtime-card">
+        <div className="runtime-card-head">
+          <h2 className="section-title">Recall runtime</h2>
+          <span className={`runtime-state-badge ${status?.running ? "running" : "idle"}`}>
             <span className="dot" aria-hidden="true" />
             {status?.running
               ? "Running"
@@ -126,7 +126,7 @@ export default function EmbedEngine() {
                   : "Not installed"}
           </span>
         </div>
-        <p className="engine-sub">
+        <p className="runtime-sub">
           I use this to recall things by meaning instead of by keyword. It runs on the CPU, so it
           never takes memory from the model you chat with.
         </p>
@@ -151,7 +151,7 @@ export default function EmbedEngine() {
             <span className="dl-pct">{prog.label}</span>
           </div>
         ) : (
-          <div className="engine-actions">
+          <div className="runtime-actions">
             {ready ? (
               <button className="btn-secondary" onClick={remove} disabled={busy === "remove"}>
                 {busy === "remove" ? "Removing…" : "Remove recall"}
@@ -170,9 +170,9 @@ export default function EmbedEngine() {
       </section>
 
       {status?.model_installed && (
-        <section className="engine-card">
+        <section className="runtime-card">
           <h2 className="section-title">Which model does the recalling</h2>
-          <p className="engine-sub">
+          <p className="runtime-sub">
             Both run at full precision — the compressed versions get noticeably worse at finding
             the right thing.
           </p>
@@ -202,7 +202,7 @@ export default function EmbedEngine() {
               );
             })}
           </div>
-          <p className="engine-hint">
+          <p className="runtime-hint">
             {catalog.find((c) => c.name === status.model_name)?.note} Switching means I'll have to
             learn what I've already read again — nothing is lost, but I'll re-read it.
           </p>
@@ -305,10 +305,10 @@ function RerankCard({ recallReady }: { recallReady: boolean }) {
     <>
       {error && <p className="hw-note error">{error}</p>}
 
-      <section className="engine-card">
-        <div className="engine-card-head">
+      <section className="runtime-card">
+        <div className="runtime-card-head">
           <h2 className="section-title">Sharper matches</h2>
-          <span className={`engine-state-badge ${status?.running ? "running" : "idle"}`}>
+          <span className={`runtime-state-badge ${status?.running ? "running" : "idle"}`}>
             <span className="dot" aria-hidden="true" />
             {status?.running ? "Running" : ready ? "Installed" : "Not installed"}
           </span>
@@ -317,12 +317,12 @@ function RerankCard({ recallReady }: { recallReady: boolean }) {
         {!recallReady ? (
           // RRK-UI-3: reranking without the recall helper is meaningless —
           // explain rather than just disabling the button.
-          <p className="engine-sub">
-            Install my recall engine first — there's nothing to re-read without it.
+          <p className="runtime-sub">
+            Install my recall runtime first — there's nothing to re-read without it.
           </p>
         ) : (
           <>
-            <p className="engine-sub">
+            <p className="runtime-sub">
               Re-reads the closest matches before answering. Slower, and it needs another 540 MB.
             </p>
             {status?.model_path && (
@@ -340,7 +340,7 @@ function RerankCard({ recallReady }: { recallReady: boolean }) {
                 <span className="dl-pct">{prog.label}</span>
               </div>
             ) : (
-              <div className="engine-actions">
+              <div className="runtime-actions">
                 {ready ? (
                   <>
                     <label className="toggle-line">
@@ -368,9 +368,9 @@ function RerankCard({ recallReady }: { recallReady: boolean }) {
       </section>
 
       {recallReady && status?.model_installed && (
-        <section className="engine-card">
+        <section className="runtime-card">
           <h2 className="section-title">Which model re-reads the matches</h2>
-          <p className="engine-sub">
+          <p className="runtime-sub">
             Both run at full precision. The larger one is noticeably better at telling close
             matches apart, at the cost of a slower pass.
           </p>
@@ -400,7 +400,7 @@ function RerankCard({ recallReady }: { recallReady: boolean }) {
               );
             })}
           </div>
-          <p className="engine-hint">{catalog.find((c) => c.name === status.model_name)?.note}</p>
+          <p className="runtime-hint">{catalog.find((c) => c.name === status.model_name)?.note}</p>
         </section>
       )}
     </>

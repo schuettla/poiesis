@@ -386,7 +386,12 @@ pub async fn chat_cmd(
 }
 
 /// Trip the active turn's cancellation flag (Stop control).
+///
+/// `HRN-1`: a turn is a tree now, so Stop trips every live run, not just the
+/// one whose flag happened to be in the manager's slot. `cancel_active` stays
+/// for the plain-chat stream, which never registers a run.
 #[tauri::command]
-pub fn stop_chat_cmd(mgr: State<'_, RuntimeManager>) {
+pub fn stop_chat_cmd(mgr: State<'_, RuntimeManager>, fleet: State<'_, crate::agent::fleet::Fleet>) {
     mgr.cancel_active();
+    fleet.cancel_all();
 }

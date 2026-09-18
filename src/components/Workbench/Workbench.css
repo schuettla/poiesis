@@ -1,5 +1,26 @@
 /* The Workbench dock: mirrors the Rail on the opposite edge — same grid span,
    same padding rhythm, border on the inside edge. */
+
+/* `SHL-27`: the open item takes the conversation's cells — the main column,
+   both of its rows, since the composer's row goes with the conversation it
+   belongs to. No border of its own: it is the main column, not a panel beside
+   it, and the only edges here are the rail's and the sidebar's.
+
+   Drawn inside the sidebar this was stuck at 340px and covered the tree it
+   came from; given a column of its own (`SHL-26`) it split the window with the
+   conversation and neither had room. */
+.item-view {
+  position: relative;
+  grid-column: 2;
+  grid-row: 2 / -1;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--paper);
+}
+.item-view .agents-detail {
+  padding: 14px 18px;
+}
+
 .workbench {
   position: relative;
   grid-column: 3;
@@ -37,7 +58,7 @@
   padding: 0;
 }
 .wb-resizer:hover,
-.app.dock-dragging .wb-resizer {
+.app.dock-dragging .workbench > .wb-resizer {
   background: var(--local);
   opacity: 0.5;
 }
@@ -46,64 +67,363 @@
   opacity: 1;
   outline: none;
 }
-.app.dock-collapsed .wb-resizer {
+.app.dock-collapsed .workbench > .wb-resizer {
   display: none;
 }
 
-/* ---- folder header ---- */
+/* ---- context header: where this chat works, on one line ----
+   The rail's row language — 30px, a flat fill on hover, radius 4 — on the
+   Workbench's own paper. Everything you can set about the folder waits in the
+   popover underneath; the line itself only has to answer "where, and how much
+   may it change". */
 
 .wb-head {
+  position: relative;
   flex-shrink: 0;
-  padding: 12px 14px 10px;
-  border-bottom: 1px solid var(--paper-edge);
+  padding: 8px 8px 6px;
 }
-.wb-head-row {
+.wb-context {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.wb-context-btn {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 7px;
-  min-width: 0;
+  min-height: 30px;
+  padding: 0 7px;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.wb-context-btn:hover,
+.wb-context-btn[aria-expanded="true"] {
+  background: var(--paper-edge);
 }
 .wb-folder-icon {
   display: flex;
   color: var(--ink-faint);
   flex-shrink: 0;
 }
+.wb-crumbs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+/* The project is the context, the folder is what this panel is about: the
+   project yields its width first and reads a step quieter. */
+.wb-crumb-project {
+  flex: 0 1 auto;
+  min-width: 2.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-muted);
+}
+.wb-crumb-sep {
+  flex: none;
+  color: var(--ink-faint);
+}
 .wb-folder-name {
-  font-family: var(--font-sans);
-  font-size: var(--fs-ui-lg);
-  font-weight: 600;
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
   color: var(--ink);
+}
+.wb-crumb-none {
+  color: var(--ink-faint);
+}
+/* How much it may change, as a word, not a control. Only "Full" is marked,
+   since it is the one level where nothing waits for you. */
+.wb-access {
+  flex: none;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-faint);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 0 5px;
+}
+.wb-access-auto {
+  color: var(--ink-muted);
+  border-color: var(--ink-faint);
+}
+.wb-context-caret {
+  flex: none;
+  color: var(--ink-faint);
+  transform: rotate(90deg);
+  transition: transform var(--t-fast);
+}
+.wb-context-caret.open {
+  transform: rotate(-90deg);
+}
+.wb-context-choose {
+  flex: none;
+}
+
+/* ---- the context popover ---- */
+
+.wb-popover {
+  position: absolute;
+  top: calc(100% - 4px);
+  left: 8px;
+  right: 8px;
+  z-index: 30;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+}
+.wb-pop-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 4px 8px;
+}
+.wb-pop-section + .wb-pop-section {
+  border-top: 1px solid var(--paper-edge);
+}
+/* The rail's group label, so the popover's parts read like the rail's. */
+.wb-pop-label {
+  margin: 0;
+  padding: 2px 7px 5px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.wb-pop-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 7px;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1;
-  min-width: 0;
 }
+.wb-pop-item:hover {
+  background: var(--paper-edge);
+}
+.wb-pop-quiet {
+  color: var(--ink-muted);
+}
+.wb-pop-danger {
+  color: var(--danger);
+}
+.wb-project-name {
+  font-weight: 500;
+}
+.wb-pop-caret {
+  flex: none;
+  color: var(--ink-faint);
+  transition: transform var(--t-fast);
+}
+.wb-pop-caret.open {
+  transform: rotate(90deg);
+}
+/* Destinations hang off a hairline, the way a project's chats do in the rail. */
+.wb-pop-sublist {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 14px;
+}
+.wb-pop-sublist::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 2px;
+  bottom: 2px;
+  width: 1px;
+  background: var(--paper-edge-2);
+}
+.wb-pop-note {
+  margin: 6px 7px 0;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+.wb-pop-section > .wb-primary {
+  align-self: flex-start;
+  margin: 8px 7px 0;
+}
+.wb-pop-section > .wb-confirm {
+  padding: 2px 7px 0;
+}
+.wb-pop-section > .wb-segments {
+  margin: 0 7px;
+}
+/* Three equal parts across the popover rather than a cluster at its left. */
+.wb-segments-fill .wb-segment {
+  flex: 1;
+  padding: 5px 8px;
+}
+
 .wb-folder-path {
-  margin: 3px 0 9px 22px;
+  margin: 0 7px 6px;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--ink-faint);
   word-break: break-all;
 }
 
-/* Empty state — the prominent, in-conversation way in. */
-.wb-head-empty {
-  padding: 20px 16px 18px;
+/* COD-UI-1: what is known about the project's code. */
+.wb-code .wb-chips,
+.wb-code .wb-tasks {
+  margin-left: 7px;
+  margin-right: 7px;
+}
+.wb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.wb-chip {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  background: none;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 0 6px;
+  white-space: nowrap;
+}
+.wb-chip-mono {
+  font-family: var(--font-mono);
+}
+.wb-chip-button {
+  cursor: pointer;
+}
+.wb-chip-button:hover,
+.wb-chip-button.on {
+  color: var(--ink);
+  background: var(--paper-edge);
+}
+.wb-chip-note {
+  color: var(--ink-faint);
+}
+.wb-tasks {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wb-tasks-note {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+.wb-task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wb-task {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.wb-task-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.wb-task-name {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink);
+}
+.wb-task-cmd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-task-allow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.wb-commands {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wb-tasks-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* One empty state for every sub-view: a title, one line on what will appear,
+   and at most one way to make it appear. */
+.wb-empty {
+  padding: 18px 15px;
 }
 .wb-empty-title {
-  margin: 0 0 5px;
+  margin: 0 0 4px;
   font-family: var(--font-sans);
-  font-size: var(--fs-ui-lg);
-  font-weight: 600;
+  font-size: var(--fs-ui);
+  font-weight: 500;
   color: var(--ink);
 }
 .wb-empty-blurb {
-  margin: 0 0 12px;
+  margin: 0;
   font-family: var(--font-sans);
-  font-size: var(--fs-ui);
+  font-size: 12.5px;
   line-height: 1.5;
   color: var(--ink-muted);
+}
+.wb-empty .wb-primary {
+  margin-top: 12px;
 }
 
 .wb-primary {
@@ -145,9 +465,18 @@
 
 /* ---- folder index status (IDX-UI-1/2/3) ---- */
 
+/* The foot of the Files view: what I have read of this folder. */
+.wb-files-foot {
+  flex-shrink: 0;
+  padding: 6px 12px 8px 15px;
+  border-top: 1px solid var(--paper-edge);
+}
 .wb-index-row {
-  margin: 0 0 8px 22px;
+  display: flex;
+  align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
 .wb-index-status {
   font-family: var(--font-sans);
@@ -159,14 +488,14 @@
 }
 /* SMP-4c: the one-time "what reading is for" line, beneath the reading state. */
 .wb-index-explain {
-  margin: -3px 0 8px 22px;
+  margin: 4px 0 0;
   font-family: var(--font-sans);
   font-size: 11.5px;
   line-height: 1.45;
   color: var(--ink-muted);
 }
 .wb-index-skipped {
-  margin: -3px 0 8px 22px;
+  margin: 2px 0 0 -4px;
 }
 .wb-index-skipped-list {
   margin: 4px 0 0;
@@ -254,7 +583,7 @@
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
   border-radius: var(--radius-lg);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-float);
 }
 .wb-menu button {
   display: block;
@@ -353,46 +682,59 @@
 
 /* ---- stacked sections: Files, then Artifacts ---- */
 
-/* Files takes the free height; Artifacts sizes to its content so it never
-   crowds out the tree, but can still scroll when there are many. */
-/* ---- the three places: Made / Files / Browser ----
+/* ---- the sub-views: Files · Artifacts · Changes (· Agents · Browser) ----
    Tabs rather than a stack, because each of these wants the column's full
-   height. Underline-only selection, no pills or fills — the panel is quiet
-   furniture and the tab row must not out-shout the content under it. */
+   height. Drawn as the rail draws its rows — sentence case, a flat fill on
+   hover, the rail's tinted fill for the one you are on — so moving between
+   the two sidebars is moving between one kind of control. The row never wraps:
+   on a narrow panel it scrolls sideways instead. */
 .wb-tabs {
   display: flex;
   gap: 2px;
-  padding: 0 8px;
+  padding: 0 8px 8px;
   border-bottom: 1px solid var(--paper-edge-2);
   flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.wb-tabs::-webkit-scrollbar {
+  display: none;
 }
 .wb-tab {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 10px 7px;
+  min-height: 28px;
+  padding: 0 9px;
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
+  border-radius: var(--radius);
   cursor: pointer;
   font-family: var(--font-sans);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--ink-faint);
+  font-size: 12.5px;
+  color: var(--ink-muted);
+  white-space: nowrap;
 }
 .wb-tab:hover {
-  color: var(--ink-muted);
+  background: var(--paper-edge);
+  color: var(--ink);
 }
 .wb-tab.active {
+  background: color-mix(in srgb, var(--paper-edge) 100%, var(--ink) 12%);
   color: var(--ink);
-  border-bottom-color: var(--ink);
+  font-weight: 500;
 }
+/* The rail's stamp: mono, faint, tabular. */
 .wb-tab-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0;
   color: var(--ink-faint);
+}
+.wb-tab.active .wb-tab-count {
+  color: var(--ink-muted);
 }
 /* A live page is a state, not a quantity — one dot, ink-toned, and it stops
    moving for anyone who asked motion to stop. */
@@ -435,12 +777,18 @@
 .wb-files {
   flex: 1;
 }
+/* Every list in the Workbench — files, artifacts, agents — is the same thing:
+   rows inset 8px from the panel edges, the rail's fills, no card around them.
+   They used to be a flush tree in one tab and bordered cards in two others,
+   for no reason tied to what any of them shows. */
 .wb-artifacts-block {
   flex: 0 1 auto;
+  padding: 8px 8px 12px;
 }
 .wb-artifacts {
-  overflow-y: auto;
-  padding-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   min-height: 0;
 }
 
@@ -460,7 +808,7 @@
 }
 
 .wb-filter-wrap {
-  padding: 2px 12px 6px;
+  padding: 8px 8px 6px;
   flex-shrink: 0;
 }
 .wb-filter {
@@ -479,12 +827,22 @@
 
 .wb-tree {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   overflow-y: auto;
-  padding-bottom: 8px;
+  padding: 0 8px 8px;
   min-height: 0;
+}
+.wb-tree > .wb-hint {
+  padding: 8px 7px;
 }
 /* Artifact rows sit in their own section, so they don't need the tree's
    indent machinery — just the kind chip and the Save action. */
+.wb-artifact {
+  min-height: 30px;
+  padding-left: 7px;
+}
 .wb-artifact .wb-row-name {
   font-style: italic;
 }
@@ -519,21 +877,27 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  padding-right: 10px;
-  min-height: 25px;
+  padding-right: 7px;
+  min-height: 26px;
+  border-radius: var(--radius);
   font-family: var(--font-sans);
   font-size: 12.5px;
   color: var(--ink-muted);
   cursor: pointer;
   user-select: none;
 }
+.wb-row:focus-visible {
+  outline-offset: -2px;
+}
 .wb-row:hover {
   background: var(--paper-edge);
   color: var(--ink);
 }
+/* The rail's "where you are" fill — see `.chat-row.active` in Rail.css. */
 .wb-row.active {
-  background: var(--paper-edge-2);
+  background: color-mix(in srgb, var(--paper-edge) 100%, var(--ink) 12%);
   color: var(--ink);
+  font-weight: 500;
 }
 .wb-row.is-dir {
   color: var(--ink);
@@ -623,25 +987,7 @@
   padding: 3px 6px;
 }
 
-/* ---- viewer: takes over the panel, with a way back ---- */
-
-.wb-back {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  color: var(--ink-muted);
-  cursor: pointer;
-  padding: 3px;
-  margin-left: -3px;
-  border-radius: var(--radius);
-  flex-shrink: 0;
-}
-.wb-back:hover {
-  color: var(--ink);
-  background: var(--paper-edge);
-}
+/* ---- viewer: the head and body of an open item tab ---- */
 
 .wb-viewer {
   flex: 1;
@@ -691,35 +1037,279 @@
   margin: 0 0 8px;
 }
 
-/* Full-screen escape hatch for content 340px can't hold. */
-.wb-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
-  background: rgba(0, 0, 0, 0.4);
-}
-.wb-overlay-panel {
+/* ---- `EDT-1`: the editable file tab ---- */
+
+/* Monaco measures its host, so the column from the pane down to the editor has
+   to have a real height at every step — one `min-height: 0` missing anywhere
+   here and the editor collapses to nothing or grows without bound. */
+.editor-pane,
+.editor-wrap {
   display: flex;
   flex-direction: column;
-  width: min(1100px, 100%);
   height: 100%;
-  background: var(--paper);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius-lg);
+  min-height: 0;
   overflow: hidden;
 }
+.editor-host {
+  flex: 1;
+  min-height: 0;
+}
+/* Monaco draws its own everything; all this has to do is not fight it. The
+   editor takes the panel's paper, so the seam between chrome and code is a
+   hairline, as everywhere else in the app. */
+.editor-host .monaco-editor,
+.editor-host .monaco-editor .overflow-guard {
+  border-radius: 0;
+}
 
-/* ---- rendered content (shared by the docked viewer and the overlay) ---- */
+/* A bar above the code: the conflict question, a read-only reason, a failed
+   save. Never more than one at a time — they are ordered by how much they
+   stop you doing. */
+.editor-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--paper-edge-2);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+.editor-bar span {
+  flex: 1;
+  min-width: 0;
+}
+.editor-bar.conflict,
+.editor-bar.error {
+  color: var(--danger);
+}
+.editor-bar .wb-link {
+  flex: 0 0 auto;
+}
+
+/* The quietest possible status line: one word, most of the time "Saved". It
+   sits under the code rather than over it so it cannot cover a line. */
+.editor-status {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  border-top: 1px solid var(--paper-edge);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-faint);
+  text-align: right;
+}
+
+/* Preview / Source, for the kinds that have both. It rides in the pane's
+   header row, left of the icons that act on the file, so the header reads
+   left to right as "this file · shown how · do what". A pair of text buttons,
+   not a pill or a segmented control — the panel is flat, and the only mark of
+   the active one is ink weight, the same way the Workbench's own tabs work. */
+.editor-modes {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 1px;
+  margin-right: 4px;
+}
+.editor-mode {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: none;
+  padding: 3px 7px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.editor-mode:hover {
+  color: var(--ink-muted);
+  background: var(--canvas);
+}
+/* Ink and weight only. The Workbench's own tabs mark the active one with a 2px
+   underline as well, but this row is 6px tall and sits directly on the header's
+   hairline — a second rule that close to the first reads as a rendering
+   artefact rather than as a selection. */
+.editor-mode.active {
+  color: var(--ink);
+  font-weight: 600;
+}
+.editor-mode-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+/* With the toggle present the editor is the row below it, not the whole pane. */
+.editor-pane > .editor-wrap {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+/* HTML and SVG previews are iframes: they fill the row and scroll internally,
+   so they need the height but never a scroller around them. */
+.editor-pane > .canvas-html,
+.editor-pane > .canvas-frame {
+  flex: 1;
+  min-height: 0;
+}
+/* Markdown needs a scroller of its own here. Everywhere else
+   `.canvas-markdown` is a direct child of `.wb-viewer-body`, which scrolls it;
+   under the toggle it is a flex row in a clipped column instead, so without
+   this a file taller than the pane simply ends where the pane does — no
+   scrollbar, no way down.
+   The scroller is this wrapper and not `.canvas-markdown` itself because that
+   is capped at `--measure`: scrolling it would hang the scrollbar at the end
+   of the text column, floating in the middle of a wide pane, instead of at the
+   pane's edge where every other scrollbar in the app sits. `auto` on both axes
+   — a wide table or an unbroken URL overflows sideways, and the measure cap
+   does not apply to either. */
+.editor-preview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* ---- rendered content ---- */
 
 .canvas-frame {
   width: 100%;
   height: 100%;
   border: none;
   background: #fff;
+}
+
+/* `ART-5`: the page and what it said, stacked. The console takes only the room
+   it needs, so a page that prints nothing looks exactly as it did before. */
+.canvas-html {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.canvas-html > .canvas-frame {
+  flex: 1;
+  min-height: 0;
+}
+.preview-console {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--paper-edge-2);
+  background: var(--paper);
+  font-family: var(--font-mono);
+  font-size: var(--fs-timeline);
+}
+.pc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px 0 4px;
+}
+.pc-toggle,
+.pc-clear {
+  background: none;
+  border: none;
+  color: var(--ink-muted);
+  font: inherit;
+  cursor: pointer;
+  padding: 6px 4px;
+}
+.pc-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  text-align: left;
+}
+.pc-toggle:hover,
+.pc-clear:hover {
+  color: var(--ink);
+}
+.pc-caret {
+  display: inline-block;
+  transition: transform var(--t-fast);
+  color: var(--ink-faint);
+}
+.pc-caret.open {
+  transform: rotate(90deg);
+}
+.pc-count {
+  color: var(--ink-faint);
+}
+/* The one thing here worth a colour: the page broke. */
+.pc-errors {
+  color: var(--danger);
+}
+.pc-list {
+  /* Tall enough to read a stack trace, short enough to leave the page the
+     panel. Beyond that it scrolls. */
+  max-height: 180px;
+  overflow-y: auto;
+  border-top: 1px solid var(--paper-edge);
+  padding: 4px 0;
+}
+.pc-line {
+  display: flex;
+  gap: 8px;
+  padding: 2px 8px;
+  align-items: baseline;
+  color: var(--ink-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pc-line + .pc-line {
+  border-top: 1px solid var(--paper-edge);
+}
+.pc-level {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  min-width: 4.5em;
+}
+.pc-text {
+  flex: 1;
+}
+.pc-source {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+}
+/* Sits quietly at the end of the line it belongs to and firms up on hover:
+   it's an offer attached to one error, not a call to action competing with
+   the error text itself. */
+.pc-fix {
+  flex: 0 0 auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--ink-faint);
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  padding: 0;
+  cursor: pointer;
+  transition: color var(--t-fast), background var(--t-fast);
+}
+.pc-fix:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--paper-edge);
+}
+.pc-fix:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.pc-error .pc-level,
+.pc-error .pc-text,
+.pc-uncaught .pc-level,
+.pc-uncaught .pc-text {
+  color: var(--danger);
+}
+.pc-warn .pc-level {
+  color: var(--cloud);
 }
 .canvas-markdown {
   padding: 18px 20px;
@@ -743,6 +1333,51 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* COD-UI-5: a code artifact's source above, what running it printed below. */
+.viewer-code-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.viewer-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.viewer-run-outcome {
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+.viewer-run-outcome.failed {
+  color: var(--danger);
+}
+.viewer-run-error {
+  margin: 0;
+  padding: 4px 10px 8px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--danger);
+}
+.viewer-run-body {
+  max-height: 240px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.viewer-run-output {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* `COD-UI-2`'s hand-numbered line view (`.viewer-lines` / `.viewer-line`) is
+   gone: opening a file at a line is Monaco's `revealLineInCenter` now, and it
+   brings its own gutter, its own current-line mark and horizontal scrolling
+   that does not fight `pre-wrap`. */
 .canvas-image {
   display: block;
   max-width: 100%;
@@ -832,33 +1467,6 @@
   color: var(--ink-faint);
 }
 
-/* "Schedule this" (SCH): turning the open chat into a recurring task. A quiet
-   full-width action, not a primary button — it's an offer, not the thing you
-   came to this panel to do. */
-.wb-schedule {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  background: none;
-  border: none;
-  border-bottom: 1px solid var(--paper-edge-2);
-  padding: 9px 14px;
-  font-family: var(--font-sans);
-  font-size: 12.5px;
-  color: var(--ink-muted);
-  cursor: pointer;
-  text-align: left;
-}
-.wb-schedule:hover {
-  background: var(--paper-edge);
-  color: var(--ink);
-}
-.wb-schedule-glyph {
-  font-size: 13px;
-  line-height: 1;
-}
-
 /* `BRW-UI-1`: the browser as a felt presence — a live page, a screenshot,
    a plain action trail. */
 .wb-browser {
@@ -930,4 +1538,117 @@
   font-family: var(--font-sans);
   font-size: 11.5px;
   color: var(--ink-faint);
+}
+
+/* `SUB-UI-2`: the Agents tab. A short list of who is working, and the whole
+   panel below it for what the selected one is actually doing — the difference
+   between knowing an agent exists and being able to supervise it. */
+/* `.wb-tabpanel` carries no padding of its own — each panel supplies what it
+   needs, and this one supplied none, so its list and transcript sat flush
+   against the panel edge. 14px matches `.wb-hint`, which is what this tab
+   shows when no work has been handed out yet; the two must not shift. */
+.agents-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 8px 8px 12px;
+}
+.agents-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: none;
+}
+.agents-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  padding: 0 7px;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  min-width: 0;
+}
+.agents-row:hover {
+  background: var(--paper-edge);
+  color: var(--ink);
+}
+.agents-row.active {
+  background: color-mix(in srgb, var(--paper-edge) 100%, var(--ink) 12%);
+  color: var(--ink);
+}
+/* Working or done, as the tab's live dot says it: breathing while it runs,
+   a still faint dot once it has stopped. */
+.agents-row-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+.agents-row-dot.live {
+  background: var(--ink);
+  animation: wb-tab-breathe 2.6s ease-in-out infinite;
+}
+.agents-row-agent {
+  flex: none;
+  color: var(--ink);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.agents-row-task {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agents-detail {
+  min-height: 0;
+  overflow-y: auto;
+}
+.agents-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.agents-detail-agent {
+  font-size: var(--fs-ui-lg);
+  color: var(--ink);
+}
+.agents-task {
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  margin: 2px 0 10px;
+}
+.agents-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.agents-artifact {
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 2px 6px;
+}
+.agents-steer {
+  margin-top: 10px;
+}
+.agents-steer input {
+  width: 100%;
+  font: inherit;
+  font-size: var(--fs-ui);
+  padding: 6px 8px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
 }

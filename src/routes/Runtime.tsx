@@ -8,11 +8,13 @@ import {
   type UpdateInfo,
 } from "../lib/api";
 import { useAppStore } from "../lib/store";
-import ImageEngine from "../components/ImageModels/ImageEngine";
-import EmbedEngine from "../components/EmbedEngine/EmbedEngine";
+import ImageRuntime from "../components/ImageModels/ImageRuntime";
+import RecallRuntime from "../components/RecallRuntime/RecallRuntime";
+import YourServers from "../components/YourServers/YourServers";
+import type { RuntimeTab } from "../lib/types";
 import "./Surface.css";
 import "./Models.css";
-import "./Engine.css";
+import "./Runtime.css";
 
 function formatVram(mb: number | null): string {
   if (!mb) return "";
@@ -23,8 +25,11 @@ function basename(path: string | null): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
-export default function Engine() {
-  const [tab, setTab] = useState<"language" | "image" | "recall">("language");
+export default function Runtime() {
+  // `RTM-8`: Chat · Images · Your servers · Recall. `runtimeTab` is the deep
+  // link (the picker and Models' "Your server" groups open `servers`).
+  const runtimeTab = useAppStore((s) => s.runtimeTab);
+  const [tab, setTab] = useState<RuntimeTab>(runtimeTab ?? "chat");
   const [ov, setOv] = useState<RuntimeOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -40,6 +45,7 @@ export default function Engine() {
   const loadingModel = useAppStore((s) => s.loadingModel);
   const engineReady = useAppStore((s) => s.engineReady);
   const loadedModelId = useAppStore((s) => s.loadedModelId);
+  const setView = useAppStore((s) => s.setView);
 
   const refresh = useCallback(async () => {
     if (!inTauri()) return;
@@ -55,7 +61,13 @@ export default function Engine() {
   }, [refresh, engineReady, loadingModel]);
 
   useEffect(() => {
-    if (tab === "recall" && !expert) setTab("language");
+    if (!runtimeTab) return;
+    setTab(runtimeTab);
+    useAppStore.setState({ runtimeTab: null });
+  }, [runtimeTab]);
+
+  useEffect(() => {
+    if (tab === "recall" && !expert) setTab("chat");
   }, [tab, expert]);
 
   const defaultModelId = () =>
@@ -64,7 +76,7 @@ export default function Engine() {
   async function start() {
     const id = loadedModelId ?? defaultModelId();
     if (!id) {
-      setError("No model in your library yet. Download one from Models first.");
+      setError("No model on this PC yet. Download one from Models first.");
       return;
     }
     setError(null);
@@ -114,8 +126,8 @@ export default function Engine() {
     return (
       <div className="surface">
         <div className="surface-inner">
-          <h1>Engine</h1>
-          <p className="lede">The local engine runs in the desktop app.</p>
+          <h1>Runtime</h1>
+          <p className="lede">The local runtime runs in the desktop app.</p>
         </div>
       </div>
     );
@@ -127,55 +139,48 @@ export default function Engine() {
   return (
     <div className="surface">
       <div className="surface-inner">
-        <h1>Engine</h1>
+        <h1>Runtime</h1>
         <p className="lede">
-          Poiesis Agent runs open models on your PC with local engines that download automatically and are
-          matched to your hardware — the <strong>llama.cpp</strong> engine for chat and recall, and
-          the <strong>stable-diffusion.cpp</strong> engine for images.
+          The local runtime runs open models on your PC. It downloads by itself and is matched to
+          your hardware — <strong>llama.cpp</strong> for chat and recall,{" "}
+          <strong>stable-diffusion.cpp</strong> for images.
         </p>
 
-        <div className="model-tabs" role="tablist" aria-label="Engine type">
-          <button
-            className={`model-tab ${tab === "language" ? "on" : ""}`}
-            role="tab"
-            aria-selected={tab === "language"}
-            onClick={() => setTab("language")}
-          >
-            Language
-          </button>
-          <button
-            className={`model-tab ${tab === "image" ? "on" : ""}`}
-            role="tab"
-            aria-selected={tab === "image"}
-            onClick={() => setTab("image")}
-          >
-            Image
-          </button>
-          {expert && (
+        <div className="model-tabs" role="tablist" aria-label="Runtime type">
+          {(
+            [
+              ["chat", "Chat"],
+              ["images", "Images"],
+              ["servers", "Your servers"],
+              ...(expert ? [["recall", "Recall"]] : []),
+            ] as [RuntimeTab, string][]
+          ).map(([id, label]) => (
             <button
-              className={`model-tab ${tab === "recall" ? "on" : ""}`}
+              key={id}
+              className={`model-tab ${tab === id ? "on" : ""}`}
               role="tab"
-              aria-selected={tab === "recall"}
-              onClick={() => setTab("recall")}
+              aria-selected={tab === id}
+              onClick={() => setTab(id)}
             >
-              Recall
+              {label}
             </button>
-          )}
+          ))}
         </div>
 
-        {tab === "image" && <ImageEngine />}
-        {tab === "recall" && expert && <EmbedEngine />}
+        {tab === "images" && <ImageRuntime />}
+        {tab === "servers" && <YourServers />}
+        {tab === "recall" && expert && <RecallRuntime />}
 
-        {tab === "language" && (
+        {tab === "chat" && (
           <>
         {error && <p className="hw-note error">{error}</p>}
 
-        {/* Engine status + lifecycle */}
-        <section className="engine-card">
-          <div className="engine-card-head">
+        {/* Runtime status + lifecycle */}
+        <section className="runtime-card">
+          <div className="runtime-card-head">
             <h2 className="section-title">Status</h2>
             <span
-              className={`engine-state-badge ${starting ? "starting" : running ? "running" : "idle"}`}
+              className={`runtime-state-badge ${starting ? "starting" : running ? "running" : "idle"}`}
             >
               <span className="dot" aria-hidden="true" />
               {starting ? loadingModel?.label : running ? "Running" : "Stopped"}
@@ -183,21 +188,26 @@ export default function Engine() {
           </div>
           <div className="hw-grid">
             <div className="hw-row">
-              <span className="hw-label">Model</span>
+              <span className="hw-label">Loaded model</span>
               <span className="hw-value">
                 {running ? basename(ov?.engine.model_path ?? null) || "—" : "—"}
               </span>
             </div>
             <div className="hw-row">
-              <span className="hw-label">Endpoint</span>
+              <span className="hw-label">Address</span>
               <span className="hw-value">
                 {running && ov?.engine.port
-                  ? `127.0.0.1:${ov.engine.port} · loopback only`
+                  ? `127.0.0.1:${ov.engine.port} · this PC only`
                   : "Not listening"}
               </span>
             </div>
             <div className="hw-row">
-              <span className="hw-label">Structured tool output</span>
+              <span
+                className="hw-label"
+                title="Whether the runtime forces tool calls into valid JSON. When it can't, I check each call and retry."
+              >
+                Structured tool output
+              </span>
               <span className="hw-value">
                 {running
                   ? ov?.engine.structured_tool_output
@@ -212,29 +222,32 @@ export default function Engine() {
                 <span className="hw-label">Self-healing</span>
                 <span className="hw-value">
                   {ov.engine.self_heal_gave_up
-                    ? `I couldn't keep my engine alive after ${ov.engine.restarts_session} tries — I've stopped trying.`
+                    ? `I couldn't keep my runtime alive after ${ov.engine.restarts_session} tries — I've stopped trying.`
                     : `Self-healed ${ov.engine.restarts_session}× this session`}
                 </span>
               </div>
             )}
           </div>
-          <div className="engine-actions">
+          <div className="runtime-actions">
+            <button className="link-button" onClick={() => setView("models")}>
+              Choose which model → Models
+            </button>
             {running ? (
               <button className="btn-secondary" onClick={stop} disabled={busyAction === "stop"}>
-                {busyAction === "stop" ? "Stopping…" : "Stop engine"}
+                {busyAction === "stop" ? "Stopping…" : "Stop runtime"}
               </button>
             ) : (
               <button className="btn-primary" onClick={start} disabled={starting}>
-                {starting ? loadingModel?.label : "Start engine"}
+                {starting ? loadingModel?.label : "Start runtime"}
               </button>
             )}
           </div>
         </section>
 
         {/* Acceleration backend (manual override) */}
-        <section className="engine-card">
+        <section className="runtime-card">
           <h2 className="section-title">Acceleration</h2>
-          <p className="engine-sub">{ov?.recommended.rationale}</p>
+          <p className="runtime-sub">{ov?.recommended.rationale}</p>
           <div className="backend-list">
             {ov?.options.map((opt) => {
               const active = opt.backend === ov.active_backend;
@@ -259,14 +272,14 @@ export default function Engine() {
               );
             })}
           </div>
-          <p className="engine-hint">
-            Most people should keep the recommended option. Switching downloads that engine the
+          <p className="runtime-hint">
+            Most people should keep the recommended option. Switching downloads that build the
             first time and restarts it if it’s running.
           </p>
         </section>
 
         {/* Installed runtime build + updates */}
-        <section className="engine-card">
+        <section className="runtime-card">
           <h2 className="section-title">Runtime build</h2>
           <div className="hw-grid">
             <div className="hw-row">
@@ -283,7 +296,7 @@ export default function Engine() {
               </div>
             )}
           </div>
-          <div className="engine-actions">
+          <div className="runtime-actions">
             <button
               className="btn-secondary"
               onClick={doCheckUpdate}
@@ -302,7 +315,7 @@ export default function Engine() {
         </section>
 
         {/* Hardware */}
-        <section className="engine-card">
+        <section className="runtime-card">
           <h2 className="section-title">Your hardware</h2>
           {ov && (
             <div className="hw-grid">

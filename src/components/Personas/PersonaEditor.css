@@ -30,7 +30,6 @@
 .soul-proposal {
   padding: 12px 14px;
   border: 1px solid var(--paper-edge-2);
-  border-left: 2px solid var(--ink-muted);
   border-radius: 6px;
 }
 .soul-proposal-why {
@@ -160,11 +159,9 @@
   gap: 6px;
   padding: 4px 0;
 }
-.field-label {
-  font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-muted);
+/* .field-label is a shared primitive (styles/global.css); the stacked form
+   here is the only place that needs the labels spaced off the field above. */
+.persona-form .field-label {
   margin-top: 6px;
 }
 .persona-form-row {
@@ -213,4 +210,18 @@
   font-size: 11px;
   color: var(--ink-faint);
   font-style: italic;
+}
+
+/* `SUB-UI-5`: a persona is an agent type. These two say when it gets used and
+   whether it may be handed work at all. */
+/* The hint under those fields is the shared `p.field-hint` primitive. */
+.persona-spawnable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  cursor: pointer;
+  margin-top: 6px;
 }

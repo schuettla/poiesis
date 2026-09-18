@@ -1,0 +1,262 @@
+/* `SHL-27`: the strip is the header's flexible middle — everything between the
+   brand and the toggles. It used to be pinned to the width of the pane its
+   tabs drove, which was the narrowest box in the row; the tabs now drive the
+   whole main column, so there is no edge to align to and the width is simply
+   whatever the row has left. A path finally fits in a tab.
+
+   Tabs sit on the recessed `--canvas` the header inherits from `html`
+   (global.css) — the same ground the Rail's rows sit on. The *active* tab
+   lifts onto `--paper`, the same surface as the column it fills, so a focused
+   tab reads as a physical extension of what is under it rather than a
+   separately coloured label pointing at it. */
+
+/* `ScrollZone` (TabStrip.tsx): an outer flex row — `[left chevron?, the
+   scrollable strip itself, right chevron?]` — sized by `.ts-zone-items`. The
+   chevrons are the reachability answer: shown only when there's actually
+   somewhere to scroll to, gone otherwise, so nothing decorates the common
+   case where every open tab already fits. */
+.ts-scrollzone {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.ts-zone {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* No visible scrollbar — the chevrons are the affordance. Wheel scroll and
+     scroll-into-view on focus (TabStrip.tsx) still work without one. */
+  scrollbar-width: none;
+  /* Continues the header's bottom edge across any empty space past the last
+     tab — each tab then paints over its own share with its own border,
+     erased when active, so the line reads as unbroken everywhere else. */
+  border-bottom: 1px solid var(--paper-edge-2);
+}
+.ts-zone::-webkit-scrollbar {
+  display: none;
+}
+
+.ts-nav {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  background: var(--canvas);
+  border: none;
+  border-bottom: 1px solid var(--paper-edge-2);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.ts-nav:hover {
+  color: var(--ink);
+  background: var(--paper-edge);
+}
+.ts-nav-left {
+  border-right: 1px solid var(--paper-edge-2);
+}
+.ts-nav-right {
+  border-left: 1px solid var(--paper-edge-2);
+}
+
+/* Holds the conversation and its open items. Sans is the default; a file or a
+   patch is mono, because its label is a path. */
+.ts-scrollzone.ts-zone-items {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-sans);
+}
+
+.ts-tab {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  /* Room for a real file name. It was 170px when the strip was confined to the
+     pane's width and every tab was fighting the same shortage. */
+  max-width: 220px;
+  min-width: 0;
+  border-right: 1px solid var(--paper-edge-2);
+  color: var(--ink-faint);
+  cursor: pointer;
+  /* No border-bottom of its own — `.ts-zone` already draws that line the
+     full width of the strip, and a second one here on top of it was what
+     doubled/thickened the line under every ordinary tab. Only the active
+     tab (below) needs to touch it at all: to erase its own share of it. */
+}
+.ts-tab.active {
+  background: var(--paper);
+  border-bottom: 1px solid var(--paper);
+  color: var(--ink);
+}
+/* `SHL-19`: the tab is the focusable element now, so it needs the focus ring
+   the label's button used to carry. The global `:focus-visible` (global.css)
+   already draws it — only the offset is overridden, since an outline sitting
+   2px *outside* a tab in a 42px-tall strip is clipped by the header's bounds
+   and by the neighbouring tab. Drawn inside, it stays whole. */
+.ts-tab:focus-visible {
+  outline-offset: -2px;
+}
+
+/* The mockup's own tab sizes, mapped onto DESIGN.md's ramp: Timeline (12.5px)
+   sans for an artifact or an agent, mono and a step smaller for a path. */
+.ts-tab-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  padding: 0 4px 0 10px;
+  font-size: 12.5px;
+  color: inherit;
+}
+.ts-tab:hover .ts-tab-main {
+  color: var(--ink-muted);
+}
+.ts-tab.active .ts-tab-main {
+  color: var(--ink);
+  font-weight: 500;
+}
+.ts-tab-label {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The item's own glyph — a page corner, a sparkle, a branching agent. It says
+   where the tab came from before the label is read, and it never shrinks away
+   with the label. */
+.ts-tab-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  color: var(--ink-faint);
+}
+.ts-tab.active .ts-tab-icon {
+  color: var(--ink);
+}
+.ts-tab.ts-mono .ts-tab-main {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+/* `SHL-27`: the session tab. Serif and a step larger, because it names a
+   conversation and every other place a chat's title appears in this shell —
+   the Rail's rows, the location label this replaces — sets it in serif. It is
+   also the one tab with no ×, so it keeps the close button's 22px as padding
+   and doesn't sit tighter than its neighbours. */
+.ts-session {
+  max-width: 260px;
+  /* A firmer edge than the hairline between two item tabs: everything right of
+     it is something taken *out* of the chat named to its left. */
+  border-right: 1px solid var(--paper-edge-2);
+  margin-right: 3px;
+}
+.ts-session .ts-tab-main {
+  font-family: var(--font-serif);
+  font-size: 13px;
+  padding-right: 12px;
+}
+
+/* A file changed this session — the same dot the tree's own rows carry. */
+/* PRJ-UI-2: the dot sits where the close button sits, the way an unsaved
+   editor buffer wears it. Hovering the tab trades the dot for the button, and
+   pressing the dot shows the patch instead of closing anything. */
+.ts-dirty {
+  flex-shrink: 0;
+  width: 22px;
+  align-self: stretch;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  background: radial-gradient(circle, var(--ink) 3px, transparent 3.5px);
+}
+/* An unsaved buffer is the user's own work, not the agent's, so it takes the
+   hollow ring the rest of the UI uses for "yours, in progress" rather than the
+   solid dot that means "the agent touched this". It is a span, not a button:
+   there is nowhere to go — the file is already open in front of you. */
+.ts-dirty.unsaved {
+  cursor: default;
+  background: radial-gradient(
+    circle,
+    transparent 1.5px,
+    var(--ink) 1.75px,
+    var(--ink) 3px,
+    transparent 3.5px
+  );
+}
+.ts-tab.has-slot .ts-tab-close {
+  display: none;
+}
+/* Hover only: on keyboard focus the dot must stay put to be pressed, and
+   `Ctrl+W` still closes the tab. */
+.ts-tab.has-slot:hover .ts-dirty {
+  display: none;
+}
+.ts-tab.has-slot:hover .ts-tab-close {
+  display: flex;
+}
+/* A live page is a state, not a quantity — one dot, breathing gently, stopped
+   for anyone who asked motion to stop. */
+.ts-live {
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink-muted);
+  animation: ts-breathe 2.6s ease-in-out infinite;
+}
+@keyframes ts-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ts-live {
+    animation: none;
+    opacity: 0.9;
+  }
+}
+.ts-count {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+  background: var(--paper-edge);
+  /* The system's chip radius. This was a hand-picked 3px, which is not a step
+     on the scale and not a shape anything else in the app has — DESIGN.md
+     gives chips `--radius` (4px) and caps everything at 6px. */
+  border-radius: var(--radius);
+  padding: 0 4px;
+}
+.ts-tab.active .ts-count {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.ts-tab-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.ts-tab-close:hover {
+  color: var(--ink);
+}
+

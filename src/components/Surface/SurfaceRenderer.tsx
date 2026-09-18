@@ -33,7 +33,7 @@ export default function SurfaceRenderer({ tree, ctx }: { tree: UINode; ctx: Surf
 
   return (
     <div
-      className={`surface ${entering ? "surface-enter" : ""}`}
+      className={`sf-surface ${entering ? "sf-surface-enter" : ""}`}
       role="region"
       aria-label="Workspace surface"
     >

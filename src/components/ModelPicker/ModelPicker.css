@@ -198,3 +198,25 @@
   color: var(--local);
   text-decoration: none;
 }
+
+/* `MOD-4`: the favorite star, on picker rows and on the Models page. */
+.star-btn {
+  background: none;
+  border: none;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.star-btn.on {
+  color: var(--ink);
+}
+.star-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.model-option .star-btn {
+  margin-left: auto;
+  font-size: 13px;
+}

@@ -25,8 +25,8 @@ use crate::runtime::{EmbedManager, RerankManager, RuntimeManager};
 
 use super::run::AgentEventSink;
 use super::{
-    artifacts, browser, codeexec, filesystem, imagegen, mail, memory_skill, present, recall,
-    retrieval, screen, skillpack, websearch,
+    artifacts, browser, codeexec, coderun, filesystem, imagegen, mail, memory_skill, present, recall,
+    retrieval, screen, skillpack, subagents, websearch,
 };
 
 /// Everything a toolset might need to run a call. Built-in toolsets receive this so
@@ -95,6 +95,25 @@ pub struct ToolContext<'a> {
     /// caller (e.g. `EVL`'s dispatched harness) doesn't wire one up — the
     /// Browser toolset reports itself unavailable rather than panicking.
     pub browser_pool: Option<&'a super::browser::BrowserPool>,
+    /// `SUB-5`: what the Subagents toolset needs to start a child run of the
+    /// same loop. `None` when the caller wired up no fleet (the `EVL` harness),
+    /// in which case `delegate` refuses rather than panicking.
+    pub delegation: Option<&'a super::run::DelegationContext<'a>>,
+    /// `RPC-1`: where a sandboxed script's own tool calls are posted, so the
+    /// tool loop can run them on this run's state. `None` when the ability is
+    /// switched off, when nothing in this batch could use it, or when the
+    /// caller wired up no loop (the `EVL` harness) — in which case `run_code`
+    /// simply runs without it and says so rather than pretending.
+    pub rpc: Option<&'a super::toolrpc::Gate>,
+    /// `COD-4`/`COD-12`: what this run has read, changed and checked. Shared
+    /// across the run, like `extra_read_roots`.
+    pub ledger: &'a super::ledger::Ledger,
+    /// The run's Stop flag, for a tool that waits a long time on something
+    /// outside the loop (`COD-6`'s build). `None` where no run owns the call.
+    pub cancel: Option<&'a crate::runtime::proxy::CancelFlag>,
+    /// When the run began, in epoch milliseconds: what "this run" means for
+    /// `changes` (`COD-11`).
+    pub run_started_at: i64,
 }
 
 /// Set this call's timeline result line (see `ToolContext::step_note`). Last
@@ -235,6 +254,12 @@ pub enum Toolset {
     /// Screenshot + launch-an-app (`SYS-1`). Default off — a screenshot can
     /// contain anything, and launching reaches outside the app's own sandbox.
     System,
+    /// `SUB-4`: hand parts of a job to other agents running at the same time.
+    /// Not sensitive — a child can never do more than the run that started it.
+    Subagents,
+    /// `COD-6`: run the build, check and tests a project declares, in its
+    /// folder. Default off, sensitive — it runs the project's own programs.
+    CodeRun,
 }
 
 /// A toolset's metadata for the Settings surface (id, label, blurb, current state).
@@ -251,10 +276,11 @@ pub struct ToolsetInfo {
 
 impl Toolset {
     /// Every built-in toolset, in display order.
-    pub const ALL: [Toolset; 13] = [
+    pub const ALL: [Toolset; 15] = [
         Toolset::FileSystem,
         Toolset::WebSearch,
         Toolset::CodeExec,
+        Toolset::CodeRun,
         Toolset::Artifacts,
         Toolset::ImageGen,
         Toolset::Present,
@@ -265,6 +291,7 @@ impl Toolset {
         Toolset::Skills,
         Toolset::Browser,
         Toolset::System,
+        Toolset::Subagents,
     ];
 
     /// Stable id used for settings keys and the frontend.
@@ -283,6 +310,8 @@ impl Toolset {
             Toolset::Skills => "skills",
             Toolset::Browser => "browser",
             Toolset::System => "system",
+            Toolset::Subagents => "subagents",
+            Toolset::CodeRun => "code_run",
         }
     }
 
@@ -305,6 +334,8 @@ impl Toolset {
             Toolset::Skills => "Skills",
             Toolset::Browser => "Browser",
             Toolset::System => "Screen & apps",
+            Toolset::Subagents => "Delegation",
+            Toolset::CodeRun => "Run project tasks",
         }
     }
 
@@ -320,7 +351,7 @@ impl Toolset {
                 "Run small Python or Node snippets in a throwaway sandbox with strict time and memory limits."
             }
             Toolset::Artifacts => {
-                "Let the assistant render web pages, graphics, documents, or code in the Canvas panel."
+                "Let the assistant render web pages, graphics, documents, or code in the Canvas panel — and run a page it made in your installed Chrome or Edge to check its own work."
             }
             Toolset::ImageGen => {
                 "Generate images on your device from a text prompt. Set it up in Models → Image."
@@ -349,6 +380,12 @@ impl Toolset {
             Toolset::System => {
                 "Take a screenshot or launch an app on this machine. Both ask first, unless you say otherwise."
             }
+            Toolset::Subagents => {
+                "I can split a job across several agents working at the same time, each with its own fresh context. I stay in charge and write the final answer."
+            }
+            Toolset::CodeRun => {
+                "Run a project's own build, type check and tests in its folder, so I can find out whether a change works instead of guessing. Only tasks the project declares, never in a read-only folder. Memory, process count and running time are limited; network and files outside the folder are not walled off."
+            }
         }
     }
 
@@ -356,7 +393,12 @@ impl Toolset {
     fn sensitive(self) -> bool {
         matches!(
             self,
-            Toolset::WebSearch | Toolset::CodeExec | Toolset::Mail | Toolset::Browser | Toolset::System
+            Toolset::WebSearch
+                | Toolset::CodeExec
+                | Toolset::CodeRun
+                | Toolset::Mail
+                | Toolset::Browser
+                | Toolset::System
         )
     }
 
@@ -378,6 +420,7 @@ impl Toolset {
                 | Toolset::Memory
                 | Toolset::Indexing
                 | Toolset::Skills
+                | Toolset::Subagents
         )
     }
 
@@ -409,6 +452,28 @@ impl Toolset {
         }
     }
 
+    /// `HRN-4`: must this call wait its turn, or may it run beside the others
+    /// in the same batch?
+    ///
+    /// The plan asks for `is_serial(self)`, but one toolset is not one answer:
+    /// `read_file` is safe beside anything and `write_file` is safe beside
+    /// nothing, and both are the File System toolset. So the tool name comes in
+    /// too.
+    ///
+    /// Serial is the default and only four toolsets opt out. Anything that
+    /// mutates shared state (`write_file`, `remember`) or drives one live
+    /// session (the browser, a render, the screen) is ordered. So is every MCP
+    /// call and every skill: we cannot see whether an MCP tool reads or writes,
+    /// and guessing wrong costs correctness while guessing right only saves
+    /// time.
+    pub fn is_serial(self, tool: &str) -> bool {
+        match self {
+            Toolset::FileSystem => !filesystem::is_read_only(tool),
+            Toolset::WebSearch | Toolset::Recall | Toolset::Indexing => false,
+            _ => true,
+        }
+    }
+
     /// The OpenAI tool schemas this toolset advertises.
     pub fn tool_specs(self) -> Vec<serde_json::Value> {
         let v = match self {
@@ -429,6 +494,8 @@ impl Toolset {
             Toolset::Skills => skillpack::tool_specs(),
             Toolset::Browser => browser::tool_specs(),
             Toolset::System => screen::tool_specs(),
+            Toolset::Subagents => subagents::tool_specs(),
+            Toolset::CodeRun => coderun::tool_specs(),
         };
         v.as_array().cloned().unwrap_or_default()
     }
@@ -449,6 +516,8 @@ impl Toolset {
             Toolset::Skills => skillpack::handles(name),
             Toolset::Browser => browser::handles(name),
             Toolset::System => screen::handles(name),
+            Toolset::Subagents => subagents::handles(name),
+            Toolset::CodeRun => coderun::handles(name),
         }
     }
 
@@ -468,6 +537,8 @@ impl Toolset {
             Toolset::Skills => skillpack::describe(name, args),
             Toolset::Browser => browser::describe(name, args),
             Toolset::System => screen::describe(name, args),
+            Toolset::Subagents => subagents::describe(name, args),
+            Toolset::CodeRun => coderun::describe(name, args),
         }
     }
 
@@ -492,6 +563,8 @@ impl Toolset {
             Toolset::Skills => skillpack::execute(ctx, name, args).await,
             Toolset::Browser => browser::execute(ctx, name, args).await,
             Toolset::System => screen::execute(ctx, name, args).await,
+            Toolset::Subagents => subagents::execute(ctx, name, args).await,
+            Toolset::CodeRun => coderun::execute(ctx, name, args).await,
         }
     }
 }

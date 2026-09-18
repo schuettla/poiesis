@@ -4,8 +4,9 @@
 use std::path::PathBuf;
 
 use poiesis_lib::agent::golden::{describe_failures, parse_cases, GoldenCase};
+use poiesis_lib::agent::fleet::{Fleet, RunLimits};
 use poiesis_lib::agent::run::run_agent;
-use poiesis_lib::agent::run::AgentEventSink;
+use poiesis_lib::agent::run::{AgentEventSink, RunContext};
 use poiesis_lib::cloud::ChatEndpoint;
 use poiesis_lib::db::Db;
 use poiesis_lib::memory::MemoryStore;
@@ -56,6 +57,14 @@ async fn run_case(
     let embed_mgr = EmbedManager::new();
     let rerank_mgr = RerankManager::new();
 
+    // `HRN-1`: a run is addressable now, so even this harness opens one. No
+    // fleet is registered with it — `EVL` never delegates, and a `None` fleet
+    // makes `delegate` report itself unavailable rather than panicking.
+    let fleet = Fleet::new();
+    let run = fleet.open(conversation_id, CancelFlag::new(), None, 0);
+    let limits = RunLimits::default();
+    let rc = RunContext::top(&run, &limits, None, "local", None);
+
     run_agent(
         &client,
         &endpoint,
@@ -78,10 +87,13 @@ async fn run_case(
         0.2,
         true,
         false,
-        CancelFlag::new(),
+        &rc,
         &sink,
     )
     .await
+    // `HRN-3`: a run reports how it ended as well as what it said. The cases
+    // here assert on the prose, and a run that stopped early still has some.
+    .text
 }
 
 /// EVL-2/EVL-3: run every case in `golden.json` (or just `EVAL_FILTER`),

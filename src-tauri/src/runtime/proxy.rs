@@ -25,6 +25,12 @@ pub enum ProxyError {
         /// The provider's own message, already unwrapped from its JSON envelope.
         message: String,
     },
+    /// The connection stayed open and the provider stopped sending. There is no
+    /// status and no body to report — the request never failed, it simply never
+    /// finished — so this cannot be an `Api` error, and calling it a network
+    /// error would point the user at their own connection.
+    #[error("{0}")]
+    Stalled(String),
 }
 
 impl ProxyError {
@@ -33,6 +39,7 @@ impl ProxyError {
         match self {
             ProxyError::Api { status, .. } => Some(*status),
             ProxyError::Http(e) => e.status().map(|s| s.as_u16()),
+            ProxyError::Stalled(_) => None,
         }
     }
 
@@ -41,7 +48,7 @@ impl ProxyError {
     pub fn provider_message(&self) -> &str {
         match self {
             ProxyError::Api { message, .. } => message,
-            ProxyError::Http(_) => "",
+            ProxyError::Http(_) | ProxyError::Stalled(_) => "",
         }
     }
 }
@@ -120,6 +127,81 @@ impl CancelFlag {
     }
 }
 
+/// How often `until_cancelled` looks at the flag while it waits.
+const CANCEL_POLL_MS: u64 = 80;
+
+/// How long one stream may go silent before the turn gives up on it.
+///
+/// This is a gap *between chunks*, not a limit on the turn: a model that is
+/// thinking hard still emits reasoning deltas, and one that is answering emits
+/// content, so a live stream refreshes this clock constantly. Two minutes of
+/// nothing at all means the provider has stopped, and waiting longer only makes
+/// the app look like the thing that broke. Generous on purpose — the failure it
+/// replaces (waiting forever) is worse than giving up a little late.
+const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// How long the wait for response *headers* may last before the turn gives up.
+///
+/// `STREAM_IDLE_TIMEOUT` only guards the gaps between chunks, which means it
+/// never starts: a provider that accepts the connection and then never answers
+/// leaves the run parked on step 1 with a running clock and no way out but Stop
+/// — exactly the hang it was meant to fix. This covers the other half. It is
+/// longer than the idle limit because a free tier can legitimately queue a
+/// request for a while before the first byte, and unlike a mid-stream stall
+/// there is no evidence yet that anything is wrong.
+const RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// How long a model may think without producing a single word of answer.
+///
+/// Neither clock above catches a model that is *busy* going nowhere: reasoning
+/// deltas keep arriving, so the idle timeout is refreshed by the very thing
+/// that has gone wrong. Observed in the wild at ten minutes and a hundred
+/// thousand characters of thinking with no answer — a loop, not deep thought.
+///
+/// Hitting this does not fail the turn: the stream is cut and whatever the turn
+/// has is returned, which for an all-thinking turn is empty and lands in
+/// `RunState::rescue_empty_answer` — the model is asked once, plainly, to write
+/// the answer. That is a better outcome than either waiting or erroring.
+const THINKING_BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The message a caller sees when either clock fires. Both failures look the
+/// same from the outside — nothing arrived — so they read the same too.
+fn stalled(secs: u64, what: &str) -> ProxyError {
+    ProxyError::Stalled(format!(
+        "The model {what} for {secs} seconds, so I gave up waiting. This is usually the \
+         provider rather than your request — try again, or use a different model."
+    ))
+}
+
+/// Await `fut`, but give up as soon as `cancel` trips. `None` means cancelled.
+///
+/// `CHT-2b`: Stop used to be read only between arriving chunks, which is the
+/// one moment a stalled turn never reaches. Waiting on the response headers of
+/// a slow or free-tier endpoint could sit there for a minute with the flag
+/// already set and the user pressing a button that did nothing. A `CancelFlag`
+/// is a bare atomic with nothing to await on, so this polls it on a short tick
+/// instead of growing a notification channel — the tick costs nothing next to
+/// the network wait it is racing.
+///
+/// Dropping `fut` on cancellation is what actually stops the work: dropping a
+/// `reqwest` future closes the connection.
+async fn until_cancelled<T>(cancel: &CancelFlag, fut: impl std::future::Future<Output = T>) -> Option<T> {
+    if cancel.is_cancelled() {
+        return None;
+    }
+    tokio::pin!(fut);
+    loop {
+        tokio::select! {
+            out = &mut fut => return Some(out),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(CANCEL_POLL_MS)) => {
+                if cancel.is_cancelled() {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
 /// A tool call requested by the model (native tool calling, TOOL-2).
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolCallReq {
@@ -129,15 +211,78 @@ pub struct ToolCallReq {
     pub arguments: String,
 }
 
+/// What one model turn cost (`OBS-1`).
+///
+/// `None` rather than zero when the provider said nothing: a turn whose cost is
+/// unknown must not read as a free one. The integrated engine reports usage on
+/// its final chunk, and Anthropic always does. A plain OpenAI-compatible cloud
+/// stream only reports it when the request asks — `OBS-2` now sets
+/// `stream_options.include_usage` on every request that names a model, which is
+/// every remote one. The integrated engine (no `model` field) is deliberately
+/// left alone: it already reports, and it is the one server we cannot afford to
+/// hand an unknown field.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct Usage {
+    pub prompt_tokens: u64,
+    pub output_tokens: u64,
+}
+
+impl Usage {
+    /// Read an OpenAI-shaped `usage` object. Anthropic's adapter builds one
+    /// directly; its field names differ.
+    pub fn from_openai(value: &serde_json::Value) -> Option<Self> {
+        let obj = value.as_object()?;
+        let prompt = obj.get("prompt_tokens").and_then(|v| v.as_u64());
+        let output = obj.get("completion_tokens").and_then(|v| v.as_u64());
+        if prompt.is_none() && output.is_none() {
+            return None;
+        }
+        Some(Self {
+            prompt_tokens: prompt.unwrap_or(0),
+            output_tokens: output.unwrap_or(0),
+        })
+    }
+
+    pub fn add(&mut self, other: Usage) {
+        self.prompt_tokens += other.prompt_tokens;
+        self.output_tokens += other.output_tokens;
+    }
+}
+
 /// How a single model turn ended.
 #[derive(Debug, Clone)]
 pub enum TurnOutcome {
     /// The model produced a final answer (already streamed via the token sink).
-    Final { content: String },
+    Final {
+        content: String,
+        usage: Option<Usage>,
+        /// A reasoning model's thinking, when the provider streams it in a
+        /// field of its own rather than inside `content`.
+        ///
+        /// Kept apart from the answer on purpose — thinking is not a reply, and
+        /// the loop already strips the `<think>…</think>` form for the same
+        /// reason. It is carried so a turn that produced *only* thinking can be
+        /// told apart from one that produced nothing at all: those two look
+        /// identical from `content` alone, and they need opposite handling.
+        reasoning: String,
+    },
     /// The model asked to call one or more tools before answering.
-    ToolCalls(Vec<ToolCallReq>),
+    ToolCalls {
+        calls: Vec<ToolCallReq>,
+        usage: Option<Usage>,
+    },
     /// The user cancelled mid-turn.
     Cancelled,
+}
+
+impl TurnOutcome {
+    /// What this turn cost, if the provider said.
+    pub fn usage(&self) -> Option<Usage> {
+        match self {
+            TurnOutcome::Final { usage, .. } | TurnOutcome::ToolCalls { usage, .. } => *usage,
+            TurnOutcome::Cancelled => None,
+        }
+    }
 }
 
 /// Accumulator for streamed tool-call deltas, keyed by their `index`.
@@ -177,6 +322,18 @@ fn accumulate_tool_calls(delta: &serde_json::Value, acc: &mut Vec<ToolCallAccum>
 
 /// Stream one model turn: relay prose tokens through `on_token`, accumulate any
 /// native tool calls, and report how the turn ended. Used by the agent loop.
+/// What a streamed chunk turned out to be.
+///
+/// The two are kept apart all the way up rather than merged into one string of
+/// text: thinking is evidence that a turn is alive, and the answer is the
+/// answer. Anything that shows one as the other is a bug, and a single `&str`
+/// callback made that bug easy to write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delta<'a> {
+    Answer(&'a str),
+    Thinking(&'a str),
+}
+
 pub async fn stream_turn<F>(
     client: &reqwest::Client,
     base_url: &str,
@@ -186,14 +343,24 @@ pub async fn stream_turn<F>(
     mut on_token: F,
 ) -> Result<TurnOutcome, ProxyError>
 where
-    F: FnMut(&str),
+    F: FnMut(Delta),
 {
     let url = format!("{base_url}/v1/chat/completions");
     let mut req = client.post(&url).json(&body);
     if let Some(token) = token {
         req = req.bearer_auth(token);
     }
-    let resp = req.send().await?;
+    // The wait for response headers is the longest part of a slow turn, and
+    // used to be the part Stop could not interrupt (`CHT-2b`). It also used to
+    // have no clock at all, which is the hang that survived the idle timeout.
+    let Some(resp) = until_cancelled(cancel, tokio::time::timeout(RESPONSE_TIMEOUT, req.send())).await
+    else {
+        return Ok(TurnOutcome::Cancelled);
+    };
+    let resp = match resp {
+        Ok(r) => r?,
+        Err(_) => return Err(stalled(RESPONSE_TIMEOUT.as_secs(), "never started answering")),
+    };
     if resp.status().is_client_error() || resp.status().is_server_error() {
         return Err(api_error(resp).await);
     }
@@ -201,12 +368,40 @@ where
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
     let mut content = String::new();
+    let mut reasoning = String::new();
     let mut tool_acc: Vec<ToolCallAccum> = Vec::new();
+    // `OBS-1`: servers that report usage put it on the last chunk, whose
+    // `choices` array is usually empty — so it is read from the chunk itself,
+    // not from a delta.
+    let mut usage: Option<Usage> = None;
+    // When the current unbroken run of thinking began. Reset by anything the
+    // model actually says, so this measures "thinking with nothing to show for
+    // it", not total thinking.
+    let mut thinking_since: Option<std::time::Instant> = None;
+    let mut ran_away = false;
 
-    while let Some(chunk) = stream.next().await {
-        if cancel.is_cancelled() {
-            return Ok(TurnOutcome::Cancelled);
+    // Same reason again: a model that has gone quiet mid-answer leaves this
+    // await hanging, so the flag is polled while waiting rather than only on
+    // the next chunk that may never come.
+    while let Some(chunk) = match until_cancelled(
+        cancel,
+        tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()),
+    )
+    .await
+    {
+        Some(Ok(c)) => c,
+        // The connection is open but nothing has arrived for a long time. Before
+        // this, a provider that stalled mid-stream held the run open forever and
+        // the only way out was Stop — which reads as the app being broken, not
+        // the provider.
+        Some(Err(_)) => {
+            return Err(stalled(
+                STREAM_IDLE_TIMEOUT.as_secs(),
+                "stopped sending anything",
+            ))
         }
+        None => return Ok(TurnOutcome::Cancelled),
+    } {
         let chunk = chunk?;
         buf.push_str(&String::from_utf8_lossy(&chunk));
         while let Some(nl) = buf.find('\n') {
@@ -221,18 +416,57 @@ where
                 break;
             }
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) {
+                if let Some(u) = json.get("usage").and_then(Usage::from_openai) {
+                    usage = Some(u);
+                }
                 if let Some(delta) = json.pointer("/choices/0/delta") {
                     if let Some(tc) = delta.get("tool_calls") {
                         accumulate_tool_calls(tc, &mut tool_acc);
                     }
                     if let Some(text) = delta.get("content").and_then(|c| c.as_str()) {
                         if !text.is_empty() {
+                            // It said something, so it is not stuck in its own
+                            // head any more. The budget starts again from here.
+                            thinking_since = None;
                             content.push_str(text);
-                            on_token(text);
+                            on_token(Delta::Answer(text));
+                        }
+                    }
+                    // A reasoning model streams its thinking in a field of its
+                    // own: OpenRouter calls it `reasoning`, DeepSeek and others
+                    // `reasoning_content`. Relayed as `Thinking`, never as the
+                    // answer — a turn that spends three minutes thinking and a
+                    // turn that has died are indistinguishable otherwise, which
+                    // is what made a live run look like a hang.
+                    for field in ["reasoning", "reasoning_content"] {
+                        if let Some(text) = delta.get(field).and_then(|c| c.as_str()) {
+                            if !text.is_empty() {
+                                reasoning.push_str(text);
+                                on_token(Delta::Thinking(text));
+                                let since = thinking_since.get_or_insert_with(std::time::Instant::now);
+                                if since.elapsed() > THINKING_BUDGET {
+                                    eprintln!(
+                                        "stream_turn: the model has been thinking for {}s and {} characters without \
+                                         answering; cutting the stream and asking it for the answer",
+                                        since.elapsed().as_secs(),
+                                        reasoning.chars().count()
+                                    );
+                                    ran_away = true;
+                                }
+                            }
                         }
                     }
                 }
             }
+            if ran_away {
+                break;
+            }
+        }
+        // Dropping the stream closes the connection, which is what actually
+        // stops a model that would otherwise think until the provider times it
+        // out. Whatever it managed to say is kept and returned below.
+        if ran_away {
+            break;
         }
     }
 
@@ -254,9 +488,9 @@ where
                 },
             })
             .collect();
-        Ok(TurnOutcome::ToolCalls(calls))
+        Ok(TurnOutcome::ToolCalls { calls, usage })
     } else {
-        Ok(TurnOutcome::Final { content })
+        Ok(TurnOutcome::Final { content, usage, reasoning })
     }
 }
 
@@ -344,7 +578,23 @@ where
         req = req.bearer_auth(token);
     }
 
-    let resp = match req.send().await {
+    // `CHT-2b`: cancellable before the first byte, same as `stream_turn` — and
+    // on the same clock, so a provider that never answers ends the turn here
+    // instead of holding it open.
+    let Some(sent) = until_cancelled(&cancel, tokio::time::timeout(RESPONSE_TIMEOUT, req.send())).await
+    else {
+        on_event(StreamEvent::Cancelled);
+        return Ok(());
+    };
+    let sent = match sent {
+        Ok(s) => s,
+        Err(_) => {
+            let err = stalled(RESPONSE_TIMEOUT.as_secs(), "never started answering");
+            on_event(StreamEvent::Error { message: err.to_string() });
+            return Err(err);
+        }
+    };
+    let resp = match sent {
         Ok(r) => r,
         Err(e) => {
             on_event(StreamEvent::Error {
@@ -365,11 +615,23 @@ where
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
 
-    while let Some(chunk) = stream.next().await {
-        if cancel.is_cancelled() {
+    while let Some(chunk) = match until_cancelled(
+        &cancel,
+        tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()),
+    )
+    .await
+    {
+        Some(Ok(c)) => c,
+        Some(Err(_)) => {
+            let err = stalled(STREAM_IDLE_TIMEOUT.as_secs(), "stopped sending anything");
+            on_event(StreamEvent::Error { message: err.to_string() });
+            return Err(err);
+        }
+        None => {
             on_event(StreamEvent::Cancelled);
             return Ok(());
         }
+    } {
         let chunk = match chunk {
             Ok(c) => c,
             Err(e) => {

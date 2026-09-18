@@ -102,12 +102,105 @@ describe("App renders", () => {
   it("renders every settings-hub tab, including Skills", () => {
     // `View` gained "skills" but `App`'s hub condition did not, so selecting
     // the tab rendered an empty shell. Each view must commit something.
-    for (const view of ["settings", "models", "engine", "apps", "skills", "self", "tasks"] as const) {
+    for (const view of ["settings", "models", "runtime", "apps", "skills", "self", "tasks"] as const) {
       act(() => {
         useAppStore.setState({ view });
       });
       mount();
       expect(container.querySelector(".settings-hub"), `${view} renders the hub`).not.toBeNull();
     }
+  });
+});
+
+/**
+ * `SHL-18-T`/`SHL-24`: what is left of the strip's keyboard bindings, and the
+ * rule that matters most about them — every one is skipped while a text field
+ * has focus. A shortcut that closes the thing you are halfway through typing
+ * into is worse than no shortcut at all.
+ *
+ * Only `Ctrl+W` remains, and it only ever closes an item tab. `Ctrl+Tab` and
+ * `Ctrl+1..9` addressed a list of open chats; chats are destinations now, so
+ * there is no such list and nothing for those to address.
+ */
+describe("the strip's keyboard bindings (SHL-18)", () => {
+  const press = (key: string, opts: KeyboardEventInit = {}) =>
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true, ...opts }));
+    });
+
+  const seedTabs = () =>
+    act(() => {
+      useAppStore.setState({
+        view: "chat",
+        conversations: [
+          // A folder, so that a file tab inside it is a real tab: without one
+          // the item view correctly closes it as a ghost, and a test opening
+          // it would be measuring that cleanup instead of the binding.
+          { id: "c1", title: "c1", updatedAt: 0, messages: [], folderPath: "C:\\work" },
+          { id: "c2", title: "c2", updatedAt: 0, messages: [] },
+        ],
+        activeConversationId: "c1",
+        itemTabs: [],
+        activeItemId: null,
+      });
+    });
+
+  it("Ctrl+W closes the active item tab", () => {
+    mount();
+    seedTabs();
+    act(() => {
+      useAppStore.getState().openItem({ kind: "file", id: "C:\\work\\notes.md" });
+    });
+    press("w");
+    const s = useAppStore.getState();
+    expect(s.itemTabs).toEqual([]);
+    expect(s.activeItemId).toBeNull();
+    expect(s.activeConversationId, "the chat behind it is not touched").toBe("c1");
+  });
+
+  it("does nothing with no item open — a chat is not a thing you close", () => {
+    mount();
+    seedTabs();
+    press("w");
+    const s = useAppStore.getState();
+    expect(s.activeConversationId).toBe("c1");
+    expect(s.conversations).toHaveLength(2);
+  });
+
+  it("hands the whole main column to an open item, without unmounting the chat", () => {
+    // `SHL-27`: the conversation steps aside rather than being torn down —
+    // its scroll position, the composer's draft and any running turn have to
+    // survive a look at a file. The shell says so with one class; the chat's
+    // own markup stays in the tree behind it.
+    mount();
+    seedTabs();
+    act(() => {
+      useAppStore.getState().openItem({ kind: "file", id: "C:\\work\\notes.md" });
+    });
+    expect(container.querySelector(".app")?.className).toContain("item-open");
+    expect(container.querySelector(".item-view"), "the item is showing").not.toBeNull();
+    expect(container.querySelector(".chat-body"), "the chat is still mounted").not.toBeNull();
+
+    // And the session tab puts it back without closing anything.
+    act(() => useAppStore.getState().showConversation());
+    expect(container.querySelector(".app")?.className).not.toContain("item-open");
+    expect(container.querySelector(".item-view")).toBeNull();
+    expect(useAppStore.getState().itemTabs, "the tab is still open").toHaveLength(1);
+  });
+
+  it("is skipped while a text field has focus", () => {
+    mount();
+    seedTabs();
+    act(() => {
+      useAppStore.getState().openItem({ kind: "file", id: "C:\\work\\notes.md" });
+    });
+    const input = document.createElement("textarea");
+    document.body.appendChild(input);
+    input.focus();
+
+    press("w");
+
+    expect(useAppStore.getState().itemTabs, "typing must not close the tab").toHaveLength(1);
+    input.remove();
   });
 });

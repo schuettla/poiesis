@@ -1,21 +1,44 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 import type {
   AgentStep,
   Attachment,
   BlockView,
   Conversation,
+  DockView,
   FolderTrust,
+  ItemRef,
   Message,
   Mode,
   Model,
   ModelFilter,
+  Project,
+  RuntimeTab,
   Provenance,
+  SubRun,
   View,
   WorkbenchSelection,
 } from "./types";
+import { NEW_PROJECT_NAME } from "./types";
 import { mockConversations, mockModels } from "./mockData";
 import * as api from "./api";
 import { budgetTurns, withSummary, KEEP_RECENT, KEEP_RECENT_WORKSPACE } from "./context";
+import {
+  EMPTY_PREFS,
+  PREF_KEYS,
+  moveFavorite,
+  normalizePrefs,
+  parseIdList,
+  parseLabels,
+  prefsChanged,
+  reorderFavorites,
+  resolveChatModel,
+  setDefault,
+  skippedNotice,
+  toggleFavorite,
+  type FavoriteTab,
+  type ModelPrefs,
+} from "./modelPrefs";
 
 const SYSTEM_PROMPT_KEY = "system_prompt";
 const READING_SCALE_KEY = "reading_scale";
@@ -27,6 +50,8 @@ const SELF_BORN_KEY = "self.born";
 const SELF_INTRODUCED_KEY = "self.introduced";
 const DOCK_OPEN_KEY = "workbench.open";
 const DOCK_WIDTH_KEY = "workbench.width";
+/** `SHL-17`: the header strip's open tabs, one set for the whole app. */
+const TAB_SET_KEY = "shell.tabs";
 const EXPERT_KEY = "ui.expert";
 const RECALL_DECLINED_KEY = "recall.declined";
 /** SMP-4c: folder reading explains itself once, the first time it happens. */
@@ -141,6 +166,10 @@ interface AppState {
   setView: (v: View) => void;
   railCollapsed: boolean;
   toggleRail: () => void;
+  /** The Ctrl+K palette: chats (titles and message text), projects, library
+   * and commands in one place. The Rail's Search row opens it too. */
+  paletteOpen: boolean;
+  setPaletteOpen: (open: boolean) => void;
 
   // model picker + library
   models: Model[];
@@ -173,6 +202,38 @@ interface AppState {
   loadModelById: (id: string) => Promise<void>;
   stopEngine: () => Promise<void>;
 
+  /** `MOD-3`/`MOD-4`: defaults across sources and the ordered favorites. */
+  modelPrefs: ModelPrefs;
+  modelPrefsLoaded: boolean;
+  /** False until every model source has answered once at startup. Until
+   * then the selection keeps re-resolving to the default, so a cloud default
+   * isn't lost to a local model just because the library answered first. */
+  selectionSettled: boolean;
+  /** The composer's one-time line when the default couldn't be used. */
+  modelNotice: string | null;
+  modelNoticeFor: string | null;
+  dismissModelNotice: () => void;
+  loadModelPrefs: () => Promise<void>;
+  settleSelection: () => void;
+  /** `fallback` describes a model that isn't in `models` (a local image file
+   * that isn't the active checkpoint yet). */
+  setDefaultModelPref: (id: string, fallback?: Model) => Promise<void>;
+  /** `false` when refused (the default can't be unstarred). */
+  toggleFavoriteModel: (id: string, fallback?: Model) => boolean;
+  moveFavoriteModel: (tab: FavoriteTab, id: string, delta: -1 | 1) => void;
+  reorderFavoriteModels: (tab: FavoriteTab, ids: string[]) => void;
+
+  /** Deep links between Models, Providers and Runtime. `modelsSource` is a
+   * source chip on Models (`MOD-6`): "local", "endpoint:<id>" or
+   * "cloud:<provider>". */
+  modelsSource: { source: string; label: string } | null;
+  setModelsSource: (f: { source: string; label: string } | null) => void;
+  openModelsFiltered: (f: { source: string; label: string }) => void;
+  runtimeTab: RuntimeTab | null;
+  openRuntime: (tab?: RuntimeTab) => void;
+  providerFocus: string | null;
+  openProviders: (id?: string) => void;
+
   /** Catalog downloads in flight, keyed by catalog entry id — percent
    * complete, or "done" briefly while the library refreshes. Lives in the
    * store rather than the Models view's local state so leaving and returning
@@ -186,6 +247,45 @@ interface AppState {
   conversations: Conversation[];
   activeConversationId: string | null;
   busy: boolean;
+  /** `HRN-1`: the run working right now, if any. Its id is what Stop and
+   * mid-run steering address. Cleared when the run ends, however it ends. */
+  activeRun: {
+    runId: string;
+    convId: string;
+    /** 1-based iteration, and the budget it is counted against (`HRN-UI-3`). */
+    step: number;
+    maxSteps: number;
+    startedAt: number;
+    /** `OBS-3`: an estimate of what the current turn is sending, and what the
+     * model can hold. `contextWindow` is null when the provider does not say,
+     * and the meter then shows no percentage rather than a made-up one. */
+    contextTokens: number;
+    contextWindow: number | null;
+    /** What the model has been thinking since the last thing it said out loud.
+     * Cleared when prose starts arriving, so the indicator describes now and
+     * not the whole run. Shown as thinking, never as the answer. */
+    thinking: string;
+    /** `PLN-UI-2`: the plan this run is working to, once it has written one.
+     * The running item is a better label for the meter than the running tool,
+     * because it says what the work is *for*. */
+    plan?: api.PlanView;
+  } | null;
+  /** `HRN-UI-1`: say something to the run that is already working. Returns
+   * false when there was no live run to say it to. */
+  steerActiveRun: (text: string) => Promise<boolean>;
+  /** `SUB-UI-1`: every delegated child this session knows about, by run id.
+   * Live children are folded in from the stream; finished ones are rehydrated
+   * from `subagent_runs` when a conversation opens. */
+  subRuns: Record<string, SubRun>;
+  /** Load the children a conversation started, so they survive a reload. */
+  loadSubRuns: (convId: string) => Promise<void>;
+  /** `SUB-UI-1`: say something to a child that is still working. */
+  steerSubRun: (runId: string, text: string) => Promise<boolean>;
+  /** `SUB-7`: stop a child, keeping what it already has. */
+  stopSubRun: (runId: string) => Promise<void>;
+  /** `SUB-UI-4`: which agent asked for a pending permission, by request id.
+   * Absent means the lead asked. */
+  permissionAgents: Record<string, string>;
   systemPrompt: string;
   /** Whether built-in toolsets are offered to the model (TOOL-3, TOOL-6). */
   toolsEnabled: boolean;
@@ -261,6 +361,9 @@ interface AppState {
     temperature?: number;
     toolsJson?: string | null;
     skillsJson?: string | null;
+    /** `SUB-3`: when to use this agent, and whether it may be handed work. */
+    description?: string | null;
+    spawnable?: boolean;
   }) => Promise<void>;
   updatePersona: (persona: api.Persona) => Promise<void>;
   deletePersona: (id: string) => Promise<void>;
@@ -329,6 +432,9 @@ interface AppState {
   /** Whether the Memory toolset is on — gates both the tool and the injection. */
   memoryToolEnabled: boolean;
   refreshMemoryToolset: () => Promise<void>;
+  /** `PLN-3`/`PLN-UI-4`: whether a run is told to plan the work first. */
+  planMode: PlanMode;
+  setPlanMode: (mode: PlanMode) => Promise<void>;
   /** PRO-4: call after any change to a global-scoped fact. Debounces 8s, then
    * attempts an automatic rebuild — a no-op below the volume gate or with the
    * `profile` autonomy rung off. */
@@ -381,6 +487,10 @@ interface AppState {
   /** `TTL-2`: a one-line notice that short-lived facts were let go. */
   expirySweptToast: string | null;
   dismissExpirySweptToast: () => void;
+  /** `SUB-12`: a background agent finished after the turn that started it had
+   * already ended. Announcement only — the report is in the Fleet card. */
+  agentDoneToast: string | null;
+  dismissAgentDoneToast: () => void;
   /** `GLD-2`: a one-line confession that a self-change was checked and put back. */
   goldenRevertedToast: string | null;
   dismissGoldenRevertedToast: () => void;
@@ -461,6 +571,17 @@ interface AppState {
   bootstrap: () => Promise<void>;
   setActiveConversation: (id: string) => Promise<void>;
   newConversation: () => Promise<void>;
+  /** `SHL-24`: shows a conversation — the Rail's "select a chat" path. A chat
+   * is a destination, not a tab: one is live at a time, and picking another
+   * goes there rather than adding to a list. Any item open over the sidebar
+   * loses focus, since what you pressed was the conversation. */
+  openSession: (id: string) => Promise<void>;
+  /** `HRN-UI-5`: branch this chat just before one assistant turn and ask the
+   * question again, leaving the original exactly as it was. */
+  forkFromMessage: (messageId: string) => Promise<void>;
+  /** `HRN-UI-5`: continue the last run instead of starting over, with its tool
+   * results intact. */
+  resumeLastRun: () => Promise<void>;
   renameConversation: (id: string, title: string) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
   sendMessage: (text: string, attachments?: Attachment[]) => Promise<void>;
@@ -522,21 +643,59 @@ interface AppState {
   dockOpen: boolean;
   toggleDock: () => void;
   setDockOpen: (open: boolean) => void;
-  /** What the viewer is showing, file or artifact. */
+  /** What the viewer is showing, file or artifact. Mirrors whichever entry in
+   * `itemTabs` is active (`SHL-10`/`SHL-22`) — every existing reader of
+   * `selected` (`Viewer`, `Tree`, `Artifacts`) keeps working unchanged. */
   selected: WorkbenchSelection | null;
+  /** Opens a file or artifact and focuses it. Kept as the one call every
+   * existing site (`Tree`, `Artifacts`, timeline chips, "recent changes")
+   * already uses; it opens an item tab. Passing `null` closes whichever item
+   * tab is active. */
   selectNode: (selection: WorkbenchSelection | null) => void;
-  /** Open the dock on a specific artifact — from a timeline chip or a document
-   * block. The artifact's own row in the tree scrolls into view. */
+  /** Open a specific artifact as a tab — from a timeline chip or a document
+   * block. */
   openArtifact: (artifactId: string) => void;
-  /** The viewer blown up to a full-screen overlay, for content 340px can't hold. */
-  viewerExpanded: boolean;
-  setViewerExpanded: (expanded: boolean) => void;
+  /** `SHL-24`/`SHL-27`: single things picked out of the right sidebar — a
+   * file, an artifact, one child agent, one patch. They open as tabs in the
+   * header and fill the conversation's own column, which is the widest surface
+   * the shell has. The conversation is the first tab in that strip, so it is
+   * never more than a click away and never has to share the width. */
+  itemTabs: ItemRef[];
+  /** The key (`"<kind>:<id>"`) of the focused item tab, or `null` when the
+   * conversation itself is what's showing. */
+  activeItemId: string | null;
+  /** Opens (or focuses) an item tab. Only ever called for something the user
+   * did — the agent moves `dockView`, never a tab (`SHL-23`). */
+  openItem: (ref: ItemRef) => void;
+  /** Closes an item tab, by its key. Closing the active one focuses its
+   * neighbour; with none left, the sidebar's overview shows again. */
+  closeItem: (id: string) => void;
+  /** `EDT-1`: absolute paths of file tabs whose editor holds edits that are
+   * not on disk. Only the flag lives here — the text stays in the Monaco
+   * model, which is the only copy that can be edited — because this is state
+   * *other* components need: the strip draws a dot from it, and `closeItem`
+   * refuses to throw a buffer away without asking. */
+  unsavedFiles: Record<string, true>;
+  setUnsaved: (path: string, unsaved: boolean) => void;
+  /** Which overview the right sidebar shows (`SHL-21`). Persisted with the
+   * tab set. A value the current chat cannot show (Files with no folder)
+   * falls back in the dock itself rather than being rewritten here. */
+  dockView: DockView;
+  /** `SHL-23`: the agent may move this, and it is all the agent may move. It
+   * names a section of the right sidebar, and nothing in the sidebar can
+   * change what the main column is showing — the trust rule is a fact of the
+   * layout rather than something this setter has to enforce. */
+  setDockView: (view: DockView) => void;
   /** Dock width in px, set by dragging its edge. Persisted across restarts. */
   dockWidth: number;
   setDockWidth: (px: number) => void;
   /** True while the divider is being dragged, so the shell drops its easing. */
   dockDragging: boolean;
   setDockDragging: (dragging: boolean) => void;
+  /** `SHL-27`: show the conversation again without closing anything — what the
+   * session tab does. Distinct from `closeItem`: the tabs stay, and coming
+   * back to one costs a click rather than reopening it. */
+  showConversation: () => void;
   showHidden: boolean;
   toggleShowHidden: () => void;
 
@@ -581,6 +740,32 @@ interface AppState {
   keepDuplicate: (group: api.DuplicateGroup, keep: string) => Promise<void>;
   dismissDuplicates: () => void;
 
+  /** `PRJ-1`: every project that is not archived, newest activity first. */
+  projects: Project[];
+  refreshProjects: () => Promise<void>;
+  /** `PRJ-UI-4`: which project the `project` route is showing. */
+  activeProjectId: string | null;
+  /** `PRJ-3` explicit create: a folderless project, opened in its own view so
+   * the first thing you do is name it and say what it is (`PRJ-UI-1a`). */
+  newProject: () => Promise<void>;
+  /** Open a project: focus its most recent session, or start one. */
+  openProject: (projectId: string) => Promise<void>;
+  /** `PRJ-UI-4`: open the project's own view as a route tab. */
+  openProjectView: (projectId: string) => void;
+  renameProject: (projectId: string, name: string) => Promise<void>;
+  /** `PRJ-7`: the instructions every session in this project carries. */
+  setProjectInstructions: (projectId: string, instructions: string) => Promise<void>;
+  /** `PRJ-3a`: give the project a working folder, or with `null` take it away.
+   * Removing it leaves the project and every one of its sessions in place. */
+  setProjectFolder: (projectId: string, pick: boolean) => Promise<void>;
+  /** `PRJ-9`: put a session in a project, or with `null` take it out. */
+  moveSessionToProject: (conversationId: string, projectId: string | null) => Promise<void>;
+  /** Hide the project and its sessions. Nothing on disk is touched. */
+  archiveProject: (projectId: string) => Promise<void>;
+  /** `PRJ-UI-1`: which project rows are expanded to show their sessions. */
+  expandedProjects: string[];
+  toggleProjectExpanded: (projectId: string) => void;
+
   attachFolder: () => Promise<void>;
   detachFolder: () => Promise<void>;
   setFolderTrust: (trust: FolderTrust) => Promise<void>;
@@ -588,6 +773,22 @@ interface AppState {
   refreshTree: (path?: string) => Promise<void>;
   refreshTrash: () => Promise<void>;
   undoFileOp: (id: string) => Promise<void>;
+  /** `PRJ-UI-3`: each conversation's change set — the files the agent changed
+   * since the last "Keep all", as patches. Keyed by conversation, because the
+   * strip is global and a file tab's dot reads its own chat's set. */
+  changeSets: Record<string, api.ChangeSet>;
+  refreshChanges: (conversationId?: string) => Promise<void>;
+  undoChanges: (conversationId: string, path?: string) => Promise<void>;
+  keepChanges: (conversationId: string) => Promise<void>;
+  /** The file the Changes sub-view should scroll to, set by a tab's dirty dot. */
+  changesFocus: string | null;
+  focusChange: (conversationId: string, path: string) => void;
+  /** `COD-UI-1`: each project's detected card and execution settings. */
+  projectCards: Record<string, api.ProjectCardView | null>;
+  refreshProjectCard: (projectId: string, redetect?: boolean) => Promise<void>;
+  setProjectExecPolicy: (projectId: string, policy: api.ExecPolicy | "inherit") => Promise<void>;
+  setProjectTaskAllowed: (projectId: string, task: string, allowed: boolean) => Promise<void>;
+  setProjectCommands: (projectId: string, runCommand: boolean, forget?: string) => Promise<void>;
   saveArtifactToFolder: (artifactId: string, dest: string) => Promise<void>;
   /** Hand a file to the OS — open it, or show it in the file manager. */
   openInSystem: (path: string) => Promise<void>;
@@ -639,6 +840,8 @@ function cloudToModels(cm: api.CloudModel[]): Model[] {
     available: true,
     provider: m.provider,
     cloudModel: m.model,
+    promptPerMtok: m.prompt_per_mtok ?? undefined,
+    outputPerMtok: m.output_per_mtok ?? undefined,
   }));
 }
 
@@ -701,23 +904,60 @@ function composeModels(
 function reconcileSelection(
   models: Model[],
   libraryModels: api.ModelEntry[],
-  selectedModelId: string,
-  lastChatModelId: string
+  s: Pick<AppState, "selectedModelId" | "lastChatModelId" | "modelPrefs" | "selectionSettled" | "modelNoticeFor">
 ): Partial<AppState> {
-  // Prefer the library default, then any chat model — never silently land on
-  // a media model, which would change what pressing send does.
-  const fallback =
-    libraryModels.find((e) => e.is_default)?.id ??
-    models.find((m) => !m.modality || m.modality === "chat")?.id ??
-    models[0]?.id;
+  // `MOD-3`: the default (any source), then the next available favorite,
+  // then the library's marked model, then any chat model — never silently
+  // land on a media model, which would change what pressing send does.
+  const resolved = resolveChatModel(models, libraryModels, s.modelPrefs);
+  const fallback = resolved.id;
   const patch: Partial<AppState> = {};
-  if (!models.some((m) => m.id === selectedModelId) && fallback) {
+  // Before every source has answered, keep following the preference rather
+  // than holding whatever happened to load first.
+  const unsettled = !s.selectionSettled;
+  if ((unsettled || !models.some((m) => m.id === s.selectedModelId)) && fallback) {
     patch.selectedModelId = fallback;
   }
-  if (!models.some((m) => m.id === lastChatModelId) && fallback) {
+  if ((unsettled || !models.some((m) => m.id === s.lastChatModelId)) && fallback) {
     patch.lastChatModelId = fallback;
   }
+  // Say so once when the default had to be skipped — but only after startup
+  // settles, since a cloud default is "missing" until its list arrives.
+  if (!unsettled && patch.selectedModelId && resolved.skippedDefault && s.modelNoticeFor !== resolved.skippedDefault) {
+    patch.modelNotice = skippedNotice(s.modelPrefs, resolved, models);
+    patch.modelNoticeFor = resolved.skippedDefault;
+  }
   return patch;
+}
+
+/** `MOD-3`: a new chat opens on the default chat model, or the next available
+ * favorite when the default can't be used (saying so once). Existing chats
+ * keep whatever they were using. */
+function openOnPreferredModel(get: () => AppState, set: (p: Partial<AppState>) => void) {
+  const s = get();
+  const resolved = resolveChatModel(s.models, s.libraryModels, s.modelPrefs);
+  if (!resolved.id) return;
+  if (resolved.skippedDefault && s.modelNoticeFor !== resolved.skippedDefault) {
+    set({
+      modelNotice: skippedNotice(s.modelPrefs, resolved, s.models),
+      modelNoticeFor: resolved.skippedDefault,
+    });
+  }
+  if (resolved.id !== s.selectedModelId) s.selectModel(resolved.id);
+}
+
+/** Write every model-preference setting. Small, and it keeps the stored
+ * record whole rather than half-updated. */
+function persistPrefs(prefs: ModelPrefs) {
+  if (!api.inTauri()) return;
+  const writes: [string, string][] = [
+    [PREF_KEYS.defaultChat, prefs.defaults.chat ?? ""],
+    [PREF_KEYS.defaultImage, prefs.defaults.image ?? ""],
+    [PREF_KEYS.favChat, JSON.stringify(prefs.favorites.chat)],
+    [PREF_KEYS.favMedia, JSON.stringify(prefs.favorites.media)],
+    [PREF_KEYS.labels, JSON.stringify(prefs.labels)],
+  ];
+  for (const [k, v] of writes) api.setSetting(k, v).catch(() => {});
 }
 
 /**
@@ -736,6 +976,12 @@ function toMessage(m: api.DbMessage): Message {
       ? { name: m.model_name, provenance: (m.model_provenance ?? "local") as Provenance }
       : undefined,
     steps: api.parseSteps(m.steps_json),
+    // `PLN-UI-5`: a plan that vanished on reload was never state, it was
+    // decoration — so it comes back with the timeline it belongs to.
+    plan: api.parsePlan(m.plan_json),
+    // A turn that stopped short keeps saying so across a reload — the mark is
+    // about the answer's completeness, not about this session.
+    stopReason: m.stop_reason && m.stop_reason !== "completed" ? m.stop_reason : undefined,
     attachments: m.attachments?.length
       ? m.attachments.map((a) => ({
           id: a.id,
@@ -784,6 +1030,24 @@ function toConversation(c: api.DbConversation): Conversation {
     reflectedAt: c.reflected_at,
     folderPath: c.folder_path,
     folderTrust: (c.folder_trust as FolderTrust) ?? "confirm",
+    parentConversationId: c.parent_conversation_id,
+    projectId: c.project_id ?? null,
+  };
+}
+
+/** `PRJ-1`: the backend row, in the frontend's shape. */
+export function toProject(p: api.DbProject): Project {
+  return {
+    id: p.id,
+    name: p.name,
+    rootPath: p.root_path,
+    instructions: p.instructions,
+    trust: (p.trust as FolderTrust) ?? "confirm",
+    execPolicy: (p.exec_policy as Project["execPolicy"]) ?? "ask",
+    cardJson: p.card_json,
+    tabsJson: p.tabs_json,
+    archived: p.archived,
+    updatedAt: p.updated_at,
   };
 }
 
@@ -917,9 +1181,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   view: "chat",
+  // `SHL-24`: a route is a destination again. Settings, Library and a project
+  // are places you go to and come back from, not things you accumulate in the
+  // strip — a tab per surface read as clutter and as a second, competing list
+  // of where you might be. `setView` is the whole router once more.
   setView: (view) => set({ view }),
   railCollapsed: false,
   toggleRail: () => set((s) => ({ railCollapsed: !s.railCollapsed })),
+  paletteOpen: false,
+  setPaletteOpen: (open) => set({ paletteOpen: open }),
 
   models: mockModels,
   libraryModels: [],
@@ -938,7 +1208,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   // just become the active choice without spawning anything.
   selectModel: (id) => {
     const m = get().models.find((x) => x.id === id);
-    set({ selectedModelId: id, ...(!m?.modality || m.modality === "chat" ? { lastChatModelId: id } : {}) });
+    // An explicit pick ends startup's "follow the default" phase.
+    set({
+      selectedModelId: id,
+      selectionSettled: true,
+      ...(!m?.modality || m.modality === "chat" ? { lastChatModelId: id } : {}),
+    });
     // The context window is a property of the model, so the meter follows it.
     get().refreshContextBudget();
     get().refreshMemoryContext();
@@ -969,9 +1244,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         libraryModels: lib,
         models,
-        ...reconcileSelection(models, lib, s.selectedModelId, s.lastChatModelId),
+        ...reconcileSelection(models, lib, s),
       };
     });
+    // `MOD-4`: a first download on a new install becomes its first favorite.
+    const s = get();
+    if (s.selectionSettled && s.modelPrefsLoaded) {
+      const prefs = normalizePrefs(s.modelPrefs, s.libraryModels, s.models);
+      if (prefsChanged(prefs, s.modelPrefs)) {
+        set({ modelPrefs: prefs });
+        persistPrefs(prefs);
+      }
+    }
   },
 
   modelDownloads: {},
@@ -1012,7 +1296,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         mediaModels,
         models,
-        ...reconcileSelection(models, s.libraryModels, s.selectedModelId, s.lastChatModelId),
+        ...reconcileSelection(models, s.libraryModels, s),
       };
     });
   },
@@ -1033,7 +1317,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         endpoints,
         endpointModels,
         models,
-        ...reconcileSelection(models, s.libraryModels, s.selectedModelId, s.lastChatModelId),
+        ...reconcileSelection(models, s.libraryModels, s),
       };
     });
   },
@@ -1051,7 +1335,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         providers,
         cloudModels,
         models,
-        ...reconcileSelection(models, s.libraryModels, s.selectedModelId, s.lastChatModelId),
+        ...reconcileSelection(models, s.libraryModels, s),
       };
     });
   },
@@ -1063,7 +1347,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const entry = get().libraryModels.find((e) => e.id === id);
     if (!entry) return;
     const promise = (async () => {
-      set({ loadingModel: { id, label: "Starting the engine…" }, engineReady: false });
+      set({ loadingModel: { id, label: "Starting the runtime…" }, engineReady: false });
       try {
         await api.loadModel({ modelPath: entry.path }, (p) => {
           const pct = p.total ? ` ${Math.round((p.received / p.total) * 100)}%` : "";
@@ -1086,9 +1370,111 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ engineReady: false, loadedModelId: null, loadingModel: null });
   },
 
+  modelPrefs: EMPTY_PREFS,
+  modelPrefsLoaded: false,
+  selectionSettled: false,
+  modelNotice: null,
+  modelNoticeFor: null,
+  dismissModelNotice: () => set({ modelNotice: null }),
+
+  loadModelPrefs: async () => {
+    if (!api.inTauri()) return;
+    const [chat, image, favChat, favMedia, labels] = await Promise.all(
+      [PREF_KEYS.defaultChat, PREF_KEYS.defaultImage, PREF_KEYS.favChat, PREF_KEYS.favMedia, PREF_KEYS.labels].map(
+        (k) => api.getSetting(k).catch(() => null)
+      )
+    );
+    set({
+      modelPrefs: {
+        defaults: { chat: chat || null, image: image || null },
+        favorites: { chat: parseIdList(favChat), media: parseIdList(favMedia) },
+        labels: parseLabels(labels),
+      },
+      modelPrefsLoaded: true,
+    });
+  },
+
+  // Every source has answered once: apply the rules (seed the default, give
+  // a new install its first favorite), then settle the selection for good.
+  settleSelection: () => {
+    const s = get();
+    const prefs = s.modelPrefsLoaded ? normalizePrefs(s.modelPrefs, s.libraryModels, s.models) : s.modelPrefs;
+    if (prefsChanged(prefs, s.modelPrefs)) persistPrefs(prefs);
+    const withPrefs = { ...s, modelPrefs: prefs };
+    // An explicit pick before startup finished stands; only fill the notice.
+    const patch = s.selectionSettled ? {} : reconcileSelection(s.models, s.libraryModels, withPrefs);
+    const resolved = resolveChatModel(s.models, s.libraryModels, prefs);
+    const notice =
+      !s.selectionSettled && resolved.skippedDefault && s.modelNoticeFor !== resolved.skippedDefault
+        ? { modelNotice: skippedNotice(prefs, resolved, s.models), modelNoticeFor: resolved.skippedDefault }
+        : {};
+    set({ modelPrefs: prefs, ...patch, ...notice, selectionSettled: true });
+  },
+
+  setDefaultModelPref: async (id, fallback) => {
+    const model = get().models.find((m) => m.id === id) ?? fallback;
+    if (!model || model.modality === "video") return;
+    const prefs = setDefault(get().modelPrefs, model);
+    set({ modelPrefs: prefs, modelNoticeFor: null });
+    persistPrefs(prefs);
+    if (!api.inTauri()) return;
+    // The runtime's own "start" still reads the library's marked model, and
+    // the local image backend its own checkpoint, so keep both in step.
+    if (model.provenance === "local" && !model.modality) {
+      await api.setDefaultModel(id).catch(() => {});
+      await get().refreshLibrary().catch(() => {});
+    } else if (model.modality === "image" && model.backendId === "local") {
+      const path = id.replace(/^media:local\//, "");
+      await api.setDefaultImageModel(path).catch(() => {});
+      await get().refreshMediaModels().catch(() => {});
+    }
+  },
+
+  toggleFavoriteModel: (id, fallback) => {
+    const model = get().models.find((m) => m.id === id) ?? fallback;
+    if (!model) {
+      // Unavailable right now, but still removable from the list.
+      const prefs = get().modelPrefs;
+      const tab: FavoriteTab = prefs.favorites.media.includes(id) ? "media" : "chat";
+      if (prefs.defaults.chat === id || prefs.defaults.image === id) return false;
+      const next = { ...prefs, favorites: { ...prefs.favorites, [tab]: prefs.favorites[tab].filter((x) => x !== id) } };
+      set({ modelPrefs: next });
+      persistPrefs(next);
+      return true;
+    }
+    const next = toggleFavorite(get().modelPrefs, model);
+    if (!next) return false;
+    set({ modelPrefs: next });
+    persistPrefs(next);
+    return true;
+  },
+
+  moveFavoriteModel: (tab, id, delta) => {
+    const next = moveFavorite(get().modelPrefs, tab, id, delta);
+    set({ modelPrefs: next });
+    persistPrefs(next);
+  },
+
+  reorderFavoriteModels: (tab, ids) => {
+    const next = reorderFavorites(get().modelPrefs, tab, ids);
+    set({ modelPrefs: next });
+    persistPrefs(next);
+  },
+
+  modelsSource: null,
+  setModelsSource: (modelsSource) => set({ modelsSource }),
+  openModelsFiltered: (modelsSource) => set({ modelsSource, view: "models" }),
+  runtimeTab: null,
+  openRuntime: (tab) => set({ runtimeTab: tab ?? null, view: "runtime" }),
+  providerFocus: null,
+  openProviders: (id) => set({ providerFocus: id ?? null, view: "providers" }),
+
   conversations: [],
   activeConversationId: null,
   busy: false,
+  activeRun: null,
+  subRuns: {},
+  permissionAgents: {},
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   // Tools default ON: without them the model can't reach render_ui/present, yet
   // the conversation history may reference them — it would emit tool-call JSON
@@ -1292,7 +1678,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       /* ignore */
     }
   },
-  createPersona: async ({ name, systemPrompt, modelId, temperature, toolsJson, skillsJson }) => {
+  createPersona: async ({
+    name,
+    systemPrompt,
+    modelId,
+    temperature,
+    toolsJson,
+    skillsJson,
+    description,
+    spawnable,
+  }) => {
     if (!api.inTauri()) return;
     const paramsJson =
       typeof temperature === "number" ? JSON.stringify({ temperature }) : null;
@@ -1303,6 +1698,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       paramsJson,
       toolsJson: toolsJson ?? null,
       skillsJson: skillsJson ?? null,
+      description: description ?? null,
+      spawnable: spawnable ?? false,
     });
     await get().refreshPersonas();
   },
@@ -1521,9 +1918,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       const toolsets = await api.listToolsets();
       const memory = toolsets.find((s) => s.id === "memory");
       set({ memoryToolEnabled: memory?.enabled ?? true });
+      // The same trip settles the planning setting: both are read once, before
+      // the first turn assembles a prompt that has to agree with the backend.
+      const mode = await api.getSetting(PLAN_MODE_KEY);
+      set({ planMode: mode === "always" || mode === "never" ? mode : "auto" });
     } catch {
       /* keep the default */
     }
+  },
+
+  planMode: "auto",
+  setPlanMode: async (mode) => {
+    set({ planMode: mode });
+    if (api.inTauri()) await api.setSetting(PLAN_MODE_KEY, mode);
   },
 
   recallOffer: null,
@@ -1683,6 +2090,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   dismissHealToast: () => set({ healToast: null }),
   expirySweptToast: null,
   dismissExpirySweptToast: () => set({ expirySweptToast: null }),
+  agentDoneToast: null,
+  dismissAgentDoneToast: () => set({ agentDoneToast: null }),
   goldenRevertedToast: null,
   dismissGoldenRevertedToast: () => set({ goldenRevertedToast: null }),
   mailSentToast: null,
@@ -1878,6 +2287,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       dockWidthRaw,
       recallDeclinedRaw,
       indexExplainedRaw,
+      tabSetRaw,
+      projectRows,
       firstTimeRaw,
       ...autonomyRaw
     ] = await Promise.all([
@@ -1895,6 +2306,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       api.getSetting(DOCK_WIDTH_KEY),
       api.getSetting(RECALL_DECLINED_KEY),
       api.getSetting(INDEX_EXPLAINED_KEY),
+      api.getSetting(TAB_SET_KEY),
+      // `PRJ-UI-1`: loaded with the conversations rather than after them. The
+      // Rail groups sessions under their project on its first paint, and a
+      // list that arrives a beat later would reshuffle the whole Rail in front
+      // of the user.
+      api.listProjects(),
       // SMP-7a: loaded with the rest rather than a beat later. The refreshes
       // below call `maybeFirstTime`, and a flag that hasn't landed yet reads
       // as "never explained" — so this has to be settled before any of them
@@ -1925,7 +2342,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     FIRST_TIME_KEYS.forEach((k, i) => {
       firstTimeFlags[k] = firstTimeRaw[i] === "true";
     });
+    // `SHL-17`: restore the header strip, dropping anything that no longer
+    // resolves. A set that fails to parse is worth nothing and is discarded
+    // rather than partially recovered.
+    const projects = projectRows.map(toProject);
+    // One global strip. A build that scoped the strip per project wrote the
+    // live project's set onto its row; that is read once, only when there is
+    // no global set yet, so the tabs someone had open do not vanish on upgrade.
+    const liveProject = projects.find((p) => p.id === conversations[0].projectId);
+    const { itemTabs, activeItemId, dockView } = validateTabSet(
+      tabSetRaw ?? liveProject?.tabsJson,
+      conversations
+    );
     set({
+      projects,
       selfBorn,
       selfIntroduced: introducedRaw === "true",
       // Learning from finished work is on unless the user turned it off.
@@ -1947,6 +2377,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       // The Workbench is open unless the user closed it last time.
       dockOpen: dockOpenRaw !== "0",
       dockWidth: Math.min(720, Math.max(260, Number(dockWidthRaw) || DEFAULT_DOCK_WIDTH)),
+      itemTabs,
+      activeItemId,
+      selected: itemToSelection(itemTabs.find((t) => itemKey(t) === activeItemId)),
+      dockView,
       bootstrapped: true,
     });
     // Swallowed deliberately: a failed library read must not abort the rest of
@@ -1954,14 +2388,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     // refresh below — including the one that flips `modelsLoaded`, so the
     // first-run guide could never appear on exactly the broken installs that
     // needed it most.
+    await get().loadModelPrefs().catch(() => {});
     await get().refreshLibrary().catch(() => {});
+    // `PRJ-UI-2`: a restored file tab's dot reads its own chat's change set,
+    // and that chat may not be the live one.
+    for (const convId of new Set(itemTabs.map((t) => t.conversationId).filter((c): c is string => !!c))) {
+      get().refreshChanges(convId).catch(() => {});
+    }
     // Cloud models load in the background (network) — don't block startup.
     // `modelsLoaded` flips once they land, so anything that keys off "no
     // models and no keys" (the first-run guide) judges a list that has
     // actually arrived rather than one that is merely still empty.
-    Promise.all([get().refreshCloud(), get().refreshMediaModels(), get().refreshEndpoints()]).finally(() =>
-      set({ modelsLoaded: true })
-    );
+    Promise.all([get().refreshCloud(), get().refreshMediaModels(), get().refreshEndpoints()]).finally(() => {
+      get().settleSelection();
+      set({ modelsLoaded: true });
+    });
     get().refreshPersonas();
     get().refreshContextBudget();
     get().refreshMemoryContext();
@@ -1972,6 +2413,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().refreshScheduler();
     listenForSelfEvents(set, get);
     maybeDailyProfileTick(get);
+    scheduleCatchUpReflection(get);
     await get().setActiveConversation(conversations[0].id);
   },
 
@@ -1982,20 +2424,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // any of the below overwrites it with itself.
     const switchingConversation = id !== get().activeConversationId;
 
-    // Leaving a conversation is when it becomes reviewable: it's finished
-    // enough to learn from, and the user isn't waiting on anything (REF-3).
-    // Fire-and-forget — reflection must never sit in the navigation path.
-    const leaving = get().conversations.find((c) => c.id === get().activeConversationId);
-    if (
-      leaving &&
-      leaving.id !== id &&
-      !leaving.reflectedAt &&
-      leaving.messages.length >= REFLECT_MIN_MESSAGES &&
-      get().autoReflect &&
-      api.inTauri()
-    ) {
-      get().reflectConversation(leaving.id).catch(() => {});
-    }
+    reflectOnLeaving(get, id);
 
     // A conversation carries its own workspace flag — switching sessions adopts
     // that session's layout (composed surface vs. classic message stream).
@@ -2010,14 +2439,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     // a just-picked media model back to the last chat model.
     const current = get().models.find((m) => m.id === get().selectedModelId);
     const restoreChatModel = switchingConversation && current?.modality && current.modality !== "chat";
-
     set({
       activeConversationId: id,
       view: "chat",
       ...(restoreChatModel ? { selectedModelId: get().lastChatModelId } : {}),
       workspaceMode: !!conv?.workspace,
-      selected: null,
-      viewerExpanded: false,
+      // Item tabs stay open across a switch; each one remembers its own chat.
+      // Only focus moves: the sidebar goes back to its overview. An item being
+      // opened in that chat sets its focus right after this.
+      ...(switchingConversation ? { selected: null, activeItemId: null } : {}),
       folderTree: {},
       expandedDirs: [],
       touchedFiles: {},
@@ -2030,11 +2460,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       duplicateScanPath: null,
       duplicatesError: null,
     });
+    persistTabSet(get());
     if (!api.inTauri()) return;
     get().refreshTree().catch(() => {});
     get().refreshTrash().catch(() => {});
+    get().refreshChanges(id).catch(() => {});
     get().refreshIndexStatus().catch(() => {});
     const rows = await api.listMessages(id);
+    // `SUB-UI-1`: after the messages land, so the children can be hung off the
+    // turns that started them.
+    setTimeout(() => get().loadSubRuns(id).catch(() => {}), 0);
     // Load any saved workspace blocks and attach them to their anchor message
     // (Generative UI). A block with no message_id trails the last assistant turn.
     let blocksByMessage: Record<string, BlockView[]> = {};
@@ -2129,26 +2564,129 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   newConversation: async () => {
+    // REF-3: starting a new chat leaves the current one behind just as much as
+    // switching to another does — reflect on it before it scrolls out of reach.
+    reflectOnLeaving(get);
     // Starting a chat while workspace mode is on pins the new session to it.
     const workspace = get().workspaceMode;
+    // `PRJ-UI-2`: the `+` in the session zone starts a new session *in the
+    // project you are in*, not a loose chat beside it. One call site, and it
+    // is why the strip never needed to learn what a project is.
+    const from = get().conversations.find((c) => c.id === get().activeConversationId);
+    const projectId = from?.projectId ?? null;
+    const folderPath = projectId ? (from?.folderPath ?? null) : null;
     if (!api.inTauri()) {
       const id = `c-${Date.now()}`;
       set((s) => ({
         conversations: [
-          { id, title: "New chat", updatedAt: Date.now(), messages: [], workspace },
+          {
+            id,
+            title: "New chat",
+            updatedAt: Date.now(),
+            messages: [],
+            workspace,
+            projectId,
+            folderPath,
+          },
           ...s.conversations,
         ],
         activeConversationId: id,
         view: "chat",
+        selected: null,
+        activeItemId: null,
       }));
+      openOnPreferredModel(get, set);
       return;
     }
     const created = await api.createConversation("New chat", undefined, workspace);
+    if (projectId) await api.setConversationProject(created.id, projectId);
     set((s) => ({
-      conversations: [toConversation(created), ...s.conversations],
+      conversations: [{ ...toConversation(created), projectId, folderPath }, ...s.conversations],
       activeConversationId: created.id,
       view: "chat",
+      selected: null,
+      activeItemId: null,
     }));
+    openOnPreferredModel(get, set);
+    persistTabSet(get());
+  },
+
+  forkFromMessage: async (messageId) => {
+    const convId = get().activeConversationId;
+    if (!convId || !api.inTauri() || !isPersistedId(messageId)) return;
+    const { conversation, resend } = await api.forkConversation(convId, messageId);
+    set((s) => ({ conversations: [toConversation(conversation), ...s.conversations] }));
+    await get().setActiveConversation(conversation.id);
+    // Sending is what makes this a rerun rather than a copy: it builds a fresh
+    // prompt from the branch's own history, so the model meets the question
+    // without the answer it is being asked to replace.
+    if (resend) await get().sendMessage(resend);
+  },
+
+  resumeLastRun: async () => {
+    const state = get();
+    const convId = state.activeConversationId;
+    const model = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
+    if (!convId || !model || state.busy || !api.inTauri()) return;
+    const conv = state.conversations.find((c) => c.id === convId);
+
+    const assistantId = `a-${Date.now()}`;
+    const assistantMsg: Message = {
+      id: assistantId,
+      role: "assistant",
+      model: { name: model.name, provenance: model.provenance },
+      steps: [],
+      text: "",
+      streaming: true,
+      createdAt: Date.now(),
+    };
+    set((s) => ({
+      busy: true,
+      presence: "active",
+      conversations: s.conversations.map((c) =>
+        c.id === convId
+          ? { ...c, updatedAt: Date.now(), messages: [...c.messages, assistantMsg] }
+          : c
+      ),
+    }));
+
+    let persistedAssistantId = assistantId;
+    try {
+      const row = await api.appendMessage({
+        conversationId: convId,
+        role: "assistant",
+        content: "",
+        modelName: model.name,
+        modelProvenance: model.provenance,
+      });
+      persistedAssistantId = row.id;
+    } catch {
+      /* non-fatal */
+    }
+
+    const engineError = await ensureEngineForModel(get, model);
+    if (engineError) {
+      patchAssistant(set, convId, assistantId, { text: engineError, streaming: false });
+      set((st) => ({ busy: false, presence: st.reflectingIds.length ? "reflecting" : "idle" }));
+      return;
+    }
+
+    const persona = conv?.personaId
+      ? state.personas.find((p) => p.id === conv.personaId)
+      : undefined;
+    await streamAssistantTurn(set, get, {
+      convId,
+      assistantId,
+      persistedAssistantId,
+      // Deliberately empty: a resumed run's transcript is rebuilt in Rust from
+      // the session log, because that is the only place the interrupted run's
+      // tool results survive. Reassembling here would send the prose back and
+      // silently throw the work away.
+      turns: [],
+      model,
+      temperature: conv?.overrides?.temperature ?? personaTemperature(persona),
+      resume: true,
+    });
   },
 
   renameConversation: async (id, title) => {
@@ -2163,8 +2701,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => {
       const remaining = s.conversations.filter((c) => c.id !== id);
       const active = s.activeConversationId === id ? remaining[0]?.id ?? null : s.activeConversationId;
-      return { conversations: remaining, activeConversationId: active };
+      // Its item tabs go with it: nothing they point at resolves any more.
+      const itemTabs = s.itemTabs.filter((t) => t.conversationId !== id);
+      const itemGone = !!s.activeItemId && !itemTabs.some((t) => itemKey(t) === s.activeItemId);
+      return {
+        conversations: remaining,
+        activeConversationId: active,
+        itemTabs,
+        ...(itemGone ? { activeItemId: null, selected: null } : {}),
+      };
     });
+    persistTabSet(get());
   },
 
   sendMessage: async (text, attachments = []) => {
@@ -2348,8 +2895,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       toolsEnabled: get().toolsEnabled,
       surface: get().surfaces[convId],
       memory,
+      memoryEnabled: get().memoryToolEnabled,
       toolHealth: get().toolHealth,
       skills: skillsForPersona(get().skills, persona?.skills_json),
+      planMode: get().planMode,
+      ...projectPrompt(get(), convId),
     });
     const effectiveTemperature =
       conv?.overrides?.temperature ?? personaTemperature(persona);
@@ -2359,6 +2909,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       convId,
       system: effectiveSystemPrompt,
       current: { role: "user", content: userContent },
+      currentId: userMsg.id,
       model,
     });
 
@@ -2478,8 +3029,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       toolsEnabled: get().toolsEnabled,
       surface: get().surfaces[convId],
       memory,
+      memoryEnabled: get().memoryToolEnabled,
       toolHealth: get().toolHealth,
       skills: skillsForPersona(get().skills, persona?.skills_json),
+      planMode: get().planMode,
+      ...projectPrompt(get(), convId),
     });
     const effectiveTemperature =
       conv?.overrides?.temperature ?? personaTemperature(persona);
@@ -2488,6 +3042,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       convId,
       system: effectiveSystemPrompt,
       current: { role: "user", content: modelContent },
+      currentId: userMsg.id,
       model,
     });
 
@@ -2592,6 +3147,110 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (api.inTauri()) api.stopChat().catch(() => {});
   },
 
+  steerActiveRun: async (text) => {
+    const body = text.trim();
+    const run = get().activeRun;
+    const convId = get().activeConversationId;
+    if (!body || !run || !convId || run.convId !== convId || !api.inTauri()) return false;
+
+    // The message goes on screen before the backend has seen it: the point of
+    // the feature is that typing lands immediately. `midRun: "pending"` is what
+    // marks it as not yet picked up; the `steered` event settles it.
+    const msg: Message = {
+      id: `u-${Date.now()}`,
+      role: "user",
+      text: body,
+      midRun: "pending",
+      createdAt: Date.now(),
+    };
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === convId ? { ...c, updatedAt: Date.now(), messages: [...c.messages, msg] } : c
+      ),
+    }));
+
+    const delivered = await api.steerRun(run.runId, body).catch(() => false);
+    if (!delivered) {
+      // The run ended in the gap between the keystroke and the send. Take the
+      // message back off screen rather than leaving a turn nothing will read;
+      // the composer resends it as an ordinary message.
+      set((s) => ({
+        conversations: s.conversations.map((c) =>
+          c.id === convId ? { ...c, messages: c.messages.filter((m) => m.id !== msg.id) } : c
+        ),
+      }));
+      return false;
+    }
+    // A steer is a real user turn: it has to survive a reload, and the next
+    // turn's context has to include it.
+    await api
+      .appendMessage({ conversationId: convId, role: "user", content: body })
+      .catch(() => {});
+    return true;
+  },
+
+  loadSubRuns: async (convId) => {
+    if (!api.inTauri()) return;
+    const rows = await api.listSubagentRuns(convId).catch(() => []);
+    if (!rows.length) return;
+    set((s) => {
+      const subRuns = { ...s.subRuns };
+      for (const row of rows) {
+        // A live child's own accumulators are ahead of the row, which is only
+        // written at the start and at the end — never overwrite one.
+        if (api.stillWorking(subRuns[row.id]?.status ?? "done")) continue;
+        subRuns[row.id] = {
+          runId: row.id,
+          conversationId: row.child_conversation_id,
+          parentConversationId: row.parent_conversation_id,
+          agent: row.agent,
+          task: row.task,
+          // Taken at face value: `SUB-12` settles every run a restart orphaned
+          // at startup, so a row still unfinished here is a background child
+          // genuinely still working — one this session simply has not met yet.
+          status: row.status,
+          stopReason: row.stop_reason ?? undefined,
+          steps: [],
+          text: row.result ?? "",
+          startedAt: row.started_at,
+          endedAt: row.ended_at ?? undefined,
+        };
+      }
+      return { subRuns };
+    });
+    // Hang the children back off the turn that started them, so the Fleet card
+    // is there after a reload and not only in the session that made it.
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id !== convId
+          ? c
+          : {
+              ...c,
+              messages: c.messages.map((m) => {
+                const mine = rows.filter((r) => r.parent_message_id === m.id).map((r) => r.id);
+                return mine.length ? { ...m, subRunIds: mine } : m;
+              }),
+            }
+      ),
+    }));
+  },
+
+  steerSubRun: async (runId, text) => {
+    const body = text.trim();
+    if (!body || !api.inTauri()) return false;
+    const delivered = await api.steerSubagent(runId, body).catch(() => false);
+    if (delivered) patchSubRun(set, runId, { steerPending: true });
+    return delivered;
+  },
+
+  stopSubRun: async (runId) => {
+    if (!api.inTauri()) return;
+    await api.stopRun(runId).catch(() => {});
+    // The child's own `sub_ended` settles the row properly; this is only so the
+    // button stops inviting a second click while that is in flight.
+    patchSubRun(set, runId, { status: "stopped", stopReason: "aborted" });
+  },
+
   setSystemPrompt: async (prompt) => {
     set({ systemPrompt: prompt });
     if (api.inTauri()) await api.setSetting(SYSTEM_PROMPT_KEY, prompt);
@@ -2599,7 +3258,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   resolvePermission: async (id, decision) => {
     const request = get().pendingPermissions.find((p) => p.id === id);
-    set((s) => ({ pendingPermissions: s.pendingPermissions.filter((p) => p.id !== id) }));
+    set((s) => {
+      const permissionAgents = { ...s.permissionAgents };
+      delete permissionAgents[id];
+      return { pendingPermissions: s.pendingPermissions.filter((p) => p.id !== id), permissionAgents };
+    });
     // "Don't ask again in this folder" raises the trust level backend-side —
     // mirror it so the header's segmented control matches what just happened.
     if (request?.in_folder && decision === "forever") {
@@ -2628,23 +3291,83 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (api.inTauri()) api.setSetting(DOCK_OPEN_KEY, dockOpen ? "1" : "0").catch(() => {});
   },
   selected: null,
-  selectNode: (selection) => set({ selected: selection, viewerExpanded: false }),
+  selectNode: (selection) => {
+    if (!selection) {
+      // "Close whatever's showing" — that means closing the active item tab,
+      // not just blanking a field.
+      const activeItemId = get().activeItemId;
+      if (activeItemId) get().closeItem(activeItemId);
+      return;
+    }
+    focusItem(set, get, selection);
+  },
   openArtifact: (artifactId) => {
     const convId = get().activeConversationId;
     const artifact = convId
       ? (get().artifacts[convId] ?? []).find((a) => a.id === artifactId)
       : undefined;
     // A saved artifact is a file now — show it where it actually lives.
-    set({
-      dockOpen: true,
-      viewerExpanded: false,
-      selected: artifact?.saved_path
-        ? { kind: "file", id: artifact.saved_path }
-        : { kind: "artifact", id: artifactId },
-    });
+    focusItem(
+      set,
+      get,
+      artifact?.saved_path ? { kind: "file", id: artifact.saved_path } : { kind: "artifact", id: artifactId }
+    );
   },
-  viewerExpanded: false,
-  setViewerExpanded: (viewerExpanded) => set({ viewerExpanded }),
+  itemTabs: [],
+  activeItemId: null,
+  openItem: (ref) => focusItem(set, get, ref),
+  unsavedFiles: {},
+  setUnsaved: (path, unsaved) =>
+    set((s) => {
+      if (unsaved === !!s.unsavedFiles[path]) return {};
+      const next = { ...s.unsavedFiles };
+      if (unsaved) next[path] = true;
+      else delete next[path];
+      return { unsavedFiles: next };
+    }),
+  closeItem: (id) => {
+    // `EDT-1`: a tab is the only place an unsaved edit exists, so closing one
+    // is the one moment it can be lost. Asked here rather than in the strip
+    // so every route to closing — the ×, middle-click, the pane's own button,
+    // a keyboard shortcut — goes through the same question.
+    const closing = get().itemTabs.find((t) => itemKey(t) === id);
+    if (closing?.kind === "file" && get().unsavedFiles[closing.id]) {
+      const name = closing.id.split(/[\\/]/).pop();
+      if (!confirm(`${name} has unsaved changes. Close it and lose them?`)) return;
+      get().setUnsaved(closing.id, false);
+    }
+    set((s) => {
+      const idx = s.itemTabs.findIndex((t) => itemKey(t) === id);
+      if (idx === -1) return {};
+      const itemTabs = s.itemTabs.filter((_, i) => i !== idx);
+      if (s.activeItemId !== id) return { itemTabs };
+      // The right-hand neighbour first, then the left.
+      const closed = s.itemTabs[idx];
+      // Only a neighbour from the chat already live, since closing a tab must
+      // not switch which chat you are in. With none, the overview shows.
+      const sameChat = (t: ItemRef) => t.conversationId === closed.conversationId;
+      const neighbor =
+        itemTabs.slice(idx).find(sameChat) ?? itemTabs.slice(0, idx).reverse().find(sameChat);
+      return {
+        itemTabs,
+        activeItemId: neighbor ? itemKey(neighbor) : null,
+        selected: itemToSelection(neighbor),
+      };
+    });
+    persistTabSet(get());
+  },
+  dockView: "files",
+  setDockView: (dockView) => {
+    if (get().dockView === dockView) return;
+    set({ dockView });
+    persistTabSet(get());
+  },
+  openSession: async (id) => {
+    // A chat is a destination (`SHL-24`). Showing one closes the item pane —
+    // what was in it belonged to the chat you just left.
+    if (get().activeItemId) set({ activeItemId: null, selected: null });
+    await get().setActiveConversation(id);
+  },
   dockWidth: DEFAULT_DOCK_WIDTH,
   setDockWidth: (px) => {
     // Floor keeps the tree usable; ceiling keeps the conversation readable.
@@ -2663,6 +3386,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!dockDragging && api.inTauri()) {
       api.setSetting(DOCK_WIDTH_KEY, String(get().dockWidth)).catch(() => {});
     }
+  },
+  showConversation: () => {
+    if (get().activeItemId === null) return;
+    set({ activeItemId: null, selected: null });
+    persistTabSet(get());
   },
   showHidden: false,
   toggleShowHidden: () => {
@@ -2697,6 +3425,172 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!get().folderTree[path]) await get().refreshTree(path);
   },
 
+  projects: [],
+
+  refreshProjects: async () => {
+    if (!api.inTauri()) return;
+    try {
+      set({ projects: (await api.listProjects()).map(toProject) });
+    } catch {
+      // A Rail group that fails to load is worth less than the Rail; the
+      // conversation list below it is unaffected either way.
+    }
+  },
+
+  activeProjectId: null,
+
+  newProject: async () => {
+    // `PRJ-UI-1a`: no folder picker. A project is a named group of sessions,
+    // and most are not about a directory — opening a file dialog first would
+    // say the opposite. The view it lands in is where a folder gets added, if
+    // one ever does.
+    set({ folderError: null });
+    try {
+      const project = api.inTauri()
+        ? toProject(await api.createProject(null))
+        : {
+            id: `p-${Date.now()}`,
+            name: NEW_PROJECT_NAME,
+            rootPath: null,
+            instructions: null,
+            trust: "confirm" as FolderTrust,
+            execPolicy: "ask" as const,
+            archived: false,
+            updatedAt: Date.now(),
+          };
+      set((s) => ({
+        projects: [project, ...s.projects.filter((p) => p.id !== project.id)],
+        expandedProjects: [...new Set([...s.expandedProjects, project.id])],
+      }));
+      get().openProjectView(project.id);
+    } catch (e) {
+      set({ folderError: String(e) });
+    }
+  },
+
+  openProjectView: (projectId) => {
+    // A route tab, exactly like Settings (`SHL-14`): it opens beside the chats
+    // and closes without losing them. `activeProjectId` says *which* project,
+    // the same way `activeConversationId` says which chat.
+    set({ activeProjectId: projectId });
+    get().setView("project");
+  },
+
+  setProjectInstructions: async (projectId, instructions) => {
+    const trimmed = instructions.trim();
+    set((s) => ({
+      projects: s.projects.map((p) =>
+        p.id === projectId ? { ...p, instructions: trimmed || null } : p
+      ),
+    }));
+    if (api.inTauri()) await api.setProjectInstructions(projectId, trimmed || null);
+  },
+
+  setProjectFolder: async (projectId, pick) => {
+    if (!api.inTauri()) return;
+    set({ folderError: null });
+    try {
+      let root: string | null = null;
+      if (pick) {
+        root = await api.pickFolder();
+        // Cancelling the dialog is not a request to remove the folder.
+        if (!root) return;
+      }
+      const project = toProject(await api.setProjectRoot(projectId, root));
+      set((s) => ({
+        projects: s.projects.map((p) => (p.id === projectId ? project : p)),
+        // The sessions' own fallback column followed in the backend; mirror it
+        // here or a chat on screen still shows the folder that was removed.
+        conversations: s.conversations.map((c) =>
+          c.projectId === projectId ? { ...c, folderPath: project.rootPath } : c
+        ),
+        folderTree: {},
+        expandedDirs: [],
+        indexState: null,
+        indexProgress: null,
+        indexError: null,
+      }));
+      const active = get().conversations.find((c) => c.id === get().activeConversationId);
+      if (active?.projectId === projectId) {
+        await get().refreshTree().catch(() => {});
+        get().refreshIndexStatus().catch(() => {});
+      }
+    } catch (e) {
+      set({ folderError: String(e) });
+    }
+  },
+
+  moveSessionToProject: async (conversationId, projectId) => {
+    const project = projectId ? get().projects.find((p) => p.id === projectId) : undefined;
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === conversationId
+          ? { ...c, projectId: projectId ?? null, folderPath: project?.rootPath ?? null }
+          : c
+      ),
+    }));
+    if (api.inTauri()) await api.setConversationProject(conversationId, projectId);
+  },
+
+  openProject: async (projectId) => {
+    const state = get();
+    const project = state.projects.find((p) => p.id === projectId);
+    if (!project) return;
+    // The most recent session in the project, or a fresh one. A project with
+    // no session yet is not an empty state to design around — it is one call.
+    const existing = state.conversations
+      .filter((c) => c.projectId === projectId && !c.parentConversationId)
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    if (existing) {
+      await state.setActiveConversation(existing.id);
+      return;
+    }
+    await state.newConversation();
+    const convId = get().activeConversationId;
+    if (!convId) return;
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === convId ? { ...c, projectId, folderPath: project.rootPath } : c
+      ),
+      folderTree: {},
+      expandedDirs: [],
+      dockOpen: true,
+    }));
+    if (api.inTauri()) {
+      await api.setConversationProject(convId, projectId);
+      await get().refreshTree();
+      get().refreshIndexStatus().catch(() => {});
+    }
+  },
+
+  renameProject: async (projectId, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    set((s) => ({
+      projects: s.projects.map((p) => (p.id === projectId ? { ...p, name: trimmed } : p)),
+    }));
+    if (api.inTauri()) await api.renameProject(projectId, trimmed);
+  },
+
+  archiveProject: async (projectId) => {
+    // Hides the project and its sessions. Nothing on disk is touched, ever,
+    // which is why there is no delete beside this.
+    set((s) => ({
+      projects: s.projects.filter((p) => p.id !== projectId),
+      expandedProjects: s.expandedProjects.filter((id) => id !== projectId),
+    }));
+    if (api.inTauri()) await api.setProjectArchived(projectId, true);
+  },
+
+  expandedProjects: [],
+
+  toggleProjectExpanded: (projectId) =>
+    set((s) => ({
+      expandedProjects: s.expandedProjects.includes(projectId)
+        ? s.expandedProjects.filter((id) => id !== projectId)
+        : [...s.expandedProjects, projectId],
+    })),
+
   attachFolder: async () => {
     if (!api.inTauri()) return;
     const convId = get().activeConversationId;
@@ -2705,11 +3599,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const picked = await api.pickFolder();
       if (!picked) return;
+      // `PRJ-3`: this creates or joins the project for that folder, in the
+      // backend, under one existing gesture. There is nothing new to learn and
+      // no empty-project state to design around — and the trust granted last
+      // time is already there.
       await api.setConversationFolder(convId, picked);
+      const project = (await api.listProjects()).find((p) => p.root_path === picked);
       set((s) => ({
         conversations: s.conversations.map((c) =>
-          c.id === convId ? { ...c, folderPath: picked } : c
+          c.id === convId
+            ? {
+                ...c,
+                folderPath: picked,
+                projectId: project?.id ?? null,
+                folderTrust: (project?.trust as FolderTrust) ?? c.folderTrust,
+              }
+            : c
         ),
+        projects: project
+          ? [toProject(project), ...s.projects.filter((p) => p.id !== project.id)]
+          : s.projects,
         folderTree: {},
         expandedDirs: [],
         selected: null,
@@ -2734,10 +3643,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   detachFolder: async () => {
     const convId = get().activeConversationId;
     if (!convId) return;
-    // Nothing on disk is touched — this only forgets the path.
+    // Nothing on disk is touched — this only forgets the path. `PRJ-3`: it
+    // also leaves the project, and the project and its other sessions stand.
     set((s) => ({
       conversations: s.conversations.map((c) =>
-        c.id === convId ? { ...c, folderPath: null } : c
+        c.id === convId ? { ...c, folderPath: null, projectId: null } : c
       ),
       folderTree: {},
       expandedDirs: [],
@@ -2753,10 +3663,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   setFolderTrust: async (trust) => {
     const convId = get().activeConversationId;
     if (!convId) return;
+    // `PRJ-4`: with a project attached this grants trust for the *folder*, so
+    // every session in it — including ones opened later — sees it. The
+    // backend writes both; the mirror here has to match or the sibling
+    // sessions on screen would still show the old level.
+    const projectId = get().conversations.find((c) => c.id === convId)?.projectId ?? null;
     set((s) => ({
       conversations: s.conversations.map((c) =>
-        c.id === convId ? { ...c, folderTrust: trust } : c
+        c.id === convId || (projectId && c.projectId === projectId)
+          ? { ...c, folderTrust: trust }
+          : c
       ),
+      projects: s.projects.map((p) => (p.id === projectId ? { ...p, trust } : p)),
     }));
     if (api.inTauri()) await api.setConversationTrust(convId, trust);
   },
@@ -2913,10 +3831,75 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  changeSets: {},
+  refreshChanges: async (conversationId) => {
+    if (!api.inTauri()) return;
+    const convId = conversationId ?? get().activeConversationId;
+    if (!convId) return;
+    try {
+      const changes = await api.conversationChanges(convId);
+      set((s) => ({ changeSets: { ...s.changeSets, [convId]: changes } }));
+    } catch {
+      /* a change set that fails to load leaves the last one standing */
+    }
+  },
+  undoChanges: async (conversationId, path) => {
+    if (!api.inTauri()) return;
+    await api.undoChanges(conversationId, path);
+    await get().refreshChanges(conversationId);
+    if (conversationId === get().activeConversationId) {
+      get().refreshTrash().catch(() => {});
+      get().refreshTree().catch(() => {});
+    }
+  },
+  keepChanges: async (conversationId) => {
+    if (!api.inTauri()) return;
+    await api.keepChanges(conversationId);
+    await get().refreshChanges(conversationId);
+  },
+  changesFocus: null,
+  focusChange: (conversationId, path) => {
+    // A click on a tab's dot is the user's own action, so it may make that
+    // tab's chat live first, the way pressing the tab does.
+    if (conversationId !== get().activeConversationId) void get().setActiveConversation(conversationId);
+    set({ changesFocus: path, dockOpen: true });
+    get().setDockView("changes");
+  },
+
+  projectCards: {},
+  refreshProjectCard: async (projectId, redetect) => {
+    if (!api.inTauri()) return;
+    try {
+      const view = await api.projectCard(projectId, redetect);
+      set((s) => ({ projectCards: { ...s.projectCards, [projectId]: view } }));
+    } catch {
+      /* the header shows no chips rather than an error about chips */
+    }
+  },
+  setProjectExecPolicy: async (projectId, policy) => {
+    set((s) => ({
+      projects: s.projects.map((p) => (p.id === projectId ? { ...p, execPolicy: policy } : p)),
+    }));
+    if (!api.inTauri()) return;
+    await api.setProjectExecPolicy(projectId, policy);
+    await get().refreshProjectCard(projectId);
+  },
+  setProjectTaskAllowed: async (projectId, task, allowed) => {
+    if (!api.inTauri()) return;
+    await api.setProjectTaskAllowed(projectId, task, allowed);
+    await get().refreshProjectCard(projectId);
+  },
+  setProjectCommands: async (projectId, runCommand, forget) => {
+    if (!api.inTauri()) return;
+    await api.setProjectCommands(projectId, runCommand, forget);
+    await get().refreshProjectCard(projectId);
+  },
+
   undoFileOp: async (id) => {
     if (!api.inTauri()) return;
     const entry = get().trash.find((t) => t.id === id);
     await api.undoFileOp(id);
+    get().refreshChanges().catch(() => {});
     set((s) => ({
       trash: s.trash.map((t) => (t.id === id ? { ...t, undone: true } : t)),
       // The file is back to its prior state, so it's no longer "changed".
@@ -2933,7 +3916,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!convId) return;
     const written = await api.saveArtifactToFolder(convId, artifactId, dest);
     // The artifact promotes: it stops being "made in this chat" and becomes a
-    // file in the tree, selected so the user sees where it landed.
+    // file in the tree, opened as an item tab so the user sees where it
+    // landed.
     set((s) => ({
       artifacts: {
         ...s.artifacts,
@@ -2942,8 +3926,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         ),
       },
       touchedFiles: { ...s.touchedFiles, [written]: Date.now() },
-      selected: { kind: "file", id: written },
     }));
+    focusItem(set, get, { kind: "file", id: written });
     await get().refreshTree();
     await get().refreshTrash();
   },
@@ -2973,13 +3957,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (artifact.conversation_id) {
       await get().setActiveConversation(artifact.conversation_id);
     }
-    set((s) => ({
-      selected: artifact.saved_path
-        ? { kind: "file" as const, id: artifact.saved_path }
-        : { kind: "artifact" as const, id: artifact.id },
-      dockOpen: true,
-      view: artifact.conversation_id ? "chat" : s.view,
-    }));
+    focusItem(
+      set,
+      get,
+      artifact.saved_path ? { kind: "file", id: artifact.saved_path } : { kind: "artifact", id: artifact.id }
+    );
   },
 
   imageLightbox: null,
@@ -2989,6 +3971,201 @@ export const useAppStore = create<AppState>((set, get) => ({
 
 type StoreSet = (fn: (s: AppState) => Partial<AppState>) => void;
 type StoreGet = () => AppState;
+
+/** An item tab's stable identity — what `activeItemId` and the strip's `key`
+ * prop both use, and the only place the string is built (`SHL-22`). */
+export function itemKey(ref: ItemRef): string {
+  return `${ref.kind}:${ref.id}`;
+}
+
+/** The reverse of `itemKey` for the two kinds `selected` understands — `null`
+ * for a run, which the Viewer does not render. */
+function itemToSelection(ref: ItemRef | undefined): WorkbenchSelection | null {
+  if (!ref || ref.kind === "run" || ref.kind === "diff") return null;
+  return { kind: ref.kind, id: ref.id };
+}
+
+const DOCK_VIEWS: readonly DockView[] = ["files", "artifacts", "agents", "browser", "changes"];
+function isDockView(x: unknown): x is DockView {
+  return typeof x === "string" && (DOCK_VIEWS as readonly string[]).includes(x);
+}
+
+/** Is this path under that folder? Compared with both separators normalised,
+ * since a path can reach the store from Windows APIs (`\`) and from the
+ * agent's own tool calls (`/`) in the same session. */
+/** `SHL-17`: turn whatever was on disk into a tab set this build can actually
+ * render, dropping every entry that no longer resolves.
+ *
+ * Pure and exported so the dropping rules can be tested directly — they are
+ * the half of persistence that is easy to get wrong and impossible to notice,
+ * since a bad entry shows up as a tab that does nothing rather than as an
+ * error. A set that fails to parse at all is discarded whole: a half-recovered
+ * strip is worth less than an empty one.
+ *
+ * `conversations` must be non-empty, and `conversations[0]` is the chat that
+ * is about to become live — every "does this still resolve" question is asked
+ * against it.
+ */
+export function validateTabSet(
+  raw: string | null | undefined,
+  conversations: Conversation[]
+): {
+  itemTabs: ItemRef[];
+  activeItemId: string | null;
+  dockView: DockView;
+} {
+  let itemTabs: ItemRef[] = [];
+  let activeItemId: string | null = null;
+  let dockView: DockView = "files";
+  try {
+    const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
+    if (parsed && typeof parsed === "object") {
+      // `sessionTabs` and `routeTabs` may still be on disk from a build that
+      // put chats and routes in the strip (`SHL-24` took them out). They are
+      // read and dropped: a chat and a route are destinations now, and nothing
+      // in the app has a list of "open" ones to restore them into.
+      //
+      // A set written before `SHL-22` names these `docTabs`/`activeDocId`/
+      // `docConversationId`, and holds `panel` entries for the sidebar's
+      // sections. The panels are not items: the last one seen becomes the
+      // sidebar's sub-view, so the section the user had open comes back as
+      // what it now is instead of vanishing.
+      const storedItems = Array.isArray(parsed.itemTabs)
+        ? parsed.itemTabs
+        : Array.isArray(parsed.docTabs)
+          ? parsed.docTabs
+          : [];
+      for (const entry of storedItems) {
+        const panel = legacyPanel(entry);
+        if (panel) dockView = panel;
+      }
+      if (isDockView(parsed.dockView)) dockView = parsed.dockView;
+      // Every item carries the chat it belongs to. A set written before the
+      // strip went global holds items for one chat only, named once in
+      // `itemConversationId`/`docConversationId`; those are stamped with it.
+      const setConversationId = parsed.itemConversationId ?? parsed.docConversationId;
+      itemTabs = storedItems.filter(isItemRef).flatMap((t) => {
+        const conversationId =
+          t.conversationId ?? (typeof setConversationId === "string" ? setConversationId : undefined);
+        return conversationId ? [{ ...t, conversationId }] : [];
+      });
+      const active = parsed.activeItemId ?? parsed.activeDocId;
+      if (typeof active === "string") activeItemId = active;
+    }
+  } catch {
+    /* a tab set that fails to parse is discarded, not quarantined */
+  }
+
+  // An item whose chat is gone is dropped. A file tab only resolves inside the
+  // folder its own chat is attached to: detach the folder, or attach a
+  // different one, and the path is no longer something that chat can open —
+  // so it is dropped rather than restored as a tab that can only ever show a
+  // read error. (A file deleted from disk while the folder stayed put is not
+  // caught here; the viewer reports that in place, which is a more useful
+  // answer than a tab vanishing for reasons the user cannot see.)
+  const byId = new Map(conversations.map((c) => [c.id, c]));
+  itemTabs = itemTabs.filter((t) => {
+    const owner = t.conversationId ? byId.get(t.conversationId) : undefined;
+    if (!owner) return false;
+    const folder = owner.folderPath ?? null;
+    // `PRJ-UI-3`: a patch only exists for a chat that works in a folder. Whether
+    // the change set still holds it is asked once the set has loaded, in
+    // `ItemView`, since that needs the backend.
+    if (t.kind === "diff") return !!folder;
+    return t.kind !== "file" || (!!folder && isInsideFolder(t.id, folder));
+  });
+  // Focus only comes back on an item of the chat that is about to be live;
+  // anything else would show an item over the wrong conversation.
+  const activeItem = itemTabs.find((t) => itemKey(t) === activeItemId);
+  if (!activeItem || activeItem.conversationId !== conversations[0].id) activeItemId = null;
+
+  return { itemTabs, activeItemId, dockView };
+}
+
+export function isInsideFolder(path: string, folder: string): boolean {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const f = norm(folder);
+  const p = norm(path);
+  return p === f || p.startsWith(`${f}/`);
+}
+
+function isItemRef(x: unknown): x is ItemRef {
+  if (!x || typeof x !== "object") return false;
+  const r = x as { kind?: unknown; id?: unknown; conversationId?: unknown; line?: unknown };
+  if (r.conversationId !== undefined && typeof r.conversationId !== "string") return false;
+  if (r.line !== undefined && typeof r.line !== "number") return false;
+  return (
+    typeof r.id === "string" &&
+    (r.kind === "file" || r.kind === "artifact" || r.kind === "run" || r.kind === "diff")
+  );
+}
+
+/** A pre-`SHL-22` `{ kind: "panel" }` entry, read as the sub-view it became. */
+function legacyPanel(x: unknown): DockView | null {
+  if (!x || typeof x !== "object") return null;
+  const r = x as { kind?: unknown; id?: unknown };
+  return r.kind === "panel" && isDockView(r.id) ? r.id : null;
+}
+
+/** Opens (or focuses) an item tab and keeps `selected` mirroring it
+ * (`SHL-10`/`SHL-22`) — every call site that used to hand-roll `selected`
+ * routes through this one function instead. An item is shown where the
+ * conversation is shown, so opening one from a route (Library) comes back to
+ * the chat area to show it.
+ *
+ * The strip is global, so the tab is stamped with the chat it belongs to, and
+ * an item from another chat makes that chat live first. The switch is
+ * synchronous up to its first await, so the item is focused on the chat that
+ * is now live, and the file reads and artifact lookups it does all resolve
+ * against the right conversation. */
+function focusItem(set: StoreSet, get: StoreGet, ref: ItemRef) {
+  const conversationId = ref.conversationId ?? get().activeConversationId;
+  if (!conversationId) return;
+  if (conversationId !== get().activeConversationId) {
+    void get().setActiveConversation(conversationId);
+  }
+  const stamped = { ...ref, conversationId } as ItemRef;
+  const key = itemKey(stamped);
+  set((s) => {
+    const exists = s.itemTabs.some((t) => itemKey(t) === key);
+    return {
+      // A file open from two chats in one folder is one tab; it follows the
+      // chat that opened it last.
+      itemTabs: exists ? s.itemTabs.map((t) => (itemKey(t) === key ? stamped : t)) : [...s.itemTabs, stamped],
+      activeItemId: key,
+      selected: itemToSelection(stamped),
+      view: "chat",
+    };
+  });
+  persistTabSet(get());
+}
+
+/** `SHL-17`: the whole strip is one persisted set.
+ *
+ * Written on tab open/close rather than per render, but that is still every
+ * `Ctrl+Tab` and every streamed artifact, so the write is coalesced onto a
+ * trailing timer: a burst of focus changes costs one settings write instead of
+ * one each. The last state always wins, which is the only ordering that
+ * matters for a snapshot.
+ *
+ * One global set under one key, whichever project the live chat is in. Each
+ * item tab carries its own `conversationId`, because an artifact id, a run id
+ * or a path only means anything inside the chat it came from. */
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function persistTabSet(state: AppState) {
+  if (!api.inTauri()) return;
+  const payload = JSON.stringify({
+    itemTabs: state.itemTabs,
+    activeItemId: state.activeItemId,
+    dockView: state.dockView,
+  });
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    api.setSetting(TAB_SET_KEY, payload).catch(() => {});
+  }, 250);
+}
 
 /** The shared spine behind both generation entry points (`STR-1`): one
  * presentation, two submit calls. Posts a normal-looking agent turn, persists
@@ -3156,6 +4333,150 @@ function patchAssistant(
   }));
 }
 
+/** Patch one delegated child's live record (`SUB-UI-1`). Silently does nothing
+ * for a run this session never saw — a stale event is not worth inventing a row
+ * the user cannot open. */
+function patchSubRun(set: StoreSet, runId: string, patch: Partial<SubRun>) {
+  set((s) =>
+    s.subRuns[runId]
+      ? { subRuns: { ...s.subRuns, [runId]: { ...s.subRuns[runId], ...patch } } }
+      : {}
+  );
+}
+
+/**
+ * Fold one event from a delegated child into that child's own record
+ * (`SUB-UI-1`).
+ *
+ * Deliberately narrow: a child's steps, prose and permission prompts are what
+ * the Fleet card and the Agents tab show. Its artifacts, files and browsing
+ * belong to *its* conversation, and the Agents tab reads them from there — if
+ * they were folded in here they would land on the lead's message and appear to
+ * be the lead's own work.
+ */
+export function applySubEvent(set: StoreSet, runId: string, event: api.AgentEvent) {
+  set((s) => {
+    const run = s.subRuns[runId];
+    if (!run) return {};
+    const steps = run.steps;
+    let next: SubRun | null = null;
+    switch (event.type) {
+      case "run_started":
+        // `SUB-12`: a background child announces itself when the pool finally
+        // gives it a slot. This is the only signal that it stopped queueing.
+        next = { ...run, status: "running", startedAt: run.startedAt || Date.now() };
+        break;
+      case "token":
+        next = { ...run, text: run.text + event.text };
+        break;
+      case "steps_parallel":
+        next = {
+          ...run,
+          parallelPending: {
+            ...(run.parallelPending ?? {}),
+            ...Object.fromEntries(event.ids.map((id) => [id, event.ids[0]])),
+          },
+        };
+        break;
+      case "step_start": {
+        const group = run.parallelPending?.[event.id];
+        next = {
+          ...run,
+          steps: [
+            ...steps,
+            {
+              id: event.id,
+              verb: event.verb,
+              target: event.target,
+              status: "running" as const,
+              ...(group ? { parallelGroup: group } : {}),
+              ...(event.parent ? { nestedUnder: event.parent } : {}),
+            },
+          ],
+        };
+        break;
+      }
+      case "task_started":
+      case "task_output":
+      case "task_ended":
+        next = { ...run, steps: steps.map((st) => (st.id === event.id ? applyTaskEvent(st, event) : st)) };
+        break;
+      case "kept_result":
+        next = {
+          ...run,
+          steps: steps.map((st) =>
+            st.id === event.id
+              ? { ...st, kept: { reference: event.reference, bytes: event.bytes, text: event.text } }
+              : st
+          ),
+        };
+        break;
+      case "step_done":
+        next = {
+          ...run,
+          steps: steps.map((st) =>
+            st.id === event.id
+              ? { ...st, status: "done" as const, result: event.result ?? undefined }
+              : st
+          ),
+        };
+        break;
+      case "step_error":
+        next = {
+          ...run,
+          steps: steps.map((st) =>
+            st.id === event.id
+              ? { ...st, status: "error" as const, result: `— ${event.error}` }
+              : st
+          ),
+        };
+        break;
+      case "steered":
+        next = { ...run, steerPending: false };
+        break;
+      case "permission":
+        // `SUB-UI-4`: the panel must say which agent is asking. Two children can
+        // ask at once, so these queue rather than replace.
+        return {
+          pendingPermissions: [...s.pendingPermissions, event.request],
+          permissionAgents: { ...s.permissionAgents, [event.request.id]: run.agent },
+        };
+      default:
+        return {};
+    }
+    return { subRuns: { ...s.subRuns, [runId]: next } };
+  });
+}
+
+/** `COD-UI-2`: fold one task event into the step that ran the task. Shared by a
+ * lead's own timeline and a child's, so a build reads the same in both. */
+export function applyTaskEvent(
+  step: AgentStep,
+  event: Extract<api.AgentEvent, { type: "task_started" | "task_output" | "task_ended" }>
+): AgentStep {
+  switch (event.type) {
+    case "task_started":
+      return {
+        ...step,
+        task: { name: event.task, argv: event.argv, cwd: event.cwd, kind: event.kind },
+      };
+    case "task_output":
+      return step.task ? { ...step, task: { ...step.task, lastLine: event.line } } : step;
+    case "task_ended":
+      return {
+        ...step,
+        task: {
+          ...(step.task ?? { name: step.target, argv: [], cwd: "", kind: "other" }),
+          outcome: event.outcome,
+          exitCode: event.exit_code,
+          durationMs: event.duration_ms,
+          diagnostics: event.diagnostics,
+          tail: event.tail,
+        },
+      };
+  }
+}
+
 /** Patch a block wherever it lives in a conversation's messages (Generative UI). */
 function patchBlock(set: StoreSet, convId: string, blockId: string, patch: Partial<BlockView>) {
   set((s) => ({
@@ -3190,6 +4511,36 @@ async function ensureEngineForModel(get: () => AppState, model: Model): Promise<
     return "No model is loaded yet. Open Models and choose a model to start the engine.";
   }
   return null;
+}
+
+/**
+ * REF-3: leaving a conversation is when it becomes reviewable — it's finished
+ * enough to learn from, and the user isn't waiting on anything.
+ *
+ * Every path that leaves the active conversation has to go through here, not
+ * just `setActiveConversation`: starting a new chat is a far commoner way to
+ * walk away from one, and for a long time it didn't reflect at all, which is
+ * most of why so few conversations were ever digested.
+ *
+ * `nextId` is the conversation being moved to, so re-selecting the active one
+ * (a Rail click on the current chat, returning from Settings) isn't mistaken
+ * for leaving it. Omit it when nothing is being opened in its place.
+ *
+ * Fire-and-forget: reflection must never sit in the navigation path.
+ */
+function reflectOnLeaving(get: () => AppState, nextId?: string) {
+  const state = get();
+  const leaving = state.conversations.find((c) => c.id === state.activeConversationId);
+  if (
+    leaving &&
+    leaving.id !== nextId &&
+    !leaving.reflectedAt &&
+    leaving.messages.length >= REFLECT_MIN_MESSAGES &&
+    state.autoReflect &&
+    api.inTauri()
+  ) {
+    state.reflectConversation(leaving.id).catch(() => {});
+  }
 }
 
 /**
@@ -3321,6 +4672,10 @@ async function assembleTurns(
     convId: string;
     system: string;
     current: api.ChatTurnMessage;
+    /** The optimistic message `current` was made from. It is already in the
+     * transcript by now, and sending it as history too would put the user's
+     * words in front of the model twice (the loop merges the two turns). */
+    currentId: string;
     model: Model;
   }
 ): Promise<api.ChatTurnMessage[]> {
@@ -3330,7 +4685,7 @@ async function assembleTurns(
 
   /** History after the summary boundary — the turns still sent verbatim. */
   const priorFrom = (boundaryId: string | null | undefined) => {
-    const all = (conv?.messages ?? []).filter((m) => m.text.trim().length > 0);
+    const all = (conv?.messages ?? []).filter((m) => m.id !== opts.currentId && m.text.trim().length > 0);
     const cut = boundaryId ? all.findIndex((m) => m.id === boundaryId) : -1;
     return all.slice(cut + 1).map((m) => ({
       id: m.id,
@@ -3387,6 +4742,10 @@ async function streamAssistantTurn(
     /** WHY-2: what this turn's prompt was actually built from, stored on the
      * finalized message so it can be explained later. */
     contextRefs?: api.ContextRefs;
+    /** `HRN-UI-5`: continue the conversation's last run instead of starting a
+     * new one. `turns` is then unused — the transcript comes from the session
+     * log, which is the only place the interrupted run's tool results survive. */
+    resume?: boolean;
   }
 ): Promise<void> {
   const { convId, assistantId, persistedAssistantId, turns, model, temperature } = opts;
@@ -3399,20 +4758,209 @@ async function streamAssistantTurn(
   /** Media artifacts this turn produced, rendered inline (`STR-1`). */
   const mediaAttachments: Attachment[] = [];
   const fileChangeIds: string[] = [];
+  /** `PRJ-UI-3`: whether this run has changed a file yet. The first change
+   * moves the sidebar to Changes; later ones leave it where the user put it. */
+  let editedYet = false;
+  /** `SUB-UI-1`: children this turn started, in the order it asked for them. */
+  const subRunIds: string[] = [];
+  /** `HRN-UI-2`: step id -> the parallel batch it belongs to. Announced before
+   * the steps themselves arrive, so it is held here until they do. */
+  const parallelOf: Record<string, string> = {};
+  /** `HRN-3`: set by `run_ended`, written to the row when the turn finalizes. */
+  let stopReason: api.StopReason | undefined;
+  /** `PLN-UI-1`: the plan this run is working to, as it last told us. Held here
+   * as well as on the turn so it can be written to the row when the turn
+   * finalizes (`PLN-UI-5`). */
+  let plan: api.PlanView | undefined;
+  /** `HRN-UI-5`: the backend found no log to pick up. Not an error — the run
+   * predates the session log, or finished cleanly and has nothing left to do. */
+  let nothingToResume = false;
+  /** Where this turn's events come from. Resuming is the same stream with the
+   * same handling; the only difference is that the transcript is rebuilt in
+   * Rust from the session log instead of being assembled here. */
+  const startRun = opts.resume
+    ? async (onEvent: (e: api.AgentEvent) => void, runOpts: api.RunOptions) => {
+        nothingToResume = !(await api.resumeRun(convId, onEvent, runOpts));
+      }
+    : (onEvent: (e: api.AgentEvent) => void, runOpts: api.RunOptions) =>
+        api.agentChat(convId, turns, onEvent, runOpts);
   try {
-    await api.agentChat(
-      convId,
-      turns,
+    await startRun(
       (e) => {
         switch (e.type) {
           case "token":
             acc += e.text;
             patchAssistant(set, convId, assistantId, { text: acc, streaming: true });
+            // The model has started speaking, so whatever it was thinking is
+            // over. Clearing here keeps the indicator honest without needing a
+            // second event to say "done thinking".
+            set((s) =>
+              s.activeRun && s.activeRun.thinking ? { activeRun: { ...s.activeRun, thinking: "" } } : {}
+            );
+            break;
+          case "thinking":
+            set((s) =>
+              s.activeRun?.runId === e.run_id
+                ? { activeRun: { ...s.activeRun, thinking: s.activeRun.thinking + e.text } }
+                : {}
+            );
+            break;
+          case "run_started":
+            set(() => ({
+              activeRun: {
+                runId: e.run_id,
+                convId,
+                step: 0,
+                maxSteps: e.max_steps,
+                startedAt: Date.now(),
+                contextTokens: 0,
+                contextWindow: e.context_window,
+                thinking: "",
+                // A resume announces the plan it is continuing right after
+                // this, so the card is never blank while the run is live.
+                plan,
+              },
+            }));
+            break;
+          case "run_progress":
+            set((s) =>
+              s.activeRun?.runId === e.run_id
+                ? {
+                    activeRun: {
+                      ...s.activeRun,
+                      step: e.step,
+                      maxSteps: e.max_steps,
+                      contextTokens: e.context_tokens,
+                      // Each step thinks afresh. Without this the indicator
+                      // would read as one think growing across the whole run.
+                      thinking: "",
+                    },
+                  }
+                : {}
+            );
+            break;
+          case "run_ended":
+            // `HRN-3`: keep the reason on the turn. A run that hit its step
+            // limit still has an answer worth reading; it just isn't the one
+            // it meant to give, and the stream says so rather than passing a
+            // stump off as finished.
+            if (e.stop_reason !== "completed") {
+              stopReason = e.stop_reason;
+              patchAssistant(set, convId, assistantId, { stopReason: e.stop_reason });
+            }
+            // `PLN-5`: the plan as the run left it. This is what lets a turn
+            // that stopped at its step limit show which items it never reached
+            // rather than only that it stopped.
+            if (e.plan) {
+              plan = e.plan;
+              patchAssistant(set, convId, assistantId, { plan: e.plan });
+            }
+            set((s) => (s.activeRun?.runId === e.run_id ? { activeRun: null } : {}));
+            break;
+          case "plan":
+            // `PLN-UI-1`: the plan the model just wrote or revised. It goes on
+            // the turn, so the card renders it above the timeline, and on the
+            // run, so the meter can name the item being worked on.
+            plan = e.plan;
+            patchAssistant(set, convId, assistantId, { plan: e.plan });
+            set((s) =>
+              s.activeRun?.runId === e.run_id
+                ? { activeRun: { ...s.activeRun, plan: e.plan } }
+                : {}
+            );
+            break;
+          case "steered":
+            // The run picked up something typed at it mid-flight. Settle the
+            // optimistic mark on the newest pending user turn.
+            set((s) => ({
+              conversations: s.conversations.map((c) =>
+                c.id !== convId
+                  ? c
+                  : {
+                      ...c,
+                      messages: c.messages.map((m) =>
+                        m.role === "user" && m.midRun === "pending" && m.text === e.text
+                          ? { ...m, midRun: "delivered" as const }
+                          : m
+                      ),
+                    }
+              ),
+            }));
+            break;
+          case "sub_spawned": {
+            // A child started. The card exists from this moment, not from its
+            // first token — an agent you cannot see is the failure this whole
+            // feature exists to avoid.
+            subRunIds.push(e.run_id);
+            set((s) => ({
+              subRuns: {
+                ...s.subRuns,
+                [e.run_id]: {
+                  runId: e.run_id,
+                  conversationId: e.conversation_id,
+                  parentConversationId: convId,
+                  agent: e.agent,
+                  task: e.task,
+                  status: "running",
+                  steps: [],
+                  text: "",
+                  startedAt: Date.now(),
+                },
+              },
+            }));
+            patchAssistant(set, convId, assistantId, { subRunIds: [...subRunIds] });
+            break;
+          }
+          case "sub":
+            applySubEvent(set, e.run_id, e.event);
+            break;
+          case "sub_ended":
+            patchSubRun(set, e.run_id, {
+              status: e.status,
+              stopReason: e.stop_reason,
+              // The report the lead was handed is the whole result — better
+              // than whatever prose happened to stream before it.
+              ...(e.summary ? { text: e.summary } : {}),
+              endedAt: Date.now(),
+              ms: e.ms,
+              steerPending: false,
+            });
+            break;
+          case "steps_parallel":
+            // `HRN-4`: these are about to start together. The batch is named
+            // after its first step, which is stable and needs no counter.
+            for (const id of e.ids) parallelOf[id] = e.ids[0];
             break;
           case "step_start":
-            steps.push({ id: e.id, verb: e.verb, target: e.target, status: "running" });
+            steps.push({
+              id: e.id,
+              verb: e.verb,
+              target: e.target,
+              status: "running",
+              ...(parallelOf[e.id] ? { parallelGroup: parallelOf[e.id] } : {}),
+              ...(e.parent ? { nestedUnder: e.parent } : {}),
+            });
             patchAssistant(set, convId, assistantId, { steps: [...steps] });
             break;
+          case "task_started":
+          case "task_output":
+          case "task_ended": {
+            // `COD-UI-2`: a task's progress hangs off its own step.
+            const at = steps.findIndex((x) => x.id === e.id);
+            if (at !== -1) {
+              steps[at] = applyTaskEvent(steps[at], e);
+              patchAssistant(set, convId, assistantId, { steps: [...steps] });
+            }
+            break;
+          }
+          case "kept_result": {
+            // `HRN-8`: the model got a preview. The user gets all of it, behind
+            // the same disclosure `Code` and `Recall` already use.
+            const s = steps.find((x) => x.id === e.id);
+            if (s) s.kept = { reference: e.reference, bytes: e.bytes, text: e.text };
+            patchAssistant(set, convId, assistantId, { steps: [...steps] });
+            break;
+          }
           case "step_done": {
             const s = steps.find((x) => x.id === e.id);
             if (s) {
@@ -3442,7 +4990,8 @@ async function streamAssistantTurn(
               saved_path: null,
               meta_json: e.meta_json,
             };
-            artifactIds.push(e.id);
+            // Same turn, same artifact, twice (made then fixed) is one chip.
+            if (!artifactIds.includes(e.id)) artifactIds.push(e.id);
             // Media is the deliberate exception (`ART-2`): it's already visible
             // inline in the stream, so auto-opening the viewer for it would be
             // redundant motion rather than the strong "look, it's ready" signal
@@ -3459,12 +5008,32 @@ async function streamAssistantTurn(
             });
             set((st) => {
               const existing = st.artifacts[convId] ?? [];
+              // `ART-4`: the agent can now revise an artifact in place, which
+              // arrives on this same event with an id already in the list.
+              // Appending blindly would leave the panel showing two Pac-Mans,
+              // the broken one first. Replace in place instead, keeping its
+              // position so the thing the user is looking at doesn't jump.
+              const at = existing.findIndex((a) => a.id === e.id);
+              const next =
+                at === -1
+                  ? [...existing, artifact]
+                  : existing.map((a, i) =>
+                      // Keep what belongs to the row rather than to this
+                      // revision: an edited artifact was still made when it
+                      // was made, and is still saved where it was saved.
+                      i === at
+                        ? { ...artifact, created_at: a.created_at, saved_path: a.saved_path }
+                        : a
+                    );
               return {
-                artifacts: { ...st.artifacts, [convId]: [...existing, artifact] },
+                artifacts: { ...st.artifacts, [convId]: next },
                 dockOpen: isMedia ? st.dockOpen : true,
-                selected: isMedia ? st.selected : { kind: "artifact" as const, id: e.id },
               };
             });
+            // `SHL-23`: the agent points the sidebar at what it made; it does
+            // not open the artifact as a tab. A tab would take the chat you
+            // are typing in off the screen, and the agent may never do that.
+            if (!isMedia) get().setDockView("artifacts");
             break;
           }
           case "file_changed": {
@@ -3480,6 +5049,15 @@ async function streamAssistantTurn(
             }
             get().refreshTree().catch(() => {});
             get().refreshTrash().catch(() => {});
+            get().refreshChanges(convId).catch(() => {});
+            // `SHL-23`/`PRJ-UI-3`: the first edit of a run points the sidebar at
+            // the patch. It never opens a diff tab — only the user does that,
+            // because a tab would take the chat off the screen.
+            if (!editedYet) {
+              editedYet = true;
+              const conv = get().conversations.find((c) => c.id === convId);
+              if (conv?.folderPath && convId === get().activeConversationId) get().setDockView("changes");
+            }
             break;
           }
           case "browser": {
@@ -3648,16 +5226,48 @@ async function streamAssistantTurn(
         target: targetFor(model),
       }
     );
+    if (nothingToResume) {
+      acc =
+        acc ||
+        "I have no record of that run to pick up — it finished before I started keeping one. Ask me again and I will start it fresh.";
+      patchAssistant(set, convId, assistantId, { text: acc, streaming: false });
+    }
   } catch (err) {
     acc = acc || `That didn't work: ${String(err)}`;
     patchAssistant(set, convId, assistantId, { text: acc, streaming: false });
   } finally {
-    // Back to resting unless a self-process is still working (PRES-1).
-    set((st) => ({ busy: false, presence: st.reflectingIds.length ? "reflecting" : "idle" }));
+    // Back to resting unless a self-process is still working (PRES-1). The run
+    // is dropped here as well as on `run_ended`, so a stream that dies without
+    // a closing event can't leave the composer thinking it can still steer.
+    set((st) => ({
+      busy: false,
+      activeRun: null,
+      presence: st.reflectingIds.length ? "reflecting" : "idle",
+      // A steer the run never got round to reading stops claiming to be in
+      // flight — it stays in the transcript as an ordinary unanswered turn.
+      conversations: st.conversations.map((c) =>
+        c.id !== convId
+          ? c
+          : {
+              ...c,
+              messages: c.messages.map((m) =>
+                m.midRun === "pending" ? { ...m, midRun: undefined } : m
+              ),
+            }
+      ),
+    }));
     try {
       const stepsJson = steps.length ? JSON.stringify(steps) : undefined;
       const contextJson = opts.contextRefs ? JSON.stringify(opts.contextRefs) : undefined;
-      await api.finalizeMessage(persistedAssistantId, acc, stepsJson, contextJson);
+      const planJson = plan?.items.length ? JSON.stringify(plan) : undefined;
+      await api.finalizeMessage(
+        persistedAssistantId,
+        acc,
+        stepsJson,
+        contextJson,
+        stopReason,
+        planJson
+      );
       // The message still carries its optimistic client id until this turn
       // finalizes — swap in the real one so "why this answer?" (WHY-4) can
       // address it this session, not only after the next reload.
@@ -3691,6 +5301,38 @@ async function maybeDailyProfileTick(get: () => AppState) {
   }
 }
 
+/** How long after launch the catch-up pass runs. Long enough that the models
+ * list, the engine and the first paint are all settled — a backlog that has sat
+ * there for weeks can wait another half-minute, and must not compete with the
+ * user's first message. */
+const CATCH_UP_DELAY_MS = 30_000;
+
+/**
+ * REF-3b: digest the conversations nobody ever left *through the door* — closed
+ * with the app, or abandoned back when only a chat switch triggered reflection.
+ *
+ * Deliberately not run on window close: reflection is two model calls per
+ * lesson, and an app being quit is the worst possible place to start one. The
+ * backlog is drained a couple at a time at launch instead, where it can take as
+ * long as it needs.
+ */
+function scheduleCatchUpReflection(get: () => AppState) {
+  if (!api.inTauri()) return;
+  setTimeout(async () => {
+    if (!get().autoReflect || get().busy) return;
+    try {
+      const digested = await api.catchUpReflection(cloudTarget());
+      if (digested > 0) {
+        get().refreshMemoryContext();
+        get().refreshSelf();
+        get().refreshChangeProposals();
+      }
+    } catch {
+      /* the backlog keeps; try again next launch */
+    }
+  }, CATCH_UP_DELAY_MS);
+}
+
 /** The selected remote model (cloud, or a user's own connected server) shaped
  * as a routing target — `undefined` means the local engine. Reflection,
  * consolidation and `GLD-2`'s before/after checks all route this way: a
@@ -3717,6 +5359,32 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
   api.onAppEvent<api.MediaPartialEvent>("poiesis-media-partial", (e) => {
     set((s) => (s.mediaJobs[e.job_id] ? { mediaPartials: { ...s.mediaPartials, [e.job_id]: e.data_uri } } : {}));
   });
+  // `SUB-10`/`SUB-12`: a background child outlives the turn that started it, so
+  // its events cannot arrive on that turn's channel — by the time it takes its
+  // second step, there is no channel. They come over the app bus instead, in
+  // exactly the shape a live child's events have, so the Fleet card, the Agents
+  // tab and the permission panel all keep working with no second code path.
+  api.onAppEvent<api.AgentEvent>("poiesis-agent-sub", (e) => {
+    if (e.type === "sub") {
+      applySubEvent(set, e.run_id, e.event);
+      return;
+    }
+    if (e.type !== "sub_ended") return;
+    patchSubRun(set, e.run_id, {
+      status: e.status,
+      stopReason: e.stop_reason,
+      ...(e.summary ? { text: e.summary } : {}),
+      endedAt: Date.now(),
+      ms: e.ms,
+      steerPending: false,
+    });
+    // Say so. An agent finishing quietly, minutes after the reply that started
+    // it, is work the person never learns happened.
+    const run = get().subRuns[e.run_id];
+    if (!run) return;
+    const verb = e.stop_reason === "completed" ? "finished" : "stopped";
+    set(() => ({ agentDoneToast: `The ${run.agent} agent ${verb}. Its report is in the turn that started it.` }));
+  });
   api.onAppEvent<api.MemoryWriteEvent>("poiesis-memory-write", (e) => {
     get().refreshMemoryContext();
     get().refreshSelf();
@@ -3737,7 +5405,7 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
       presence: "healing" as const,
       healToast: e.ok
         ? "↻ My engine stalled — I restarted it."
-        : "↻ I couldn't keep my engine alive — I've stopped trying. Check the Engine page.",
+        : "↻ I couldn't keep my runtime alive — I've stopped trying. Check the Runtime page.",
     }));
     // The healing state is a moment, not a mode.
     setTimeout(() => {
@@ -3802,6 +5470,19 @@ function soulBlock(soul: string | undefined): string {
   return `## Standing instructions (SOUL.md — the user approved these; they take precedence over the persona/system prompt above when the two conflict)\n${s}`;
 }
 
+/** `PRJ-7`: what this project is, carried by every session in it.
+ *
+ * Sits after SOUL.md because standing instructions the user approved apply
+ * everywhere and this applies only here. Mirrors `project_block` in
+ * `context.rs` — the two are compared byte for byte by `CTX-4`. */
+function projectBlock(name: string | undefined, instructions: string | undefined): string {
+  const n = name?.trim();
+  const t = instructions?.trim();
+  if (!n || !t) return "";
+  const text = t.length > PROJECT_INSTRUCTIONS_CAP ? `${t.slice(0, PROJECT_INSTRUCTIONS_CAP)}…` : t;
+  return `## Project: ${n} (instructions for this project; the persona/system prompt above still governs voice, format and depth)\n${text}`;
+}
+
 /** The durable memory index, with a caveat when tools (and so `memory` reads) are off. */
 function memoryIndexBlock(index: string | undefined, toolsEnabled: boolean): string {
   const i = index?.trim();
@@ -3818,9 +5499,57 @@ function sessionStateBlock(state: Record<string, unknown> | undefined): string {
   return `## Session state (durable; update with the remember tool)\n${JSON.stringify(state)}`;
 }
 
-/** The standing guidance only sent when the model can actually call tools. */
-function toolGuidanceBlock(): string {
-  return `${SURFACE_GUIDANCE}\n\n${BLOCK_GUIDANCE}\n\n${PLAN_FIRST_GUIDANCE}`;
+/** The standing guidance only sent when the model can actually call tools.
+ *
+ * `PLN-3`: the planning sentence rides on the end of the same block — it is the
+ * same kind of thing (how to go about the work), and `never` must be able to
+ * remove it without leaving a gap. Mirrors `tool_guidance_block` in
+ * `agent/context.rs`; the golden gate (`CTX-4`) holds the two to the byte. */
+function toolGuidanceBlock(planMode: PlanMode | undefined): string {
+  const out = `${SURFACE_GUIDANCE}\n\n${BLOCK_GUIDANCE}\n\n${PLAN_FIRST_GUIDANCE}`;
+  const planning = planGuidance(planMode);
+  return planning ? `${out}\n${planning}` : out;
+}
+
+/** `PLN-3`: the user's override of the model's judgement about planning.
+ * Mirrors `agent::plan::PlanMode`. */
+export type PlanMode = "always" | "auto" | "never";
+export const PLAN_MODE_KEY = "agent.plan_mode";
+
+/** One sentence, and one sentence only. A model that writes junk plans will not
+ * be argued out of it by a paragraph — `never` is the answer for that model.
+ * Word for word `PlanMode::guidance` in `agent/plan.rs`. */
+export function planGuidance(mode: PlanMode | undefined): string {
+  if (mode === "never") return "";
+  if (mode === "always") {
+    return "Before your first tool call, write the plan with the `plan` tool, then keep it up to date as you work.";
+  }
+  return "When a request has several distinct parts, or will take more than a few steps, write a short plan with the `plan` tool before you start and keep it up to date as you work; otherwise just do the work.";
+}
+
+/**
+ * MEM-COLD: the instruction that makes durable memory actually happen.
+ *
+ * Without this the only thing telling the model to save is one tool
+ * description buried among forty others, and `memoryIndexBlock` goes silent at
+ * zero facts — so an empty memory never mentions memory, the model never saves,
+ * and it stays empty forever. This block is therefore sent whenever the Memory
+ * toolset is on, *especially* when there is nothing remembered yet.
+ */
+function memoryGuidanceBlock(hasFacts: boolean): string {
+  const lines = [
+    "## Remembering",
+    'You keep durable notes about the user across conversations with the `memory` tool. When the user says something that will still be true next week and would change how you answer later, call memory(op:"save") in the same turn — do not wait to be asked, and do not announce it at length; the save shows up in their timeline on its own.',
+    "Worth saving: how they want you to work (tone, length, format, language), tools/stacks/services they use, what they're building and why, stable personal or professional facts, standing decisions they've made.",
+    "Never save: task state, one-off requests, anything you inferred rather than heard, or anything they haven't actually confirmed. When in doubt, don't.",
+    "One fact per save, in their own terms, with a slug you would search for later.",
+  ];
+  if (!hasFacts) {
+    lines.push(
+      "You have not saved anything about this user yet, so the bar for the first few notes is simply: would knowing this next month make you better here? If so, save it.",
+    );
+  }
+  return lines.join("\n");
 }
 
 export interface ComposePromptOpts {
@@ -3830,11 +5559,41 @@ export interface ComposePromptOpts {
   surface?: BlockView;
   /** The durable self (MEM-3). Omitted when the Memory toolset is off. */
   memory?: api.MemoryContext;
+  /** Is the Memory toolset on — i.e. can the model actually call `memory`?
+   * Distinct from `memory` being present: with the toolset off, soul and the
+   * synthesis are still injected (`recallForPrompt`), just without an index. */
+  memoryEnabled?: boolean;
   /** 7-day tool reliability for this model (HEAL-2). */
   toolHealth?: api.ToolHealth[];
   /** Discovered Agent Skills (SKL-2), for the "Skills available" block. */
   skills?: api.SkillView[];
+  /** `PLN-3`: whether this turn is told to plan first. Absent means *when it
+   * helps*, which is what an unset setting means. */
+  planMode?: PlanMode;
+  /** `PRJ-7`: the project this session is in, and what it says to do. Both or
+   * neither — a name with no instructions has nothing to inject, and
+   * instructions with no name have nothing to attribute them to. */
+  projectName?: string;
+  projectInstructions?: string;
 }
+
+/** `PRJ-7`: the project half of a turn's standing context, read beside the
+ * persona because both answer the same question — what this turn starts from.
+ * Mirrors `from_db` in `context.rs`. */
+function projectPrompt(
+  state: AppState,
+  convId: string
+): { projectName?: string; projectInstructions?: string } {
+  const projectId = state.conversations.find((c) => c.id === convId)?.projectId;
+  const project = projectId ? state.projects.find((p) => p.id === projectId) : undefined;
+  if (!project?.instructions) return {};
+  return { projectName: project.name, projectInstructions: project.instructions };
+}
+
+/** `PRJ-7`: same order as the skills block, and well under any model's
+ * patience. Instructions past this are clipped rather than dropped — a project
+ * whose instructions vanished for being long would be worse. */
+export const PROJECT_INSTRUCTIONS_CAP = 4000;
 
 /** Assemble the full system prompt for a turn: base persona/prompt, then the
  * live workspace-block registry (W3), durable session state, and the
@@ -3851,6 +5610,10 @@ export function composeSystemPrompt(base: string, opts: ComposePromptOpts): stri
   if (aboutYouText) out += `\n\n${aboutYouText}`;
   const soulText = soulBlock(opts.memory?.soul);
   if (soulText) out += `\n\n${soulText}`;
+  // `PRJ-7`: after the standing instructions, which apply everywhere, and
+  // before the memory index, which this narrows the meaning of.
+  const projectText = projectBlock(opts.projectName, opts.projectInstructions);
+  if (projectText) out += `\n\n${projectText}`;
   const indexText = memoryIndexBlock(opts.memory?.index, opts.toolsEnabled);
   if (indexText) out += `\n\n${indexText}`;
   // Only mention blocks/surface machinery when the model can actually call the
@@ -3866,7 +5629,14 @@ export function composeSystemPrompt(base: string, opts: ComposePromptOpts): stri
   const sessionText = sessionStateBlock(opts.sessionState);
   if (sessionText) out += `\n\n${sessionText}`;
   if (opts.toolsEnabled) {
-    out += `\n\n${toolGuidanceBlock()}`;
+    out += `\n\n${toolGuidanceBlock(opts.planMode)}`;
+    // MEM-COLD: last of the guidance, and sent even at zero facts — that is
+    // precisely the state it exists to break out of.
+    if (opts.memoryEnabled) {
+      // `fact_count`, not the index text: scoped recall (SCP) can leave the
+      // index empty on a turn where facts do exist, and that is not a cold start.
+      out += `\n\n${memoryGuidanceBlock((opts.memory?.fact_count ?? 0) > 0)}`;
+    }
     const cautions = toolCautions(opts.toolHealth);
     if (cautions) out += `\n\n${cautions}`;
   }
@@ -4098,6 +5868,30 @@ export function useSelectedModel(): Model {
 
 export function useActiveConversation(): Conversation | null {
   return useAppStore((s) => s.conversations.find((c) => c.id === s.activeConversationId) ?? null);
+}
+
+/** `SHL-24`: what the item pane holds right now, derived in one place so the
+ * strip, the pane and the shell's column width cannot disagree about it.
+ *
+ * Only the live chat's items, because the pane sits beside that chat's
+ * conversation and a tab that silently switched which chat was live is the one
+ * move the shell must never make. Items belonging to other chats stay in the
+ * store and come back when you do.
+ *
+ * `activeKey` is `null` when the conversation itself is what's showing, which
+ * is a real state and not a missing one (`SHL-27`): the session tab is
+ * selected, and the item tabs are still open behind it. It also covers an
+ * `activeItemId` naming something that is gone or belongs to another chat,
+ * which lands on the same place — the conversation, which always exists. */
+export function useLiveItems(): { items: ItemRef[]; activeKey: string | null } {
+  const convId = useAppStore((s) => s.activeConversationId);
+  const itemTabs = useAppStore((s) => s.itemTabs);
+  const activeItemId = useAppStore((s) => s.activeItemId);
+  return useMemo(() => {
+    const items = itemTabs.filter((t) => t.conversationId === convId);
+    const activeKey = items.some((t) => itemKey(t) === activeItemId) ? activeItemId : null;
+    return { items, activeKey };
+  }, [itemTabs, convId, activeItemId]);
 }
 
 /** SMP-1b: expert-only surfaces render `null` when this is false — no

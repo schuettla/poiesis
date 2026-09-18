@@ -2,12 +2,18 @@
   grid-column: 1;
   grid-row: 2 / -1;
   border-right: 1px solid var(--paper-edge-2);
-  padding: 18px 16px;
+  padding: 14px 0 14px 12px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
+/* The scroll container itself carries no horizontal padding, so its
+   scrollbar sits flush against the panel's right edge instead of floating
+   inset from it; children that need clearance from that edge give themselves
+   a right margin (`.rail-group`, `.rail-job-row` below) rather than relying
+   on a blanket `.rail-scroll > *` rule, which loses the cascade to any child
+   that sets its own. */
 .rail-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -22,7 +28,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 14px;
+  margin: 0 12px 12px 0;
   padding: 7px 8px;
   border: 1px solid var(--paper-edge-2);
   border-radius: var(--radius);
@@ -72,7 +78,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-bottom: 18px;
+  margin: 0 12px 14px 0;
 }
 .rail-top-btn {
   display: flex;
@@ -108,37 +114,267 @@
 .rail-top-btn:hover .nav-icon {
   color: var(--ink);
 }
-.rail-top-btn.new-chat .nav-icon {
-  font-size: 14px;
+.rail-top-btn .rail-kbd {
+  margin-left: auto;
+  padding: 2px 4px;
+}
+.rail.collapsed .rail-kbd {
+  display: none;
 }
 
-.rail-search {
-  font-family: var(--font-sans);
-  font-size: 12.5px;
-  color: var(--ink);
-  background: var(--paper);
+/* `PRJ-3`: "Projects" opens the overview; the `+` beside it is the same quick
+   create the button used to be, kept as a narrow extension rather than a
+   second full row — one destination gets two doors instead of two rows. */
+.rail-top-btn-row {
+  display: flex;
+  align-items: stretch;
+}
+.rail-top-btn-row .rail-top-btn {
+  flex: 1;
+  min-width: 0;
+  border-radius: var(--radius) 0 0 var(--radius);
+  border-right: none;
+}
+.rail-top-btn-add {
+  flex: none;
+  width: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--ink-faint);
+  background: none;
   border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  padding: 6px 10px;
-  margin-bottom: 16px;
-  outline: none;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  cursor: pointer;
 }
-.rail-search:focus {
+.rail-top-btn-add:hover {
   border-color: var(--ink-faint);
+  color: var(--ink);
+}
+.rail.collapsed .rail-top-btn-add {
+  display: none;
+}
+.rail.collapsed .rail-top-btn-row .rail-top-btn {
+  border-radius: var(--radius);
+  border-right: 1px solid var(--paper-edge-2);
 }
 
+/* Wraps one labeled run of rows — gives the group its own right clearance
+ * from the panel edge, since `.rail-scroll` itself carries none. */
+.rail-group {
+  margin-right: 12px;
+}
+/* Sticky within its own group, so the next group's label pushes it out: you
+   always know which stretch of time you are scrolled into. */
 .rail-label {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0;
+  padding: 4px 0 6px 7px;
+  background: var(--canvas);
   font-size: 11px;
+  font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-faint);
-  margin: 0 0 8px 2px;
 }
 
-/* nav item icon + label */
+.nav-label {
+  display: inline;
+}
+
+.chat-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* One row, chat or project. The title takes whatever the trailing slot
+   leaves; nothing else sits in the row's flow at rest, so a title runs as
+   far as it can before it clips. The row itself must not clip, or the row
+   menu would be cut off at the rail's edge. */
+.chat-row,
+.project-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 7px;
+  border-radius: var(--radius);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.chat-row:focus-visible,
+.project-row:focus-visible {
+  outline-offset: -2px;
+}
+.chat-row:hover,
+.project-row:hover {
+  background: var(--paper-edge);
+  color: var(--ink);
+}
+
+/* Where you are: one step past hover's fill, not an inverted block. Hover
+   fills flat with `--paper-edge`; active tints that same fill a little
+   further toward ink — clearly a firmer, different state, but still the
+   flat, hairline-family surface the rest of the panel is built from, rather
+   than a block of ink dropped into the middle of the list. `--paper-edge-2`
+   was tried here first and read muddy: it's a saturated structural token
+   meant for 1px borders, not a fill covering a whole row. Mixing toward ink
+   instead keeps the same neutral cast as hover, and in dark mode it
+   lightens rather than darkens — ink is the one highlight in both lighting
+   conditions, so "more of it" means the same thing either way. */
+.chat-row.active,
+.project-row.current {
+  background: color-mix(in srgb, var(--paper-edge) 100%, var(--ink) 12%);
+  color: var(--ink);
+  font-weight: 500;
+}
+.chat-row.active :is(.row-stamp, .chat-digest, .chat-workspace, .chat-more),
+.project-row.current :is(.row-stamp, .project-twisty, .chat-more) {
+  color: var(--ink-muted);
+}
+.chat-row.active .chat-more:hover,
+.project-row.current :is(.chat-more, .project-twisty):hover {
+  color: var(--ink);
+}
+
+.chat-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Witnessed digestion (PRES-2): a pulse while I'm reading the conversation
+   back, and a quiet mark once it taught me something. It follows the title
+   rather than holding a slot, so rows without it spend nothing on it. The
+   offer to reflect lives in the row menu. */
+.chat-digest {
+  flex: none;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--ink-faint);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chat-digest.reflecting {
+    animation: mark-breathe 2.4s ease-in-out infinite;
+  }
+}
+.chat-workspace {
+  flex: none;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+/* The trailing slot: a reading at rest (when, or how many), the ⋯ on hover or
+   focus, in the same place. The actions never cost the title width, and the
+   list gains a column of information instead of two blank gaps. */
+.row-slot {
+  position: relative;
+  flex: none;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 22px;
+  margin-left: auto;
+}
+.row-stamp {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+  transition: opacity var(--t-fast);
+}
+/* No transform here: a transformed ancestor would turn the menu's fixed
+   backdrop into a box the size of this slot. */
+.chat-menu-wrap {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+}
+.chat-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--ink-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+.chat-more:hover {
+  color: var(--ink);
+}
+:is(.chat-row, .project-row):is(:hover, :focus-within) .chat-more,
+.chat-more[aria-expanded="true"] {
+  opacity: 1;
+}
+:is(.chat-row, .project-row):is(:hover, :focus-within) .row-stamp,
+.row-slot:has(.chat-more[aria-expanded="true"]) .row-stamp {
+  opacity: 0;
+}
+
+/* The menu itself (.row-menu) is shared with the session menu in chat — see
+   styles/menu.css. */
+
+.rail-divider {
+  border: none;
+  border-top: 1px solid var(--paper-edge-2);
+  margin: 2px 12px 8px 2px;
+  width: auto;
+}
+
+/* The footer (Settings, and whatever else ever joins it): the same row
+   language as `.chat-row`/`.project-row` above — flat fill on hover, a
+   tinted fill for the current one, same height, same left inset. It used to
+   be plain text with a different padding and no hover feedback at all, which
+   is why it read as a leftover strip below the divider instead of the last
+   row in the same list. */
+.rail-nav {
+  list-style: none;
+  margin: 0 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .rail-nav li {
   display: flex;
   align-items: center;
+  min-height: 30px;
+  padding: 0 7px;
+  border-radius: var(--radius);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.rail-nav li:hover {
+  background: var(--paper-edge);
+  color: var(--ink);
+}
+.rail-nav li.active {
+  background: color-mix(in srgb, var(--paper-edge) 100%, var(--ink) 12%);
+  color: var(--ink);
+  font-weight: 500;
 }
 .rail-nav li .nav-icon {
   display: inline-flex;
@@ -149,133 +385,9 @@
   color: var(--ink-faint);
   flex-shrink: 0;
 }
-.rail-nav li.active .nav-icon {
+.rail-nav li.active .nav-icon,
+.rail-nav li:hover .nav-icon {
   color: var(--ink);
-}
-.nav-label {
-  display: inline;
-}
-
-.chat-list {
-  list-style: none;
-  margin: 0 0 20px;
-  padding: 0;
-}
-.chat-list li {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 13px;
-  color: var(--ink-muted);
-  padding: 6px 2px;
-  border-radius: 3px;
-  cursor: pointer;
-  white-space: nowrap;
-  /* The title clips itself (below); the row must not clip, or the row menu
-     would be cut off at the rail's edge. */
-  position: relative;
-}
-.chat-title {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Witnessed digestion (PRES-2): one ◆ in three states — an offer to reflect,
-   a pulse while I'm reading the conversation back, and a quiet mark once it
-   taught me something. */
-.chat-digest {
-  flex: none;
-  font-size: 10px;
-  line-height: 1;
-  background: none;
-  border: none;
-  padding: 2px;
-  color: var(--ink-faint);
-  cursor: pointer;
-}
-.chat-digest.offer {
-  opacity: 0;
-}
-.chat-list li:hover .chat-digest.offer,
-.chat-list li:focus-within .chat-digest.offer,
-.chat-digest.offer:focus {
-  opacity: 1;
-}
-.chat-digest.learned {
-  color: var(--ink-muted);
-}
-@media (prefers-reduced-motion: no-preference) {
-  .chat-digest.reflecting {
-    animation: mark-breathe 2.4s ease-in-out infinite;
-  }
-}
-.chat-list li.active {
-  color: var(--ink);
-  font-weight: 500;
-}
-.chat-workspace {
-  color: var(--ink-faint);
-  margin-right: 5px;
-  font-size: 11px;
-}
-.chat-list li.active .chat-workspace {
-  color: var(--ink);
-}
-.chat-list li:hover {
-  color: var(--ink);
-}
-
-/* Per-chat actions: hidden until the row is hovered or focused, so the rail
-   stays a list of conversations rather than a list of controls. Right-clicking
-   the row opens the same menu. */
-.chat-menu-wrap {
-  position: relative;
-  flex: none;
-  display: flex;
-}
-.chat-more {
-  background: none;
-  border: none;
-  padding: 2px 3px;
-  line-height: 1;
-  font-size: 13px;
-  color: var(--ink-faint);
-  cursor: pointer;
-  opacity: 0;
-}
-.chat-list li:hover .chat-more,
-.chat-list li:focus-within .chat-more,
-.chat-more[aria-expanded="true"] {
-  opacity: 1;
-}
-.chat-more:hover {
-  color: var(--ink);
-}
-
-/* The menu itself (.row-menu) is shared with the session menu in chat — see
-   styles/menu.css. */
-
-.rail-divider {
-  border: none;
-  border-top: 1px solid var(--paper-edge-2);
-  margin: 4px 2px 14px;
-  width: auto;
-}
-
-.rail-nav {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.rail-nav li {
-  font-size: 13px;
-  color: var(--ink-muted);
-  padding: 7px 2px;
-  cursor: pointer;
 }
 
 /* Something about the agent's self is waiting on the user (SOUL-UI-3). A dot,
@@ -292,27 +404,27 @@
 .rail.collapsed .nav-badge {
   margin-left: 4px;
 }
-.rail-nav li:hover {
-  color: var(--ink);
-}
-.rail-nav li.active {
-  color: var(--ink);
-  font-weight: 500;
-}
 
 /* Collapsed (icon-only) rail — manual toggle or auto at very narrow widths. */
 .rail.collapsed {
-  padding: 14px 6px;
+  padding: 12px 5px;
   align-items: stretch;
   /* The session flyout is positioned relative to a button inside this
      scroll container; auto overflow would clip it at the rail's edge. */
   overflow: visible;
 }
-.rail.collapsed .rail-search,
 .rail.collapsed .chat-list,
 .rail.collapsed .rail-label,
 .rail.collapsed .rail-divider {
   display: none;
+}
+/* The 16px right clearance the expanded rail's rows need (so they don't sit
+   flush against the panel edge) is dead weight in the collapsed, icon-only
+   rail — it's already only 52px wide, padded 6px each side. */
+.rail.collapsed .rail-top-actions,
+.rail.collapsed .rail-job-row,
+.rail.collapsed .rail-nav {
+  margin-right: 0;
 }
 .rail.collapsed .rail-top-actions {
   margin-bottom: 10px;
@@ -324,9 +436,27 @@
 .rail.collapsed .rail-top-btn .nav-icon {
   margin-right: 0;
 }
+/* The label does *not* flex. Giving it the slack pushed the "changes waiting"
+   badge to the far end of the row, where it sat against the engine readout and
+   read as belonging to it — the badge is about Settings, so it stays touching
+   the word Settings. The slack goes to the readout's own left margin instead,
+   so only the readout is pushed right. */
+.rail-nav-footer li .nav-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-nav-footer li .engine-status {
+  margin-left: auto;
+}
+
+/* Collapsed, the row is the cog with the dot beside it. Both centred as one
+   pair, so the icon does not shift sideways when the engine starts. */
 .rail.collapsed .rail-nav li {
   justify-content: center;
   padding: 9px 0;
+  gap: 5px;
 }
 .rail.collapsed .rail-nav li .nav-icon {
   margin-right: 0;
@@ -386,4 +516,107 @@
   font-size: 12.5px;
   color: var(--ink-faint);
   padding: 8px 11px;
+}
+
+/* `PRJ-UI-1`: projects, listed above the date-grouped chats, in the same rows
+   (`.chat-row` / `.project-row` above) — one more group in the Rail rather
+   than a second navigation model. A project is a container, so its row reads
+   one step heavier than the chats inside it. */
+.project-row {
+  gap: 5px;
+  padding-left: 3px;
+  color: var(--ink);
+  font-weight: 500;
+}
+/* The active chat is inside this project, but the project is folded: its row
+   takes the lighter fill, so "you are in here" survives the collapse. */
+.project-row-wrap:not(.expanded) > .project-row.contains-active:not(:hover) {
+  background: var(--paper-edge);
+}
+
+/* The twisty and the row do different things: the row opens the project, the
+   twisty only shows what is inside it. Drawn, and turned rather than swapped. */
+.project-twisty {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.project-twisty:hover {
+  color: var(--ink);
+}
+.project-twisty svg {
+  transition: transform var(--t-fast);
+}
+.project-row-wrap.expanded .project-twisty svg {
+  transform: rotate(90deg);
+}
+
+/* `PRJ-UI-1a`: hollow for a project with no working folder, filled for one
+   with. Two kinds of project, one mark, no extra row of chrome. It becomes the
+   language dot once there is a project card to read a language from
+   (`COD-1`). */
+.project-dot {
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  margin-right: 4px;
+  border-radius: 50%;
+  border: 1px solid var(--ink-faint);
+}
+.project-dot.has-folder {
+  background: var(--ink-faint);
+}
+.project-row.contains-active .project-dot,
+.project-row.current .project-dot {
+  border-color: var(--ink);
+}
+.project-row.contains-active .project-dot.has-folder,
+.project-row.current .project-dot.has-folder {
+  background: var(--ink);
+}
+
+.project-rename {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: 400;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--ink-faint);
+  border-radius: var(--radius);
+  padding: 1px 5px;
+  outline: none;
+}
+
+/* An expanded project's sessions sit in place of the flat list, hung off a
+   hairline that drops from under the chevron — nesting drawn as structure,
+   not implied by a margin. */
+.project-sessions {
+  position: relative;
+  margin: 1px 0 4px;
+  padding-left: 16px;
+}
+.project-sessions::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 2px;
+  bottom: 2px;
+  width: 1px;
+  background: var(--paper-edge-2);
+}
+.project-empty {
+  padding: 6px 7px;
+  font-size: var(--fs-timeline);
+  color: var(--ink-faint);
 }

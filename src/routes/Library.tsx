@@ -86,24 +86,30 @@ export default function Library() {
           </div>
         )}
 
-        {filtered.length === 0 ? (
-          <div className="placeholder-note">
-            {allArtifacts.length === 0
-              ? "No artifacts yet. Ask the assistant to create a document, web page, image, or diagram."
-              : "Nothing in this filter yet."}
-          </div>
-        ) : (
-          <div className="artifact-grid">
-            {filtered.map((a) => (
-              <ArtifactCard
-                key={a.id}
-                artifact={a}
-                conversationTitle={a.conversation_id ? conversationTitles[a.conversation_id] : undefined}
-                onClick={() => viewArtifact(a)}
-              />
-            ))}
-          </div>
-        )}
+        {/* One container that is always rendered, empty filter or not, so the
+            page keeps its height and width when a filter matches nothing —
+            swapping the grid out for a bare note is what made the layout
+            collapse when Video was selected. */}
+        <div className="library-results">
+          {filtered.length === 0 ? (
+            <div className="placeholder-note">
+              {allArtifacts.length === 0
+                ? "No artifacts yet. Ask the assistant to create a document, web page, image, or diagram."
+                : "Nothing in this filter yet."}
+            </div>
+          ) : (
+            <div className="artifact-grid">
+              {filtered.map((a) => (
+                <ArtifactCard
+                  key={a.id}
+                  artifact={a}
+                  conversationTitle={a.conversation_id ? conversationTitles[a.conversation_id] : undefined}
+                  onClick={() => viewArtifact(a)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

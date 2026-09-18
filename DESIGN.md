@@ -2,13 +2,13 @@
 name: Poiesis
 description: A local-first, agentic desktop LLM application
 colors:
-  canvas: "#eceee6"
-  paper: "#f4f6ef"
-  paper-edge: "#d3d8c9"
-  paper-edge-2: "#b9c0ad"
-  ink: "#16241c"
-  ink-muted: "#556157"
-  ink-faint: "#7d8a7f"
+  canvas: "#f3f5f3"
+  paper: "#ffffff"
+  paper-edge: "#e6eae6"
+  paper-edge-2: "#b8c0b8"
+  ink: "#17201c"
+  ink-muted: "#5a6560"
+  ink-faint: "#8a938e"
   local: "#3d4fa0"
   cloud: "#b5642e"
   ok: "#4a7a5e"
@@ -27,9 +27,12 @@ typography:
   body-lg:
     fontFamily: "Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
     fontSize: "15px"
-  label:
+  timeline:
     fontFamily: "Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
     fontSize: "12.5px"
+  label:
+    fontFamily: "Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+    fontSize: "11px"
   mono:
     fontFamily: "JetBrains Mono, SF Mono, Consolas, monospace"
 rounded:
@@ -94,18 +97,20 @@ Rejected: glassmorphism, colorful gradients, drop-shadow-heavy card stacks, roun
 
 ## Colors
 
-The palette is almost monochrome on purpose: warm-neutral paper tones plus a green-black ink, with functional color held in reserve for the few moments the machine needs to speak for itself.
+The palette is almost monochrome on purpose: cool-neutral paper tones plus a green-black ink, with functional color held in reserve for the few moments the machine needs to speak for itself.
+
+Daylight was recolored to sit closer to the palette of the *Poiesis Harness Shakedown* artifact — the same green-cast neutrals, but cooler and lighter: a clean white panel instead of an off-white one, and the old khaki/olive saturation bred out of the borders and muted text. Backlit (dark) is unchanged.
 
 ### Primary
-- **Ink** (`#16241c` / dark `#e3e9e0`): the only highlight color in the system. Text, active states, borders-on-focus, filled buttons. 14.8:1 contrast on paper in Daylight.
+- **Ink** (`#17201c` / dark `#e3e9e0`): the only highlight color in the system. Text, active states, borders-on-focus, filled buttons. 16.7:1 contrast on paper in Daylight.
 
 ### Neutral
-- **Canvas** (`#eceee6` / dark `#0d100e`): the recessed ground the whole shell sits on.
-- **Paper** (`#f4f6ef` / dark `#141814`): panel surface, one step lighter (or, in Backlit, one step brighter) than canvas — this is the "lit" layer.
-- **Paper Edge** (`#d3d8c9` / dark `#232a24`): inner dividers, timeline rails, chip fills.
-- **Paper Edge 2** (`#b9c0ad` / dark `#333c34`): panel outlines — the structural grid. Load-bearing: this hairline is what separates panels in a system with no shadows or fills, and must stay clearly visible against paper.
-- **Ink Muted** (`#556157` / dark `#8f9a90`): metadata, labels, step verbs. AA body contrast (5.96:1 / 6.15:1).
-- **Ink Faint** (`#7d8a7f` / dark `#6a756c`): secondary labels, hairlines, idle dots. AA large/UI contrast only (3.32:1 / 3.74:1) — never body text.
+- **Canvas** (`#f3f5f3` / dark `#0d100e`): the recessed ground the whole shell sits on.
+- **Paper** (`#ffffff` / dark `#141814`): panel surface — a clean white in Daylight (was `#f4f6ef`), one step brighter than canvas in Backlit — this is the "lit" layer.
+- **Paper Edge** (`#e6eae6` / dark `#232a24`): inner dividers, timeline rails, chip fills.
+- **Paper Edge 2** (`#b8c0b8` / dark `#333c34`): panel outlines — the structural grid. Load-bearing: this hairline is what separates panels in a system with no shadows or fills, and must stay clearly visible against paper. Deliberately *not* a straight lift of the artifact's border color — that one measures only ~1.4:1 against white, well under what this token held against the old off-white paper (~1.7:1), because the artifact leans on `box-shadow` for card definition and this UI has none (flat by design, see Elevation & Depth below). This value keeps the cooler, less-khaki cast but holds ~1.9:1 against the new white paper.
+- **Ink Muted** (`#5a6560` / dark `#8f9a90`): metadata, labels, step verbs. AA body contrast (6.06:1 / 6.15:1).
+- **Ink Faint** (`#8a938e` / dark `#6a756c`): secondary labels, hairlines, idle dots. AA large/UI contrast only (3.16:1 / 3.74:1) — never body text.
 
 ### Functional (used sparingly, only where it serves a purpose)
 - **Local** (indigo, `#3d4fa0` / dark `#8c97e8`): marks a local-model action or state.
@@ -122,11 +127,12 @@ The palette is almost monochrome on purpose: warm-neutral paper tones plus a gre
 **UI Font:** Inter (sans), with system-UI fallback.
 **Mono Font:** JetBrains Mono, with SF Mono / Consolas fallback.
 
-**Character:** Serif carries anything meant to be *read* — chat prose, the brand mark, display moments. Sans carries anything meant to be *operated* — buttons, labels, menus, metadata. The pairing is a newsroom instrument: editorial content in a book face, controls in a working grotesque.
+**Character:** Serif carries the brand mark, display moments, document pages and the headings inside an answer; chat answers themselves are set in the sans, so the conversation reads in the instrument's own face. Sans carries anything meant to be *operated* — buttons, labels, menus, metadata. The pairing is a newsroom instrument: editorial content in a book face, controls in a working grotesque.
 
 ### Hierarchy
 - **Display** (500, 21px): brand wordmark, rare display moments.
-- **Reading** (400, 17.5px / 1.68 line-height, serif): chat message prose. Column capped at 64ch (`--measure`), user-scalable via `--reading-scale` so content reflows rather than truncates.
+- **Answer** (400, 15.5px / 1.72 line-height, sans — `--font-reading`, `--fs-answer`, `--lh-answer`): chat answer prose. Headings inside an answer are set in the serif, so a long reply keeps an editorial spine. The user's question is sans 15px/500 in a paper panel with the standard hairline outline and radius.
+- **Reading** (400, 17.5px / 1.68 line-height, serif): long-form documents (Workbench markdown). Column capped at 64ch (`--measure`), user-scalable via `--reading-scale` so content reflows rather than truncates. In chat the scale applies to the whole message stream (`zoom` on `.message-stream`), so user turns, tool rows, cards and spacing keep their proportions at every size; elsewhere `.run-text` scales its font alone.
 - **Body-LG** (400, 15px, sans): user turn body text, composer input.
 - **Body** (400, 13px, sans): default UI text — buttons, menu items, panel labels.
 - **Timeline** (400, 12.5px, sans): timeline steps, secondary metadata.

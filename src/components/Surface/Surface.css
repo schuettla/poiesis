@@ -2,7 +2,12 @@
  * paper/ink language: hairline rules, mono machinery labels, sans data,
  * no fills or shadows. */
 
-.surface {
+/* `sf-surface`, not `surface` — the route shells in `routes/Surface.css` own the
+   global `.surface` class (grid placement + the scroll container). Sharing the
+   name meant this file's `display: flex` / `max-width: 960px` silently landed on
+   Library, Settings and every other route surface, depending on stylesheet
+   order. */
+.sf-surface {
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -340,7 +345,7 @@
 /* PRES-7: a surface hatches into place on its first render. Reduced motion
    never gets the class, so there is nothing to suppress. */
 @media (prefers-reduced-motion: no-preference) {
-  .surface-enter {
+  .sf-surface-enter {
     animation: surface-hatch 300ms ease-out;
   }
 }

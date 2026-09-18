@@ -47,10 +47,8 @@ function Row({ artifact, canSave }: { artifact: Artifact; canSave: boolean }) {
         tabIndex={0}
         onClick={() => selectNode({ kind: "artifact", id: artifact.id })}
         onKeyDown={(e) => e.key === "Enter" && selectNode({ kind: "artifact", id: artifact.id })}
-        style={{ paddingLeft: 10 }}
         title={artifact.title}
       >
-        <span className="wb-row-caret" aria-hidden="true" />
         <span className="wb-row-name">{artifact.title}</span>
         <span className="wb-kind">{artifact.kind}</span>
         {canSave && (

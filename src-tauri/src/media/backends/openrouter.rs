@@ -83,7 +83,7 @@ fn curated_models(modality: Modality) -> Vec<MediaModel> {
 }
 
 fn key() -> Result<String, String> {
-    cloud::get_key(Provider::OpenRouter).ok_or_else(|| "No OpenRouter key is set. Add one in Settings → Cloud.".to_string())
+    cloud::get_key(Provider::OpenRouter).ok_or_else(|| "No OpenRouter key is set. Add one in Settings → Providers.".to_string())
 }
 
 async fn provider_error(resp: reqwest::Response) -> String {

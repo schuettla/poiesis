@@ -38,6 +38,43 @@ export interface DbConversation {
   folder_path: string | null;
   /** How much the agent may change inside it: read-only | confirm | auto. */
   folder_trust: string;
+  /**
+   * `SUB-3`: set when this conversation is a delegated child's workspace. The
+   * Rail keeps these out of the top-level list — they belong to the turn that
+   * started them, not beside it.
+   */
+  parent_conversation_id: string | null;
+  /**
+   * `PRJ-1`: the project this conversation belongs to, or null for a loose
+   * chat. When it is set the project owns the folder and the trust level, and
+   * the two fields above are the fallback rather than the answer.
+   */
+  project_id?: string | null;
+}
+
+/** `PRJ-1`: a working directory and the sessions that happened in it. */
+export interface DbProject {
+  id: string;
+  name: string;
+  /** Canonical, and unique across projects. Null when the project is not
+   * about a directory (`PRJ-1a`). */
+  root_path: string | null;
+  /** `PRJ-7`: free text carried into every session in this project. */
+  instructions: string | null;
+  /** read-only | confirm | auto, granted once for the folder. */
+  trust: string;
+  /** `COD-7`: off | ask | allow, or inherit for the Settings default. */
+  exec_policy: string;
+  /** `COD-1` detection result, as stored JSON. */
+  card_json: string | null;
+  card_built_at: number | null;
+  /** `COD-7`/`COD-8`: what "always allow" was said to in this project. */
+  allow_json?: string | null;
+  /** `SHL-17`'s scope seam: the open tab set for this project. */
+  tabs_json: string | null;
+  archived: boolean;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface DbAttachment {
@@ -56,6 +93,12 @@ export interface DbMessage {
   model_name: string | null;
   model_provenance: string | null;
   steps_json: string | null;
+  /** `HRN-3`: why the run behind this turn stopped. Null on user turns and on
+   * anything written before the column existed, both of which read as done. */
+  stop_reason: StopReason | null;
+  /** `PLN-UI-5`: the plan the run behind this turn worked to, as stored JSON.
+   * Null for a turn that never wrote one, which is most of them. */
+  plan_json: string | null;
   created_at: number;
   attachments?: DbAttachment[];
 }
@@ -109,11 +152,29 @@ export const finalizeMessage = (
   id: string,
   content: string,
   stepsJson?: string,
-  contextJson?: string
-) => invoke<void>("finalize_message_cmd", { id, content, stepsJson, contextJson });
+  contextJson?: string,
+  stopReason?: StopReason,
+  /** `PLN-UI-5`: the plan this turn worked to, so it survives a reload. */
+  planJson?: string
+) =>
+  invoke<void>("finalize_message_cmd", {
+    id,
+    content,
+    stepsJson,
+    contextJson,
+    stopReason,
+    planJson,
+  });
 
-export const searchConversations = (query: string) =>
-  invoke<DbConversation[]>("search_conversations_cmd", { query });
+/** One conversation's best-matching message. The matched words in `snippet`
+ * are fenced by ``…``; see `splitSnippet`. */
+export interface MessageHit {
+  conversation_id: string;
+  snippet: string;
+}
+
+export const searchMessages = (query: string) =>
+  invoke<MessageHit[]>("search_messages_cmd", { query });
 
 export const listArtifacts = (conversationId: string) =>
   invoke<Artifact[]>("list_artifacts_cmd", { conversationId });
@@ -227,9 +288,9 @@ export type Fit = "great" | "slow" | "wont-fit";
 /** Shared by both catalogs — the same verdict, worded the same way, whether
  * the download is a GGUF or a diffusion checkpoint. */
 export const FIT_LABEL: Record<Fit, string> = {
-  great: "Runs great on your PC",
+  great: "Runs great",
   slow: "Runs slowly",
-  "wont-fit": "Won't fit",
+  "wont-fit": "Too big for this PC",
 };
 
 export interface CatalogEntry {
@@ -328,8 +389,21 @@ export const stopChat = () => invoke<void>("stop_chat_cmd");
 
 // ---- agent loop + permissions (Phase 4) ----
 
+/** Why a run stopped (`HRN-3`). Anything but `completed` means the answer is
+ * what the run had in hand, not what it set out to say. */
+export type StopReason = "completed" | "aborted" | "timeout" | "max_steps" | "error";
+
+/** What a run cost, when the provider reported it (`OBS-1`). */
+export interface TurnUsage {
+  prompt_tokens: number;
+  output_tokens: number;
+}
+
 export type AgentEvent =
-  | { type: "step_start"; id: string; verb: string; target: string }
+  /** `parent` is `RPC-1`: the step this one happened *inside*. A script running
+   * in the sandbox can make tool calls of its own, and they belong under the
+   * step that ran the script rather than beside it. */
+  | { type: "step_start"; id: string; verb: string; target: string; parent?: string }
   | { type: "step_done"; id: string; result: string | null }
   | { type: "step_error"; id: string; error: string }
   | { type: "token"; text: string }
@@ -341,11 +415,88 @@ export type AgentEvent =
   | { type: "memory_write"; op: string; name: string; description: string; collection: string; undo_token: string }
   | { type: "recall"; id: string; matches: SearchHit[] }
   | { type: "code"; id: string; language: string; code: string }
+  /** `COD-UI-2`: a project task started, finished, or printed a line. */
+  | {
+      type: "task_started";
+      id: string;
+      task: string;
+      argv: string[];
+      cwd: string;
+      kind: TaskKind;
+      timeout_secs: number;
+    }
+  | { type: "task_output"; id: string; line: string }
+  | {
+      type: "task_ended";
+      id: string;
+      outcome: string;
+      exit_code: number | null;
+      timed_out: boolean;
+      cancelled: boolean;
+      duration_ms: number;
+      diagnostics: Diagnostic[];
+      tail: string;
+    }
   | { type: "untrusted"; id: string; label: string; risk: number; flags: string[]; text: string }
   | { type: "proposal"; id: string; target: string; rationale: string }
   | { type: "file_changed"; op: string; path: string; undo_token: string }
   | { type: "browser"; state: BrowserPanelState }
   | { type: "mail_sent"; to: string }
+  /** `HRN-4`/`HRN-UI-2`: these steps are running at the same time, in this
+   * order. Arrives before their `step_start`s. */
+  | { type: "steps_parallel"; ids: string[] }
+  /** `HRN-8`: this step's output was kept on disk instead of pasted into the
+   * transcript. The model got a preview; the user gets all of it. */
+  | { type: "kept_result"; id: string; reference: string; bytes: number; text: string }
+  /** A chunk of the model's thinking. Never the answer, and never appended to
+   * the message — it exists so a reasoning model's long silence reads as work
+   * rather than as a hang. */
+  | { type: "thinking"; run_id: string; text: string }
+  | { type: "run_started"; run_id: string; max_steps: number; context_window: number | null }
+  | {
+      type: "run_progress";
+      run_id: string;
+      step: number;
+      max_steps: number;
+      ms: number;
+      /** `OBS-3`: an estimate of what this turn is about to send. */
+      context_tokens: number;
+    }
+  | {
+      type: "run_ended";
+      run_id: string;
+      stop_reason: StopReason;
+      steps: number;
+      ms: number;
+      usage: TurnUsage | null;
+      /** `PLN-5`: the plan as it stood when the run ended, so a run that
+       * stopped at its budget can say which items it never reached. */
+      plan: PlanView | null;
+    }
+  /** `PLN-1`: the run wrote or revised its plan. Carries the whole plan, not a
+   * patch — it is a handful of short strings, and a card rebuilt from the
+   * current state cannot drift out of step with the model's copy. */
+  | { type: "plan"; run_id: string; plan: PlanView }
+  | { type: "steered"; run_id: string; text: string }
+  | {
+      type: "sub_spawned";
+      run_id: string;
+      conversation_id: string;
+      agent: string;
+      task: string;
+      index: number;
+    }
+  /** One event from a delegated child, tagged with whose it is (`SUB-2`). */
+  | { type: "sub"; run_id: string; event: AgentEvent }
+  | {
+      type: "sub_ended";
+      run_id: string;
+      status: SubRunStatus;
+      stop_reason: StopReason;
+      summary: string;
+      steps: number;
+      ms: number;
+    }
   | { type: "done" }
   | { type: "cancelled" }
   | { type: "error"; message: string };
@@ -418,7 +569,15 @@ export interface PermissionRequest {
   /** `BRW-3`/`SYS-1`: set for a non-filesystem capability request —
    * `"domain"` | `"screen"` | `"open-app"` — instead of a folder request.
    * `path` carries the domain/app name. */
-  capability?: "domain" | "screen" | "open-app";
+  capability?: "domain" | "screen" | "open-app" | "task" | "command";
+  /** `COD-UI-4`: for a task or command, the exact program and arguments. */
+  argv?: string[];
+  /** The project it runs in. */
+  project?: string;
+  /** How long it may run before it is stopped. */
+  timeout_secs?: number;
+  /** What "always allow" remembers: a task's name, or a `command argv[0]` pair. */
+  remember?: string;
 }
 
 export type Decision = "deny" | "once" | "chat" | "forever";
@@ -471,16 +630,20 @@ export interface ChatTarget {
   model?: string;
 }
 
+/** What a run needs beyond its messages. Shared by `agentChat` and `resumeRun`
+ * so the two cannot drift into running the same conversation differently. */
+export interface RunOptions {
+  temperature?: number;
+  toolsEnabled?: boolean;
+  target?: ChatTarget;
+  assistantMessageId?: string;
+}
+
 export function agentChat(
   conversationId: string,
   messages: ChatTurnMessage[],
   onEvent: (e: AgentEvent) => void,
-  opts?: {
-    temperature?: number;
-    toolsEnabled?: boolean;
-    target?: ChatTarget;
-    assistantMessageId?: string;
-  }
+  opts?: RunOptions
 ): Promise<void> {
   const ch = new Channel<AgentEvent>();
   ch.onmessage = onEvent;
@@ -496,6 +659,148 @@ export function agentChat(
 }
 
 /**
+ * `HRN-UI-5`: pick an interrupted run back up with its tool results intact.
+ *
+ * The transcript is rebuilt in Rust from the session log (`CTX-2`), not from
+ * what is on screen — the screen has the prose, the log has the work. Resolves
+ * `false` when there is nothing to resume, which is a fact about the run and
+ * not a failure.
+ */
+export function resumeRun(
+  conversationId: string,
+  onEvent: (e: AgentEvent) => void,
+  opts?: RunOptions
+): Promise<boolean> {
+  const ch = new Channel<AgentEvent>();
+  ch.onmessage = onEvent;
+  return invoke<boolean>("resume_run_cmd", {
+    conversationId,
+    assistantMessageId: opts?.assistantMessageId,
+    temperature: opts?.temperature,
+    toolsEnabled: opts?.toolsEnabled ?? false,
+    target: opts?.target,
+    onEvent: ch,
+  });
+}
+
+/** `HRN-UI-5`: the new branch, and the question to ask it again. */
+export interface ForkedConversation {
+  conversation: DbConversation;
+  /** `null` when the fork point had no user turn before it. */
+  resend: string | null;
+}
+
+/**
+ * `HRN-UI-5`: branch a conversation just before one assistant turn. The branch
+ * keeps the persona, model, working folder and trust of the original — a fork
+ * the user has to set up again is not the same question asked again.
+ */
+export const forkConversation = (
+  conversationId: string,
+  messageId: string
+): Promise<ForkedConversation> =>
+  invoke<ForkedConversation>("fork_conversation_cmd", { conversationId, messageId });
+
+/**
+ * Say something to a run that is already working (`HRN-2`). The text is picked
+ * up at the top of the run's next iteration, so it lands between tool calls
+ * rather than in the middle of one.
+ *
+ * Resolves `false` when the run finished between the keystroke and the send —
+ * the caller then sends it as an ordinary next message instead.
+ */
+export const steerRun = (runId: string, text: string): Promise<boolean> =>
+  invoke<boolean>("steer_run_cmd", { runId, text });
+
+// ---- delegation (`SUB-9`) ----
+
+/** How a child run ended, as the row records it. `queued` is `SUB-12`: it was
+ * started in the background and is waiting for a free slot in the pool. */
+export type SubRunStatus = "queued" | "running" | "done" | "stopped" | "error";
+
+/** Is this child still to come? Queued and working are one thing to every
+ * reader — neither is a result — and the only difference is whether it has
+ * begun. One predicate so no surface can accidentally read a waiting agent as
+ * a finished one. */
+export const stillWorking = (status: SubRunStatus): boolean =>
+  status === "running" || status === "queued";
+
+/**
+ * One delegated child run. Its *work* lives in `child_conversation_id`, which
+ * is an ordinary conversation — the Agents tab opens it with the same
+ * `listMessages` / artifact calls any conversation uses.
+ */
+export interface SubagentRun {
+  id: string;
+  parent_conversation_id: string;
+  parent_message_id: string | null;
+  child_conversation_id: string;
+  agent: string;
+  task: string;
+  status: SubRunStatus;
+  stop_reason: StopReason | null;
+  result: string | null;
+  steps: number;
+  started_at: number;
+  ended_at: number | null;
+}
+
+/** An agent type the lead may hand a job to: `general`, plus spawnable personas. */
+export interface AgentType {
+  name: string;
+  description: string;
+  persona_id: string | null;
+}
+
+export const listSubagentRuns = (conversationId: string) =>
+  invoke<SubagentRun[]>("list_subagent_runs_cmd", { conversationId });
+
+export const getSubagentRun = (id: string) =>
+  invoke<SubagentRun | null>("get_subagent_run_cmd", { id });
+
+/**
+ * Stop one child and everything it started, keeping what it has (`SUB-7`).
+ * Resolves `false` when the run had already finished.
+ */
+export const stopRun = (runId: string) => invoke<boolean>("stop_run_cmd", { runId });
+
+/** Say something to a child that is already working (`SUB-6`). */
+export const steerSubagent = (runId: string, text: string) =>
+  invoke<boolean>("steer_subagent_cmd", { runId, text });
+
+export const listAgentTypes = () => invoke<AgentType[]>("list_agent_types_cmd");
+
+/** One line of the Usage panel (`OBS-2`): a day, a model, or a conversation. */
+export interface UsageBucket {
+  /** A UTC day start in epoch ms, a model name, or a conversation id. */
+  key: string;
+  /** A conversation's title, when it still exists. */
+  label: string | null;
+  provenance: "local" | "cloud" | "endpoint" | string;
+  prompt_tokens: number;
+  output_tokens: number;
+  runs: number;
+  /** `null` means the price is unknown, which is never the same as free. */
+  cost_usd: number | null;
+}
+
+export interface PricedUsage {
+  total: UsageBucket;
+  by_day: UsageBucket[];
+  by_model: UsageBucket[];
+  by_conversation: UsageBucket[];
+  /** At least one model has no price, so the total is a floor, not a figure. */
+  some_prices_unknown: boolean;
+}
+
+export const usageSummary = (days = 30) => invoke<PricedUsage>("usage_summary_cmd", { days });
+
+/** `HRN-UI-4`: write a kept result into the chat's working folder. Returns the
+ * path it landed at; rejects when the chat has no folder. */
+export const saveKeptResult = (conversationId: string, reference: string, text: string) =>
+  invoke<string>("save_kept_result_cmd", { conversationId, reference, text });
+
+/**
  * Fold every turn up to `uptoMessageId` into the conversation's summary and
  * return it (CTX-3). Only changes what is *sent* to the model — no message is
  * deleted or hidden.
@@ -506,6 +811,34 @@ export const compactConversation = (
   target?: ChatTarget
 ) =>
   invoke<string>("compact_conversation_cmd", { conversationId, uptoMessageId, target });
+
+/** One compaction this conversation has been through (`CTX-5`). */
+export interface Compaction {
+  /** When it happened, epoch ms. */
+  at: number;
+  /** The summary as it was written at the time. */
+  text: string;
+  /** The first message it stands in for, if that could still be resolved. */
+  from_message_id: string | null;
+  /** The last message it stands in for. */
+  upto_message_id: string;
+  /** How many messages this pass replaced. */
+  replaced: number;
+  /** Whether it folded an earlier summary into itself. When true, the text has
+   * been through a model twice and detail the first pass dropped is not
+   * recoverable from this one. */
+  merged_earlier: boolean;
+}
+
+/**
+ * Every compaction this conversation has been through, oldest first (`CTX-5`).
+ *
+ * The conversation itself carries only the newest summary, because that is what
+ * gets sent. This is the record of how it got there, which survives being
+ * compacted again.
+ */
+export const conversationSummaries = (conversationId: string) =>
+  invoke<Compaction[]>("conversation_summaries_cmd", { conversationId });
 
 // ---- durable memory (MEM) ----
 
@@ -779,6 +1112,13 @@ export interface Reflection {
 
 export const reflectConversation = (conversationId: string, target?: ChatTarget) =>
   invoke<Reflection>("reflect_conversation_cmd", { conversationId, target });
+
+/** REF-3b: digest a few conversations that were left behind — closed with the
+ * app, or abandoned before the leaving hook existed. Returns how many it read
+ * back. Counted in the backend, which is the only side that knows how long each
+ * conversation actually is. */
+export const catchUpReflection = (target?: ChatTarget) =>
+  invoke<number>("catch_up_reflection_cmd", { target });
 
 export const listLessons = () => invoke<Fact[]>("list_lessons_cmd");
 
@@ -1300,6 +1640,10 @@ export interface Persona {
   tools_json: string | null;
   /** `SKL-6`: JSON array of allowed Agent Skill names, or `null` for every enabled skill. */
   skills_json: string | null;
+  /** `SUB-3`: one line saying when to hand this agent a job. The lead reads it. */
+  description: string | null;
+  /** `SUB-3`: may the agent delegate work to this one. Off by default. */
+  spawnable: boolean;
 }
 
 export const listPersonas = () => invoke<Persona[]>("list_personas_cmd");
@@ -1310,6 +1654,8 @@ export const createPersona = (args: {
   paramsJson?: string | null;
   toolsJson?: string | null;
   skillsJson?: string | null;
+  description?: string | null;
+  spawnable?: boolean;
 }) =>
   invoke<Persona>("create_persona_cmd", {
     name: args.name,
@@ -1318,6 +1664,8 @@ export const createPersona = (args: {
     paramsJson: args.paramsJson ?? null,
     toolsJson: args.toolsJson ?? null,
     skillsJson: args.skillsJson ?? null,
+    description: args.description ?? null,
+    spawnable: args.spawnable ?? false,
   });
 export const updatePersona = (persona: Persona) =>
   invoke<void>("update_persona_cmd", { persona });
@@ -1355,12 +1703,21 @@ export const listActivity = (limit?: number) =>
 
 // ---- cloud providers (Phase 7, BYOK) ----
 
+/** One card on the Providers page (`PRV-2`), built by the backend: chat
+ * providers and media-only backends alike, so no provider is hard-coded here. */
 export interface ProviderInfo {
   id: string;
   name: string;
+  /** "cloud" is a chat provider (its key may unlock media too); "media" is
+   * a media-only backend with its own key. */
+  kind: "cloud" | "media" | string;
   key_set: boolean;
   key_hint: string;
   console_url: string;
+  /** Any of "chat", "image", "video". */
+  unlocks: string[];
+  /** The last real request's account problem (bad key, no credit), if any. */
+  last_error: string | null;
 }
 export interface CloudModel {
   id: string;
@@ -1372,11 +1729,18 @@ export interface CloudModel {
    * means the agent loop can't call tools on it — OpenRouter answers such a
    * request with a bare 404. */
   tools: boolean;
+  /** USD per million tokens, when known (`MOD-5`). Null is unknown, not free. */
+  prompt_per_mtok: number | null;
+  output_per_mtok: number | null;
 }
 
 export const listProviders = () => invoke<ProviderInfo[]>("list_providers_cmd");
 export const setProviderKey = (provider: string, key: string) =>
   invoke<void>("set_provider_key_cmd", { provider, key });
+/** `PRV-3`: check the key with the provider and save it only if it works.
+ * Rejects with the sentence to show when it doesn't. */
+export const verifyProviderKey = (provider: string, key: string) =>
+  invoke<void>("verify_provider_key_cmd", { provider, key });
 export const clearProviderKey = (provider: string) =>
   invoke<void>("clear_provider_key_cmd", { provider });
 export const listCloudModels = () => invoke<CloudModel[]>("list_cloud_models_cmd");
@@ -1509,10 +1873,63 @@ export const setConversationFolder = (id: string, path: string | null) =>
 export const setConversationTrust = (id: string, trust: FolderTrust) =>
   invoke<void>("set_conversation_trust_cmd", { id, trust });
 
+// ---- projects (`PRJ-1`/`PRJ-3`) ----
+
+export const listProjects = (includeArchived?: boolean) =>
+  invoke<DbProject[]>("list_projects_cmd", { includeArchived });
+/** Both arguments optional (`PRJ-1a`): most projects are not about a
+ * directory. A folder that is already a project comes back rather than
+ * erroring. */
+export const createProject = (rootPath?: string | null, name?: string) =>
+  invoke<DbProject>("create_project_cmd", { rootPath, name });
+/** `PRJ-7`: the instructions every session in this project carries. */
+export const setProjectInstructions = (id: string, instructions: string | null) =>
+  invoke<void>("set_project_instructions_cmd", { id, instructions });
+/** `PRJ-3a`: give a project a folder, or with `null` take it away. Removing it
+ * leaves the project and all its sessions in place. */
+export const setProjectRoot = (id: string, rootPath: string | null) =>
+  invoke<DbProject>("set_project_root_cmd", { id, rootPath });
+export const renameProject = (id: string, name: string) =>
+  invoke<void>("rename_project_cmd", { id, name });
+export const setProjectTrust = (id: string, trust: FolderTrust) =>
+  invoke<void>("set_project_trust_cmd", { id, trust });
+/** Hides the project and its sessions. Nothing on disk is touched, ever. */
+export const setProjectArchived = (id: string, archived: boolean) =>
+  invoke<void>("set_project_archived_cmd", { id, archived });
+export const setProjectTabs = (id: string, tabsJson: string | null) =>
+  invoke<void>("set_project_tabs_cmd", { id, tabsJson });
+export const setConversationProject = (conversationId: string, projectId: string | null) =>
+  invoke<void>("set_conversation_project_cmd", { conversationId, projectId });
+
 export const readDirTree = (path: string, conversationId?: string, showHidden?: boolean) =>
   invoke<FileNode[]>("read_dir_tree_cmd", { path, conversationId, showHidden });
 export const readTextFile = (path: string, conversationId?: string, maxBytes?: number) =>
   invoke<string>("read_text_file_cmd", { path, conversationId, maxBytes });
+
+/** A file opened in an editable tab. `read_only` is a reason, not a flag, so
+ * the tab can say *why* it won't take an edit. */
+export interface EditableFile {
+  content: string;
+  /** Epoch millis, handed back on save to detect a write underneath us. */
+  modified: number;
+  read_only: string | null;
+}
+/** Unlike `readTextFile` this never truncates — a clipped buffer saved back
+ * would write the clip over the file. Big files are refused instead. */
+export const readFileForEdit = (path: string, conversationId?: string) =>
+  invoke<EditableFile>("read_file_for_edit_cmd", { path, conversationId });
+export const writeTextFile = (
+  path: string,
+  content: string,
+  conversationId?: string,
+  expectedModified?: number
+) =>
+  invoke<EditableFile>("write_text_file_cmd", {
+    path,
+    content,
+    conversationId,
+    expectedModified,
+  });
 export const openPath = (path: string, conversationId?: string) =>
   invoke<void>("open_path_cmd", { path, conversationId });
 export const revealPath = (path: string, conversationId?: string) =>
@@ -1551,6 +1968,124 @@ export const saveArtifactToFolder = (
   dest: string
 ) => invoke<string>("save_artifact_to_folder_cmd", { conversationId, artifactId, dest });
 
+// ---- the coding half (`CODING_PLAN`) ----
+
+export type TaskKind = "build" | "check" | "test" | "lint" | "other";
+
+/** One task a project declares (`COD-1`). */
+export interface ProjectTask {
+  name: string;
+  argv: string[];
+  cwd: string;
+  kind: TaskKind;
+  source: string;
+}
+
+export interface ProjectCard {
+  languages: string[];
+  manifests: string[];
+  package_managers: string[];
+  tasks: ProjectTask[];
+  git: boolean;
+  branch: string | null;
+  instructions_file: string | null;
+  readme: boolean;
+}
+
+export type ExecPolicy = "off" | "ask" | "allow";
+
+export interface ProjectAllow {
+  tasks: string[];
+  commands: string[];
+  run_command: boolean;
+}
+
+/** `COD-UI-1`: what the project header shows. */
+export interface ProjectCardView {
+  card: ProjectCard;
+  policy: ExecPolicy;
+  policy_is_own: boolean;
+  allow: ProjectAllow;
+  tasks_enabled: boolean;
+  card_built_at: number | null;
+}
+
+/** `COD-10`: one finding from a build, check or test run. */
+export interface Diagnostic {
+  file: string;
+  line: number | null;
+  col: number | null;
+  severity: "error" | "warning" | "failure";
+  message: string;
+  code: string | null;
+}
+
+export interface DiffLine {
+  kind: "context" | "added" | "removed";
+  text: string;
+  old_no: number | null;
+  new_no: number | null;
+}
+
+export interface Hunk {
+  old_start: number;
+  old_lines: number;
+  new_start: number;
+  new_lines: number;
+  lines: DiffLine[];
+}
+
+/** `PRJ-UI-3`: one file the agent changed. */
+export interface FileChange {
+  path: string;
+  display: string;
+  status: "added" | "modified" | "deleted" | "moved";
+  from: string | null;
+  added: number;
+  removed: number;
+  hunks: Hunk[];
+  binary: boolean;
+  too_large: boolean;
+  entry_ids: string[];
+  last_at: number;
+}
+
+export interface ChangeSet {
+  files: FileChange[];
+  added: number;
+  removed: number;
+  since: number;
+  this_run: boolean;
+}
+
+/** `COD-UI-5`: what running a code artifact produced. */
+export interface CodeRun {
+  language: string;
+  output: string;
+  exit_code: number | null;
+  timed_out: boolean;
+  outcome: string;
+  diagnostics: Diagnostic[];
+  duration_ms: number;
+}
+
+export const projectCard = (id: string, refresh?: boolean) =>
+  invoke<ProjectCardView | null>("project_card_cmd", { id, refresh });
+export const setProjectExecPolicy = (id: string, policy: ExecPolicy | "inherit") =>
+  invoke<void>("set_project_exec_policy_cmd", { id, policy });
+export const setProjectTaskAllowed = (id: string, task: string, allowed: boolean) =>
+  invoke<void>("set_project_task_allowed_cmd", { id, task, allowed });
+export const setProjectCommands = (id: string, runCommand: boolean, forget?: string) =>
+  invoke<void>("set_project_commands_cmd", { id, runCommand, forget });
+export const conversationChanges = (conversationId: string) =>
+  invoke<ChangeSet>("conversation_changes_cmd", { conversationId });
+/** Put files back: one `path`, or every changed file when it is left out. */
+export const undoChanges = (conversationId: string, path?: string) =>
+  invoke<void>("undo_changes_cmd", { conversationId, path });
+export const keepChanges = (conversationId: string) =>
+  invoke<void>("keep_changes_cmd", { conversationId });
+export const runCodeArtifact = (id: string) => invoke<CodeRun>("run_code_artifact_cmd", { id });
+
 export const listTrash = (conversationId: string, limit?: number) =>
   invoke<TrashEntry[]>("list_trash_cmd", { conversationId, limit });
 export const undoFileOp = (id: string) => invoke<void>("undo_file_op_cmd", { id });
@@ -1566,6 +2101,47 @@ export const extractPdfText = (path: string, conversationId?: string) =>
  * source path for the `image` kind, its raw text otherwise. */
 export const saveArtifactFile = (dest: string, kind: string, content: string) =>
   invoke<void>("save_artifact_cmd", { dest, kind, content });
+
+/** One line an artifact's live preview printed (`ART-5`). `level` is a console
+ * method name, or `uncaught` for a thrown error the page never handled. */
+export type ConsoleEntry = {
+  level: "log" | "info" | "warn" | "error" | "debug" | "uncaught";
+  text: string;
+  /** `file:line:col`, when the webview says where. */
+  source?: string;
+};
+
+/** Hand the preview's console output to the agent side, so `read_artifact` can
+ * return it. Fire-and-forget: a dropped log line must never break a preview. */
+export const recordArtifactConsole = (artifactId: string, entries: ConsoleEntry[]) =>
+  invoke<void>("record_artifact_console_cmd", { artifactId, entries });
+
+/** Forget what a preview printed — it reloaded, so those lines are about code
+ * that is no longer running. */
+export const clearArtifactConsole = (artifactId: string) =>
+  invoke<void>("clear_artifact_console_cmd", { artifactId });
+
+/** `ART-6`: the loopback origin html artifacts are served from, or `null` if
+ * the server didn't start (the Canvas then renders the source inline, as it
+ * used to). Asked for once per session — the port and token don't change. */
+let previewBase: Promise<string | null> | null = null;
+export function previewBaseUrl(): Promise<string | null> {
+  if (!previewBase) {
+    previewBase = inTauri()
+      ? invoke<string | null>("preview_base_url_cmd").catch(() => null)
+      : Promise.resolve(null);
+  }
+  return previewBase;
+}
+
+/** A stable short key for a string, so an updated artifact gets a URL the
+ * webview treats as new. Without it the iframe keeps showing the old page:
+ * same src, no reload. */
+export function contentVersion(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
 
 // ---- scheduler (SCH): the quiet night shift ----
 
@@ -1761,6 +2337,42 @@ export const skillBody = (name: string, workingFolder?: string | null) =>
 export const forgetSkill = (name: string) => invoke<void>("forget_skill_cmd", { name });
 
 // ---- mapping helpers ----
+
+/** `PLN-1`: where one item of a run's plan stands. `dropped` keeps the item
+ * and its reason — a plan that quietly loses items cannot be trusted to have
+ * been the plan. Mirrors `agent::plan::PlanStatus`. */
+export type PlanItemStatus = "todo" | "doing" | "done" | "dropped";
+
+export interface PlanItem {
+  text: string;
+  status: PlanItemStatus;
+  /** Why a dropped item was dropped. Only ever set for `dropped`. */
+  why?: string | null;
+  /** True for an item added after the plan was first written. */
+  added?: boolean;
+}
+
+/** One run's plan. `revisions` counts rewrites, not status changes — rewriting
+ * the plan is the event worth announcing (`PLN-UI-3`); ticking an item off is
+ * not. `previous` holds the earlier versions, oldest first. */
+export interface PlanView {
+  items: PlanItem[];
+  revisions: number;
+  previous?: string[][];
+}
+
+/** Parse a stored `plan_json` back into the plan a run worked to (`PLN-UI-5`).
+ * A row that will not parse reads as no plan rather than failing the reload —
+ * one unreadable plan must not cost the user the conversation. */
+export function parsePlan(planJson: string | null): PlanView | undefined {
+  if (!planJson) return undefined;
+  try {
+    const plan = JSON.parse(planJson) as PlanView;
+    return plan?.items?.length ? plan : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Parse a backend message row's steps_json into AgentStep[]. */
 export function parseSteps(stepsJson: string | null): AgentStep[] | undefined {

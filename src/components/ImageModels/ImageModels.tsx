@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   imageSetupStatus,
@@ -9,38 +9,52 @@ import {
   setDefaultImageModel,
   deleteImageModel,
   setSetting,
+  inTauri,
   FIT_LABEL,
   type ImageSetupStatus,
   type ImageModel,
   type ImageCatalogEntry,
 } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
+import type { Model } from "../../lib/types";
+import { classifyModelLink } from "../../lib/addLink";
+import { CatalogRow, type CatalogState } from "../Models/ModelRows";
 import "../../routes/Models.css";
 
-function formatSize(bytes: number): string {
+export function formatBytes(bytes: number): string {
   const mb = bytes / 1048576;
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
 }
 
-/** The "Image" tab of the Models view: the image engine + diffusion model library
- * (choose from a catalog, add by URL, set default, delete) — the image-gen twin
- * of the language-model marketplace. */
-export default function ImageModels() {
+/** A local diffusion file as a joint-list model, so it can be starred and
+ * made the default like any other (`MOD-2`). The id is the one the local
+ * backend reports for its active checkpoint. */
+export function localImageAsModel(m: ImageModel): Model {
+  return {
+    id: `media:local/${m.path}`,
+    name: m.name,
+    provenance: "local",
+    modality: "image",
+    backendId: "local",
+    backendLabel: "This PC",
+    available: true,
+  };
+}
+
+/** The local image library, catalog and downloads, shared by the Images &
+ * video tab's groups and its add doors. Every mutation re-reads the store's
+ * media list too, so the picker never offers a file that's gone. */
+export function useImageLibrary() {
   const [status, setStatus] = useState<ImageSetupStatus | null>(null);
   const [models, setModels] = useState<ImageModel[]>([]);
   const [catalog, setCatalog] = useState<ImageCatalogEntry[]>([]);
   const [dlProg, setDlProg] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
-  const [urlInput, setUrlInput] = useState("");
-  const [advanced, setAdvanced] = useState(false);
+  const [justAdded, setJustAdded] = useState<string | null>(null);
   const refreshMediaModels = useAppStore((s) => s.refreshMediaModels);
 
-  // Every mutation below routes through here, so this is also where the
-  // *shared* model list gets re-read. Without that, deleting or adding a
-  // diffusion model only updated this screen's own state — the model chooser
-  // went on offering a checkpoint that was no longer on disk until the app
-  // was restarted.
-  async function refresh() {
+  const refresh = useCallback(async () => {
+    if (!inTauri()) return;
     try {
       const [s, m] = await Promise.all([imageSetupStatus(), listImageModels()]);
       setStatus(s);
@@ -49,12 +63,13 @@ export default function ImageModels() {
       setError(String(e));
     }
     await refreshMediaModels();
-  }
+  }, [refreshMediaModels]);
 
   useEffect(() => {
+    if (!inTauri()) return;
     refresh();
     imageCatalog().then(setCatalog).catch(() => {});
-  }, []);
+  }, [refresh]);
 
   function clearProg(key: string) {
     setDlProg((p) => {
@@ -73,6 +88,7 @@ export default function ImageModels() {
         setDlProg((prev) => ({ ...prev, [filename]: pct }));
       });
       clearProg(filename);
+      setJustAdded(filename);
       await refresh();
     } catch (e) {
       setError(`Couldn't download ${filename}: ${e}`);
@@ -91,22 +107,12 @@ export default function ImageModels() {
         setDlProg((prev) => ({ ...prev, [c.id]: pct }));
       });
       clearProg(c.id);
+      setJustAdded(c.components.length > 1 ? c.name : (c.components[0]?.filename ?? c.name));
       await refresh();
     } catch (e) {
       setError(`Couldn't download ${c.name}: ${e}`);
       clearProg(c.id);
     }
-  }
-
-  async function addByUrl() {
-    const url = urlInput.trim();
-    if (!/^https?:\/\//i.test(url)) {
-      setError("Enter a direct https link to a .safetensors, .gguf, or .ckpt file.");
-      return;
-    }
-    const filename = url.split("?")[0].split("/").pop() || "model.safetensors";
-    setUrlInput("");
-    await download(url, filename);
   }
 
   async function makeDefault(path: string) {
@@ -115,7 +121,6 @@ export default function ImageModels() {
   }
 
   async function remove(m: ImageModel) {
-    if (!confirm(`Remove "${m.name}" and delete its file from disk?`)) return;
     await deleteImageModel(m.path).catch((e) => setError(String(e)));
     await refresh();
   }
@@ -127,134 +132,113 @@ export default function ImageModels() {
     await refresh();
   }
 
-  const ownedFiles = new Set(models.map((m) => m.name));
+  return {
+    status,
+    models,
+    catalog,
+    dlProg,
+    error,
+    setError,
+    justAdded,
+    setJustAdded,
+    refresh,
+    download,
+    downloadFromCatalog,
+    makeDefault,
+    remove,
+    pickModelFile,
+  };
+}
+
+export type ImageLibrary = ReturnType<typeof useImageLibrary>;
+
+/** Door 1 on the Images & video tab: the curated diffusion catalog. */
+export function RecommendedImages({ lib }: { lib: ImageLibrary }) {
+  const ownedFiles = new Set(lib.models.map((m) => m.name));
+  return (
+    <div className="model-rows catalog-list">
+      {lib.catalog.map((c) => {
+        const prog = lib.dlProg[c.id];
+        // A single-file model is installed under its filename; a
+        // multi-file one under its display name, from the manifest.
+        const owned = ownedFiles.has(c.name) || ownedFiles.has(c.components[0]?.filename ?? "");
+        const parts = c.components.length;
+        const state: CatalogState = owned ? "owned" : prog === undefined ? "idle" : prog;
+        return (
+          <CatalogRow
+            key={c.id}
+            name={c.name}
+            description={c.note}
+            fit={c.fit}
+            fitLabel={FIT_LABEL[c.fit]}
+            size={c.size_label}
+            // What it will actually be generated at. These differ sharply
+            // between families (a distilled model at the wrong guidance scale
+            // produces unusable images), so they are stated, not hidden.
+            details={[
+              `${c.profile.size}px`,
+              `${c.profile.steps} steps`,
+              `cfg ${c.profile.cfg_scale}`,
+              c.vram_label,
+              parts > 1 ? `${parts} files` : "",
+            ]}
+            state={state}
+            onDownload={() => lib.downloadFromCatalog(c)}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/** Door 2 on the Images & video tab: a direct file link, or a file already on
+ * disk ("point at my own file" moved in here from the old Advanced toggle). */
+export function LinkImages({ lib }: { lib: ImageLibrary }) {
+  const [input, setInput] = useState("");
+  const kind = classifyModelLink(input, "media");
+  const inFlight = Object.entries(lib.dlProg);
+
+  async function add() {
+    if (kind.kind !== "file") {
+      lib.setError(kind.kind === "empty" ? null : kind.label);
+      return;
+    }
+    setInput("");
+    await lib.download(kind.url, kind.filename);
+  }
 
   return (
-    <>
-      {error && <p className="hw-note error">{error}</p>}
-
-      {status && !status.engine_installed && (
-        <p className="add-help">
-          Tip: install the image engine under <strong>Engine → Image</strong> so downloaded models
-          can generate.
-        </p>
-      )}
-
-      {/* Installed models */}
-      {models.length > 0 && (
-        <section className="model-section">
-          <h2 className="section-title">Your image models</h2>
-          <div className="card-grid">
-            {models.map((m) => (
-              <div className="model-card" key={m.path}>
-                <div className="model-card-head">
-                  <span className="model-name">{m.name}</span>
-                </div>
-                <div className="model-meta">
-                  {formatSize(m.size_bytes)}
-                  {m.is_default ? " · default" : ""}
-                </div>
-                <div className="model-card-actions">
-                  {!m.is_default && (
-                    <button className="btn-text" onClick={() => makeDefault(m.path)}>
-                      Set default
-                    </button>
-                  )}
-                  <button className="btn-text danger" onClick={() => remove(m)}>
-                    Delete
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* Catalog */}
-      <section className="model-section">
-        <h2 className="section-title">Get a model</h2>
-        <div className="card-grid">
-          {catalog.map((c) => {
-            const prog = dlProg[c.id];
-            // A single-file model is installed under its filename; a
-            // multi-file one under its display name, from the manifest.
-            const owned =
-              ownedFiles.has(c.name) || ownedFiles.has(c.components[0]?.filename ?? "");
-            const parts = c.components.length;
-            return (
-              <div className="model-card" key={c.id}>
-                <div className="model-card-head">
-                  <span className="model-name">{c.name}</span>
-                </div>
-                <p className="model-desc">{c.note}</p>
-                <div className="model-meta">
-                  <span className={`fit-badge fit-${c.fit}`}>{FIT_LABEL[c.fit]}</span>
-                  <span className="model-size">{c.size_label}</span>
-                  {parts > 1 && <span className="model-parts">{parts} files</span>}
-                </div>
-                {/* What it will actually be generated at. These differ sharply
-                    between families — a distilled model at the wrong guidance
-                    scale produces unusable images — so they are stated up
-                    front rather than hidden in the engine's defaults. */}
-                <div className="model-speed">
-                  {c.profile.size}px · {c.profile.steps} steps · cfg {c.profile.cfg_scale} ·{" "}
-                  {c.vram_label}
-                </div>
-                <div className="model-card-actions">
-                  {owned ? (
-                    <span className="owned-note">In your models</span>
-                  ) : prog === undefined ? (
-                    <button
-                      className="btn-download"
-                      disabled={c.fit === "wont-fit"}
-                      onClick={() => downloadFromCatalog(c)}
-                    >
-                      Download
-                    </button>
-                  ) : (
-                    <div className="dl-progress">
-                      <div className="dl-bar" style={{ width: `${prog}%` }} />
-                      <span className="dl-pct">{prog}%</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* Add by URL */}
-      <section className="model-section">
-        <h2 className="section-title">Add a model by link</h2>
-        <p className="add-help">
-          Paste a direct link to a <code>.safetensors</code>, <code>.gguf</code>, or{" "}
-          <code>.ckpt</code> diffusion model.
-        </p>
-        <div className="add-row">
-          <input
-            className="add-input"
-            placeholder="https://…/model.safetensors"
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && addByUrl()}
-          />
-          <button className="btn-primary" onClick={addByUrl} disabled={!urlInput.trim()}>
-            Download
-          </button>
-        </div>
-
-        <button className="link-button" onClick={() => setAdvanced((v) => !v)}>
-          {advanced ? "Hide advanced" : "Advanced — point at my own file"}
+    <div className="add-door-body">
+      <div className="add-row">
+        <input
+          className="add-input"
+          aria-label="Link to an image model file"
+          placeholder="https://…/model.safetensors"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && add()}
+        />
+        <button className="btn-primary" onClick={add} disabled={kind.kind !== "file"}>
+          Download
         </button>
-        {advanced && (
-          <div className="add-row" style={{ marginTop: 10, gap: 10 }}>
-            <button className="btn-secondary" onClick={pickModelFile}>
-              Choose model file…
-            </button>
-          </div>
-        )}
-      </section>
-    </>
+      </div>
+      {kind.kind !== "empty" && (
+        <p className={`link-kind ${kind.kind === "invalid" ? "bad" : ""}`}>{kind.label}</p>
+      )}
+      {inFlight.map(([name, pct]) => (
+        <div className="dl-progress wide" key={name}>
+          <div className="dl-bar" style={{ width: `${pct}%` }} />
+          <span className="dl-pct">
+            {name} — {pct}%
+          </span>
+        </div>
+      ))}
+      <p className="add-help">
+        Already have a model file?{" "}
+        <button className="link-button inline" onClick={lib.pickModelFile}>
+          Point at my own file…
+        </button>
+      </p>
+    </div>
   );
 }

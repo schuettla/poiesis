@@ -2,9 +2,24 @@
    (rather than a full-width toolbar fused to the bottom edge) — closer to
    the composer in claude.ai. */
 .composer-wrap {
+  /* Placement in the app shell grid (row 3 of the reading column), which Chat
+     used to declare by redeclaring this class in its own stylesheet — two base
+     rules for one class, resolved by bundle order. It belongs to the composer.
+     Workspace nests the composer inside `.ws-foot`, which is not a grid
+     container, so these two are simply inert there. */
+  grid-column: 2;
+  grid-row: 3;
   position: sticky;
   bottom: 0;
-  padding: 0 24px 20px;
+  /* A sticky box is always its own stacking context, so the pickers' z-index
+     only counts *inside* the composer — the composer itself has to sit above
+     the stream, or its drop-ups open underneath the pinned user turn
+     (`.turn-user`, z 2). Above the session menu (15), below every panel and
+     overlay (35+). */
+  z-index: 16;
+  /* Top pad adds to the stream's own bottom padding so the gap survives even
+     if the last turn ends flush; bottom stays tight to keep the box low. */
+  padding: 10px 24px 12px;
 }
 .composer-wrap.drag-over .composer {
   border-color: var(--local);
@@ -227,6 +242,20 @@
 
 /* `EDT-2`: the implicit reference — always visible before send, never a
    silent attach. */
+/* `MOD-3`: the one-time "your default isn't available" line. */
+.composer-model-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  margin-bottom: 6px;
+  background: var(--paper-edge);
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--ink-muted);
+  width: fit-content;
+}
 .implicit-ref-chip {
   display: flex;
   align-items: center;
@@ -477,4 +506,24 @@
   flex-direction: column;
   max-height: 300px;
   overflow-y: auto;
+}
+
+/* `SUB-UI-3`: a quiet count beside Stop while agents are out. Clicking it opens
+   the Agents tab — the pill is the way in, not just a number. */
+.fleet-pill {
+  align-self: center;
+  white-space: nowrap;
+  background: none;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 3px 8px;
+  margin-right: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+}
+.fleet-pill:hover {
+  color: var(--ink);
+  background: var(--canvas);
 }

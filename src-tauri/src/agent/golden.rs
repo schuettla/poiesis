@@ -270,14 +270,14 @@ pub async fn run_golden_set(
             endpoint,
             &messages,
             &specs,
-            0.2,
+            0.2, crate::cloud::Effort::Off,
             &CancelFlag::new(),
             |_| {},
         )
         .await
         {
-            Ok(TurnOutcome::Final { content }) => (content, Vec::new()),
-            Ok(TurnOutcome::ToolCalls(calls)) => {
+            Ok(TurnOutcome::Final { content, .. }) => (content, Vec::new()),
+            Ok(TurnOutcome::ToolCalls { calls, .. }) => {
                 (String::new(), calls.into_iter().map(|c| c.name).collect())
             }
             _ => (String::new(), Vec::new()),
@@ -676,6 +676,7 @@ mod tests {
                 created: "2026-08-05".into(),
                 source_conversation: None,
                 body: "Always metric.".into(),
+                project: None,
                 scope: None,
                 recurrence: None,
                 last_seen: None,

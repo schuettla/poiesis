@@ -52,6 +52,20 @@ base64 = "0.22"
 # enough decode support for the formats IDX already recognises as images.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
 
+# Code-shaped navigation (COD-14..16): top-level symbols per file. Pinned to the
+# releases whose rust-version fits ours (1.77): tree-sitter 0.26+ and
+# tree-sitter-language 0.1.8 need 1.90. The grammars pull tree-sitter-language
+# "0.1", so the direct pin here is what holds it down.
+tree-sitter = "=0.25.10"
+tree-sitter-language = "=0.1.5"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-go = "0.25"
+tree-sitter-json = "0.24"
+tree-sitter-md = "0.5"
+
 # Secrets in the OS credential store (Windows Credential Manager) — MCP connector
 # tokens (Phase 6), cloud provider keys (Phase 7), and mail account passwords
 # (Phase 8 MAIL-1). Never persisted to SQLite.

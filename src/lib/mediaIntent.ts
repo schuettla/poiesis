@@ -8,9 +8,19 @@ export type MediaIntent = "chat" | "image" | "video" | "edit";
 // Anchored at the start (`^`): the verb has to be the sentence's own
 // imperative for this to count. "how do I draw a fox in Illustrator?" fails
 // here — "how" is first — which is what keeps a genuine question out of the
-// chip without needing an object noun ("draw a fox" alone has none).
-const LEADING_VERB = /^(draw|generate|create|make|paint|render|zeichne|male|erstelle)\b/i;
-const VIDEO_NOUN = /\b(video|clip|animation|film)\b/i;
+// chip without needing an object noun.
+//
+// Two tiers of verb. VISUAL_VERB is unambiguously about making a picture —
+// "draw", "paint", "sketch" — so it stands on its own. GENERIC_VERB ("create",
+// "make", "generate", "erstelle") is the bulk of *every* request ("create a
+// component", "make a plan"), so on its own it means nothing: it only counts as
+// media intent when the sentence also names something visual (IMAGE_NOUN) or a
+// clip (VIDEO_NOUN).
+const VISUAL_VERB = /^(draw|paint|sketch|illustrate|render|zeichne|male|skizziere)\b/i;
+const GENERIC_VERB = /^(generate|create|make|erstelle|generiere)\b/i;
+const VIDEO_NOUN = /\b(video|clip|animation|film|movie|gif|reel|footage|animate)\b/i;
+const IMAGE_NOUN =
+  /\b(image|images|picture|pic|photo|photos|photograph|illustration|drawing|painting|artwork|art|logo|icon|sprite|wallpaper|poster|banner|thumbnail|portrait|avatar|graphic|mockup|render|scene|bild|foto|zeichnung|grafik|abbildung)\b/i;
 const EDIT_LANGUAGE = /\b(remove|replace|make it|turn.*into|entferne|mach)\b/i;
 const QUESTION = /\b(what|who|why|how|is|does|was|wer)\b/i;
 
@@ -21,7 +31,14 @@ export function detectIntent(
   const text = draft.trim();
   const hasImageAttachment = attachments.some((a) => a.kind === "image");
 
-  if (LEADING_VERB.test(text)) {
+  // A visual verb is enough on its own; a generic verb needs the sentence to
+  // actually name a picture or a clip, otherwise "create a route handler" would
+  // light up the image chip.
+  const hasMediaVerb =
+    VISUAL_VERB.test(text) ||
+    (GENERIC_VERB.test(text) && (IMAGE_NOUN.test(text) || VIDEO_NOUN.test(text)));
+
+  if (hasMediaVerb) {
     return VIDEO_NOUN.test(text)
       ? { intent: "video", confidence: "high" }
       : { intent: "image", confidence: "high" };

@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS messages (
   model_name       TEXT,                   -- assistant turns: model used
   model_provenance TEXT,                   -- 'local' | 'cloud'
   steps_json       TEXT,                   -- serialized agent-run timeline (CHT-9)
+  stop_reason      TEXT,                   -- HRN-3: completed|aborted|timeout|max_steps|error
   created_at       INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);
@@ -255,6 +256,39 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_vectors_chunk
 DROP INDEX IF EXISTS idx_vectors_scope;
 CREATE INDEX IF NOT EXISTS idx_vectors_ref ON vectors(ref_key);
 
+-- `PRJ-1`: a project is a named group of sessions that share a context. A
+-- working directory is something it may have, not what it is (`PRJ-1a`) — a
+-- project about a book or a job is as real as one about a repository.
+--
+-- `root_path` is canonical and UNIQUE, matching how `index_roots` keys the
+-- same folders, so attaching a known folder joins rather than duplicates. It
+-- is nullable, and SQLite already treats NULLs as distinct under a unique
+-- index, so any number of folderless projects coexist.
+--
+-- `trust` moves off the conversation and onto the project, because it is a
+-- property of the folder and always was. `conversations.folder_path` /
+-- `folder_trust` stay in place as the fallback for a chat with no project;
+-- `Db::conversation_folder` resolves the pair.
+--
+-- `card_json` (`COD-1`), `exec_policy` (`COD-7`) and `tabs_json`
+-- (`SHELL_PLAN`'s `SHL-17` scope seam) are declared here and left unread until
+-- the phases that own them. One migration is cheaper than three.
+CREATE TABLE IF NOT EXISTS projects (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  root_path     TEXT UNIQUE,                      -- canonical; NULL = no folder
+  instructions  TEXT,                             -- PRJ-7: shared by its sessions
+  trust         TEXT NOT NULL DEFAULT 'confirm',  -- read-only | confirm | auto
+  exec_policy   TEXT NOT NULL DEFAULT 'inherit',  -- off | ask | allow | inherit
+  card_json     TEXT,
+  card_built_at INTEGER,
+  allow_json    TEXT,                             -- COD-7: always-allowed tasks/commands
+  tabs_json     TEXT,
+  archived      INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+
 -- Perception: one row per indexed folder root — what built it, and when.
 CREATE TABLE IF NOT EXISTS index_roots (
   path        TEXT PRIMARY KEY,       -- canonical folder path
@@ -366,3 +400,67 @@ CREATE TABLE IF NOT EXISTS browser_sessions (
   trail_json      TEXT NOT NULL,  -- ["visited x", "clicked \"Sign in\""]
   updated_at      INTEGER NOT NULL
 );
+
+-- One delegated child run (`SUB-3`). The child's *work* lives in its own
+-- conversation, exactly like any other run; this row is the link back to the
+-- turn that asked for it, and the record of how it ended — so the Fleet card
+-- and the Agents tab still have something to show after a restart, when the
+-- in-memory `Fleet` handle is long gone.
+CREATE TABLE IF NOT EXISTS subagent_runs (
+  id                     TEXT PRIMARY KEY,   -- the run id
+  parent_conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  parent_message_id      TEXT,
+  child_conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  agent                  TEXT NOT NULL,
+  task                   TEXT NOT NULL,
+  status                 TEXT NOT NULL,      -- queued|running|done|stopped|error
+  stop_reason            TEXT,               -- completed|aborted|timeout|max_steps|error
+  result                 TEXT,
+  steps                  INTEGER NOT NULL DEFAULT 0,
+  started_at             INTEGER NOT NULL,
+  ended_at               INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_subagent_runs_parent ON subagent_runs(parent_conversation_id);
+
+-- What one run cost (`OBS-1`/`OBS-2`). One row per run that reported anything,
+-- written when the run ends. Local runs land here too with zero cost: context
+-- pressure is worth seeing even when the tokens are free.
+--
+-- No foreign key to `conversations`: usage is the record of what was spent, and
+-- deleting a conversation should not quietly erase a month's bill. The
+-- conversation id is kept so a per-conversation breakdown is still possible for
+-- the ones that still exist.
+CREATE TABLE IF NOT EXISTS run_usage (
+  run_id          TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  model_name      TEXT NOT NULL,
+  provenance      TEXT NOT NULL,   -- local|cloud|endpoint
+  prompt_tokens   INTEGER NOT NULL,
+  output_tokens   INTEGER NOT NULL,
+  turns           INTEGER NOT NULL,
+  created_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_run_usage_created ON run_usage(created_at);
+
+-- `CTX-2`: the model's view of a conversation, append-only.
+--
+-- The rule: anything the model saw must be reconstructible from these rows.
+-- `messages` stays exactly what it was and remains what the UI reads; this is
+-- a different shape on purpose, because a person's transcript and a model's
+-- transcript are different things and forcing one table to be both is what
+-- split prompt assembly across two languages in the first place.
+--
+-- `seq` is per conversation and monotonic, so "fork at this point" is a range
+-- and not a guess. `run_id` groups the rows one run sent, which is what resume
+-- replays.
+CREATE TABLE IF NOT EXISTS session_events (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  run_id          TEXT,
+  seq             INTEGER NOT NULL,   -- per conversation, monotonic
+  kind            TEXT NOT NULL,      -- prompt|user|assistant|tool_call|tool_result|system_note|summary|steer|stop
+  payload_json    TEXT NOT NULL,
+  created_at      INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_session_events_seq ON session_events(conversation_id, seq);
+CREATE INDEX IF NOT EXISTS idx_session_events_run ON session_events(run_id);

@@ -1,0 +1,179 @@
+/* The palette floats above the whole shell, so it is one of the few things
+   allowed the dialog shadow. The selected row is an inverted segment — ink
+   ground, paper text — the way a monochrome LCD marks the line you're on, and
+   the same treatment as the Rail's current row. */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 190;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12vh 16px 16px;
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+.palette {
+  width: min(640px, 100%);
+  max-height: min(560px, 76vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .palette {
+    animation: palette-drop 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+@keyframes palette-drop {
+  from {
+    opacity: 0.5;
+    transform: translateY(-6px);
+  }
+}
+
+.palette-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--paper-edge);
+  color: var(--ink-faint);
+}
+.palette-input {
+  flex: 1;
+  min-width: 0;
+  height: 50px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  color: var(--ink);
+  caret-color: var(--ink);
+  background: none;
+  border: none;
+  outline: none;
+}
+.palette-input::placeholder {
+  color: var(--ink-muted);
+}
+.palette-input::selection {
+  background: var(--paper-edge-2);
+  color: var(--ink);
+}
+
+.palette-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 6px 6px;
+}
+.palette-group + .palette-group {
+  margin-top: 4px;
+}
+.palette-group-label {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 10px 10px 5px;
+}
+
+.palette-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  cursor: pointer;
+}
+.palette-icon {
+  flex: none;
+  display: inline-flex;
+  justify-content: center;
+  width: 16px;
+  color: var(--ink-faint);
+}
+.palette-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.palette-label,
+.palette-snippet,
+.palette-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-snippet {
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+}
+.palette-snippet mark {
+  background: none;
+  color: var(--ink);
+  font-weight: 600;
+}
+.palette-meta {
+  flex: 0 1 auto;
+  max-width: 38%;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.palette-time {
+  flex: none;
+  min-width: 4ch;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+
+.palette-option[aria-selected="true"] {
+  background: var(--ink);
+  color: var(--paper);
+}
+.palette-option[aria-selected="true"] :is(.palette-icon, .palette-meta, .palette-time, .palette-snippet) {
+  color: color-mix(in srgb, var(--paper) 72%, transparent);
+}
+.palette-option[aria-selected="true"] .palette-snippet mark {
+  color: var(--paper);
+}
+
+.palette-empty {
+  margin: 0;
+  padding: 20px 10px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+
+.palette-foot {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--paper-edge);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.palette-foot .kbd {
+  padding: 2px 4px;
+}
+.palette-status {
+  margin-left: auto;
+}

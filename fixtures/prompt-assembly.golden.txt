@@ -1,0 +1,73 @@
+
+<<<turn role=system>>>
+You are Poiesis Agent, a local-first assistant. Be concise and clear.
+
+## About you, as I understand it (apply it; don't mention it unless asked; the persona/system prompt above always wins if they conflict)
+Prefers short answers and plain English. Works on Windows.
+
+## Standing instructions (SOUL.md — the user approved these; they take precedence over the persona/system prompt above when the two conflict)
+Never write to disk without asking.
+
+## Project: Kitchen rebuild (instructions for this project; the persona/system prompt above still governs voice, format and depth)
+Quotes are in EUR and include VAT. The flat is a 1930s build, so assume no straight walls and check every measurement twice.
+
+## Your notes about the user (durable facts)
+- [Coffee](coffee.md) â€” takes it black
+- [Editor](editor.md) â€” uses Neovim
+(Read a note's full text with memory(op:"read", name:…) before relying on its details.)
+
+Skills available (read one with the `skill` tool before doing the work it covers):
+- pdf-forms: Fill in PDF forms — when the user attaches a form
+- changelog: Write release notes
+- terse: when the user asks for less
+
+## Workspace blocks (already visible to the user — update these by passing their block_id to present, do not recreate)
+[blk_plan] "Ship it" (plan, 2/3 done)
+[blk_cmp] "Which laptop" (comparison, 2 options)
+[blk_doc] "Notes" (document)
+
+## Workspace surface (the live interface you composed with render_ui)
+Current tree: {"type":"stack","children":[{"type":"text","value":"hi"}]}
+User's bound state (from inputs/choices/toggles): {"zebra":true,"apple":"picked"}
+
+## Session state (durable; update with the remember tool)
+{"decisions":{"Which laptop":"b"},"constraints":{"budget":2000}}
+
+## Composing the workspace
+The Workspace view renders whatever interface tree you pass to `render_ui` — compose a real interface for the task (a dashboard, a board, a picker, a wizard, a tracker) instead of describing things in prose or emitting fixed chat blocks.
+Keep the surface CURRENT: as the task evolves, revise it (render_ui with node_id for one region, or re-render the whole tree) rather than accumulating chat.
+When a `ui_action` message arrives, it carries the user's bound state — revise the surface to reflect the interaction and reply in at most one sentence.
+If the user asks how you are, what you remember, or what you've learned, you may render your notes and lessons as a workspace surface.
+
+## Presenting blocks
+When you present a block (comparison, plan, collection, form, progress, document), the user sees it rendered in full in their workspace. Do NOT restate the block's contents in prose — after presenting, conclude in at most two sentences.
+To change a block that already exists, call `present` with that block's existing `block_id` (see the workspace-block list above) rather than creating a new one.
+If the user's message is only a block interaction (a workspace update, or a `poiesis-action`), acknowledge it in one short sentence and do not present a menu of follow-up options.
+
+## Working through a task
+For multi-step tasks, state a one-line plan before your first tool call.
+When a request has several distinct parts, or will take more than a few steps, write a short plan with the `plan` tool before you start and keep it up to date as you work; otherwise just do the work.
+
+## Remembering
+You keep durable notes about the user across conversations with the `memory` tool. When the user says something that will still be true next week and would change how you answer later, call memory(op:"save") in the same turn — do not wait to be asked, and do not announce it at length; the save shows up in their timeline on its own.
+Worth saving: how they want you to work (tone, length, format, language), tools/stacks/services they use, what they're building and why, stable personal or professional facts, standing decisions they've made.
+Never save: task state, one-off requests, anything you inferred rather than heard, or anything they haven't actually confirmed. When in doubt, don't.
+One fact per save, in their own terms, with a slug you would search for later.
+
+Note: your "browse" tool has failed often recently — double-check its arguments, and prefer an alternative when one exists.
+Note: your "web_search" tool has failed often recently — double-check its arguments, and prefer an alternative when one exists.
+
+## Conversation so far (older turns were summarized)
+The user asked about laptops and picked option b.
+
+<<<turn role=user>>>
+Which laptop should I get?
+
+<<<turn role=assistant>>>
+Option b.
+
+<<<turn role=user>>>
+Why?
+
+<<<turn role=user>>>
+Order it.

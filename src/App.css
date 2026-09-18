@@ -1,26 +1,44 @@
-/* The dock width is a *registered* custom property, so the browser knows it is
-   a length and can interpolate it. An unregistered `--dock-w` would snap between
-   values, which is why show/hide has to animate through this and not through a
-   plain variable. */
+/* Both side columns are *registered* custom properties, so the browser knows
+   they are lengths and can interpolate them. An unregistered custom property
+   would snap between values, which is why show/hide has to animate through
+   these and not through plain variables. The rail used to hard-code its width
+   straight into `grid-template-columns` (52px vs 232px) instead of going
+   through a registered property like the dock did — `grid-template-columns`
+   itself doesn't interpolate between two different literal tracks, so the
+   dock's open/close eased in while the rail's collapse/expand snapped. */
 @property --dock-w {
   syntax: "<length>";
   inherits: true;
   initial-value: 340px;
 }
+@property --rail-w {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 232px;
+}
+/* App shell grid — 232px rail + fluid main column + the Workbench dock, under
+   a 42px topbar spanning the full width. The main column is `1fr`, so whatever
+   the dock gives up it immediately takes.
 
-/* App shell grid — mirrors the mockup: 232px rail + fluid main + the Workbench
-   dock on the right, 48px topbar spanning the full width. The conversation
-   column is `1fr`, so whatever the dock gives up it immediately takes. */
+   `SHL-27`: an open file, artifact or agent takes that main column whole — the
+   widest thing the shell has. It had its own fourth column briefly (`SHL-26`),
+   which meant a document and the conversation splitting one window between
+   them and neither having room. What makes that affordable now is the session
+   tab: the conversation is one click away in the strip, so the item can have
+   everything. */
 .app {
   display: grid;
-  grid-template-columns: 232px 1fr var(--dock-w);
-  transition: --dock-w var(--t-mode);
+  grid-template-columns: var(--rail-w) 1fr var(--dock-w);
+  transition: --dock-w var(--t-mode), --rail-w var(--t-mode);
   /* Row 3 is explicit (not left implicit) so that "grid-row: 2 / -1" on the
      rail and the full-height routes actually reaches it — negative grid line
      indices only resolve against the *explicit* grid, not implicit tracks
      the composer would otherwise add on its own. Auto-collapses to 0 in any
      view that doesn't place something there. */
-  grid-template-rows: 48px 1fr auto;
+  /* 42px, matching the mockup. The header holds a wordmark, a location label,
+     the sidebar's tabs and two toggles — none of which needed 48px, and six
+     pixels off the chrome is six more of the reading column. */
+  grid-template-rows: 42px 1fr auto;
   height: 100vh;
 }
 
@@ -29,7 +47,7 @@
 
 /* Manual icon-only collapse (rail toggle). */
 .app.rail-collapsed {
-  grid-template-columns: 52px 1fr var(--dock-w);
+  --rail-w: 52px;
 }
 
 /* While dragging the divider the width is already following the pointer;
@@ -38,6 +56,20 @@
   transition: none;
   cursor: col-resize;
   user-select: none;
+}
+/* `SHL-27`: an open item occupies the same cells the conversation does, so the
+   conversation steps aside while one is showing — hidden rather than
+   unmounted, which keeps the scroll position, the composer's draft and any
+   running turn exactly as they were. Getting back is the session tab, and
+   what you come back to is what you left.
+
+   The composer goes with it. A text box addressed to the agent, sitting under
+   a file that is not the conversation, invites a message into a stream nobody
+   can see being written. */
+.app.item-open .chat-body,
+.app.item-open .composer-wrap,
+.app.item-open .workspace-body {
+  display: none;
 }
 
 /* Routes other than chat have no Workbench at all — nothing to animate. */
@@ -48,6 +80,6 @@
 /* Responsive: narrow the rail gracefully on a smaller window (§5.5). */
 @media (max-width: 900px) {
   .app:not(.rail-collapsed) {
-    grid-template-columns: 188px 1fr var(--dock-w);
+    --rail-w: 188px;
   }
 }

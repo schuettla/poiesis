@@ -6,7 +6,7 @@ import "./Surface.css";
 import "./Settings.css";
 
 const ATTRIBUTIONS = [
-  { name: "llama.cpp", license: "MIT", what: "Local model engine (llama-server)" },
+  { name: "llama.cpp", license: "MIT", what: "Local model runtime (llama-server)" },
   { name: "Tauri", license: "MIT / Apache-2.0", what: "Desktop application shell" },
   { name: "React", license: "MIT", what: "User interface" },
   { name: "Newsreader, Inter, JetBrains Mono", license: "OFL / MIT", what: "Typefaces" },

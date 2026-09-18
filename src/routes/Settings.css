@@ -40,20 +40,7 @@
   gap: 12px;
   margin-top: 12px;
 }
-.btn-primary {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  background: var(--ink);
-  color: var(--paper);
-  border: 1px solid var(--ink);
-  border-radius: var(--radius);
-  padding: 7px 16px;
-  cursor: pointer;
-}
-.btn-primary:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
+/* .btn-primary is a shared primitive — see styles/global.css. */
 .saved-note {
   font-size: 12px;
   color: var(--ok);
@@ -99,12 +86,6 @@
 .provider-controls .field-input {
   flex: 1;
   min-width: 200px;
-}
-
-.btn-secondary.selected {
-  background: var(--paper-edge);
-  border-color: var(--ink);
-  color: var(--ink);
 }
 
 /* privacy toggle */
@@ -288,19 +269,7 @@
   font-size: 11px;
   text-align: right;
 }
-.btn-secondary {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  background: none;
-  color: var(--ink);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  padding: 7px 14px;
-  cursor: pointer;
-}
-.btn-secondary:hover {
-  border-color: var(--ink-faint);
-}
+/* .btn-secondary is a shared primitive — see styles/global.css. */
 .empty-hint {
   font-family: var(--font-sans);
   font-size: 13px;
@@ -431,4 +400,75 @@
   display: flex;
   justify-content: center;
   margin: 4px 0 20px;
+}
+
+/* `SUB-UI-7`: delegation's caps, under its own toggle. Indented to the same
+   34px as the indexed-folder list, so it reads as belonging to the switch
+   above rather than as a new section. */
+.delegation-caps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0 10px 34px;
+}
+/* The same rows, but standing on their own rather than indented under a
+   checkbox — there is nothing to the left to line up with. */
+.delegation-caps.step-limit {
+  padding: 0;
+}
+.delegation-cap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  max-width: 420px;
+}
+.delegation-cap input {
+  width: 72px;
+  font: inherit;
+  font-size: var(--fs-ui);
+  padding: 3px 6px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+}
+.delegation-nested {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+/* `RPC-1`: one sub-switch under Code execution, indented to the same 34px as
+   delegation's caps so it reads as belonging to the toggle above. */
+.toolset-subswitch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0 10px 34px;
+}
+.toolset-subswitch label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.toolset-subswitch p {
+  font-size: var(--fs-timeline);
+  color: var(--ink-faint);
+  margin: 2px 0 0;
+  max-width: 52ch;
+}
+
+.delegation-note {
+  font-size: var(--fs-timeline);
+  color: var(--ink-faint);
+  margin: 2px 0 0;
+  max-width: 52ch;
 }

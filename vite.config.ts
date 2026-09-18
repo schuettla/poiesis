@@ -27,6 +27,15 @@ export default defineConfig(async () => ({
     },
   },
 
+  // `EDT-1`: Monaco's worker. ES format, so Vite emits `new Worker(url, {type:
+  // "module"})` against a same-origin chunk. The default IIFE format can route
+  // a worker through a `Blob` URL, which the app's CSP (`script-src 'self'`,
+  // no `blob:`) blocks outright — the editor would then silently lose word
+  // suggestions and link detection with only a console error to show for it.
+  worker: {
+    format: "es",
+  },
+
   // Produce a build that Tauri can package.
   build: {
     target: "chrome105",

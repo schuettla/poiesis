@@ -46,7 +46,7 @@ impl Default for OpenAiBackend {
 }
 
 fn key() -> Result<String, String> {
-    cloud::get_key(Provider::OpenAi).ok_or_else(|| "No OpenAI key is set. Add one in Settings → Cloud.".to_string())
+    cloud::get_key(Provider::OpenAi).ok_or_else(|| "No OpenAI key is set. Add one in Settings → Providers.".to_string())
 }
 
 /// The three shapes this model offers, as ratios, so the shared

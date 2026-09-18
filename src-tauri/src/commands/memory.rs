@@ -97,8 +97,8 @@ async fn backfill_scope(mgr: &RuntimeManager, db: &Db, mem: &MemoryStore) {
 /// `recall_for(None)` rather than `index_markdown()` so the "last surfaced"
 /// mark covers exactly the facts that fit inside the character cap — a fact
 /// the cap dropped never reached the prompt and must not claim it did.
-fn wholesale(db: &Db, mem: &MemoryStore) -> RecallResult {
-    let set = mem.recall_for(db, None);
+fn wholesale(db: &Db, mem: &MemoryStore, project: Option<&str>) -> RecallResult {
+    let set = mem.recall_for_project(db, None, project);
     let _ = db.touch_memory_usage(FACTS, &set.injected_facts);
     RecallResult { index: set.index, matches: Vec::new(), injected_facts: set.injected_facts }
 }
@@ -114,20 +114,46 @@ pub async fn recall_for_cmd(
     db: State<'_, Db>,
     mem: State<'_, MemoryStore>,
     query: String,
+    conversation_id: Option<String>,
 ) -> Cmd<RecallResult> {
-    backfill_scope(&mgr, &db, &mem).await;
+    // `PRJ-8`: scoped to the conversation's project when one is named. The
+    // caller may legitimately have none — a manual search of memory is not
+    // happening anywhere in particular.
+    let project = conversation_id
+        .and_then(|id| db.conversation_project(&id).ok().flatten())
+        .map(|p| p.id);
+    Ok(recall_for(&mgr, &embed_mgr, &db, &mem, &query, project.as_deref()).await)
+}
 
-    let Some(model) = db.default_model_by_role("embed").map_err(err)? else {
-        return Ok(wholesale(&db, &mem));
+/// The body of `recall_for_cmd`, callable without a Tauri `State`.
+///
+/// `CTX-3` needs the same scoped recall the chat window gets, from inside the
+/// backend's own prompt assembly. Two copies of this would mean a scheduled job
+/// recalling different memories than a typed message, which is exactly the drift
+/// that track exists to end. Anything that fails here degrades to the whole
+/// index rather than to no memory at all.
+pub async fn recall_for(
+    mgr: &RuntimeManager,
+    embed_mgr: &EmbedManager,
+    db: &Db,
+    mem: &MemoryStore,
+    query: &str,
+    project: Option<&str>,
+) -> RecallResult {
+    backfill_scope(mgr, db, mem).await;
+
+    let Ok(Some(model)) = db.default_model_by_role("embed") else {
+        return wholesale(db, mem, project);
     };
+    let query = query.to_string();
 
-    let missing = mem.missing_vector_texts(&db, &model.name);
+    let missing = mem.missing_vector_texts(db, &model.name);
     let mut texts = vec![query];
     texts.extend(missing.iter().map(|(_, _, t)| t.clone()));
 
-    let Some((vectors, model_name, dim)) = embed_texts_or_none(&mgr, &embed_mgr, &db, &texts).await
+    let Some((vectors, model_name, dim)) = embed_texts_or_none(mgr, embed_mgr, db, &texts).await
     else {
-        return Ok(wholesale(&db, &mem));
+        return wholesale(db, mem, project);
     };
 
     if !missing.is_empty() {
@@ -149,7 +175,7 @@ pub async fn recall_for_cmd(
         let _ = db.insert_vectors(&rows);
     }
 
-    let set = mem.recall_for(&db, Some((&vectors[0], &model_name, dim)));
+    let set = mem.recall_for_project(db, Some((&vectors[0], &model_name, dim)), project);
     let _ = db.touch_memory_usage(FACTS, &set.injected_facts);
     let matches = set
         .retrieved
@@ -164,7 +190,7 @@ pub async fn recall_for_cmd(
             path: None,
         })
         .collect();
-    Ok(RecallResult { index: set.index, matches, injected_facts: set.injected_facts })
+    RecallResult { index: set.index, matches, injected_facts: set.injected_facts }
 }
 
 // ---- context manifest (WHY-1/2): explaining what shaped an answer ----
@@ -275,7 +301,10 @@ fn persona_layer(db: &Db, persona_id: Option<&str>) -> ContextLayer {
 /// conversation carries right now. This is what the composer chip shows.
 fn live_manifest(db: &Db, mem: &MemoryStore, conversation_id: &str) -> Vec<ContextLayer> {
     let conv = db.get_conversation(conversation_id).ok().flatten();
-    let set = mem.recall_for(db, None);
+    // `PRJ-8`: the manifest has to describe the prompt that will actually be
+    // built, so it is scoped exactly as recall is.
+    let project = conv.as_ref().and_then(|c| c.project_id.clone());
+    let set = mem.recall_for_project(db, None, project.as_deref());
     let [notes, when_relevant] = fact_layers(mem, &set.injected_facts);
     let lessons = mem.list_in(LESSONS).into_iter().map(|f| f.name).collect::<Vec<_>>();
     vec![
@@ -490,10 +519,10 @@ async fn synthesize_profile(mgr: &RuntimeManager, facts: &[Fact]) -> Option<Stri
          and nothing else."
     );
     let msgs = vec![serde_json::json!({ "role": "user", "content": prompt })];
-    let outcome = drive_turn(&mgr.client, &endpoint, &msgs, &[], 0.2, &CancelFlag::new(), |_| {})
+    let outcome = drive_turn(&mgr.client, &endpoint, &msgs, &[], 0.2, crate::cloud::Effort::Off, &CancelFlag::new(), |_| {})
         .await
         .ok()?;
-    let TurnOutcome::Final { content } = outcome else { return None };
+    let TurnOutcome::Final { content, .. } = outcome else { return None };
     let text = content.trim();
     if text.is_empty() {
         None
@@ -757,6 +786,10 @@ pub async fn resolve_change_proposal_cmd(
                     recurrence: None,
                     last_seen: None,
                     expires_at: None,
+                    // A lesson the user accepted from the review queue is not
+                    // fenced to a project: they were shown it out of context
+                    // and said yes to it as a standing lesson.
+                    project: None,
                 },
             )
             .map_err(PoiesisError::Message)?;
@@ -908,11 +941,11 @@ pub async fn consolidate_memory_cmd(
         serde_json::json!({ "role": "user", "content": prompt }),
     ];
 
-    let outcome = drive_turn(&mgr.client, &endpoint, &msgs, &[], 0.2, &CancelFlag::new(), |_| {})
+    let outcome = drive_turn(&mgr.client, &endpoint, &msgs, &[], 0.2, crate::cloud::Effort::Off, &CancelFlag::new(), |_| {})
         .await
         .map_err(err)?;
     let raw = match outcome {
-        TurnOutcome::Final { content } => content,
+        TurnOutcome::Final { content, .. } => content,
         _ => return Ok(Consolidation::default()),
     };
 
@@ -1073,6 +1106,7 @@ mod tests {
             recurrence: None,
             last_seen: None,
             expires_at: None,
+            project: None,
         }
     }
 
@@ -1089,6 +1123,8 @@ mod tests {
                 params_json: None,
                 tools_json: None,
                 skills_json: None,
+                description: None,
+                spawnable: false,
             })
             .unwrap();
         let conv = db.create_conversation("test", None, false).unwrap();

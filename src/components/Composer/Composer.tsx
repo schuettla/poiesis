@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { inTauri, pickFiles } from "../../lib/api";
+import { inTauri, pickFiles, stillWorking } from "../../lib/api";
 import { useAppStore, useExpert, useSelectedModel } from "../../lib/store";
 import { detectIntent } from "../../lib/mediaIntent";
 import type { Attachment, Model } from "../../lib/types";
 import ContextMeter from "./ContextMeter";
+import EffortPicker from "./EffortPicker";
 import ContextChip from "../Context/ContextChip";
 import ModelPicker from "../ModelPicker/ModelPicker";
 import ImageByPath from "../Conversation/ImageByPath";
@@ -42,6 +43,8 @@ export default function Composer({
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const modelNotice = useAppStore((s) => s.modelNotice);
+  const dismissModelNotice = useAppStore((s) => s.dismissModelNotice);
   const toolsEnabled = useAppStore((s) => s.toolsEnabled);
   const setToolsEnabled = useAppStore((s) => s.setToolsEnabled);
   const workspaceMode = useAppStore((s) => s.workspaceMode);
@@ -52,6 +55,19 @@ export default function Composer({
   const [menuOpen, setMenuOpen] = useState(false);
   const [submenu, setSubmenu] = useState<Submenu | null>(null);
   const startFromSkill = useAppStore((s) => s.startFromSkill);
+  // `HRN-UI-1`: a live agent run is something you can talk to. Media jobs also
+  // set `busy` but register no run, so this is what tells the two apart.
+  const steerActiveRun = useAppStore((s) => s.steerActiveRun);
+  const canSteer = useAppStore((s) => s.activeRun !== null);
+  // `SUB-UI-3`: how many agents the running turn has out right now. Stop takes
+  // all of them, and the user has to know that before pressing it.
+  const convId = useAppStore((s) => s.activeConversationId);
+  const subRunMap = useAppStore((s) => s.subRuns);
+  const setDockOpen = useAppStore((s) => s.setDockOpen);
+  const setDockView = useAppStore((s) => s.setDockView);
+  const agentsWorking = Object.values(subRunMap).filter(
+    (r) => stillWorking(r.status) && r.parentConversationId === convId
+  ).length;
   // Filter outside the selector, not inside it: zustand v5 compares snapshots
   // by identity, so a selector returning a fresh array re-renders forever.
   const skills = useAppStore((s) => s.skills);
@@ -204,7 +220,20 @@ export default function Composer({
 
   function submit() {
     const text = value.trim();
-    if (busy) return;
+    if (busy) {
+      // `HRN-UI-1`: while a run is working, Enter talks to it. The run reads
+      // this at the top of its next iteration, so it lands between tool calls
+      // rather than waiting for a turn that may be minutes away.
+      if (canSteer && text) {
+        setValue("");
+        steerActiveRun(text).then((delivered) => {
+          // The run ended in the gap. Nothing was queued, so send it as an
+          // ordinary message instead of dropping what the user typed.
+          if (!delivered) onSend(text);
+        });
+      }
+      return;
+    }
 
     if (mediaTarget !== null) {
       if (!text) return;
@@ -306,7 +335,9 @@ export default function Composer({
     setAttachments((a) => a.filter((x) => x.id !== id));
   }
 
-  const placeholder = showImplicitRef
+  const placeholder = canSteer
+    ? "Tell me something while I work"
+    : showImplicitRef
     ? "Describe the change…"
     : mediaTarget === "video"
       ? "Describe a video…"
@@ -519,6 +550,16 @@ export default function Composer({
               aria-label="Don't refine from this image"
               onClick={clearImplicitReference}
             >
+              ×
+            </button>
+          </div>
+        )}
+
+        {/* `MOD-3`: said once when the default model couldn't be used. */}
+        {modelNotice && (
+          <div className="composer-model-notice" role="status">
+            <span>{modelNotice}</span>
+            <button className="implicit-ref-remove" aria-label="Dismiss" onClick={dismissModelNotice}>
               ×
             </button>
           </div>
@@ -896,8 +937,41 @@ export default function Composer({
               }}
             />
           </div>
-          {busy ? (
-            <button className="icon-btn send" aria-label="Stop generating" title="Stop" onClick={onStop}>
+          {agentsWorking > 0 && (
+            <button
+              className="fleet-pill"
+              title="Show me what they are doing"
+              onClick={() => {
+                setDockView("agents");
+                setDockOpen(true);
+              }}
+            >
+              {agentsWorking} agent{agentsWorking === 1 ? "" : "s"} working
+            </button>
+          )}
+          {busy && canSteer && value.trim() ? (
+            // Typing during a run means you have something to say to it, not
+            // that you want it stopped — so the same key sends, and Stop is
+            // one keystroke away again the moment the box is empty.
+            <button
+              className="icon-btn send"
+              aria-label="Send this to the run"
+              title="Send to the running agent"
+              onClick={submit}
+            >
+              ↑
+            </button>
+          ) : busy ? (
+            <button
+              className="icon-btn send"
+              aria-label="Stop generating"
+              title={
+                agentsWorking
+                  ? `Stop me and the ${agentsWorking} agent${agentsWorking === 1 ? "" : "s"} I started`
+                  : "Stop"
+              }
+              onClick={onStop}
+            >
               ■
             </button>
           ) : (
@@ -916,6 +990,10 @@ export default function Composer({
           </div>
           <div className="cf-right">
             <ContextMeter draft={value} />
+            {/* Beside the model, because it is a property of the answer that
+                model is about to give. Hidden for an image or video model,
+                where there is nothing to think about. */}
+            {!mediaTarget && <EffortPicker />}
             <ModelPicker compact dropUp />
           </div>
         </div>

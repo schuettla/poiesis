@@ -124,6 +124,113 @@ input[type="radio"]:disabled {
   cursor: default;
 }
 
+/* ---- shared primitives ----
+   Buttons and form fields used across routes and components alike. These lived
+   in Settings.css and Apps.css, which meant every other consumer (Models,
+   Skills, Tasks, PersonaEditor, MemoryPanel, SelfPanel, …) was relying on one
+   of those route stylesheets happening to be in the bundle. They are the
+   app's vocabulary, not any one route's, so they belong here. */
+
+.btn-primary {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  background: var(--ink);
+  color: var(--paper);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  padding: 7px 16px;
+  cursor: pointer;
+}
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.btn-secondary {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  background: none;
+  color: var(--ink);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.btn-secondary:hover {
+  border-color: var(--ink-faint);
+}
+.btn-secondary.selected {
+  background: var(--paper-edge);
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.btn-text {
+  background: none;
+  border: none;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--ink-muted);
+  padding: 6px 2px;
+}
+.btn-text:hover {
+  color: var(--ink);
+}
+.btn-text.danger:hover {
+  color: var(--danger);
+}
+
+/* A key or chord, drawn as a hairline keycap. */
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--ink-faint);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 3px 5px;
+  white-space: nowrap;
+}
+
+.field-label {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+/* Two shapes, one name: an inline <span> qualifying a label ("(optional)"),
+   and a standalone <p> under a field. The inline one must inherit the label's
+   size and only step down in weight and colour; the block one sets its own
+   type. Previously these were two competing base rules in two files and
+   whichever landed last in the bundle styled both. */
+.field-hint {
+  font-weight: 400;
+  color: var(--ink-faint);
+}
+p.field-hint {
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  margin: 0;
+}
+
+.field-input {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 8px 11px;
+  outline: none;
+}
+.field-input:focus {
+  border-color: var(--ink-faint);
+}
+
 /* Subtle scrollbars matching the paper ground. */
 ::-webkit-scrollbar {
   width: 6px;

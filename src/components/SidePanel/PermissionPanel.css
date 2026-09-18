@@ -2,7 +2,7 @@
    (§5.3, §5.5). Calm, not alarmist. */
 .side-panel {
   position: fixed;
-  top: 48px;
+  top: 42px;
   right: 0;
   bottom: 0;
   width: 360px;
@@ -64,6 +64,60 @@
   word-break: break-word;
 }
 
+/* COD-UI-4: a declared task's command, on one line. */
+.permission-command {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--paper-edge);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+/* A free-form command: one token per line, numbered, so nothing hides. */
+.permission-argv {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--ink);
+  background: var(--paper-edge);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  margin: 0 0 8px;
+  padding: 8px 10px 8px 34px;
+  max-height: 240px;
+  overflow: auto;
+}
+.permission-argv li {
+  overflow-wrap: anywhere;
+}
+.permission-argv li::marker {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+.permission-where {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--ink-muted);
+  margin: 0 0 2px;
+}
+.permission-remember {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--ink);
+  margin: 0 0 18px;
+  cursor: pointer;
+}
+.permission-remember code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 .permission-actions {
   display: flex;
   flex-direction: column;
@@ -101,6 +155,6 @@
 @media (max-width: 720px) {
   .side-panel {
     width: 100%;
-    top: 48px;
+    top: 42px;
   }
 }

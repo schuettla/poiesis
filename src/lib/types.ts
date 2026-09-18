@@ -41,6 +41,9 @@ export interface Model {
    * silently remapped. */
   supportedResolutions?: string[];
   maxDurationSecs?: number;
+  /** Cloud chat only: USD per million tokens in / out, when known. */
+  promptPerMtok?: number;
+  outputPerMtok?: number;
 }
 
 export type Role = "user" | "assistant";
@@ -64,7 +67,66 @@ export interface AgentStep {
    * can wrap several file excerpts in one step. Drives the `◇ from outside`
    * chip and its disclosure (`TRU-UI-1`). */
   untrusted?: { label: string; risk: number; flags: string[]; text: string }[];
+  /** `HRN-UI-2`: the batch of steps this one is running alongside. Steps that
+   * share a group are drawn as one "3 things at once" band, because that is
+   * what actually happened — a stack that fills one row at a time would show
+   * concurrent work as sequential. */
+  parallelGroup?: string;
+  /** `RPC-1`: the step this one happened inside. A snippet in the sandbox can
+   * call tools itself, and forty of those arriving as ordinary rows would read
+   * as forty things the agent decided to do. Drawn indented under their step,
+   * they read as what they are: the work of the one step above. */
+  nestedUnder?: string;
+  /** `HRN-8`/`HRN-UI-4`: this step's output was too big to paste, so it was
+   * kept on disk. The model saw a preview; this is the whole thing. */
+  kept?: { reference: string; bytes: number; text: string };
+  /** `COD-UI-2`: a project task this step ran. Live while it runs (the newest
+   * line it printed), then the outcome and its diagnostics. */
+  task?: {
+    name: string;
+    argv: string[];
+    cwd: string;
+    kind: import("./api").TaskKind;
+    lastLine?: string;
+    outcome?: string;
+    exitCode?: number | null;
+    durationMs?: number;
+    diagnostics?: import("./api").Diagnostic[];
+    tail?: string;
+  };
   status: "running" | "done" | "error";
+}
+
+/** One delegated child agent, as the Fleet card and Agents tab see it
+ * (`SUB-UI-1`). Assembled live from `sub_spawned` / `sub` / `sub_ended`, and
+ * rehydrated from `subagent_runs` after a reload.
+ *
+ * `steps` and `text` are the child's *own* — a child's step never lands in the
+ * lead's timeline, which is the whole reason its events arrive wrapped. */
+export interface SubRun {
+  runId: string;
+  /** The child's own conversation: its transcript, artifacts and blocks. */
+  conversationId: string;
+  /** The conversation whose turn started it. */
+  parentConversationId: string;
+  /** The agent type: a persona name, or "general". */
+  agent: string;
+  task: string;
+  status: import("./api").SubRunStatus;
+  /** Why it ended, once it has (`HRN-3`'s vocabulary). */
+  stopReason?: import("./api").StopReason;
+  steps: AgentStep[];
+  /** The child's prose so far, and at the end its whole report. */
+  text: string;
+  startedAt: number;
+  endedAt?: number;
+  /** Elapsed milliseconds as the backend measured them, once it has ended. */
+  ms?: number;
+  /** True while a steer sent to this child has not been picked up yet. */
+  /** `HRN-UI-2`: step ids this child announced as one parallel batch, mapped
+   * to their group, so its timeline bands them the same way the lead's does. */
+  parallelPending?: Record<string, string>;
+  steerPending?: boolean;
 }
 
 /** The typed workspace-block kinds the renderer understands (Generative UI).
@@ -77,6 +139,7 @@ export type BlockKind =
   | "progress"
   | "document"
   | "table"
+  | "diagnostics"
   | "surface";
 
 /** One node of the agent-composed interface tree (the dynamic Workspace
@@ -150,11 +213,29 @@ export interface Message {
   };
   /** True while the assistant turn is still streaming. */
   streaming?: boolean;
+  /** `HRN-UI-1`: a user turn typed while the agent was already working.
+   * `pending` until the run picks it up at the top of its next iteration,
+   * `delivered` after. Nothing is queued for a later turn — the run reads it
+   * mid-flight, which is why the mark says so. */
+  midRun?: "pending" | "delivered";
+  /** `HRN-3`: why an assistant turn stopped. Absent or `completed` means the
+   * model finished; anything else means the text is what the run had in hand. */
+  stopReason?: import("./api").StopReason;
+  /** `SUB-UI-1`: run ids of the agents this turn handed work to, in the order
+   * the lead asked for them. Drives the Fleet card. */
+  subRunIds?: string[];
+  /** `PLN-UI-1`: the plan the run behind this turn wrote and worked through.
+   * Absent for a turn that never planned — most of them. Persisted with the
+   * turn (`PLN-UI-5`), so reopening the conversation brings it back. */
+  plan?: import("./api").PlanView;
   createdAt: number;
 }
 
 export interface Conversation {
   id: string;
+  /** `SUB-3`: set when this conversation is a delegated child's workspace. The
+   * Rail hides these — they belong to the turn that started them. */
+  parentConversationId?: string | null;
   title: string;
   updatedAt: number;
   messages: Message[];
@@ -181,10 +262,48 @@ export interface Conversation {
   folderPath?: string | null;
   /** How much the agent may change inside that folder. Reads are always free. */
   folderTrust?: FolderTrust;
+  /** `PRJ-1`: the project this session belongs to, or null for a loose chat.
+   * With one set, the project owns the folder and the trust level and the two
+   * fields above are only the fallback. */
+  projectId?: string | null;
 }
 
 /** Per-conversation file-access level, chosen in the Workbench panel. */
 export type FolderTrust = "read-only" | "confirm" | "auto";
+
+/** `PRJ-1`: a named group of sessions that share a context.
+ *
+ * A working directory is something a project may *have* (`PRJ-1a`), not what
+ * it is — a project about a book, a job or a person is as real as one about a
+ * repository, and none of those live in a folder.
+ *
+ * Nobody has to create one either way. Attaching a folder to a loose chat
+ * creates or joins the project for that folder, so the user who never thinks
+ * about projects still gets one — and gets the trust they granted back, the
+ * second time they open that folder. */
+export interface Project {
+  id: string;
+  name: string;
+  /** Canonical, and unique across projects. `null` for a project that is not
+   * about a directory (`PRJ-1a`), which is most of them. */
+  rootPath: string | null;
+  /** `PRJ-7`: free text carried into every session in this project. */
+  instructions?: string | null;
+  trust: FolderTrust;
+  /** `COD-7`: the project's own policy, or `inherit` for the Settings default. */
+  execPolicy: "off" | "ask" | "allow" | "inherit";
+  /** `COD-1` detection result, as stored JSON. The header reads the parsed
+   * card through `projectCards` instead. */
+  cardJson?: string | null;
+  /** `PRJ-UI-2`: the open tab set for this project, filling `SHL-17`'s scope
+   * seam. Kept in memory so switching projects swaps what is open without a
+   * round trip to the database. */
+  tabsJson?: string | null;
+  /** Hidden from the Rail. Nothing on disk is ever touched — there is no
+   * delete, because the word would be read as "delete my code". */
+  archived: boolean;
+  updatedAt: number;
+}
 
 /** What the Workbench viewer is showing. Files are identified by path;
  * artifacts by id — two origins, one selection. */
@@ -193,20 +312,120 @@ export interface WorkbenchSelection {
   id: string;
 }
 
-export type View =
-  | "chat"
-  | "models"
-  | "engine"
-  | "apps"
-  | "settings"
-  | "library"
-  | "self"
-  | "tasks"
-  | "activity"
-  | "skills"
-  | "workingdir"
-  | "mail"
-  | "tools"
-  | "about";
+/** One single thing open as a tab in the header strip (`SHL-22`). `file` and
+ * `artifact` mirror `WorkbenchSelection` — the same two origins, one
+ * selection, able to sit open as more than one at a time. `run` is one child
+ * agent, not the fleet. An overview of many of them is never an item: it is a
+ * `DockView`, navigated inside the sidebar.
+ *
+ * An open item remembers the chat it belongs to: `conversationId` is stamped
+ * when the tab opens, and the strip only shows the live chat's items, since
+ * the strip stands over that chat's sidebar. Callers opening something in the
+ * current chat can leave it out. */
+export type ItemRef = (
+  /** `line` is where to scroll (`COD-UI-2`). It is not part of the item's
+   * identity: a second click on another line of the same file refocuses the
+   * one tab and moves it. */
+  | { kind: "file"; id: string; line?: number }
+  | { kind: "artifact"; id: string }
+  | { kind: "run"; id: string }
+  /** `PRJ-UI-3`: one file's patch, full width. The id is the file's absolute
+   * path, which still means something after a reload: the change set is
+   * rebuilt from the item's own chat. */
+  | { kind: "diff"; id: string }
+) & { conversationId?: string };
+
+/** The right sidebar's sub-views (`SHL-21`): the overviews it navigates from
+ * its own row, the way Settings navigates its sections. `changes` is
+ * `PRJ-UI-3`: every file the agent changed, as patches. */
+export type DockView = "files" | "artifacts" | "agents" | "browser" | "changes";
+
+/** Every route, as a value rather than only a type.
+ *
+ * `View` used to be a hand-written union with no runtime counterpart, so
+ * nothing could *check* a string against it. The list stays derived from the
+ * same source as the type, which is what keeps `HUB_VIEWS` — and anything else
+ * that enumerates routes — from drifting away from the routes that exist. */
+export const ALL_VIEWS = [
+  "chat",
+  "models",
+  "providers",
+  "runtime",
+  "apps",
+  "settings",
+  "library",
+  "self",
+  "tasks",
+  "activity",
+  "skills",
+  "workingdir",
+  "mail",
+  "tools",
+  "usage",
+  "about",
+  // `PRJ-UI-4`: the project view. A route rather than a window takeover, so it
+  // opens beside your chats and closes without losing them. Which project it
+  // shows is `activeProjectId`, the same way `chat` reads
+  // `activeConversationId` — a route names a surface, not an instance.
+  "project",
+  // The projects overview: every project as a card, reached from the Rail's
+  // "Projects" button. `project` (above) is one project's own page; this is
+  // the list you land on before picking one.
+  "projects",
+] as const;
+
+export type View = (typeof ALL_VIEWS)[number];
+
+/** The settings hub's sections: everything reached from the cog.
+ *
+ * Data, so it lives here rather than with the component that draws it — the
+ * store needs it too (to collapse the whole hub onto one route tab) and
+ * importing a route module from the store would drag every settings panel into
+ * its module graph. `SettingsHub` re-exports this as `HUB_TABS`. */
+export const HUB_SECTIONS: { view: View; label: string; icon: string }[] = [
+  { view: "settings", label: "General", icon: "⚙" },
+  { view: "models", label: "Models", icon: "▤" },
+  { view: "providers", label: "Providers", icon: "⌁" },
+  { view: "runtime", label: "Runtime", icon: "◧" },
+  { view: "tools", label: "Tools", icon: "⚒" },
+  { view: "skills", label: "Skills", icon: "▦" },
+  { view: "apps", label: "Apps", icon: "◇" },
+  { view: "self", label: "Self", icon: "" },
+  { view: "tasks", label: "Tasks", icon: "◷" },
+  { view: "mail", label: "Mail", icon: "✉" },
+  { view: "activity", label: "Activity", icon: "≡" },
+  { view: "usage", label: "Usage", icon: "◔" },
+  { view: "workingdir", label: "Working dir", icon: "▥" },
+  { view: "about", label: "About", icon: "ⓘ" },
+];
+
+/** What a project is called before the user names it (`PRJ-UI-1a`). Also the
+ * signal that the project view should open with the name selected for typing.
+ * Mirrors the same literal in `commands/projects.rs`, which is where a project
+ * created in the desktop app gets its fallback name. */
+export const NEW_PROJECT_NAME = "New project";
+
+const HUB_VIEWS = new Set<View>(HUB_SECTIONS.map((t) => t.view));
+
+/** Does this view belong to the hub?
+ *
+ * `App` used to answer this with its own hand-written list of the same view
+ * names, which meant every new section had to be added in two places. Usage
+ * was added to the sections and not to that list, so choosing it rendered
+ * *nothing* — no hub, no nav, no content, just an empty window — for as long
+ * as the section had existed. Derived, so the two cannot drift again. */
+export function isHubView(view: View): boolean {
+  return HUB_VIEWS.has(view);
+}
+
+/* `routeTabFor` and `isView` lived here to serve a persisted list of open route
+   tabs. `SHL-24` removed that list — a route is a destination again — and with
+   it the only thing that ever needed to validate a view name read off disk. */
 export type Mode = "light" | "dark";
-export type ModelFilter = "all" | "local";
+/** Shared by the picker and the Models page (`MOD-6`), so choosing "On this
+ * PC" in one place holds in both. */
+export type ModelFilter = "all" | "local" | "cloud";
+
+/** The Runtime page's tabs (`RTM-8`). `servers` is the deep link used by the
+ * picker and the Models page's "Your server" groups. */
+export type RuntimeTab = "chat" | "images" | "servers" | "recall";

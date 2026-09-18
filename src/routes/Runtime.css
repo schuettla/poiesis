@@ -1,24 +1,24 @@
-.engine-card {
+.runtime-card {
   border: 1px solid var(--paper-edge-2);
   border-radius: var(--radius);
   padding: 18px 20px;
   margin-bottom: 18px;
 }
 
-.engine-card-head {
+.runtime-card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.engine-sub {
+.runtime-sub {
   font-family: var(--font-sans);
   font-size: 13px;
   color: var(--ink-muted);
   margin: 2px 0 12px;
 }
-.engine-hint {
+.runtime-hint {
   font-family: var(--font-sans);
   font-size: 12px;
   color: var(--ink-faint);
@@ -27,7 +27,7 @@
 }
 
 /* status badge */
-.engine-state-badge {
+.runtime-state-badge {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -38,20 +38,20 @@
   border-radius: var(--radius);
   padding: 4px 11px;
 }
-.engine-state-badge .dot {
+.runtime-state-badge .dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--ink-faint);
 }
-.engine-state-badge.running .dot {
+.runtime-state-badge.running .dot {
   background: var(--ok);
 }
-.engine-state-badge.starting .dot {
+.runtime-state-badge.starting .dot {
   background: var(--local);
-  animation: engine-pulse 1.2s ease-in-out infinite;
+  animation: runtime-pulse 1.2s ease-in-out infinite;
 }
-@keyframes engine-pulse {
+@keyframes runtime-pulse {
   0%,
   100% {
     opacity: 1;
@@ -61,12 +61,12 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .engine-state-badge.starting .dot {
+  .runtime-state-badge.starting .dot {
     animation: none;
   }
 }
 
-.engine-actions {
+.runtime-actions {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -154,7 +154,7 @@
   color: var(--ink-muted);
   word-break: break-all;
 }
-.engine-card code {
+.runtime-card code {
   font-family: var(--font-mono);
   font-size: 0.85em;
   background: var(--paper-edge);

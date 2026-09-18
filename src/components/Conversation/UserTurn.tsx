@@ -15,8 +15,25 @@ export default function UserTurn({ message }: { message: Message }) {
   const viewArtifactByPath = useAppStore((s) => s.viewArtifactByPath);
   return (
     <div className="turn-user">
-      <div className="role">You</div>
+      {/* `HRN-UI-1`: this went to a run that was already working, so it is
+          not waiting for a next turn. Saying which of the two it is matters:
+          "sending" still could be missed, "sent mid-run" was read. Rendered
+          only when there is a mark — an empty row still carried its margin
+          and made the top padding visibly deeper than the bottom. */}
+      {message.midRun && (
+        <div className="role">
+          <span className={`mid-run-mark ${message.midRun}`}>
+            {message.midRun === "pending" ? "sending…" : "sent mid-run"}
+          </span>
+        </div>
+      )}
       {human && <div className="body">{human}</div>}
+      {/* The same reading the Rail puts at the end of a chat row: when. */}
+      {message.createdAt > 0 && (
+        <span className="turn-stamp" aria-hidden="true">
+          {new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+        </span>
+      )}
       {isAction && (
         <span className="block-action-chip" aria-label="block action">
           ⌁ block action

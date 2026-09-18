@@ -77,7 +77,7 @@ pub fn tool_specs() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "read_file",
-                "description": "Read a text file from the user's computer. Large files must be read in windows using offset/limit.",
+                "description": "Read a text file from the user's computer. Each line comes back prefixed with its line number and a tab, so you can cite `file.rs:42`; that prefix is not part of the file. Large files must be read in windows using offset/limit. Read a file before you edit or overwrite it.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -124,6 +124,22 @@ pub fn tool_specs() -> serde_json::Value {
         {
             "type": "function",
             "function": {
+                "name": "find_symbol",
+                "description": "Find where a function, type, class, method or constant is defined, then where it is used, as `path:line` with the line. Understands Rust, TypeScript, JavaScript, Python and Go; other files are searched as plain text. Prefer this over search_files when you know the identifier.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "The exact identifier, e.g. \"build_index\" or \"FolderHeader\"." },
+                        "path": { "type": "string", "description": "Folder or file to look in. Defaults to the working folder." },
+                        "max_results": { "type": "integer", "description": "Cap on uses listed (default 40). Definitions are always listed." }
+                    },
+                    "required": ["name"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "write_file",
                 "description": "Write a text file, creating it and any missing parent folders. Overwrites the whole file — prefer edit_file for changes to an existing one.",
                 "parameters": {
@@ -140,7 +156,7 @@ pub fn tool_specs() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "edit_file",
-                "description": "Replace an exact snippet in a file, leaving the rest untouched. `old_string` must appear exactly once unless replace_all is set. Read the file first so the snippet matches byte for byte.",
+                "description": "Replace an exact snippet in a file, leaving the rest untouched. `old_string` must appear exactly once unless replace_all is set. You must have read the file in this run, and it must not have changed since; copy the snippet from what read_file showed, without the line-number prefixes.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -184,6 +200,14 @@ pub fn tool_specs() -> serde_json::Value {
         {
             "type": "function",
             "function": {
+                "name": "changes",
+                "description": "Show every file you have changed on disk in this run, as unified diffs. Read your own patch before telling the user you are finished: it is what they will review.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "delete_file",
                 "description": "Delete a file, or a folder with `recursive`. Always asks the user first.",
                 "parameters": {
@@ -206,11 +230,13 @@ pub fn handles(name: &str) -> bool {
         "read_file"
             | "list_directory"
             | "search_files"
+            | "find_symbol"
             | "write_file"
             | "edit_file"
             | "create_dir"
             | "move_file"
             | "delete_file"
+            | "changes"
     )
 }
 
@@ -237,6 +263,7 @@ pub fn describe(name: &str, args: &serde_json::Value) -> (String, String) {
             };
             ("searched".into(), what)
         }
+        "find_symbol" => ("looked up".into(), format!("`{}`", arg("name"))),
         "write_file" => ("wrote".into(), short),
         "edit_file" => ("edited".into(), short),
         "create_dir" => ("created folder".into(), short),
@@ -249,6 +276,7 @@ pub fn describe(name: &str, args: &serde_json::Value) -> (String, String) {
             ("moved".into(), format!("{short} \u{2192} {to}"))
         }
         "delete_file" => ("deleted".into(), short),
+        "changes" => ("reviewed".into(), "my changes".into()),
         other => (other.into(), short),
     }
 }
@@ -256,10 +284,17 @@ pub fn describe(name: &str, args: &serde_json::Value) -> (String, String) {
 /// What each tool does to the disk, and therefore what trust it needs.
 fn impact(name: &str) -> Impact {
     match name {
-        "read_file" | "list_directory" | "search_files" => Impact::Read,
+        "read_file" | "list_directory" | "search_files" | "find_symbol" | "changes" => Impact::Read,
         "write_file" | "edit_file" | "create_dir" => Impact::Modify,
         _ => Impact::Destroy,
     }
+}
+
+/// `HRN-4`: does this tool only look at the disk? Only these are safe to run
+/// beside another call — a write, a move or a delete races anything that reads
+/// the same path in the same batch.
+pub fn is_read_only(name: &str) -> bool {
+    impact(name) == Impact::Read
 }
 
 fn required_mode(name: &str) -> Mode {
@@ -286,6 +321,24 @@ fn resolve(raw: &str, folder: Option<&Path>) -> PathBuf {
         _ => p.to_path_buf(),
     };
     canonicalize_lenient(&joined)
+}
+
+/// `FS-7`: refuse a relative path when there is no working folder to hang it
+/// off. Nothing downstream can do anything sensible with one — the process
+/// working directory is Poiesis's own install, not the user's workspace — so
+/// this stops before the disk is touched rather than writing somewhere
+/// arbitrary and reporting success.
+fn check_anchored(raw: &str, folder: Option<&Path>) -> Result<(), String> {
+    if folder.is_some() || !Path::new(raw).is_relative() {
+        return Ok(());
+    }
+    Err(format!(
+        "\"{raw}\" is a relative path, but this conversation has no working folder, so there is \
+         nothing to measure it against. Either give the full path to where it should go, or ask \
+         the user to attach a folder in the Workbench panel. If this is something for them to \
+         look at rather than a file they asked to keep, use create_artifact instead — an \
+         artifact needs no folder."
+    ))
 }
 
 /// Show a path the way the user thinks of it: relative to the working folder
@@ -496,22 +549,75 @@ fn read_windowed(path: &Path, offset: Option<usize>, limit: Option<usize>) -> Re
 
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("couldn't read {}: {e}", path.display()))?;
-    if offset.is_none() && limit.is_none() {
-        return Ok(text);
-    }
-
     let lines: Vec<&str> = text.lines().collect();
     let total = lines.len();
+    if offset.is_none() && limit.is_none() {
+        return Ok(numbered(&lines, 0, total));
+    }
+
     let start = offset.unwrap_or(1).saturating_sub(1).min(total);
     let end = limit.map(|l| (start + l).min(total)).unwrap_or(total);
-    let body = lines[start..end].join("\n");
     Ok(format!(
         "[lines {}\u{2013}{} of {}]\n{}",
         start + 1,
         end,
         total,
-        body
+        numbered(&lines, start, end)
     ))
+}
+
+/// `COD-5`: lines `start..end` prefixed with their 1-based number and a tab,
+/// right-aligned to the widest number in the file, so a diagnostic naming a
+/// line is usable without counting.
+fn numbered(lines: &[&str], start: usize, end: usize) -> String {
+    let width = lines.len().max(1).to_string().len();
+    lines[start..end]
+        .iter()
+        .enumerate()
+        .map(|(i, line)| format!("{:>width$}\t{line}", start + i + 1))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `COD-5`: a snippet copied out of a numbered read, with the numbers taken
+/// back off. `None` unless every line carries a prefix: ordinary text that
+/// happens to start with a number and a tab on one line is left alone.
+fn strip_line_numbers(snippet: &str) -> Option<String> {
+    let segments: Vec<&str> = snippet.split('\n').collect();
+    let mut out = Vec::with_capacity(segments.len());
+    for (i, seg) in segments.iter().enumerate() {
+        let seg = seg.strip_suffix('\r').unwrap_or(seg);
+        // A trailing newline leaves one empty segment, which carries nothing.
+        if seg.is_empty() && i + 1 == segments.len() && i > 0 {
+            out.push("");
+            continue;
+        }
+        let t = seg.trim_start_matches(' ');
+        let digits = t.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 || !t[digits..].starts_with('\t') {
+            return None;
+        }
+        out.push(&t[digits + 1..]);
+    }
+    Some(out.join("\n"))
+}
+
+/// `apply_edit`, forgiving the one mistake a numbered read invites: pasting
+/// the prefixes into the snippet.
+fn apply_edit_lenient(
+    original: &str,
+    old: &str,
+    new: &str,
+    replace_all: bool,
+) -> Result<(String, usize), String> {
+    match apply_edit(original, old, new, replace_all) {
+        Err(e) if !old.is_empty() && !original.contains(old) => {
+            let Some(stripped_old) = strip_line_numbers(old) else { return Err(e) };
+            let stripped_new = strip_line_numbers(new).unwrap_or_else(|| new.to_string());
+            apply_edit(original, &stripped_old, &stripped_new, replace_all).map_err(|_| e)
+        }
+        other => other,
+    }
 }
 
 fn list_dir(path: &Path, recursive: bool) -> Result<String, String> {
@@ -736,7 +842,8 @@ pub fn working_folder_brief(db: &Db, conversation_id: &str) -> Option<String> {
     }
     brief.push_str(
         "\nUse create_artifact for something the user should look at; use write_file when they \
-         want it kept on disk.",
+         want it kept on disk. An artifact you already made is changed with update_artifact, \
+         never by writing a file — it was never on disk to begin with.",
     );
     Some(brief)
 }
@@ -764,6 +871,22 @@ pub async fn execute(
         );
     }
 
+    // `COD-11`: the run's own patch. Belongs to no path, so it is answered
+    // before any path argument is looked for.
+    if name == "changes" {
+        let set = super::changes::change_set(db, conversation_id, ctx.run_started_at);
+        let n = set.files.len();
+        super::toolsets::set_step_note(
+            ctx,
+            if n == 0 {
+                "\u{2014} nothing changed yet".to_string()
+            } else {
+                format!("\u{2014} {n} file{}, +{} \u{2212}{}", if n == 1 { "" } else { "s" }, set.added, set.removed)
+            },
+        );
+        return Ok(super::changes::render_for_model(&set));
+    }
+
     let (folder_raw, trust_raw) = db
         .conversation_folder(conversation_id)
         .map_err(|e| e.to_string())?;
@@ -777,7 +900,18 @@ pub async fn execute(
 
     let raw_path = str_arg("path")
         .or_else(|| str_arg("from"))
+        // `COD-16`: a lookup with no path means the whole working folder.
+        .or(if name == "find_symbol" { Some(".") } else { None })
         .ok_or("missing 'path' argument")?;
+    // `FS-7`: a relative path only means something against a working folder.
+    // With no folder attached, `resolve` used to fall back on the *process*
+    // working directory — so `write_file("pacman.html")` landed inside Poiesis's
+    // own install (in dev, `src-tauri/`), somewhere the user would never look
+    // and never asked for. Refuse instead, and say what to do about it.
+    check_anchored(raw_path, folder_ref)?;
+    if let Some(to) = str_arg("to") {
+        check_anchored(to, folder_ref)?;
+    }
     let path = resolve(raw_path, folder_ref);
     let shown = display(&path, folder_ref);
 
@@ -811,6 +945,13 @@ pub async fn execute(
         return Ok(result);
     }
 
+    // `COD-4`: a change to a file that exists must be made against a current
+    // read of it. Checked before anything else about the edit, so the refusal
+    // names the actual problem rather than a snippet that "isn't there".
+    if matches!(name, "edit_file" | "write_file") {
+        ctx.ledger.check_before_edit(&path, &shown)?;
+    }
+
     // Prepare the review detail before asking, so the prompt shows the change.
     let mut pending_edit: Option<(String, usize)> = None;
     let detail: Option<String> = match name {
@@ -819,7 +960,7 @@ pub async fn execute(
             let new = str_arg("new_string").ok_or("missing 'new_string'")?;
             let original = std::fs::read_to_string(&path)
                 .map_err(|e| format!("couldn't read {shown}: {e}"))?;
-            let (updated, count) = apply_edit(&original, old, new, bool_arg("replace_all"))?;
+            let (updated, count) = apply_edit_lenient(&original, old, new, bool_arg("replace_all"))?;
             pending_edit = Some((updated, count));
             Some(edit_excerpt(old, new))
         }
@@ -873,7 +1014,11 @@ pub async fn execute(
     let mut changed_path: Option<String> = None;
 
     let result = match name {
-        "read_file" => read_windowed(&path, usize_arg("offset"), usize_arg("limit"))?,
+        "read_file" => {
+            let text = read_windowed(&path, usize_arg("offset"), usize_arg("limit"))?;
+            ctx.ledger.record_read(&path);
+            text
+        }
 
         "list_directory" => list_dir(&path, bool_arg("recursive"))?,
 
@@ -881,6 +1026,12 @@ pub async fn execute(
             &path,
             str_arg("glob"),
             str_arg("query"),
+            usize_arg("max_results").unwrap_or(40).min(MAX_SEARCH_RESULTS),
+        )?,
+
+        "find_symbol" => super::symbols::find_symbol(
+            &path,
+            str_arg("name").unwrap_or(""),
             usize_arg("max_results").unwrap_or(40).min(MAX_SEARCH_RESULTS),
         )?,
 
@@ -959,6 +1110,15 @@ pub async fn execute(
         other => return Err(format!("unknown file tool '{other}'")),
     };
 
+    // `COD-4`/`COD-12`: the run's own write is not a change behind its back,
+    // and a change inside the project is code that has not been checked yet.
+    if matches!(name, "write_file" | "edit_file" | "move_file" | "delete_file") {
+        ctx.ledger.record_edit(&path, clearance.in_folder);
+        if let Some(to) = str_arg("to").filter(|_| name == "move_file") {
+            ctx.ledger.record_edit(&resolve(to, folder_ref), clearance.in_folder);
+        }
+    }
+
     // Tell the Workbench what moved, so the tree and Recent changes stay honest.
     if let Some(changed) = changed_path {
         let (verb, _) = describe(name, args);
@@ -999,6 +1159,27 @@ mod tests {
     }
 
     #[test]
+    fn a_relative_path_with_no_folder_is_refused() {
+        // `FS-7`: this is the call that used to write into Poiesis's own
+        // install directory and report success.
+        let err = check_anchored("pacman.html", None).unwrap_err();
+        assert!(err.contains("no working folder"), "{err}");
+        assert!(err.contains("create_artifact"), "the way out has to be in the message: {err}");
+    }
+
+    #[test]
+    fn an_absolute_path_needs_no_folder() {
+        let abs = canonicalize_lenient(&std::env::temp_dir()).join("thing.txt");
+        assert!(check_anchored(&abs.to_string_lossy(), None).is_ok());
+    }
+
+    #[test]
+    fn a_relative_path_is_fine_once_a_folder_is_attached() {
+        let root = canonicalize_lenient(&std::env::temp_dir());
+        assert!(check_anchored("pacman.html", Some(&root)).is_ok());
+    }
+
+    #[test]
     fn absolute_paths_are_left_alone() {
         let root = canonicalize_lenient(&std::env::temp_dir());
         let other = root.join("elsewhere.txt");
@@ -1020,6 +1201,39 @@ mod tests {
         assert_eq!(all, "gamma\nbeta\ngamma\n");
         let (one, _) = apply_edit(text, "beta", "delta", false).unwrap();
         assert_eq!(one, "alpha\ndelta\nalpha\n");
+    }
+
+    /// `COD-5-T`: a snippet copied out of a numbered read still matches.
+    #[test]
+    fn a_snippet_copied_from_a_numbered_read_still_matches() {
+        let original = "fn main() {\n    let x = 1;\n    println!(\"{x}\");\n}\n";
+        let lines: Vec<&str> = original.lines().collect();
+        let shown = numbered(&lines, 0, lines.len());
+        assert!(shown.starts_with("1\tfn main() {\n2\t    let x = 1;"), "{shown}");
+
+        let copied = shown.lines().skip(1).take(2).collect::<Vec<_>>().join("\n");
+        let (updated, _) = apply_edit_lenient(original, &copied, "2\t    let x = 2;\n3\t    println!(\"{x}\");", false).unwrap();
+        assert_eq!(updated, original.replace("let x = 1", "let x = 2"));
+
+        // Prefixes on the old side only: the new side is taken as written.
+        let (updated, _) = apply_edit_lenient(original, "2\t    let x = 1;", "    let y = 1;", false).unwrap();
+        assert!(updated.contains("    let y = 1;"));
+        // A snippet that genuinely is not there still says so.
+        assert!(apply_edit_lenient(original, "9\tnope", "x", false).is_err());
+        assert_eq!(strip_line_numbers("12\tcode\nno prefix"), None);
+    }
+
+    #[test]
+    fn whole_and_windowed_reads_are_numbered_to_the_files_width() {
+        let f = std::env::temp_dir().join(format!("poiesis_num_{}.txt", uuid::Uuid::new_v4()));
+        let body: String = (1..=12).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n");
+        std::fs::write(&f, &body).unwrap();
+        let whole = read_windowed(&f, None, None).unwrap();
+        assert!(whole.starts_with(" 1\tline 1\n 2\tline 2"), "{whole}");
+        assert!(whole.ends_with("12\tline 12"));
+        let window = read_windowed(&f, Some(10), Some(2)).unwrap();
+        assert_eq!(window, "[lines 10\u{2013}11 of 12]\n10\tline 10\n11\tline 11");
+        std::fs::remove_file(&f).ok();
     }
 
     #[test]

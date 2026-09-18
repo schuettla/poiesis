@@ -133,17 +133,32 @@ pub struct PermissionRequest {
     /// Once / Always / No choice; `None` for every filesystem request above.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capability: Option<String>,
+    /// `COD-UI-4`: for a `"task"` or `"command"` request, the exact program
+    /// and arguments that will run, so the panel can show them one token per
+    /// line rather than as a sentence about them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub argv: Option<Vec<String>>,
+    /// The project it runs in, by name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// How long it may run before it is stopped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    /// What "always allow" would remember, in words: the task's name, or the
+    /// `command argv[0]` pair.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remember: Option<String>,
 }
 
 impl PermissionRequest {
     /// A scope request: "may I reach into this folder at all?"
     pub fn scope(id: String, summary: String, path: String, mode: Mode) -> Self {
-        Self { id, summary, path, mode, diff: None, in_folder: false, capability: None }
+        Self { id, summary, path, mode, diff: None, in_folder: false, capability: None, argv: None, project: None, timeout_secs: None, remember: None }
     }
 
     /// An operation confirm inside the already-attached folder.
     pub fn operation(id: String, summary: String, path: String, mode: Mode, diff: Option<String>) -> Self {
-        Self { id, summary, path, mode, diff, in_folder: true, capability: None }
+        Self { id, summary, path, mode, diff, in_folder: true, capability: None, argv: None, project: None, timeout_secs: None, remember: None }
     }
 
     /// A one-off capability consent: visiting a domain, taking a screenshot,
@@ -158,6 +173,38 @@ impl PermissionRequest {
             diff: None,
             in_folder: false,
             capability: Some(kind.to_string()),
+            argv: None,
+            project: None,
+            timeout_secs: None,
+            remember: None,
+        }
+    }
+
+    /// `COD-UI-4`: running something in a project. `kind` is `"task"` for a
+    /// task the project declares and `"command"` for a free-form command; the
+    /// panel draws the two differently on purpose.
+    pub fn execution(
+        id: String,
+        kind: &'static str,
+        summary: String,
+        cwd: String,
+        argv: Vec<String>,
+        project: String,
+        timeout_secs: u64,
+        remember: String,
+    ) -> Self {
+        Self {
+            id,
+            summary,
+            path: cwd,
+            mode: Mode::ReadWrite,
+            diff: None,
+            in_folder: false,
+            capability: Some(kind.to_string()),
+            argv: Some(argv),
+            project: Some(project),
+            timeout_secs: Some(timeout_secs),
+            remember: Some(remember),
         }
     }
 }

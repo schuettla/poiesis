@@ -1,8 +1,10 @@
 import { useAppStore } from "../lib/store";
+import { HUB_SECTIONS } from "../lib/types";
 import type { View } from "../lib/types";
 import PoiesisMark from "../components/Mark/PoiesisMark";
 import Models from "./Models";
-import Engine from "./Engine";
+import Providers from "./Providers";
+import Runtime from "./Runtime";
 import Apps from "./Apps";
 import Skills from "./Skills";
 import Self from "./Self";
@@ -12,26 +14,20 @@ import Settings from "./Settings";
 import WorkingDir from "./WorkingDir";
 import Mail from "./Mail";
 import Tools from "./Tools";
+import Usage from "./Usage";
 import About from "./About";
 import "./SettingsHub.css";
 
-const TABS: { view: View; label: string; icon: string }[] = [
-  { view: "settings", label: "General", icon: "⚙" },
-  { view: "models", label: "Models", icon: "▤" },
-  { view: "engine", label: "Engine", icon: "◧" },
-  { view: "tools", label: "Tools", icon: "⚒" },
-  { view: "skills", label: "Skills", icon: "▦" },
-  { view: "apps", label: "Apps", icon: "◇" },
-  { view: "self", label: "Self", icon: "" },
-  { view: "tasks", label: "Tasks", icon: "◷" },
-  { view: "mail", label: "Mail", icon: "✉" },
-  { view: "activity", label: "Activity", icon: "≡" },
-  { view: "workingdir", label: "Working dir", icon: "▥" },
-  { view: "about", label: "About", icon: "ⓘ" },
-];
+/** The hub's own sections, and whether a view is one of them. Both now live in
+ * `types.ts`, because the store needs them to collapse the whole hub onto a
+ * single route tab and importing this module from the store would drag every
+ * settings panel into its module graph. Re-exported under the names the rest
+ * of the app already uses. */
+export const HUB_TABS = HUB_SECTIONS;
+export { isHubView } from "../lib/types";
 
 /** The settings hub: everything that used to be its own rail entry (Models,
- * Engine, Apps, Self, Settings) now lives behind the header cog, with its own
+ * Runtime, Apps, Self, Settings) now lives behind the header cog, with its own
  * secondary navigation so the main rail stays about conversations. */
 export default function SettingsHub() {
   const view = useAppStore((s) => s.view);
@@ -54,10 +50,15 @@ export default function SettingsHub() {
     (v === "self" && (selfPending || consolidationPending)) ||
     (v === "skills" && skillPending);
 
+  // `SHL-16` is withdrawn: the hub owns its own section navigation, always,
+  // whatever the Rail is doing. Moving it into the Rail made the sections read
+  // as another top-level place to be rather than as the inside of Settings,
+  // and it took the conversation list away to do it. This small inline column
+  // is the settings navigation.
   return (
     <div className="settings-hub">
       <nav className="settings-hub-nav" aria-label="Settings sections">
-        {TABS.map((t) => (
+        {HUB_TABS.map((t) => (
           <button
             key={t.view}
             className={`settings-hub-tab ${view === t.view ? "active" : ""}`}
@@ -84,12 +85,14 @@ export default function SettingsHub() {
         {view === "mail" && <Mail />}
         {view === "tools" && <Tools />}
         {view === "models" && <Models />}
-        {view === "engine" && <Engine />}
+        {view === "providers" && <Providers />}
+        {view === "runtime" && <Runtime />}
         {view === "apps" && <Apps />}
         {view === "skills" && <Skills />}
         {view === "self" && <Self />}
         {view === "tasks" && <Tasks />}
         {view === "activity" && <Activity />}
+        {view === "usage" && <Usage />}
         {view === "about" && <About />}
       </div>
     </div>

@@ -11,8 +11,10 @@
 use super::toolsets::ToolContext;
 use crate::db::Db;
 
-/// The six block kinds the renderer understands.
-const KINDS: [&str; 6] = ["comparison", "collection", "plan", "form", "progress", "document"];
+/// The block kinds the renderer understands. `diagnostics` is `COD-UI-3`: a
+/// compiler's or test runner's findings, shown as rows grouped by file rather
+/// than described in prose.
+const KINDS: [&str; 7] = ["comparison", "collection", "plan", "form", "progress", "document", "diagnostics"];
 
 /// Cap on the serialized session state, so it can't grow unbounded in context.
 const STATE_CAP_BYTES: usize = 4096;
@@ -33,11 +35,11 @@ pub fn tool_specs() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "present",
-                "description": "Show a structured, interactive block inline in the chat instead of describing data in prose. Kinds and their data shapes: comparison {columns:[{id,label}],options:[{id,label,values:{colId:val},pros?,cons?}],recommended_id?} for ranked options; collection {items:[{id,title,subtitle?,tags?,url?,meta?}],facets?:[{id,label}]} for browsable lists; plan {steps:[{id,label,detail?,status:todo|doing|done|blocked}]} for checklists; form {fields:[{id,label,type:text|number|select|multiselect|toggle,options?,required?}],submit_label?} to request structured input from the user; progress {label,current,total,unit?,status:running|done|error,note?} for long tasks; document {artifact_id} or {markdown} for a full document. Pass block_id to UPDATE an existing block in place (e.g. mark plan steps done, refresh progress). Prefer a block whenever the user is deciding, choosing, filling in, or tracking something.",
+                "description": "Show a structured, interactive block inline in the chat instead of describing data in prose. Kinds and their data shapes: comparison {columns:[{id,label}],options:[{id,label,values:{colId:val},pros?,cons?}],recommended_id?} for ranked options; collection {items:[{id,title,subtitle?,tags?,url?,meta?}],facets?:[{id,label}]} for browsable lists; plan {steps:[{id,label,detail?,status:todo|doing|done|blocked}]} for checklists; form {fields:[{id,label,type:text|number|select|multiselect|toggle,options?,required?}],submit_label?} to request structured input from the user; progress {label,current,total,unit?,status:running|done|error,note?} for long tasks; document {artifact_id} or {markdown} for a full document; diagnostics {items:[{file,line?,col?,severity:error|warning|failed,message,code?}]} for errors from a build, type check or test run, instead of listing them in prose. Pass block_id to UPDATE an existing block in place (e.g. mark plan steps done, refresh progress). Prefer a block whenever the user is deciding, choosing, filling in, or tracking something.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "kind": { "type": "string", "enum": ["comparison", "collection", "plan", "form", "progress", "document"] },
+                        "kind": { "type": "string", "enum": ["comparison", "collection", "plan", "form", "progress", "document", "diagnostics"] },
                         "title": { "type": "string", "description": "Short heading shown above the block" },
                         "data": { "type": "object", "description": "Block payload per the kind's shape" },
                         "block_id": { "type": "string", "description": "Omit to create; pass an existing block id to update it in place" }

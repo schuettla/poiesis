@@ -2,6 +2,8 @@ import { Component, Fragment, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { BlockView } from "../../lib/types";
 import { useAppStore } from "../../lib/store";
+import type { Diagnostic } from "../../lib/api";
+import DiagnosticsList, { locateDiagnostic } from "../Conversation/Diagnostics";
 import "./blocks.css";
 
 /** Loose object access for lenient, model-provided block data. */
@@ -60,9 +62,58 @@ function BlockFrame({ block }: { block: BlockView }) {
       return <DocumentBlock block={block} />;
     case "table":
       return <TableBlock block={block} />;
+    case "diagnostics":
+      return <DiagnosticsBlock block={block} />;
     default:
       return <RawBlock block={block} />;
   }
+}
+
+// ---- diagnostics (COD-UI-3) ----
+
+/** The model hands over a build's findings as one block instead of describing
+ * them in prose. Lenient on shape: severity words the model reaches for are
+ * mapped onto the three the list draws. */
+function DiagnosticsBlock({ block }: { block: BlockView }) {
+  const openItem = useAppStore((s) => s.openItem);
+  const root = useAppStore(
+    (s) => s.conversations.find((c) => c.id === s.activeConversationId)?.folderPath ?? null
+  );
+  const items: Diagnostic[] = asArr(asObj(block.data).items).map((d) => {
+    const sev = String(d.severity ?? "error").toLowerCase();
+    return {
+      file: String(d.file ?? ""),
+      line: typeof d.line === "number" ? d.line : null,
+      col: typeof d.col === "number" ? d.col : null,
+      severity: sev.startsWith("warn") ? "warning" : sev.startsWith("fail") ? "failure" : "error",
+      message: String(d.message ?? ""),
+      code: d.code != null ? String(d.code) : null,
+    };
+  });
+  const errors = items.filter((d) => d.severity !== "warning").length;
+  const warnings = items.length - errors;
+  const footer = [errors && `${errors} error${errors === 1 ? "" : "s"}`, warnings && `${warnings} warning${warnings === 1 ? "" : "s"}`]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <Frame title={block.title} kind="diagnostics" footer={footer || undefined}>
+      {items.length === 0 ? (
+        <p className="block-empty">Nothing to report.</p>
+      ) : (
+        <DiagnosticsList
+          items={items}
+          onOpen={
+            root
+              ? (d) => {
+                  const path = locateDiagnostic(d.file, root);
+                  if (path) openItem({ kind: "file", id: path, line: d.line ?? undefined });
+                }
+              : undefined
+          }
+        />
+      )}
+    </Frame>
+  );
 }
 
 // ---- comparison ----

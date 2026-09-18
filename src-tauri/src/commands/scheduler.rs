@@ -439,11 +439,54 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
     // No live webview is listening — the run's answer comes back as the
     // return value, not a stream, so an empty handler is enough.
     let sink = AgentEventSink::new(tauri::ipc::Channel::new(|_| Ok(())));
-    let messages = vec![serde_json::json!({ "role": "user", "content": &job.prompt })];
-    let images_dir = mgr.generated_media_dir();
     let model_name = mgr.engine_model_name().await.unwrap_or_else(|| "local".to_string());
 
-    let text = run_agent(
+    // `CTX-4`: assemble the prompt here rather than sending the job's text on
+    // its own. Until this line, a scheduled task ran with no persona, no
+    // standing instructions, no memory, no skills list and no tool guidance —
+    // the same agent by name only. There is no history to budget: every run
+    // gets a fresh conversation, so the turn is the system prompt and the task.
+    let system = crate::agent::context::compose_system_prompt(
+        &crate::agent::context::gather(
+            &db,
+            &memory,
+            &mgr,
+            &embed_mgr,
+            crate::agent::context::GatherOpts {
+                conversation_id: &conversation_id,
+                tools_enabled: true,
+                model_name: &model_name,
+                query: &job.prompt,
+            },
+        )
+        .await,
+    );
+    let mut messages = vec![
+        serde_json::json!({ "role": "system", "content": system }),
+        serde_json::json!({ "role": "user", "content": &job.prompt }),
+    ];
+    crate::agent::context::insert_briefs(&db, &conversation_id, true, true, &mut messages);
+    let images_dir = mgr.generated_media_dir();
+
+    // A scheduled run is unattended, so it gets a clock as well as a step
+    // budget — and, like every run, an id nobody has to guess at to stop it.
+    let fleet = app.state::<crate::agent::fleet::Fleet>();
+    let run = fleet.open(&conversation_id, cancel, None, 0);
+    let limits = crate::agent::fleet::RunLimits {
+        deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(600)),
+        ..Default::default()
+    };
+    // A scheduled job runs on whatever the engine is: the local one unless the
+    // job pinned a cloud model, which `endpoint` above already resolved.
+    let rc = crate::agent::run::RunContext::top(
+        &run,
+        &limits,
+        Some(&fleet),
+        "local",
+        mgr.engine_ctx_size().await.map(|n| n as usize),
+    );
+
+    let outcome = run_agent(
         &mgr.client,
         &endpoint,
         Some(&endpoint),
@@ -464,10 +507,12 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
         0.4,
         true,
         true,
-        cancel,
+        &rc,
         &sink,
     )
     .await;
+    fleet.close(&run.id);
+    let text = outcome.text;
 
     let _ = db.log_activity(
         Some(&conversation_id),

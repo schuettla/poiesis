@@ -1,0 +1,146 @@
+/* Usage tab (`OBS-2`/`HRN-UI-6`) — three plain ledgers, one per grouping.
+   No charts: the question this panel answers is "what did that cost", and a
+   sorted list answers it faster than a shape does. */
+
+/* Padding, width and the heading all come from `.surface` / `.surface-inner`,
+   the shell every tab in the settings hub shares. Nothing here may re-declare
+   them: this panel used to render bare with its own padding and its own
+   heading level, which is exactly why it looked like a different application
+   from the tab next to it. */
+
+.usage-ranges {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.usage-range {
+  border: 1px solid transparent;
+  background: none;
+  border-radius: var(--radius);
+  padding: 3px 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+.usage-range:hover {
+  color: var(--ink);
+}
+.usage-range.active {
+  border-color: var(--paper-edge-2);
+  color: var(--ink);
+}
+
+.usage-total {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 14px 0 4px;
+  font-size: var(--fs-ui-lg);
+  color: var(--ink);
+}
+.usage-total-cost {
+  color: var(--ink-muted);
+  font-size: var(--fs-ui);
+}
+.usage-total-cost.free {
+  color: var(--local);
+}
+
+.usage-section {
+  margin-top: 20px;
+}
+.usage-section h3 {
+  margin: 0 0 6px;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.usage-rows {
+  display: flex;
+  flex-direction: column;
+}
+.usage-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: baseline;
+  gap: 14px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--paper-edge);
+  font-size: var(--fs-ui);
+  text-align: left;
+}
+button.usage-row {
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  background: none;
+  width: 100%;
+  font: inherit;
+  font-size: var(--fs-ui);
+  cursor: pointer;
+  color: inherit;
+}
+button.usage-row:disabled {
+  cursor: default;
+}
+button.usage-row:not(:disabled):hover .usage-name {
+  text-decoration: underline;
+}
+
+.usage-name {
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-runs,
+.usage-tokens {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.usage-cost {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 12ch;
+  text-align: right;
+}
+.usage-cost.free {
+  color: var(--local);
+}
+
+.usage-empty {
+  margin: 4px 0;
+  font-size: var(--fs-ui);
+  color: var(--ink-faint);
+}
+
+/* Shown instead of three empty ledgers when there is nothing at all. A page
+   with no data still has to answer "what would ever appear here". */
+.usage-blank {
+  margin: 18px 0 0;
+  padding: 16px 18px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-ui);
+  line-height: 1.6;
+  color: var(--ink-muted);
+}
+.usage-blank p {
+  margin: 0 0 8px;
+}
+.usage-blank p:last-child {
+  margin-bottom: 0;
+  color: var(--ink-faint);
+}
+
+.usage-note {
+  margin-top: 24px;
+  max-width: 62ch;
+  font-size: var(--fs-ui);
+  line-height: 1.6;
+  color: var(--ink-faint);
+}

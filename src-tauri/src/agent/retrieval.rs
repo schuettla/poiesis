@@ -247,10 +247,10 @@ async fn rephrase_query(client: &reqwest::Client, endpoint: &ChatEndpoint, query
          numbers exactly as given. Reply with only the rephrased text, nothing else.\n\nQuestion: {query}"
     );
     let msgs = vec![serde_json::json!({ "role": "user", "content": prompt })];
-    let outcome = crate::cloud::drive_turn(client, endpoint, &msgs, &[], 0.0, &CancelFlag::new(), |_| {})
+    let outcome = crate::cloud::drive_turn(client, endpoint, &msgs, &[], 0.0, crate::cloud::Effort::Off, &CancelFlag::new(), |_| {})
         .await
         .ok()?;
-    let TurnOutcome::Final { content } = outcome else { return None };
+    let TurnOutcome::Final { content, .. } = outcome else { return None };
     let rephrased = content.trim();
     if rephrased.is_empty() {
         None
@@ -318,10 +318,10 @@ async fn judges_sufficient(
          without answering it? Answer with exactly one word: yes or no."
     );
     let msgs = vec![serde_json::json!({ "role": "user", "content": prompt })];
-    let outcome = crate::cloud::drive_turn(client, endpoint, &msgs, &[], 0.0, &CancelFlag::new(), |_| {})
+    let outcome = crate::cloud::drive_turn(client, endpoint, &msgs, &[], 0.0, crate::cloud::Effort::Off, &CancelFlag::new(), |_| {})
         .await
         .ok()?;
-    let TurnOutcome::Final { content } = outcome else { return None };
+    let TurnOutcome::Final { content, .. } = outcome else { return None };
     let lower = content.to_lowercase();
     if lower.contains("yes") {
         Some(true)

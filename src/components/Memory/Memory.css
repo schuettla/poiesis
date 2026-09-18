@@ -144,7 +144,6 @@
 .memory-proposal {
   padding: 12px 14px;
   border: 1px solid var(--paper-edge-2);
-  border-left: 2px solid var(--ink-muted);
   border-radius: var(--radius-lg);
 }
 .memory-proposal-head {

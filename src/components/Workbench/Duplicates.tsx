@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAppStore } from "../../lib/store";
 import type { DuplicateGroup } from "../../lib/api";
+import { CloseIcon } from "../Icons/Icons";
 import "./Workbench.css";
 
 function shortName(path: string): string {
@@ -64,14 +65,7 @@ export default function Duplicates() {
           aria-label="Close duplicates"
           onClick={dismiss}
         >
-          <svg width="13" height="13" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <path
-              d="M5 5l10 10M15 5 5 15"
-              stroke="currentColor"
-              strokeWidth="1.4"
-              strokeLinecap="round"
-            />
-          </svg>
+          <CloseIcon size={13} strokeWidth={1.4} />
         </button>
       </div>
       {loading && <p className="wb-hint">Comparing files…</p>}

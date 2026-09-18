@@ -106,6 +106,43 @@ pub fn assert_ui_readable_raw(
     )))
 }
 
+/// May the UI *write* this path? Deliberately stricter than reading: the
+/// conversation's working folder, a persisted grant, or something picked from
+/// a dialog this session — and pointedly *not* "a file once attached to a
+/// message". Attaching a file to a chat is showing it to the agent, not
+/// handing over a pen, so the read allowance in `assert_ui_readable` must not
+/// become an edit allowance by inheritance.
+///
+/// The conversation's trust level is not consulted. Trust grades what the
+/// *agent* may do to the disk unattended (`permissions::gate`); a person
+/// typing into their own file is the consent that system exists to obtain.
+pub fn assert_ui_writable(
+    db: &Db,
+    grants: &DialogGrants,
+    conversation_id: Option<&str>,
+    path: &Path,
+) -> Result<(), PoiesisError> {
+    if let Some(cid) = conversation_id {
+        if let Ok((Some(folder), _)) = db.conversation_folder(cid) {
+            if path_within_root(path, Path::new(&folder)) {
+                return Ok(());
+            }
+        }
+    }
+    if let Ok(list) = db.list_permissions() {
+        if list.iter().any(|g| path_within_root(path, Path::new(&g.path))) {
+            return Ok(());
+        }
+    }
+    if grants.covers(path) {
+        return Ok(());
+    }
+    Err(PoiesisError::Message(format!(
+        "{} isn't in a folder Poiesis may write to.",
+        path.display()
+    )))
+}
+
 /// One row in the Workbench tree.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileNode {
@@ -206,7 +243,7 @@ pub async fn pick_zip_file_cmd(
     Ok(Some(canonicalize_lenient(&path).to_string_lossy().to_string()))
 }
 
-fn app_data_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+pub(crate) fn app_data_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
     use tauri::Manager;
     app.path().app_data_dir().ok()
 }
@@ -382,6 +419,118 @@ pub fn read_text_file_cmd(
         return Ok(format!("{clipped}\n\n… truncated — open the file to see the rest"));
     }
     Ok(text)
+}
+
+// ---- editing a file in a tab ----
+
+/// How big a file may be and still be opened for *editing*. Well above the
+/// viewer's preview cap: a preview may be clipped, an editable buffer may not.
+const MAX_EDIT_BYTES: u64 = 4 * 1024 * 1024;
+
+/// A file opened for editing, with everything a save needs to be safe.
+#[derive(Debug, Clone, Serialize)]
+pub struct EditableFile {
+    pub content: String,
+    /// Modification time in epoch millis, the same unit `FileNode` uses. The
+    /// editor hands this back on save so a write can tell whether the agent
+    /// (or anything else) touched the file underneath the buffer.
+    pub modified: i64,
+    /// Why this can be read but not saved, or `None` when it is editable.
+    /// Carried rather than thrown so the tab can still *show* an enormous or
+    /// read-only file — it just shows it read-only.
+    pub read_only: Option<String>,
+}
+
+fn modified_millis(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Read a file for an editable tab.
+///
+/// Distinct from `read_text_file_cmd`, which clips at 512 KB and appends a
+/// "… truncated" line. That is fine for a preview and catastrophic for an
+/// editor: saving the buffer back would write the clip over the file. So this
+/// never truncates — past `MAX_EDIT_BYTES` it refuses outright, and anything
+/// it *does* return is the whole file.
+#[tauri::command]
+pub fn read_file_for_edit_cmd(
+    db: State<'_, Db>,
+    grants: State<'_, DialogGrants>,
+    conversation_id: Option<String>,
+    path: String,
+) -> Cmd<EditableFile> {
+    let p = canonicalize_lenient(Path::new(&path));
+    assert_ui_readable(&db, &grants, conversation_id.as_deref(), &p)?;
+
+    let meta = std::fs::metadata(&p).map_err(err)?;
+    if meta.len() > MAX_EDIT_BYTES {
+        return Err(PoiesisError::Message(format!(
+            "that file is {} MB — too big to open here; use the default app",
+            meta.len() / (1024 * 1024)
+        )));
+    }
+    let content = std::fs::read_to_string(&p)
+        .map_err(|_| PoiesisError::Message("that file isn't readable as text".into()))?;
+
+    // Everything else is a genuine editable buffer; only the scope check can
+    // still hold it back, and the reason belongs in the tab, not in an error.
+    let read_only = match assert_ui_writable(&db, &grants, conversation_id.as_deref(), &p) {
+        Ok(()) if meta.permissions().readonly() => Some("this file is read-only on disk".to_string()),
+        Ok(()) => None,
+        Err(e) => Some(e.to_string()),
+    };
+
+    Ok(EditableFile { content, modified: modified_millis(&meta), read_only })
+}
+
+/// Save an edited file back to disk.
+///
+/// `expected_modified` is the mtime the buffer was read at. A mismatch means
+/// something changed the file while it was open — almost always the agent —
+/// and the write is refused rather than resolved: the tab has both versions
+/// and the user does not, so the choice is theirs to make.
+///
+/// Snapshots into the trash first, so a hand edit is undoable from Recent
+/// changes exactly like one of the agent's writes.
+#[tauri::command]
+pub fn write_text_file_cmd(
+    app: tauri::AppHandle,
+    db: State<'_, Db>,
+    grants: State<'_, DialogGrants>,
+    conversation_id: Option<String>,
+    path: String,
+    content: String,
+    expected_modified: Option<i64>,
+) -> Cmd<EditableFile> {
+    let p = canonicalize_lenient(Path::new(&path));
+    assert_ui_writable(&db, &grants, conversation_id.as_deref(), &p)?;
+
+    if let Some(expected) = expected_modified {
+        let current = std::fs::metadata(&p).as_ref().map(modified_millis).unwrap_or(0);
+        // A zero on either side means we never had a reliable stamp; refusing
+        // then would block saving on filesystems that don't report mtime.
+        if expected != 0 && current != 0 && current != expected {
+            return Err(PoiesisError::Message(
+                "this file changed on disk since you opened it".into(),
+            ));
+        }
+    }
+
+    if let Some(cid) = conversation_id.as_deref() {
+        let data_dir = app_data_dir(&app).unwrap_or_else(|| p.parent().unwrap_or(&p).to_path_buf());
+        let _ = trash::record(&db, &data_dir, cid, "edit", &p, None);
+    }
+
+    std::fs::write(&p, content.as_bytes()).map_err(err)?;
+    let meta = std::fs::metadata(&p).map_err(err)?;
+    if let Some(cid) = conversation_id.as_deref() {
+        let _ = db.log_activity(Some(cid), "file", &format!("edited {}", p.display()));
+    }
+    Ok(EditableFile { content: String::new(), modified: modified_millis(&meta), read_only: None })
 }
 
 /// Open a file with the system default application.
@@ -603,6 +752,64 @@ mod tests {
             assert_ui_readable(&db, &grants, Some(&c.id), Path::new(r"C:\Windows\notepad.exe"))
                 .is_err(),
             "…and nothing outside it"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `EDT-1`: the editable tab's scope rule, and the one asymmetry in it.
+    ///
+    /// Reading a file the user once attached to a message is allowed, so an old
+    /// chat can still show its own images. Writing to it is not: an attachment
+    /// is a file shown to the agent, usually from somewhere the user never
+    /// granted anything — the Desktop, a Downloads folder — and letting a read
+    /// allowance widen into an edit allowance by inheritance would put a save
+    /// button over paths nobody consented to changing.
+    #[test]
+    fn attaching_a_file_lets_the_ui_read_it_but_never_write_it() {
+        let dir = std::env::temp_dir().join(format!("poiesis_write_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = canonicalize_lenient(&dir);
+        let outside = dir.join("elsewhere.txt");
+        let inside_dir = dir.join("folder");
+        std::fs::create_dir_all(&inside_dir).unwrap();
+        std::fs::write(&outside, "attached").unwrap();
+        std::fs::write(inside_dir.join("main.rs"), "fn main() {}").unwrap();
+
+        let db = Db::open_in_memory().unwrap();
+        let c = db.create_conversation("Edit", None, false).unwrap();
+        db.set_conversation_folder(&c.id, Some(&inside_dir.to_string_lossy())).unwrap();
+        let m = db
+            .append_message(
+                &c.id,
+                &crate::db::NewMessage {
+                    role: "user".into(),
+                    content: "look at this".into(),
+                    model_name: None,
+                    model_provenance: None,
+                    steps_json: None,
+                    attachments: vec![],
+                },
+            )
+            .unwrap();
+        db.add_attachment(&m.id, "file", "elsewhere.txt", &outside.to_string_lossy(), None)
+            .unwrap();
+        let grants = DialogGrants::new();
+
+        let editable = inside_dir.join("main.rs");
+        assert!(assert_ui_writable(&db, &grants, Some(&c.id), &editable).is_ok());
+
+        assert!(
+            assert_ui_readable(&db, &grants, Some(&c.id), &outside).is_ok(),
+            "an attached file stays readable"
+        );
+        assert!(
+            assert_ui_writable(&db, &grants, Some(&c.id), &outside).is_err(),
+            "…but attaching it is not consent to edit it"
+        );
+        assert!(
+            assert_ui_writable(&db, &grants, None, &editable).is_err(),
+            "without a conversation there is no folder to be inside of"
         );
 
         std::fs::remove_dir_all(&dir).ok();

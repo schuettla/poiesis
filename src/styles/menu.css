@@ -17,7 +17,7 @@
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
   border-radius: var(--radius);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+  box-shadow: var(--shadow-float);
   padding: 5px;
   display: flex;
   flex-direction: column;
@@ -56,4 +56,55 @@
 }
 .row-menu-item.danger {
   color: var(--danger);
+}
+
+/* An item that folds a list of destinations open under itself (the session
+   menus' "Add to project…"). The list hangs off a hairline, the way a
+   project's chats hang off theirs in the rail, and scrolls past a handful. */
+.row-menu {
+  max-width: 260px;
+}
+.row-menu-parent {
+  gap: 8px;
+}
+.row-menu-caret {
+  flex: none;
+  color: var(--ink-faint);
+  transition: transform var(--t-fast);
+}
+.row-menu-caret.open {
+  transform: rotate(90deg);
+}
+.row-menu-sub {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding-left: 14px;
+}
+.row-menu-sub::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--paper-edge-2);
+}
+.row-menu-sub .row-menu-item {
+  min-height: 30px;
+  padding: 6px 9px;
+  color: var(--ink-muted);
+}
+.row-menu-sub .row-menu-item:hover {
+  color: var(--ink);
+}
+/* A hairline between the kinds of thing a row menu does — organising the chat
+   above, removing it below. */
+.row-menu-sep {
+  border: none;
+  border-top: 1px solid var(--paper-edge);
+  margin: 4px 2px;
 }

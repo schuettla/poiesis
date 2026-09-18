@@ -1,3 +1,4 @@
+import { availableFavorites } from "../../lib/modelPrefs";
 import { useEffect, useState } from "react";
 import { useAppStore, useExpert, personaTemperature } from "../../lib/store";
 import * as api from "../../lib/api";
@@ -107,6 +108,10 @@ interface Draft {
   checkedTools: string[];
   /** `SKL-6`: skill names currently checked, the same shape as `checkedTools`. */
   checkedSkills: string[];
+  /** `SUB-3`: one line the lead reads when choosing who to hand a job to. */
+  description: string;
+  /** `SUB-3`: may the agent delegate work to this persona. */
+  spawnable: boolean;
 }
 
 const EMPTY: Draft = {
@@ -117,6 +122,8 @@ const EMPTY: Draft = {
   temperature: "",
   checkedTools: [],
   checkedSkills: [],
+  description: "",
+  spawnable: false,
 };
 
 /** `PER-UI-1`: what this persona may do — checked-but-disabled + a note is how
@@ -202,6 +209,9 @@ function PersonaSkillsEditor({
 export default function PersonaEditor() {
   const personas = useAppStore((s) => s.personas);
   const models = useAppStore((s) => s.models);
+  const modelPrefs = useAppStore((s) => s.modelPrefs);
+  const favoriteChat = availableFavorites(models, modelPrefs, "chat");
+  const favoriteIds = new Set(favoriteChat.map((m) => m.id));
   const createPersona = useAppStore((s) => s.createPersona);
   const updatePersona = useAppStore((s) => s.updatePersona);
   const deletePersona = useAppStore((s) => s.deletePersona);
@@ -231,6 +241,8 @@ export default function PersonaEditor() {
         name: preset.name,
         systemPrompt: preset.systemPrompt,
         temperature: preset.temperature,
+        ...(preset.tools ? { toolsJson: JSON.stringify(preset.tools) } : {}),
+        ...(preset.description ? { description: preset.description } : {}),
       });
     } finally {
       setAddingPreset(null);
@@ -253,6 +265,8 @@ export default function PersonaEditor() {
       temperature: typeof temp === "number" ? String(temp) : "",
       checkedTools: allow ?? toolsets.map((s) => s.id),
       checkedSkills: allowSkills ?? skills.map((s) => s.name),
+      description: p.description ?? "",
+      spawnable: p.spawnable,
     });
   }
 
@@ -315,6 +329,8 @@ export default function PersonaEditor() {
                 : null,
             tools_json: toolsJson,
             skills_json: skillsJson,
+            description: draft.description.trim() || null,
+            spawnable: draft.spawnable,
           });
         }
       } else {
@@ -326,6 +342,8 @@ export default function PersonaEditor() {
             typeof temperature === "number" && !Number.isNaN(temperature) ? temperature : undefined,
           toolsJson,
           skillsJson,
+          description: draft.description.trim() || null,
+          spawnable: draft.spawnable,
         });
       }
       setDraft(null);
@@ -409,6 +427,28 @@ export default function PersonaEditor() {
             onChange={(e) => setDraft({ ...draft, systemPrompt: e.target.value })}
           />
 
+          {/* `SUB-UI-5`: personas are agent types. These two fields are what
+              turn one into something the agent can hand a job to. */}
+          <label className="field-label">When should I use this agent?</label>
+          <input
+            className="field-input"
+            value={draft.description}
+            placeholder="e.g. Reads sources carefully and reports back with citations"
+            onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+          />
+          <p className="field-hint">
+            I read this when deciding who to hand a job to, so say what it is good at.
+          </p>
+
+          <label className="persona-spawnable">
+            <input
+              type="checkbox"
+              checked={draft.spawnable}
+              onChange={(e) => setDraft({ ...draft, spawnable: e.target.checked })}
+            />
+            I can hand work to this agent
+          </label>
+
           <div className="persona-form-row">
             <div className="persona-field">
               <label className="field-label">Model (optional)</label>
@@ -418,11 +458,25 @@ export default function PersonaEditor() {
                 onChange={(e) => setDraft({ ...draft, modelId: e.target.value })}
               >
                 <option value="">Use the chat's current model</option>
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
+                {/* `MOD-4`: favorites first, the full list behind them. */}
+                {favoriteChat.length > 0 && (
+                  <optgroup label="Favorites">
+                    {favoriteChat.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                <optgroup label={favoriteChat.length > 0 ? "More models…" : "Models"}>
+                  {models
+                    .filter((m) => !favoriteIds.has(m.id))
+                    .map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                </optgroup>
               </select>
             </div>
             <div className="persona-field narrow">

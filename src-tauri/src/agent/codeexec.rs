@@ -1,7 +1,12 @@
 //! Built-in Code Execution toolset (TOOL-5). Runs short Python or Node snippets in
-//! an isolated **Job-Object-confined subprocess** (reusing `runtime/jobobject`):
-//! no network, a scratch working directory, and a hard kill-on-close so a runaway
-//! script can't outlive the run. Defaults off; opt-in per chat.
+//! a **Job-Object-confined subprocess** (`sandbox.rs`): a memory cap, a process
+//! cap, a scrubbed environment, a scratch working directory, and a hard
+//! kill-on-close so a runaway script can't outlive the run. Defaults off.
+//!
+//! `COD-9`: that is the whole of it. On Windows the snippet's **network** and
+//! its **filesystem** beyond the scratch folder are not confined — that needs an
+//! AppContainer profile. The module doc used to promise "no network"; it was
+//! never true, and a sandbox that claims more than it does is worse than none.
 //!
 //! `DAT`: the sandbox generalises past a bespoke `query_csv`-style tool — it's
 //! made *reachable* for spreadsheet/data questions (`DAT-1`), given read access
@@ -32,6 +37,10 @@ use super::sandbox;
 const WATCH_ENTRY_CAP: usize = 4000;
 /// How many changed filenames to name in the record before summarising.
 const WATCH_NAMES_SHOWN: usize = 5;
+/// Floor on the wall clock for a snippet that may call tools (`RPC-1`). Its
+/// time goes on waiting for searches, reads and permission prompts rather than
+/// on computing, so the ad-hoc ten seconds would kill nearly every useful loop.
+const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Every file under `root`, as `relative path -> (size, mtime-ms)`.
 ///
@@ -210,12 +219,32 @@ pub async fn execute(
     // lands in the activity log by name rather than happening invisibly.
     let before = folder_path.and_then(folder_snapshot);
 
+    // `RPC-1`/`RPC-2`: if this run may let a script call tools, mint the token
+    // now and drop the client library next to the snippet. The ticket revokes
+    // on drop, so it stops working the moment this call returns however it
+    // returns — including the path where the user pressed Stop and this future
+    // is simply dropped.
+    let ticket = ctx
+        .rpc
+        .and_then(|gate| super::toolrpc::arm(gate.clone(), ctx.call_id));
+    if ticket.is_some() {
+        // Written into the snippet's own directory, not the working directory:
+        // Python puts the script's folder on `sys.path` and Node resolves
+        // `./poiesis` against the module's own file, so the import works
+        // whichever folder the sandbox is run from.
+        let (client_name, client_source) = match language {
+            "node" => ("poiesis.js", super::toolrpc::JS_CLIENT),
+            _ => ("poiesis.py", super::toolrpc::PY_CLIENT),
+        };
+        let _ = std::fs::write(dir.join(client_name), client_source);
+    }
+
     // `SKL-3`: an explicit `skill` argument swaps in the longer-timeout,
     // skill-directory profile so a bundled `scripts/*` has room to run and
     // knows where its own folder is. Falls back to the ordinary ad-hoc
     // profile when the name is missing, disabled, or not found — the
     // snippet still runs, just without the extended profile.
-    let (run_dir, profile) = match args.get("skill").and_then(|s| s.as_str()) {
+    let (run_dir, mut profile) = match args.get("skill").and_then(|s| s.as_str()) {
         Some(name) if !name.trim().is_empty() => {
             let working_folder = ctx
                 .db
@@ -231,6 +260,18 @@ pub async fn execute(
         }
         _ => (dir.clone(), sandbox::Profile::ad_hoc()),
     };
+
+    // A snippet that calls tools spends its wall clock *waiting* on them — a
+    // web search, a folder read, a permission panel the user has not answered
+    // yet. Ten seconds is the right budget for arithmetic and the wrong one for
+    // that, and the whole point of `RPC-1` is the loop over many items.
+    if let (Some(ticket), Some(base)) = (ticket.as_ref(), super::toolrpc::base_url()) {
+        profile.extra_env.push(("POIESIS_TOOL_URL".to_string(), base.to_string()));
+        profile
+            .extra_env
+            .push(("POIESIS_RUN_TOKEN".to_string(), ticket.token().to_string()));
+        profile.timeout = profile.timeout.max(RPC_TIMEOUT);
+    }
 
     let result = sandbox::run(
         program,
@@ -263,7 +304,13 @@ pub async fn execute(
 
     let out = result?;
     if out.timed_out {
-        return Ok("The code ran longer than the 10-second limit and was stopped.".to_string());
+        // The limit is named because it is not always ten seconds any more: a
+        // skill's script and a snippet that may call tools both get longer, and
+        // "the 10-second limit" would be a lie the model then plans around.
+        return Ok(format!(
+            "The code ran longer than the {}-second limit and was stopped.",
+            profile.timeout.as_secs()
+        ));
     }
 
     // `DAT-3`: a table the snippet printed renders directly instead of only

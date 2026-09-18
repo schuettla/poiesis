@@ -1,21 +1,74 @@
-/* ---- user turn ---- */
+/* ---- reading size ----
+   The Reading size setting (`--reading-scale`) scales the message stream as
+   one unit — questions, prose, tool rows, plan cards, code, blocks, media and
+   the spacing between them — rather than the prose alone. Scaling only the
+   font left the chrome around it fixed, so "Larger" read as big text in
+   small boxes and "Smaller" as small text in loose ones. `zoom` keeps every
+   proportion the Standard size was designed at; the stream still takes the
+   column's full width because a zoomed box lays out in its own units. */
+.message-stream {
+  zoom: var(--reading-scale);
+}
+
+/* ---- user turn ----
+   A white panel with the hairline outline and radius every other panel in
+   the app uses, the question set a little heavier than the answer, its time
+   at the end of the line in the Rail's mono stamp.
+
+   It also stays pinned to the top of the scroll area for as long as you're
+   reading the answer underneath it: `.turn-group` (Chat.tsx) wraps a user
+   turn together with every assistant turn that follows until the next user
+   turn, and `.turn-user` is `position: sticky` within that wrapper — the
+   classic sticky-list-header trick, so the question you're currently reading
+   an answer to is always in view, and the next question naturally pushes it
+   off once you scroll into its own group. */
 .turn-user {
-  margin-bottom: 22px;
+  position: sticky;
+  top: 0;
+  /* `z-index` isn't optional here: a positioned box only wins the paint order
+     over later static-flow siblings (like the `PlanCard`/`Timeline` in the
+     `AgentRun` right below it) when its stacking context actually says so —
+     without this, content scrolling underneath showed through the sticky
+     question instead of being covered by it. */
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 18px;
+  align-items: baseline;
+  margin-bottom: 18px;
+  padding: 11px 14px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+}
+.turn-user > * {
+  grid-column: 1;
 }
 .turn-user .role {
   font-family: var(--font-sans);
   font-size: 12px;
   font-weight: 600;
   color: var(--ink-muted);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 .turn-user .body {
   font-family: var(--font-sans);
   font-size: var(--fs-ui-lg);
-  line-height: 1.6;
+  font-weight: 500;
+  line-height: 1.55;
+  letter-spacing: -0.005em;
   color: var(--ink);
   max-width: var(--measure);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.turn-stamp {
+  grid-column: 2;
+  grid-row: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
 }
 .user-attachments {
   display: flex;
@@ -210,24 +263,32 @@
   margin-top: 4px;
 }
 
+/* Who answered, set like a Rail group label — small caps-tracked sans for the
+   role, the model's id in the mono the Rail uses for readings. A label over
+   the answer, not a chip competing with it. */
 .run-header {
   display: flex;
   align-items: center;
   gap: 8px;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: 11px;
   color: var(--ink-faint);
   margin-bottom: 10px;
+  padding-left: 1px;
 }
 .run-header .agent-label {
-  font-weight: 600;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--ink-muted);
 }
 .run-header .model-tag {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
   color: var(--ink-faint);
-  padding: 1px 6px;
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
 }
 
 /* ---- thinking state: shown before the first token/step/block lands ---- */
@@ -244,13 +305,78 @@
   color: var(--ink-faint);
 }
 /* A turn that ended silently says so, rather than leaving a blank bubble that
-   can't be told apart from one still running. */
-.run-empty {
+   can't be told apart from one still running. The same for one that ran its
+   steps and then wrote no answer. */
+.run-empty,
+.run-no-answer {
   margin: 2px 0 4px;
   font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.55;
   color: var(--ink-faint);
+}
+/* `HRN-UI-3`: the live meter. Deliberately the quietest text in the turn —
+   it is reassurance that work has a budget, not something to read. */
+.run-meter {
+  margin: 2px 0 4px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+/* The model's thinking, while it is thinking. Deliberately quieter than the
+   meter above it: this is evidence the run is alive, not something to read. */
+.run-thinking {
+  margin: 0 0 6px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-faint);
+}
+.run-thinking > summary {
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  list-style: none;
+}
+.run-thinking > summary::before {
+  content: "▸ ";
+}
+.run-thinking[open] > summary::before {
+  content: "▾ ";
+}
+.run-thinking > pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--paper-edge-2);
+  background: var(--paper-sunken, transparent);
+  font-family: var(--font-mono);
+  font-size: var(--fs-timeline);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--ink-faint);
+}
+
+/* `HRN-3`: why a turn stopped short. Sits directly under the prose it
+   qualifies, because its whole job is to change how that prose is read. */
+.run-stopped {
+  margin: 4px 0 4px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.55;
+  color: var(--ink-muted);
+}
+/* `HRN-UI-1`: a turn typed into a run that was already working. Same step as
+   the "You" label it sits beside; weight and colour carry the hierarchy. */
+.mid-run-mark {
+  margin-left: 8px;
+  font-weight: 400;
+  font-size: var(--fs-timeline);
+  letter-spacing: 0.02em;
+  color: var(--ink-faint);
+}
+.mid-run-mark.pending {
+  opacity: 0.7;
 }
 .thinking-dot {
   width: 6px;
@@ -401,87 +527,249 @@
   color: var(--ink-faint);
 }
 
-/* ---- timeline ---- */
+/* ---- timeline ----
+   What the agent did, as one hairline-framed panel built from the Rail's
+   parts: the same outline as the Rail's top buttons, the same turned chevron
+   as a project's twisty, rows separated like chat rows, readings in the mono
+   stamp. Open while the run is live, folded to its one-line head once it is
+   done — the steps are how the answer was got, not the answer. */
 .timeline {
-  border-left: 2px solid var(--paper-edge-2);
-  padding-left: 16px;
-  margin: 0 0 16px 1px;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
+  margin: 0 0 16px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  background: var(--paper);
+  overflow: hidden;
 }
 
+.timeline-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px 0 8px;
+  background: none;
+  border: none;
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  text-align: left;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.timeline-head:hover {
+  color: var(--ink);
+}
+.timeline.open .timeline-head {
+  border-bottom: 1px solid var(--paper-edge);
+}
+.timeline-twisty {
+  flex: none;
+  display: inline-flex;
+  color: var(--ink-faint);
+}
+.timeline-twisty svg {
+  transition: transform var(--t-fast);
+}
+.timeline.open .timeline-twisty svg {
+  transform: rotate(90deg);
+}
+.timeline-head:hover .timeline-twisty {
+  color: var(--ink);
+}
+.timeline-title {
+  flex: none;
+  font-weight: 500;
+  color: var(--ink);
+}
+.timeline.live .timeline-title {
+  animation: step-running 1.6s ease-in-out infinite;
+}
+.timeline-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+.timeline-failed {
+  flex: none;
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--danger);
+}
+
+.timeline-rows {
+  display: flex;
+  flex-direction: column;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.timeline-rows > .step + .step,
+.timeline-rows > .step + .step-band,
+.timeline-rows > .step-band + .step,
+.timeline-rows > .step-band + .step-band {
+  border-top: 1px solid var(--paper-edge);
+}
+.timeline-earlier {
+  padding: 6px 12px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--paper-edge);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  text-align: left;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.timeline-earlier:hover {
+  color: var(--ink);
+  background: var(--paper-edge);
+}
+
+/* One step is one grid row: dot · verb · target · readings. Nothing wraps —
+   the target and the stamp clip, and anything longer opens *under* the row,
+   full width. The old wrapping flex row let the readings fall onto a line of
+   their own, pinned right, which is what broke the panel apart. */
 .step {
   display: flex;
-  align-items: baseline;
-  /* The recall provenance panel drops to its own full-width line. */
-  flex-wrap: wrap;
-  gap: 9px;
+  flex-direction: column;
   font-family: var(--font-mono);
   font-size: var(--fs-timeline);
   line-height: 1.5;
-  position: relative;
 }
-.step::before {
-  content: "";
-  position: absolute;
-  left: -20.5px;
-  top: 6px;
-  width: 7px;
-  height: 7px;
+.step-head {
+  display: grid;
+  grid-template-columns: 6px auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 32px;
+  padding: 0 10px 0 12px;
+}
+.step.expandable > .step-head {
+  cursor: pointer;
+}
+.step.expandable > .step-head:hover {
+  background: var(--paper-edge);
+}
+.step-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Status as a dot — the Rail's own mark for "something is running here".
+   Hollow when done, filled and breathing while live, danger when it failed. */
+.step-dot {
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: var(--paper-edge-2);
+  border: 1px solid var(--ink-faint);
 }
-.step.done::before {
-  background: var(--ok);
+.step.running .step-dot {
+  border-color: var(--ink);
+  background: var(--ink);
 }
-.step.error::before {
+.step.error .step-dot {
+  border-color: var(--danger);
   background: var(--danger);
 }
-.step.running::before {
-  background: var(--local);
-  animation: pulse 1.2s ease-in-out infinite;
+@media (prefers-reduced-motion: no-preference) {
+  .step.running .step-dot {
+    animation: mark-breathe 2.4s ease-in-out infinite;
+  }
 }
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.4;
-    transform: scale(0.7);
-  }
+
+/* RPC-1: a step a script asked for, sitting under the step that ran the
+   script. Indented and hung off a hairline, so a loop over forty items reads
+   as one thing the agent did rather than forty. */
+.step.nested > .step-head {
+  margin-left: 15px;
+  padding-left: 12px;
+  border-left: 1px solid var(--paper-edge-2);
+}
+.step.nested .verb,
+.step.nested .target {
+  color: var(--ink-muted);
 }
 
 .step .verb {
+  font-family: var(--font-sans);
   color: var(--ink-muted);
-  flex-shrink: 0;
+  white-space: nowrap;
 }
-.step.done .verb {
-  color: var(--ink-faint);
+.step.running .verb {
+  color: var(--ink);
+  animation: step-running 1.2s ease-in-out infinite;
+}
+.step.error .verb {
+  color: var(--danger);
+}
+@keyframes step-running {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
 }
 .step .target {
   color: var(--ink);
+  /* One line per step, however long the query or path — the full text is
+     still there in the title tooltip, and in `aria-label` for anyone who
+     can't hover. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 .step .result {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
   color: var(--ink-faint);
-  font-size: 11.5px;
+}
+
+/* The row's own twisty — the same chevron, turned the same way. */
+.step-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: none;
+  padding: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--ink-faint);
+}
+.step-expand svg {
+  transition: transform var(--t-fast);
+}
+.step.open .step-expand svg {
+  transform: rotate(90deg);
+}
+.step-expand:hover {
+  color: var(--ink);
+}
+
+/* Everything a step opens, set under its row at the row's text edge. */
+.step > :is(.recall-matches, .code-disclosure, .task-disclosure, .untrusted-disclosure, .kept-disclosure) {
+  margin: 0 12px 10px 28px;
+}
+.step > .task-live-line {
+  padding: 0 12px 8px 28px;
 }
 
 /* ---- recall provenance (RCL-UI) ---- */
-.step-expand {
-  border: none;
-  background: none;
-  padding: 0 2px;
-  cursor: pointer;
-  color: var(--ink-faint);
-  font-size: 11px;
-  line-height: 1;
-}
-.step-expand:hover {
-  color: var(--ink-muted);
-}
 .recall-matches {
   flex-basis: 100%;
   display: flex;
@@ -556,6 +844,45 @@
   overflow-y: auto;
 }
 
+/* ---- project task step (COD-UI-2) ---- */
+/* The newest line a running build printed, under its step, so four minutes of
+   compiling reads as work rather than as a hang. One line, never a log. */
+.task-live-line {
+  flex-basis: 100%;
+  padding-left: 10px;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-disclosure {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 2px;
+  padding-left: 10px;
+  border-left: 1px solid var(--paper-edge-2);
+  font-family: var(--font-sans);
+}
+.task-command {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+.task-tail {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  white-space: pre;
+  overflow: auto;
+  max-height: 220px;
+}
+
 /* ---- untrusted-content marker (TRU-UI-1) — provenance, not an alarm: ink
    tones only, no red, no triangle ---- */
 .untrusted-chip {
@@ -607,26 +934,128 @@
   overflow-y: auto;
 }
 
-/* ---- run prose (serif reading column) ---- */
+/* ---- run prose ----
+   Set in the working grotesque, not a book face: the answer is read the way
+   the rest of the instrument is read — clean, even, a little tighter than a
+   novel — at a size and leading tuned for long answers. The serif is kept for
+   what it does best here: the headings inside an answer, so a long reply has
+   an editorial spine you can scan down. */
 .run-text {
-  font-family: var(--font-serif);
-  font-size: calc(var(--fs-reading) * var(--reading-scale));
-  line-height: var(--lh-reading);
+  font-family: var(--font-reading);
+  font-size: calc(var(--fs-answer) * var(--reading-scale));
+  line-height: var(--lh-answer);
+  letter-spacing: -0.003em;
   color: var(--ink);
   max-width: var(--measure);
+  overflow-wrap: break-word;
+}
+/* Inside the stream the whole stream is already zoomed (`.message-stream`
+   below) — multiplying here as well would scale the prose twice. */
+.message-stream .run-text {
+  font-size: var(--fs-answer);
 }
 .run-text p {
-  margin: 0 0 1em;
+  margin: 0 0 0.9em;
 }
-.run-text p:last-child {
+.run-text > :last-child {
   margin-bottom: 0;
+}
+.run-text > :first-child {
+  margin-top: 0;
+}
+.run-text :is(h1, h2, h3, h4) {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: -0.005em;
+  color: var(--ink);
+  margin: 1.5em 0 0.5em;
+}
+.run-text h1 {
+  font-size: 1.45em;
+}
+.run-text h2 {
+  font-size: 1.28em;
+}
+.run-text h3 {
+  font-size: 1.12em;
+}
+.run-text h4 {
+  font-family: var(--font-sans);
+  font-size: 0.78em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.run-text :is(ul, ol) {
+  margin: 0 0 0.9em;
+  padding-left: 1.3em;
+}
+.run-text li {
+  margin: 0.25em 0;
+  padding-left: 0.2em;
+}
+.run-text li::marker {
+  color: var(--ink-faint);
+}
+.run-text ol > li::marker {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+.run-text strong {
+  font-weight: 600;
+}
+.run-text a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--ink-faint);
+  text-underline-offset: 2px;
+}
+.run-text a:hover {
+  text-decoration-color: var(--ink);
+}
+.run-text blockquote {
+  margin: 0 0 0.9em;
+  padding: 0 0 0 14px;
+  border-left: 2px solid var(--paper-edge-2);
+  color: var(--ink-muted);
+}
+.run-text hr {
+  border: none;
+  border-top: 1px solid var(--paper-edge-2);
+  margin: 1.6em 0;
+}
+.run-text table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0 0 1em;
+  font-size: 0.88em;
+  line-height: 1.5;
+}
+.run-text :is(th, td) {
+  padding: 6px 12px 6px 0;
+  border-bottom: 1px solid var(--paper-edge);
+  text-align: left;
+  vertical-align: top;
+}
+.run-text th {
+  font-family: var(--font-sans);
+  font-size: 0.85em;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  border-bottom-color: var(--paper-edge-2);
 }
 .run-text code {
   font-family: var(--font-mono);
-  font-size: 0.78em;
+  font-size: 0.84em;
   background: var(--paper-edge);
-  padding: 0.1em 0.4em;
-  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius);
 }
 .run-text pre {
   font-family: var(--font-mono);
@@ -680,6 +1109,36 @@
 .compact-divider:hover {
   color: var(--ink-muted);
 }
+/* CTX-5: what a compaction actually replaced, and the passes before it. */
+.compact-detail {
+  margin-top: 8px;
+}
+.compact-note {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-faint);
+}
+.compact-history {
+  margin-top: 10px;
+}
+.compact-history > summary {
+  font-size: 12px;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.compact-history > summary:hover {
+  color: var(--ink-muted);
+}
+.compact-past {
+  margin-top: 10px;
+}
+.compact-when {
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--ink-faint);
+}
 .compact-summary {
   margin: 8px 0 0;
   padding: 12px 14px;
@@ -702,7 +1161,6 @@
   margin-top: 10px;
   padding: 10px 14px;
   border: 1px solid var(--paper-edge-2);
-  border-left: 2px solid var(--ink-muted);
   border-radius: var(--radius-lg);
 }
 .proposal-text {
@@ -770,4 +1228,332 @@
   background: var(--paper);
   color: var(--ink);
   margin-bottom: 8px;
+}
+
+/* `SUB-UI-1`: the agents a turn handed work to, inside the turn itself. Sits
+   between the timeline and the prose — what happened, then who did it, then
+   what came of it. */
+.fleet-card {
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  background: var(--paper);
+  margin: 8px 0 12px;
+  overflow: hidden;
+}
+.fleet-header {
+  font-size: var(--fs-timeline);
+  color: var(--ink-faint);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--paper-edge);
+}
+.fleet-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: var(--fs-ui);
+}
+.fleet-row + .fleet-row {
+  border-top: 1px solid var(--paper-edge);
+}
+.fleet-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.fleet-row.running .fleet-dot {
+  animation: fleet-pulse 1.4s ease-in-out infinite;
+}
+@keyframes fleet-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.fleet-agent {
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12ch;
+}
+.fleet-doing {
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fleet-clock {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-timeline);
+}
+.fleet-actions {
+  display: flex;
+  gap: 6px;
+}
+.fleet-action {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  color: var(--ink-faint);
+  font: inherit;
+  font-size: var(--fs-timeline);
+  border-radius: var(--radius);
+}
+.fleet-action:hover {
+  color: var(--ink);
+  background: var(--canvas);
+}
+.fleet-steer {
+  grid-column: 1 / -1;
+}
+.fleet-steer input {
+  width: 100%;
+  font: inherit;
+  font-size: var(--fs-ui);
+  padding: 5px 8px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  background: var(--canvas);
+  color: var(--ink);
+}
+.fleet-note,
+.fleet-report {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+}
+.fleet-report {
+  white-space: pre-wrap;
+  font-family: inherit;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px 8px;
+  background: var(--canvas);
+  border-radius: var(--radius);
+}
+
+/* ---- `HRN-UI-2`: steps that ran at the same time ----
+   Drawn as one band with a single header, because "3 things at once" is a
+   different fact from three things one after another, and a plain stack shows
+   the second when the first is what happened. */
+.step-band {
+  display: flex;
+  flex-direction: column;
+  box-shadow: inset 2px 0 0 var(--paper-edge-2);
+}
+.step-band.running {
+  box-shadow: inset 2px 0 0 var(--ink);
+}
+.band-header {
+  padding: 7px 12px 2px 30px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+/* Every dot in a live band pulses together: the whole band is the unit. */
+.step-band.running .step.running .verb {
+  animation: step-running 1.2s ease-in-out infinite;
+}
+
+/* ---- `HRN-UI-4`: a result kept on disk ---- */
+.kept-disclosure {
+  flex-basis: 100%;
+  margin-top: 4px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.kept-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 9px;
+  background: var(--paper-edge);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+.kept-ref {
+  font-family: var(--font-mono);
+  color: var(--ink);
+}
+.kept-size {
+  flex: 1;
+}
+.kept-save {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--local);
+  font: inherit;
+}
+.kept-save:hover {
+  text-decoration: underline;
+}
+.kept-saved {
+  color: var(--ok);
+}
+.kept-text {
+  margin: 0;
+  padding: 8px 9px;
+  max-height: 320px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-timeline);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ink-muted);
+}
+
+/* `OBS-3`: the meter turns when the window is nearly full, which is the one
+   moment the number is worth looking at. */
+.run-meter.tight {
+  color: var(--ink-muted);
+}
+
+/* `HRN-UI-5`: what you can do with an answer once it exists. Quiet by design —
+   these sit under every finished turn, so they have to be findable without
+   competing with the answer they follow. */
+.turn-actions {
+  display: flex;
+  gap: 14px;
+  margin-top: 6px;
+}
+
+/* ---- the plan (`PLN-UI-1`) ----
+   Above the timeline, in the same column, sharing its ground: the plan and the
+   steps that carry it out are one story read top to bottom, and putting them
+   on two surfaces would make you hold one in your head while looking at the
+   other. Quieter than the answer, louder than a step — it is the frame the
+   steps below it are read inside. */
+.plan-card {
+  margin: 0 0 8px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+/* The same head as the timeline's, so the two panels read as one story told
+   at two altitudes. */
+.plan-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--paper-edge);
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+}
+.plan-title {
+  font-weight: 500;
+  color: var(--ink);
+}
+.plan-progress {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* `PLN-UI-3`: the mark that says this list is not the first one. */
+.plan-revised {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+.plan-items {
+  list-style: none;
+  margin: 0;
+  padding: 9px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+/* Two columns, not a wrapping row. A row would let a long item flow back under
+   its own checkbox, which is what turned this list into a wall — the boxes have
+   to hold a column of their own for the list to read as a list. */
+.plan-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 9px;
+  align-items: start;
+  font-family: var(--font-mono);
+  font-size: var(--fs-timeline);
+  line-height: 1.5;
+  color: var(--ink);
+}
+.plan-mark {
+  color: var(--ink-faint);
+  /* The glyphs differ in width between fonts; a fixed box keeps the text edge
+     straight whatever renders. */
+  width: 1.1em;
+  text-align: center;
+  /* Optical: the box sits a shade high against mono text at this size. */
+  transform: translateY(0.05em);
+}
+.plan-item.done .plan-mark,
+.plan-item.doing .plan-mark {
+  color: var(--ink-muted);
+}
+.plan-item.doing .plan-mark {
+  color: var(--ink);
+}
+/* The item being worked on is the one thing on this card worth finding at a
+   glance, so it is the only one carrying weight. */
+.plan-item.doing .plan-text {
+  color: var(--ink);
+  font-weight: 600;
+}
+.plan-item.todo .plan-text {
+  color: var(--ink-muted);
+}
+.plan-item.done .plan-text {
+  color: var(--ink-faint);
+}
+/* A dropped item stays legible: struck through, not hidden. Losing it would
+   turn the plan into a record of whatever happened to succeed. */
+.plan-item.dropped .plan-text {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+.plan-why,
+.plan-added {
+  font-family: var(--font-sans);
+  color: var(--ink-faint);
+}
+.plan-added {
+  font-style: italic;
+}
+.plan-history {
+  margin: -2px 0 0;
+  padding: 0 12px 10px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-faint);
+}
+.plan-history > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.plan-history > summary::before {
+  content: "▸ ";
+}
+.plan-history[open] > summary::before {
+  content: "▾ ";
+}
+.plan-past {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  color: var(--ink-faint);
 }

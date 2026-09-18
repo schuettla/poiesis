@@ -4,6 +4,11 @@
   grid-column: 2;
   grid-row: 2 / -1;
   overflow-y: auto;
+  /* Reserve the scrollbar track permanently. Without it, filtering a long list
+     down to one item removes the scrollbar, the content box widens by the
+     scrollbar width, and the centred column shifts sideways — the layout
+     "jumps" on every filter change. */
+  scrollbar-gutter: stable;
   padding: 40px 48px 48px;
 }
 .surface-inner {

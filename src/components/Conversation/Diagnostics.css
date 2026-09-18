@@ -1,0 +1,103 @@
+/* COD-UI-3: one error grammar across the app — task steps, the diagnostics
+   block and a code artifact's run all draw findings with these rows. */
+
+.diag-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--fs-timeline);
+}
+
+.diag-file {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  margin-bottom: 2px;
+  overflow-wrap: anywhere;
+}
+
+.diag-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.diag-row {
+  display: grid;
+  grid-template-columns: 10px auto 1fr auto;
+  align-items: baseline;
+  column-gap: 8px;
+  line-height: 1.45;
+}
+
+.diag-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  align-self: center;
+  background: var(--ink-faint);
+}
+
+.diag-error .diag-dot {
+  background: var(--danger);
+}
+
+/* A failed test is not a compiler error: a ring rather than a filled dot. */
+.diag-failure .diag-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--danger);
+}
+
+.diag-warning .diag-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--ink-faint);
+}
+
+.diag-where {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--paper-edge-2);
+  text-underline-offset: 2px;
+}
+
+.diag-where:hover {
+  color: var(--ink);
+  text-decoration-color: currentColor;
+}
+
+.diag-where.plain {
+  cursor: default;
+  text-decoration: none;
+}
+
+.diag-message {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.diag-code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+.diag-more {
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

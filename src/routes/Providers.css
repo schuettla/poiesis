@@ -1,0 +1,152 @@
+/* Providers (`PRV-1`): one flat card per cloud account. Hairlines, not
+   shadows; the only color is the state dot and the problem line. */
+
+.providers-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+.providers-head .link-button {
+  padding: 0;
+}
+
+.provider-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  margin: 12px 0 20px;
+}
+
+.provider-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+}
+.provider-card.off {
+  border-color: var(--paper-edge);
+}
+
+.provider-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.provider-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--ink-faint);
+  flex: none;
+}
+.provider-dot.on {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+.provider-dot.attention {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+.provider-card-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.provider-card-state {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.provider-card-state.on {
+  color: var(--ok);
+}
+.provider-card-state.attention {
+  color: var(--danger);
+}
+
+.provider-card-unlocks {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+.provider-card-problem,
+.provider-card-error {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--danger);
+  line-height: 1.5;
+}
+.provider-card-ok {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ok);
+  line-height: 1.5;
+}
+
+.provider-card-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.provider-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+.provider-card-actions .link-button {
+  padding: 0;
+}
+
+.provider-manage {
+  position: relative;
+  margin-left: auto;
+}
+.provider-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 5;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-float);
+}
+.provider-menu button {
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.provider-menu button:hover,
+.provider-menu button:focus-visible {
+  background: var(--paper-edge);
+}
+.provider-menu button.danger {
+  color: var(--danger);
+}
+
+.providers-servers-hint {
+  margin-top: 4px;
+}
