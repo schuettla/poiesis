@@ -261,23 +261,39 @@ function TurnActions({ message, last }: { message: Message; last: boolean }) {
   const forkFromMessage = useAppStore((s) => s.forkFromMessage);
   const resumeLastRun = useAppStore((s) => s.resumeLastRun);
   const busy = useAppStore((s) => s.busy);
-  if (message.streaming || busy || !isPersistedId(message.id)) return null;
+  if (message.streaming) return null;
 
   const interrupted =
     message.stopReason === "aborted" ||
     message.stopReason === "timeout" ||
     message.stopReason === "max_steps";
 
+  const persisted = isPersistedId(message.id);
+  const canAct = !busy && persisted;
+  const when = message.createdAt
+    ? new Date(message.createdAt).toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      })
+    : null;
+  if (!when && !canAct) return null;
+
+  // One line, shown on hover (or keyboard focus) so a finished turn stays as
+  // quiet as its text until you reach for it.
   return (
     <div className="turn-actions">
-      <button className="why-link" onClick={() => void forkFromMessage(message.id)}>
-        Try again from here
-      </button>
-      {last && interrupted && (
+      {message.text && <WhyThisAnswer messageId={message.id} />}
+      {canAct && (
+        <button className="why-link" onClick={() => void forkFromMessage(message.id)}>
+          Try again from here
+        </button>
+      )}
+      {canAct && last && interrupted && (
         <button className="why-link" onClick={() => void resumeLastRun()}>
           Continue where I stopped
         </button>
       )}
+      {when && <span className="turn-time">{when}</span>}
     </div>
   );
 }
@@ -360,7 +376,6 @@ export default function AgentRun({ message, last = false }: { message: Message; 
       {!message.streaming && message.stopReason && <StoppedNote reason={message.stopReason} />}
       {saidNothing && <SaidNothing />}
       {noAnswer && <NoAnswer />}
-      {!message.streaming && message.text && <WhyThisAnswer messageId={message.id} />}
       <TurnActions message={message} last={last} />
       {message.artifactIds && message.artifactIds.length > 0 && (
         <ArtifactChips ids={message.artifactIds} />

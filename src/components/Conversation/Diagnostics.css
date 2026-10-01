@@ -10,7 +10,7 @@
 
 .diag-file {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   margin-bottom: 2px;
   overflow-wrap: anywhere;
@@ -58,7 +58,7 @@
 
 .diag-where {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   background: none;
   border: 0;
@@ -86,7 +86,7 @@
 
 .diag-code {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
 

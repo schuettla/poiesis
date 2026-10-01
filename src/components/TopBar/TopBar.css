@@ -35,8 +35,10 @@
   border: none;
   color: var(--ink-faint);
   cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius);
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: var(--radius-sm);
 }
 /* The rail toggle sits at the segment's right end, on the rail's own edge —
    the side the rail closes toward. */
@@ -47,7 +49,10 @@
 }
 .sidebar-toggle:hover {
   color: var(--ink);
-  background: var(--paper-edge);
+  background: var(--fill-hover);
+}
+.sidebar-toggle:active {
+  background: var(--fill-press);
 }
 /* A pressed toggle reads as "this panel is on", not just hovered. */
 .sidebar-toggle.on {
@@ -61,12 +66,14 @@
 }
 .toggle-badge {
   position: absolute;
-  top: 4px;
-  right: 3px;
+  top: 5px;
+  right: 5px;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--local);
+  box-shadow: 0 0 0 2px var(--canvas);
+  animation: pop-in var(--dur) var(--ease-pop);
 }
 
 .brand {
@@ -79,7 +86,7 @@
   /* The mockup's 15px wordmark in a 42px header. It was 17px in a 48px one;
      shrinking the row without shrinking what sits in it is how a "narrower"
      header ends up merely more cramped. */
-  font-size: 15px;
+  font-size: var(--fs-ui-lg);
   letter-spacing: 0.02em;
   font-weight: 500;
   white-space: nowrap;
@@ -146,14 +153,13 @@
   padding: 0;
   color: var(--ink-muted);
   cursor: default;
-  transition: background-color 120ms ease, color 120ms ease;
 }
 .wc-btn:hover {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
   color: var(--ink);
 }
 .wc-btn:active {
-  background: var(--paper-edge-2);
+  background: var(--fill-press);
 }
 .wc-close:hover,
 .wc-close:active {
@@ -178,30 +184,22 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  padding: 0 14px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--paper-edge-2);
 }
+/* One voice for "where you are", whatever it names: the window-title
+   treatment — sans, semibold, a touch tight. It used to be serif for a chat
+   and tiny tracked capitals for a route, so the same slot changed character
+   every time you moved. */
 .topbar-where-label {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--ink-muted);
-}
-/* Body-LG in serif: the size the session tab carried, kept so that removing
-   the tab did not also quietly demote the title it held. */
-.topbar-where.is-chat .topbar-where-label {
-  font-family: var(--font-serif);
-  font-size: 15px;
-}
-/* Label: a route is a section of the app, and this is how every other section
-   name in the shell is set. */
-.topbar-where.is-route .topbar-where-label {
   font-family: var(--font-sans);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  color: var(--ink);
+  animation: fade-in var(--dur) var(--ease-out);
 }
-

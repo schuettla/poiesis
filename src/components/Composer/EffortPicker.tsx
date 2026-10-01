@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getSetting, setSetting } from "../../lib/api";
+import { ChevronIcon } from "../Icons/Icons";
 import "./EffortPicker.css";
 
 /**
@@ -97,7 +98,7 @@ export default function EffortPicker() {
         <Meter bars={current.bars} />
         <span className="effort-name">{current.label}</span>
         <span className="caret" aria-hidden="true">
-          ▴
+          <ChevronIcon dir="up" size={10} strokeWidth={1.8} />
         </span>
       </button>
 

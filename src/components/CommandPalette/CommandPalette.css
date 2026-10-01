@@ -1,7 +1,6 @@
 /* The palette floats above the whole shell, so it is one of the few things
-   allowed the dialog shadow. The selected row is an inverted segment — ink
-   ground, paper text — the way a monochrome LCD marks the line you're on, and
-   the same treatment as the Rail's current row. */
+   allowed the dialog shadow. The selected row takes the shared selection
+   fill, one step firmer than hover. */
 .palette-backdrop {
   position: fixed;
   inset: 0;
@@ -10,7 +9,9 @@
   justify-content: center;
   align-items: flex-start;
   padding: 12vh 16px 16px;
-  background: color-mix(in srgb, var(--ink) 18%, transparent);
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+  backdrop-filter: blur(2px);
+  animation: fade-in var(--dur) var(--ease-out);
 }
 
 .palette {
@@ -19,21 +20,12 @@
   display: flex;
   flex-direction: column;
   background: var(--paper);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-modal);
   overflow: hidden;
-}
-@media (prefers-reduced-motion: no-preference) {
-  .palette {
-    animation: palette-drop 160ms cubic-bezier(0.16, 1, 0.3, 1);
-  }
-}
-@keyframes palette-drop {
-  from {
-    opacity: 0.5;
-    transform: translateY(-6px);
-  }
+  transform-origin: top center;
+  animation: pop-in var(--dur) var(--ease-out);
 }
 
 .palette-input-row {
@@ -76,10 +68,8 @@
 }
 .palette-group-label {
   font-family: var(--font-sans);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: var(--fs-caption);
+  font-weight: 600;
   color: var(--ink-faint);
   padding: 10px 10px 5px;
 }
@@ -129,28 +119,27 @@
 .palette-meta {
   flex: 0 1 auto;
   max-width: 38%;
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
 .palette-time {
   flex: none;
   min-width: 4ch;
   text-align: right;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
 
+/* The keyboard's place in the list: a firm fill, not an inverted bar — the
+   same family as every other selection, one step stronger because it moves. */
 .palette-option[aria-selected="true"] {
-  background: var(--ink);
-  color: var(--paper);
+  background: var(--fill-press);
+  color: var(--ink);
 }
-.palette-option[aria-selected="true"] :is(.palette-icon, .palette-meta, .palette-time, .palette-snippet) {
-  color: color-mix(in srgb, var(--paper) 72%, transparent);
-}
-.palette-option[aria-selected="true"] .palette-snippet mark {
-  color: var(--paper);
+.palette-option[aria-selected="true"] :is(.palette-icon, .palette-meta, .palette-time) {
+  color: var(--ink-muted);
 }
 
 .palette-empty {
@@ -168,7 +157,7 @@
   padding: 8px 14px;
   border-top: 1px solid var(--paper-edge);
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
 .palette-foot .kbd {

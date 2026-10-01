@@ -3,6 +3,7 @@ import { useAppStore, useSelectedModel } from "../../lib/store";
 import type { Model } from "../../lib/types";
 import { availableFavorites, isMediaModel } from "../../lib/modelPrefs";
 import { StarButton } from "../Models/ModelRows";
+import { ChevronIcon } from "../Icons/Icons";
 import "./ModelPicker.css";
 
 function Dot({ provenance }: { provenance: Model["provenance"] }) {
@@ -118,7 +119,7 @@ export default function ModelPicker({
         <Dot provenance={selected.provenance} />
         <span className="model-picker-name">{selected.name}</span>
         <span className="caret" aria-hidden="true">
-          {dropUp ? "▴" : "▾"}
+          <ChevronIcon dir={dropUp ? "up" : "down"} size={10} strokeWidth={1.8} />
         </span>
       </button>
 

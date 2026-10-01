@@ -37,22 +37,82 @@ html {
   color: var(--ink);
   font-family: var(--font-sans);
   transition: background var(--t-mode), color var(--t-mode);
+  /* Grayscale smoothing and real kerning: type on a lit panel should look
+     drawn, not rasterised. */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-kerning: normal;
 }
 
 body {
   overflow: hidden;
 }
 
-/* Visible focus ring on every interactive element (accessibility floor, §5.5). */
+/* Visible focus ring on every interactive element (accessibility floor, §5.5).
+   The outline follows the element's own radius; this rule used to force a
+   2px corner radius as well, which squared off every rounded control the
+   moment it took keyboard focus. */
 :focus-visible {
-  outline: 2px solid var(--local);
+  outline: 2px solid color-mix(in srgb, var(--local) 70%, transparent);
   outline-offset: 2px;
-  border-radius: 2px;
 }
 
 button {
   font-family: inherit;
   color: inherit;
+}
+
+/* One motion vocabulary for every interactive surface. Longhands, so a
+   component that declares its own `transition` shorthand simply replaces this
+   rather than fighting it — and every hover that used to snap now eases. */
+button,
+a,
+input,
+textarea,
+select,
+[role="button"],
+[role="tab"],
+[role="menuitem"],
+[role="option"] {
+  transition-property: background-color, border-color, color, box-shadow, opacity, transform;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: var(--ease-out);
+}
+
+/* Arrivals. Menus and popovers grow out of where they were opened from;
+   panels and cards rise a few pixels as they fade in. Short, and only ever
+   on the way in — leaving is instant, so nothing lingers in the way. */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-3px);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+/* The same arrival for things that open upward (the composer's drop-ups). */
+@keyframes pop-up {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+  }
+}
+/* Dialogs settle into place from a touch smaller. */
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
 
 /* Checkboxes and radios — the native controls ship a browser-blue fill that
@@ -73,10 +133,17 @@ input[type="radio"] {
   place-content: center;
   vertical-align: middle;
   border: 1px solid var(--paper-edge-2);
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   background: var(--paper);
   cursor: pointer;
-  transition: background var(--t-fast), border-color var(--t-fast);
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast),
+    transform var(--dur) var(--ease-pop);
+}
+input[type="checkbox"]:active:not(:disabled),
+input[type="radio"]:active:not(:disabled) {
+  transform: scale(0.9);
 }
 
 input[type="radio"] {
@@ -102,6 +169,13 @@ input[type="checkbox"]:checked::after {
   border: solid var(--paper);
   border-width: 0 1.5px 1.5px 0;
   transform: translateY(-1px) rotate(45deg);
+  animation: check-in var(--dur) var(--ease-pop);
+}
+@keyframes check-in {
+  from {
+    opacity: 0;
+    transform: translateY(-1px) rotate(45deg) scale(0.4);
+  }
 }
 
 input[type="checkbox"]:indeterminate::after {
@@ -131,45 +205,75 @@ input[type="radio"]:disabled {
    of those route stylesheets happening to be in the bundle. They are the
    app's vocabulary, not any one route's, so they belong here. */
 
-.btn-primary {
+.btn-primary,
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: var(--control);
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  border-radius: var(--radius);
+  padding: 0 14px;
+  cursor: pointer;
+}
+/* A press settles the button into the panel a fraction; the spring on the
+   way back out is what makes it feel physical rather than toggled. */
+.btn-primary:active:not(:disabled),
+.btn-secondary:active:not(:disabled) {
+  transform: scale(0.97);
+  transition-duration: 60ms;
+}
+
+.btn-primary {
   background: var(--ink);
   color: var(--paper);
   border: 1px solid var(--ink);
-  border-radius: var(--radius);
-  padding: 7px 16px;
-  cursor: pointer;
+  box-shadow: var(--shadow-xs);
+}
+.btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 86%, var(--paper));
+  border-color: color-mix(in srgb, var(--ink) 86%, var(--paper));
 }
 .btn-primary:disabled {
-  opacity: 0.4;
+  opacity: 0.35;
+  box-shadow: none;
   cursor: default;
 }
 
 .btn-secondary {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  background: none;
+  background: var(--paper);
   color: var(--ink);
   border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  padding: 7px 14px;
-  cursor: pointer;
+  box-shadow: var(--shadow-xs);
 }
-.btn-secondary:hover {
+.btn-secondary:hover:not(:disabled) {
   border-color: var(--ink-faint);
+  background: color-mix(in srgb, var(--paper) 94%, var(--ink));
+}
+.btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 .btn-secondary.selected {
-  background: var(--paper-edge);
+  background: var(--fill-selected);
   border-color: var(--ink);
   color: var(--ink);
+  box-shadow: none;
 }
 
+/* A link-style action. Colour-only feedback, no fill: it sits flush with the
+   text column, and a hover pad would need side padding that pushes it off
+   that edge. */
 .btn-text {
   background: none;
   border: none;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   cursor: pointer;
   color: var(--ink-muted);
   padding: 6px 2px;
@@ -177,27 +281,34 @@ input[type="radio"]:disabled {
 .btn-text:hover {
   color: var(--ink);
 }
+.btn-text:active {
+  opacity: 0.7;
+}
 .btn-text.danger:hover {
   color: var(--danger);
 }
 
-/* A key or chord, drawn as a hairline keycap. */
+/* A key or chord, drawn as a hairline keycap with a hint of depth. */
 .kbd {
   display: inline-flex;
   align-items: center;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-caption);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
   line-height: 1;
   color: var(--ink-faint);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  padding: 3px 5px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-bottom-width: 1.5px;
+  border-radius: var(--radius-xs);
+  padding: 2px 5px;
   white-space: nowrap;
 }
 
 .field-label {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   font-weight: 600;
   color: var(--ink-muted);
 }
@@ -213,37 +324,185 @@ input[type="radio"]:disabled {
 }
 p.field-hint {
   font-family: var(--font-sans);
-  font-size: var(--fs-timeline);
+  font-size: var(--fs-footnote);
+  line-height: 1.5;
   margin: 0;
 }
 
+/* Fields: hairline at rest, a soft halo on focus — the halo, not a heavier
+   border, is what says "you are typing here". */
 .field-input {
   font-family: var(--font-sans);
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
   border-radius: var(--radius);
-  padding: 8px 11px;
+  min-height: var(--control);
+  padding: 7px 11px;
   outline: none;
+}
+.field-input:hover:not(:focus):not(:disabled) {
+  border-color: color-mix(in srgb, var(--paper-edge-2) 60%, var(--ink-faint));
 }
 .field-input:focus {
   border-color: var(--ink-faint);
+  box-shadow: var(--ring);
+}
+.field-input::placeholder,
+textarea::placeholder,
+input::placeholder {
+  color: var(--ink-faint);
 }
 
-/* Subtle scrollbars matching the paper ground. */
+/* ---- segmented control ----
+   The one way to pick one of a few: a recessed track with the chosen
+   segment lifted out of it as a small paper tile. Seven different controls
+   used to do this job — bordered tab strips, black-filled chips, outlined
+   buttons, a bare text row — each a different height and a different idea of
+   "selected". They keep their class names (the components still use them)
+   but all of them are drawn here, and their own sheets only place them. */
+.segmented,
+.model-tabs,
+.models-filters,
+.filter-row,
+.library-filter-row,
+.usage-ranges,
+.self-segmented,
+.wb-segments,
+.memory-scope,
+.setting-actions[role="group"] {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px;
+  min-height: var(--control);
+  background: var(--fill-press);
+  border: none;
+  border-radius: var(--radius);
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
+  overflow: visible;
+}
+.segmented-item,
+.model-tab,
+.filter-chip,
+.usage-range,
+.self-segment,
+.wb-segment,
+.memory-scope-segment,
+.setting-actions[role="group"] > .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  font-weight: 500;
+  line-height: 1;
+  color: var(--ink-muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  min-height: calc(var(--control) - 4px);
+  box-shadow: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.segmented-item:hover,
+.model-tab:hover,
+.filter-chip:hover,
+.usage-range:hover,
+.self-segment:hover,
+.wb-segment:hover,
+.memory-scope-segment:hover,
+.setting-actions[role="group"] > .btn-secondary:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--paper) 45%, transparent);
+}
+.segmented-item.active,
+.model-tab.active,
+.filter-chip.active,
+.usage-range.active,
+.self-segment.active,
+.wb-segment.active,
+.memory-scope-segment.active,
+.setting-actions[role="group"] > .btn-secondary.active,
+.segmented-item.on,
+.model-tab.on,
+.filter-chip.on,
+.usage-range.on,
+.self-segment.on,
+.wb-segment.on,
+.memory-scope-segment.on,
+.setting-actions[role="group"] > .btn-secondary.on,
+.segmented-item.selected,
+.model-tab.selected,
+.filter-chip.selected,
+.usage-range.selected,
+.self-segment.selected,
+.wb-segment.selected,
+.memory-scope-segment.selected,
+.setting-actions[role="group"] > .btn-secondary.selected,
+.segmented-item[aria-pressed="true"],
+.model-tab[aria-pressed="true"],
+.filter-chip[aria-pressed="true"],
+.usage-range[aria-pressed="true"],
+.self-segment[aria-pressed="true"],
+.wb-segment[aria-pressed="true"],
+.memory-scope-segment[aria-pressed="true"],
+.setting-actions[role="group"] > .btn-secondary[aria-pressed="true"],
+.segmented-item[aria-selected="true"],
+.model-tab[aria-selected="true"],
+.filter-chip[aria-selected="true"],
+.usage-range[aria-selected="true"],
+.self-segment[aria-selected="true"],
+.wb-segment[aria-selected="true"],
+.memory-scope-segment[aria-selected="true"],
+.setting-actions[role="group"] > .btn-secondary[aria-selected="true"] {
+  color: var(--ink);
+  background: var(--paper);
+  box-shadow: var(--shadow-xs), 0 0 0 0.5px var(--hairline);
+}
+
+/* ---- empty state ----
+   Nothing here yet is a calm moment, not an error: centred, quiet, in the
+   UI's own face — never a dashed box of monospace. */
+.empty-note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: var(--sp-10) var(--sp-6);
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.5;
+  color: var(--ink-muted);
+  background: var(--fill-quiet);
+  border-radius: var(--radius-lg);
+  animation: fade-in var(--dur) var(--ease-out);
+}
+
+/* Subtle scrollbars: a thin thumb inset from the edge by a transparent
+   border, so it floats in the gutter the way an overlay scroller does. */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--paper-edge-2);
-  border-radius: 3px;
-  transition: background var(--t-fast);
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: var(--radius-pill);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--ink-faint);
+  background-color: color-mix(in srgb, var(--ink) 32%, transparent);
 }
-::-webkit-scrollbar-track {
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
   background: transparent;
 }

@@ -5,23 +5,41 @@
 }
 .setting-title {
   font-family: var(--font-sans);
-  font-size: 15px;
+  font-size: var(--fs-ui-lg);
   font-weight: 600;
   color: var(--ink);
   margin: 0 0 4px;
 }
 .setting-help {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink-muted);
   margin: 0 0 14px;
   max-width: 60ch;
   line-height: 1.55;
 }
+.setting-subtitle {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink);
+  margin: 18px 0 2px;
+}
+/* Each choice is set in its own face, and faces differ in ascent/descent, so
+   the line box is pinned — otherwise the buttons come out different heights. */
+.setting-font-choice {
+  box-sizing: border-box;
+  height: calc(var(--control) - 4px);
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
 .system-prompt {
   width: 100%;
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: var(--fs-callout);
   line-height: 1.6;
   color: var(--ink);
   background: var(--paper);
@@ -40,9 +58,14 @@
   gap: 12px;
   margin-top: 12px;
 }
+/* A choice group (theme, text size, font, …) is a segmented control, drawn
+   in global.css; only the row of plain actions keeps the 12px gap. */
+.setting-actions[role="group"] {
+  gap: 2px;
+}
 /* .btn-primary is a shared primitive — see styles/global.css. */
 .saved-note {
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ok);
 }
 
@@ -62,16 +85,16 @@
 }
 .provider-name {
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: var(--fs-callout);
   font-weight: 600;
   color: var(--ink);
 }
 .provider-status {
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   border: 1px solid var(--paper-edge-2);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 1px 8px;
 }
 .provider-status.set {
@@ -94,7 +117,7 @@
   align-items: flex-start;
   gap: 9px;
   font-family: var(--font-sans);
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   color: var(--ink);
   cursor: pointer;
   margin-top: 4px;
@@ -112,14 +135,14 @@
 }
 .imggen-label {
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   font-weight: 600;
   color: var(--ink-muted);
   flex: 0 0 130px;
 }
 .imggen-path {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
   flex: 1;
   overflow: hidden;
@@ -129,7 +152,7 @@
 
 .imggen-ready {
   font-family: var(--font-sans);
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   color: var(--ok);
   margin: 4px 0 12px;
 }
@@ -157,7 +180,7 @@
 .imggen-progress .dl-pct {
   position: relative;
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   margin: 0 auto;
   padding: 0 10px;
@@ -185,7 +208,7 @@
 }
 .toolset-flag {
   font-family: var(--font-sans);
-  font-size: 10.5px;
+  font-size: var(--fs-caption);
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -195,7 +218,7 @@
   padding: 1px 8px;
 }
 .toolset-desc {
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   line-height: 1.5;
 }
@@ -203,8 +226,9 @@
    description — a footnote, not a claim. Absent entirely when there's no data. */
 .toolset-reliability {
   margin-top: 3px;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
 
@@ -221,7 +245,7 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--fs-footnote);
 }
 .toolset-subitem-path {
   font-family: var(--font-mono);
@@ -251,7 +275,7 @@
   padding: 7px 0;
   border-top: 1px solid var(--paper-edge-2);
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
 }
 .attribution-row:first-child {
   border-top: none;
@@ -266,13 +290,13 @@
 .attribution-license {
   color: var(--ink-faint);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   text-align: right;
 }
 /* .btn-secondary is a shared primitive — see styles/global.css. */
 .empty-hint {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink-faint);
   margin: 0 0 14px;
 }
@@ -288,19 +312,19 @@
 .grant-path {
   flex: 1;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
   word-break: break-all;
 }
 .grant-mode {
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   flex-shrink: 0;
 }
 .grant-revoke {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   background: none;
   border: none;
   color: var(--danger);
@@ -318,7 +342,7 @@
 }
 .activity-count {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 .activity-list {
@@ -335,36 +359,39 @@
   border-bottom: 1px solid var(--paper-edge);
 }
 .activity-kind {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--ink-muted);
 }
 .activity-detail {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
   word-break: break-all;
 }
 .activity-time {
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   white-space: nowrap;
 }
 
 .version-note {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
 
 /* A plain read-only value inside a settings card (e.g. context window size). */
 .setting-readout {
   margin: 0 0 10px;
-  font-family: var(--font-mono);
-  font-size: 13px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-ui);
   color: var(--ink-muted);
 }
 .setting-readout.wrap {
@@ -380,7 +407,7 @@
   background: none;
   border: none;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink-muted);
   cursor: pointer;
   text-align: left;

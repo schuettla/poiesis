@@ -21,8 +21,9 @@
 .self-strip {
   /* Carries the gap down to the tab row, which sits outside the header. */
   margin: 0 0 14px;
-  font-family: var(--font-mono);
-  font-size: 12px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 .growth-rings {
@@ -44,7 +45,7 @@
   max-width: 100%;
 }
 .self-tabs .model-tab {
-  padding: 7px 14px;
+  padding: 0 14px;
 }
 
 .self-list {
@@ -62,14 +63,14 @@
 .self-subhead {
   margin: 0 0 6px;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   font-weight: 600;
   color: var(--ink);
 }
 .self-line {
   margin: 0 0 6px;
   font-family: var(--font-sans);
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   line-height: 1.55;
   color: var(--ink-muted);
 }
@@ -82,9 +83,10 @@
   margin: 6px 0 0;
   padding: 10px 12px;
   background: var(--paper-edge);
-  border-radius: 6px;
-  font-family: var(--font-mono);
-  font-size: 12px;
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-footnote);
   line-height: 1.55;
   color: var(--ink);
   white-space: pre-wrap;
@@ -93,7 +95,7 @@
   overflow-y: auto;
 }
 .self-chip {
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 
@@ -116,13 +118,14 @@
 .self-tool {
   flex: 1;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
   word-break: break-all;
 }
 .self-tool-count {
-  font-family: var(--font-mono);
-  font-size: 12px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 
@@ -145,38 +148,13 @@
 }
 .self-rung-label {
   font-family: var(--font-sans);
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   font-weight: 600;
   color: var(--ink);
 }
+/* Drawn by the shared segmented control (global.css). */
 .self-segmented {
-  display: flex;
   flex: none;
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-.self-segment {
-  font-family: var(--font-sans);
-  font-size: 12px;
-  background: none;
-  border: none;
-  border-left: 1px solid var(--paper-edge-2);
-  color: var(--ink-muted);
-  padding: 6px 11px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.self-segment:first-child {
-  border-left: none;
-}
-.self-segment:hover {
-  color: var(--ink);
-}
-.self-segment.active {
-  background: var(--paper-edge);
-  color: var(--ink);
-  font-weight: 600;
 }
 
 .self-why-link {
@@ -197,22 +175,22 @@
   gap: 4px;
   margin: 0 0 10px;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .self-field input[type="text"],
 .self-field textarea {
   font-family: var(--font-sans);
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 8px 10px;
   resize: vertical;
 }
 .self-field textarea {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   line-height: 1.5;
 }

@@ -5,16 +5,19 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--ink) 22%, transparent);
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+  backdrop-filter: blur(3px);
+  animation: fade-in var(--dur) var(--ease-out);
 }
 
 .confirm-card {
   width: min(380px, calc(100vw - 48px));
   background: var(--paper);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
-  padding: 18px 20px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-modal);
+  padding: 20px 20px 16px;
+  animation: dialog-in var(--dur) var(--ease-out);
 }
 
 .confirm-title {
@@ -41,20 +44,28 @@
 }
 
 .confirm-actions button {
+  min-height: var(--control);
   font-family: var(--font-sans);
   font-size: var(--fs-ui);
-  padding: 6px 14px;
+  font-weight: 500;
+  padding: 0 14px;
   border-radius: var(--radius);
   cursor: pointer;
 }
+.confirm-actions button:active {
+  transform: scale(0.97);
+  transition-duration: 60ms;
+}
 
 .confirm-cancel {
-  background: none;
+  background: var(--paper);
   color: var(--ink);
   border: 1px solid var(--paper-edge-2);
+  box-shadow: var(--shadow-xs);
 }
 .confirm-cancel:hover {
   border-color: var(--ink-faint);
+  background: color-mix(in srgb, var(--paper) 94%, var(--ink));
 }
 
 .confirm-go {

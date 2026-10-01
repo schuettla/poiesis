@@ -26,7 +26,7 @@
   border: none;
   color: var(--ink-muted);
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   cursor: pointer;
   padding: 10px 0 0;
   text-decoration: underline;
@@ -59,13 +59,13 @@
   background: none;
   border: none;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   padding: 6px 14px;
   cursor: pointer;
 }
 .transport-toggle .seg.on {
-  background: var(--paper-edge);
+  background: var(--fill-selected);
   color: var(--ink);
 }
 
@@ -77,7 +77,7 @@
 }
 .bundle-note {
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   margin: 10px 0 0;
 }
@@ -87,7 +87,7 @@
 .bundle-text {
   width: 100%;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
@@ -140,12 +140,12 @@
 }
 .connector-name {
   font-family: var(--font-sans);
-  font-size: 14.5px;
+  font-size: var(--fs-callout);
   font-weight: 600;
   color: var(--ink);
 }
 .lock {
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 .switch {
@@ -154,13 +154,13 @@
   gap: 6px;
   cursor: pointer;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 
 .connector-url {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   margin: 8px 0 10px;
   word-break: break-all;
@@ -174,27 +174,27 @@
 }
 .tool-count {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .tool-chip {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink);
   background: var(--paper-edge);
   border: 1px solid var(--paper-edge-2);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   padding: 2px 8px;
 }
 .tool-empty {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 
 .connector-status {
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   margin-top: 11px;
 }
 .connector-status.ok {

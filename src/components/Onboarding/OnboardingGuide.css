@@ -7,15 +7,16 @@
   width: 320px;
   z-index: 35;
   background: var(--paper);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-modal);
   padding: 18px 18px 16px;
-  animation: onboarding-in 0.18s ease;
+  transform-origin: bottom right;
+  animation: onboarding-in var(--dur-slow) var(--ease-out);
 }
 @keyframes onboarding-in {
   from {
-    transform: translateY(8px);
+    transform: translateY(10px) scale(0.98);
     opacity: 0;
   }
 }
@@ -37,7 +38,7 @@
 }
 .onboarding-close:hover {
   color: var(--ink);
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 
 .onboarding-title {

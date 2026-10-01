@@ -83,3 +83,11 @@
     --rail-w: 188px;
   }
 }
+/* On a small window the dock gives way before the conversation does: capped
+   at a third of the window, so the reading column never ends up the narrowest
+   thing on screen. The dragged width still applies whenever it is smaller. */
+@media (max-width: 1100px) {
+  .app {
+    grid-template-columns: var(--rail-w) minmax(0, 1fr) min(var(--dock-w), 32vw);
+  }
+}

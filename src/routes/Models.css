@@ -6,16 +6,14 @@
 }
 .hw-title {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--ink-faint);
   margin: 0 0 14px;
 }
 .hw-note {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink-muted);
   margin: 0;
 }
@@ -35,37 +33,23 @@
 }
 .hw-label {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 .hw-value {
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: var(--fs-callout);
   color: var(--ink);
 }
 
 /* ---- Language / Image tabs ---- */
+/* Drawn by the shared segmented control (global.css). */
 .model-tabs {
-  display: inline-flex;
-  gap: 0;
   margin: 4px 0 28px;
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  overflow: hidden;
 }
 .model-tab {
-  background: none;
-  border: none;
-  font-family: var(--font-sans);
-  font-size: 13px;
-  color: var(--ink-muted);
-  padding: 7px 20px;
-  cursor: pointer;
-}
-.model-tab.on {
-  background: var(--paper-edge);
-  color: var(--ink);
-  font-weight: 600;
+  font-size: var(--fs-ui);
+  padding: 0 16px;
 }
 
 /* ---- marketplace sections ---- */
@@ -74,10 +58,8 @@
 }
 .section-title {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--ink-faint);
   margin: 0 0 16px;
 }
@@ -102,19 +84,19 @@
 }
 .model-name {
   font-family: var(--font-sans);
-  font-size: 14.5px;
+  font-size: var(--fs-callout);
   font-weight: 600;
   color: var(--ink);
 }
 .model-quant {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   flex-shrink: 0;
 }
 .model-desc {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   line-height: 1.5;
   color: var(--ink-muted);
   margin: 0 0 14px;
@@ -129,19 +111,19 @@
 }
 .model-size {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 /* Multi-file models download several parts as one model; saying so up front
    explains an otherwise surprising 15 GB, four-file transfer. */
 .model-parts {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 .fit-badge {
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   font-weight: 500;
   padding: 3px 9px;
   border-radius: var(--radius);
@@ -167,7 +149,7 @@
 }
 .model-speed {
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   margin-bottom: 12px;
 }
@@ -179,13 +161,13 @@
 }
 .disk-total {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 .btn-download,
 .btn-use {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   background: var(--ink);
   color: var(--paper);
   border: 1px solid var(--ink);
@@ -207,7 +189,7 @@
 }
 .owned-note {
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .dl-progress {
@@ -229,8 +211,9 @@
 }
 .dl-pct {
   position: relative;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-muted);
   margin: 0 auto;
 }
@@ -238,7 +221,7 @@
 /* ---- add by link ---- */
 .add-help {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink-muted);
   margin: 0 0 12px;
 }
@@ -250,7 +233,7 @@
 .add-input {
   flex: 1;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
@@ -292,7 +275,7 @@
 }
 .first-run-body {
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: var(--fs-callout);
   line-height: 1.55;
   color: var(--ink-muted);
   margin: 0 0 16px;
@@ -300,7 +283,7 @@
 }
 .btn-primary.big,
 .btn-secondary.big {
-  font-size: 14px;
+  font-size: var(--fs-callout);
   padding: 10px 20px;
 }
 .dl-progress.wide {
@@ -323,7 +306,7 @@
   display: flex;
   justify-content: space-between;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   margin: 4px 0 14px;
 }
@@ -348,14 +331,11 @@
   margin: 0;
 }
 .models-filters {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: stretch;
 }
 .models-search {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
@@ -373,7 +353,7 @@
 }
 .section-note {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   margin: 8px 0 0;
 }
@@ -402,7 +382,7 @@
   padding: 4px 6px;
   border-bottom: 1px solid var(--paper-edge);
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
 }
 .model-row.in-use {
   background: color-mix(in srgb, var(--paper-edge) 50%, transparent);
@@ -423,7 +403,7 @@
 }
 .cap-chip {
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-muted);
   background: var(--paper-edge);
   border: 1px solid var(--paper-edge-2);
@@ -433,7 +413,7 @@
 }
 .model-row-cost,
 .model-cost {
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   white-space: nowrap;
 }
@@ -453,7 +433,7 @@
 }
 .default-tag {
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -493,14 +473,15 @@
   cursor: default;
 }
 .fav-pos {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   width: 14px;
   flex: none;
 }
 .fav-where {
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   flex: 1 1 auto;
   overflow: hidden;
@@ -515,7 +496,7 @@
 .model-details {
   margin-bottom: 12px;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 .model-details summary {
@@ -530,7 +511,7 @@
 }
 .model-speed.path {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   word-break: break-all;
 }
 
@@ -551,12 +532,12 @@
   gap: 6px 14px;
   padding: 0 6px 10px 23px;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 .model-row-path {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   word-break: break-all;
   flex: 1 1 240px;
 }
@@ -578,7 +559,7 @@
   align-items: center;
   gap: 8px;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink-muted);
   margin: 0 0 12px;
 }
@@ -594,37 +575,71 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
+  gap: 4px;
   text-align: left;
   background: var(--paper);
-  border: 1px solid var(--paper-edge-2);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
-  padding: 14px 16px;
+  box-shadow: var(--shadow-xs);
+  padding: 16px;
   cursor: pointer;
   font-family: var(--font-sans);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out),
+    transform var(--dur) var(--ease-out);
 }
-.add-door:hover,
+.add-door:hover {
+  border-color: var(--paper-edge-2);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-2px);
+}
+.add-door:active {
+  transform: translateY(0) scale(0.99);
+  transition-duration: 60ms;
+}
 .add-door.open {
   border-color: var(--ink-faint);
+  background: var(--fill-quiet);
+  box-shadow: none;
+  transform: none;
 }
-.add-door.open {
-  background: var(--paper-edge);
+.add-door-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin-bottom: 6px;
+  border-radius: var(--radius);
+  background: var(--fill-press);
+  color: var(--ink);
 }
 .add-door-title {
-  font-size: 13px;
+  font-size: var(--fs-ui);
   font-weight: 600;
   color: var(--ink);
 }
 .add-door-body-text {
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   line-height: 1.5;
 }
 .add-door-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   margin-top: auto;
-  font-size: 12px;
+  padding-top: 8px;
+  font-size: var(--fs-footnote);
+  font-weight: 500;
   color: var(--ink);
-  text-decoration: underline;
+}
+.add-door-action svg {
+  transition: transform var(--dur) var(--ease-out);
+}
+.add-door:hover:not(.open) .add-door-action svg {
+  transform: translateX(2px);
 }
 .add-door-body {
   display: flex;
@@ -642,7 +657,7 @@
 }
 .link-kind {
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   margin: 0;
 }
@@ -651,7 +666,7 @@
 }
 .quant-repo {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   font-weight: 600;
   color: var(--ink);
   margin-bottom: 10px;
@@ -680,7 +695,7 @@
   min-width: 0;
 }
 .catalog-desc {
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   line-height: 1.45;
   overflow: hidden;
@@ -706,7 +721,7 @@
   height: 26px;
 }
 .catalog-action .owned-note {
-  font-size: 12px;
+  font-size: var(--fs-footnote);
 }
 .catalog-row.wont-fit .model-row-name,
 .catalog-row.wont-fit .catalog-desc {

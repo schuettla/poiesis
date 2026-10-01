@@ -33,8 +33,9 @@
   min-width: 0;
 }
 .ws-badge {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   letter-spacing: 0.05em;
   color: var(--ink);
   border: 1px solid var(--ink-faint);
@@ -44,7 +45,7 @@
 }
 .ws-title {
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   font-weight: 500;
   color: var(--ink);
   white-space: nowrap;
@@ -55,15 +56,16 @@
 .ws-recipe {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .ws-log-toggle {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   letter-spacing: 0.05em;
   color: var(--ink-faint);
   background: none;
@@ -124,8 +126,9 @@
   overflow: hidden;
 }
 .ws-pending {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   margin: 0 0 6px;
 }

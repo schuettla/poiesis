@@ -12,16 +12,16 @@
   padding: 5px 10px 5px 8px;
   cursor: pointer;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink);
 }
 .model-picker-trigger:hover {
   border-color: var(--ink-faint);
 }
 .model-picker-trigger .caret {
+  display: inline-flex;
   color: var(--ink-faint);
-  font-size: 10px;
-  margin-left: 2px;
+  margin-left: 1px;
 }
 .model-picker-name {
   overflow: hidden;
@@ -33,22 +33,19 @@
 .model-picker.compact .model-picker-trigger {
   gap: 6px;
   padding: 3px 7px 3px 6px;
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   border-color: transparent;
   max-width: 210px;
 }
 .model-picker.compact .model-picker-trigger:hover,
 .model-picker.compact .model-picker-trigger[aria-expanded="true"] {
-  border-color: var(--paper-edge-2);
+  background: var(--fill-hover);
   color: var(--ink);
 }
 .model-picker.compact .provenance-dot {
   width: 6px;
   height: 6px;
-}
-.model-picker.compact .caret {
-  font-size: 9px;
 }
 .model-picker.compact .model-dropdown {
   width: 300px;
@@ -59,7 +56,8 @@
   top: auto;
   bottom: calc(100% + 6px);
   max-height: 60vh;
-  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.12);
+  transform-origin: bottom right;
+  animation: pop-up var(--dur) var(--ease-out);
 }
 
 .provenance-dot {
@@ -92,44 +90,25 @@
   max-height: 70vh;
   overflow-y: auto;
   background: var(--paper);
-  border: 1px solid var(--paper-edge-2);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  padding: 8px;
+  box-shadow: var(--shadow-float);
+  padding: 6px;
   z-index: 20;
+  transform-origin: top right;
+  animation: pop-in var(--dur) var(--ease-out);
 }
 
 .filter-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 6px 10px;
-  margin-bottom: 6px;
-  border-bottom: 1px solid var(--paper-edge-2);
+  margin: 2px 2px 8px;
 }
-.filter-chip {
-  font-family: var(--font-sans);
-  font-size: 11.5px;
-  color: var(--ink-muted);
-  background: none;
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  padding: 4px 10px;
-  cursor: pointer;
-  user-select: none;
-}
-.filter-chip.active {
-  background: var(--ink);
-  color: var(--paper);
-  border-color: var(--ink);
-}
+/* `.filter-chip` is drawn by the shared segmented control (global.css). */
 
 .model-group-label {
-  font-size: 10.5px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: var(--fs-caption);
+  font-weight: 600;
   color: var(--ink-faint);
-  padding: 6px 8px 4px;
+  padding: 8px 8px 4px;
 }
 
 .model-option {
@@ -141,19 +120,19 @@
   cursor: pointer;
 }
 .model-option:hover {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 .model-option .name {
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   color: var(--ink);
   flex: 1;
 }
 .model-option .meta {
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
 .model-option .price {
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   flex-shrink: 0;
 }
@@ -164,7 +143,7 @@
   font-style: italic;
 }
 .model-option.selected {
-  background: var(--paper-edge);
+  background: var(--fill-selected);
 }
 .model-option.selected .name {
   font-weight: 500;
@@ -174,7 +153,7 @@
   width: 100%;
   box-sizing: border-box;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
@@ -188,7 +167,7 @@
 }
 
 .add-key-row {
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   padding: 8px 8px 4px;
   margin-top: 4px;
@@ -203,7 +182,7 @@
 .star-btn {
   background: none;
   border: none;
-  font-size: 15px;
+  font-size: var(--fs-ui-lg);
   line-height: 1;
   color: var(--ink-faint);
   cursor: pointer;
@@ -218,5 +197,5 @@
 }
 .model-option .star-btn {
   margin-left: auto;
-  font-size: 13px;
+  font-size: var(--fs-ui);
 }

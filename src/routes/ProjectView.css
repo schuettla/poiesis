@@ -44,22 +44,20 @@
 }
 
 .pv-label {
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: var(--fs-caption);
+  font-weight: 600;
   color: var(--ink-faint);
   margin: 0;
 }
 
 .pv-hint {
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   margin: 0;
 }
 
 .pv-error {
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--danger);
   margin: 0;
 }
@@ -67,7 +65,7 @@
 .pv-instructions {
   width: 100%;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   line-height: 1.55;
   color: var(--ink);
   background: var(--paper);
@@ -83,7 +81,7 @@
 
 .pv-path {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   margin: 0;
   max-width: 100%;
@@ -99,7 +97,7 @@
 }
 .pv-trust-btn {
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
@@ -125,7 +123,7 @@
 
 .pv-action {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
@@ -141,7 +139,7 @@
    page, not the loudest. Nothing here deletes anything. */
 .pv-quiet {
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   background: none;
   border: none;
@@ -172,7 +170,7 @@
   min-width: 0;
   text-align: left;
   font-family: var(--font-serif);
-  font-size: 15px;
+  font-size: var(--fs-ui-lg);
   color: var(--ink-muted);
   background: none;
   border: none;
@@ -203,7 +201,7 @@
 }
 
 .pv-gone {
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink-faint);
 }
 .pv-gone button {

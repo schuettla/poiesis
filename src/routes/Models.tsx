@@ -36,6 +36,7 @@ import {
   type ImageLibrary,
 } from "../components/ImageModels/ImageModels";
 import ConfirmDialog from "../components/Confirm/ConfirmDialog";
+import { ChevronIcon, DownloadIcon, PlusIcon, SectionIcon } from "../components/Icons/Icons";
 import "./Surface.css";
 import "../components/ModelPicker/ModelPicker.css";
 import "./Models.css";
@@ -287,7 +288,7 @@ export default function Models() {
           <h2 className="section-title">Add models</h2>
           <div className="add-doors">
             <DoorCard
-              icon="⬇"
+              icon={<DownloadIcon size={16} />}
               title="Recommended for this PC"
               body={hw ? hardwareLine(hw) : "Picks matched to your hardware"}
               action="Browse"
@@ -295,7 +296,7 @@ export default function Models() {
               onClick={() => setDoor(door === "recommended" ? null : "recommended")}
             />
             <DoorCard
-              icon="⧉"
+              icon={<PlusIcon size={16} />}
               title={tab === "chat" ? "From Hugging Face or a link" : "From a link or a file"}
               body={
                 tab === "chat"
@@ -307,7 +308,7 @@ export default function Models() {
               onClick={() => setDoor(door === "link" ? null : "link")}
             />
             <DoorCard
-              icon="⌁"
+              icon={<SectionIcon view="providers" size={16} />}
               title="Connect an account"
               body={
                 providers.length
@@ -367,7 +368,7 @@ function DoorCard({
   open,
   onClick,
 }: {
-  icon: string;
+  icon: React.ReactNode;
   title: string;
   body: string;
   action: string;
@@ -376,11 +377,15 @@ function DoorCard({
 }) {
   return (
     <button className={`add-door ${open ? "open" : ""}`} aria-expanded={open} onClick={onClick}>
-      <span className="add-door-title">
-        <span aria-hidden="true">{icon}</span> {title}
+      <span className="add-door-icon" aria-hidden="true">
+        {icon}
       </span>
+      <span className="add-door-title">{title}</span>
       <span className="add-door-body-text">{body}</span>
-      <span className="add-door-action">{open ? "Close" : action}</span>
+      <span className="add-door-action">
+        {open ? "Close" : action}
+        <ChevronIcon dir={open ? "up" : "right"} size={11} strokeWidth={1.8} />
+      </span>
     </button>
   );
 }

@@ -29,15 +29,16 @@
   border-bottom: 1px solid var(--paper-edge);
 }
 .block-title {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-muted);
+  font-weight: 600;
 }
 .block-kind {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
 .block-body {
@@ -46,8 +47,9 @@
 .block-foot {
   padding: 8px 16px;
   border-top: 1px solid var(--paper-edge);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
 
@@ -62,8 +64,9 @@
   font-size: var(--fs-ui);
 }
 .cmp-label {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-muted);
@@ -98,7 +101,7 @@
   background: none;
   cursor: pointer;
   color: var(--ink-faint);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   padding: 0;
   line-height: 1;
 }
@@ -111,7 +114,7 @@
 }
 .cmp-rec {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-micro);
   color: var(--ok);
 }
 .cmp-detail-row td {
@@ -133,8 +136,9 @@
   font-size: var(--fs-ui);
 }
 .tbl-label {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-muted);
@@ -159,8 +163,9 @@
   margin-bottom: 12px;
 }
 .col-chip {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   border: 1px solid var(--paper-edge-2);
   border-radius: var(--radius);
   background: none;
@@ -213,8 +218,9 @@
   text-decoration: none;
 }
 .col-tags {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   margin-top: 2px;
 }
@@ -236,7 +242,7 @@
   background: none;
   padding: 0;
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   line-height: 1;
   color: var(--ink-faint);
 }
@@ -287,8 +293,9 @@
   gap: 12px;
 }
 .form-label {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--ink-muted);
@@ -355,7 +362,7 @@
   flex: 1;
   height: 4px;
   background: var(--paper-edge);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   overflow: hidden;
 }
 .prog-fill {
@@ -364,13 +371,15 @@
   transition: width var(--t-fast);
 }
 .prog-count {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-muted);
   white-space: nowrap;
 }
 .prog-done {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
   font-size: var(--fs-ui);
   color: var(--ok);
 }
@@ -402,14 +411,15 @@
 
 /* ---- raw fallback ---- */
 .block-raw summary {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   cursor: pointer;
 }
 .block-raw pre {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-muted);
   overflow-x: auto;
   margin-top: 8px;
@@ -420,8 +430,9 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   border: 1px solid var(--paper-edge-2);
   border-radius: var(--radius);
@@ -435,17 +446,17 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-muted);
   padding: 6px 0 12px;
   border-bottom: 1px solid var(--paper-edge);
   margin-bottom: 12px;
 }
 .session-label {
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
   color: var(--ink-faint);
+  font-weight: 600;
 }
 .session-item {
   display: inline-flex;
@@ -455,7 +466,7 @@
 /* This one outlives the session (MEM-UI-7). */
 .session-durable {
   color: var(--ink-faint);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   cursor: default;
 }
 .session-clear {
@@ -464,7 +475,7 @@
   color: var(--ink-faint);
   cursor: pointer;
   padding: 0;
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   line-height: 1;
 }
 .session-clear:hover {

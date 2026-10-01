@@ -2,6 +2,7 @@ import { useAppStore } from "../lib/store";
 import { HUB_SECTIONS } from "../lib/types";
 import type { View } from "../lib/types";
 import PoiesisMark from "../components/Mark/PoiesisMark";
+import { SectionIcon } from "../components/Icons/Icons";
 import Models from "./Models";
 import Providers from "./Providers";
 import Runtime from "./Runtime";
@@ -65,7 +66,7 @@ export default function SettingsHub() {
             onClick={() => setView(t.view)}
           >
             <span className="sht-icon" aria-hidden="true">
-              {t.view === "self" ? <PoiesisMark size={15} /> : t.icon}
+              {t.view === "self" ? <PoiesisMark size={15} /> : <SectionIcon view={t.view} size={16} />}
             </span>
             <span className="sht-label">{t.label}</span>
             {badgeFor(t.view) && (

@@ -55,13 +55,13 @@
   border-color: var(--danger);
 }
 .provider-card-name {
-  font-size: 15px;
+  font-size: var(--fs-ui-lg);
   font-weight: 600;
   color: var(--ink);
 }
 .provider-card-state {
   margin-left: auto;
-  font-size: 11px;
+  font-size: var(--fs-caption);
   font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -76,19 +76,19 @@
 
 .provider-card-unlocks {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink-muted);
 }
 .provider-card-problem,
 .provider-card-error {
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--danger);
   line-height: 1.5;
 }
 .provider-card-ok {
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ok);
   line-height: 1.5;
 }
@@ -135,13 +135,13 @@
   border-radius: var(--radius);
   padding: 6px 10px;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink);
   cursor: pointer;
 }
 .provider-menu button:hover,
 .provider-menu button:focus-visible {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 .provider-menu button.danger {
   color: var(--danger);

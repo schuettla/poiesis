@@ -14,13 +14,13 @@
 
 .runtime-sub {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink-muted);
   margin: 2px 0 12px;
 }
 .runtime-hint {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   margin: 12px 0 0;
   max-width: var(--measure);
@@ -32,7 +32,7 @@
   align-items: center;
   gap: 7px;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   border: 1px solid var(--paper-edge-2);
   border-radius: var(--radius);
@@ -76,7 +76,7 @@
 
 .update-note {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   max-width: 460px;
 }
@@ -99,7 +99,7 @@
   padding: 10px 13px;
   cursor: pointer;
   font-family: var(--font-sans);
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   color: var(--ink);
 }
 .backend-row:hover {
@@ -107,7 +107,7 @@
 }
 .backend-row.active {
   border-color: var(--ink);
-  background: var(--paper-edge);
+  background: var(--fill-selected);
 }
 .backend-row:disabled {
   opacity: 0.6;
@@ -129,7 +129,7 @@
   flex: 1;
 }
 .tag {
-  font-size: 11px;
+  font-size: var(--fs-caption);
   font-family: var(--font-sans);
   padding: 2px 8px;
   border-radius: var(--radius);
@@ -150,7 +150,7 @@
 
 .hw-value.path {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   word-break: break-all;
 }
@@ -159,5 +159,5 @@
   font-size: 0.85em;
   background: var(--paper-edge);
   padding: 0.1em 0.4em;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
 }

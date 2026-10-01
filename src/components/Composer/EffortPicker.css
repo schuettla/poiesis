@@ -20,18 +20,18 @@
   border-radius: var(--radius);
   cursor: pointer;
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .effort-trigger:hover,
 .effort-trigger[aria-expanded="true"] {
-  border-color: var(--paper-edge-2);
+  background: var(--fill-hover);
   color: var(--ink);
 }
 .effort-trigger .caret {
-  font-size: 9px;
+  display: inline-flex;
   color: var(--ink-faint);
-  margin-left: 2px;
+  margin-left: 1px;
 }
 .effort-name {
   overflow: hidden;
@@ -83,11 +83,13 @@
   right: 0;
   width: 292px;
   background: var(--paper);
-  border: 1px solid var(--paper-edge-2);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
-  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.12);
-  padding: 8px;
+  box-shadow: var(--shadow-float);
+  padding: 6px;
   z-index: 20;
+  transform-origin: bottom right;
+  animation: pop-up var(--dur) var(--ease-out);
 }
 
 .effort-option {
@@ -100,13 +102,13 @@
   cursor: pointer;
 }
 .effort-option:hover {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 .effort-option.selected {
-  background: var(--paper-edge);
+  background: var(--fill-selected);
 }
 .effort-option .name {
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   color: var(--ink);
 }
 .effort-option.selected .name {
@@ -117,7 +119,7 @@
    list wider than the model dropdown it sits under. */
 .effort-option .hint {
   grid-column: 2;
-  font-size: 11px;
+  font-size: var(--fs-caption);
   line-height: 1.45;
   color: var(--ink-faint);
 }
@@ -126,7 +128,7 @@
   margin: 6px 0 0;
   padding: 8px 8px 2px;
   border-top: 1px solid var(--paper-edge-2);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   line-height: 1.45;
   color: var(--ink-faint);
 }

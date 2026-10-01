@@ -14,8 +14,9 @@
 }
 .memory-count {
   flex: 1;
-  font-family: var(--font-mono);
-  font-size: 13px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-ui);
   color: var(--ink-muted);
 }
 .memory-search {
@@ -23,7 +24,7 @@
 }
 .memory-error {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--danger);
 }
 
@@ -37,7 +38,7 @@
 }
 .memory-about-you-text {
   margin: 0 0 4px;
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   line-height: 1.6;
   color: var(--ink);
 }
@@ -46,7 +47,7 @@
 }
 .memory-about-you-meta {
   margin: 0 0 6px;
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 .memory-about-you-actions {
@@ -64,8 +65,9 @@
   display: flex;
   align-items: baseline;
   gap: 10px;
-  font-family: var(--font-mono);
-  font-size: 12px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-footnote);
 }
 .memory-name {
   color: var(--ink);
@@ -75,7 +77,7 @@
   border: 1px solid var(--paper-edge-2);
   border-radius: var(--radius);
   color: var(--ink-faint);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 .memory-created {
   margin-left: auto;
@@ -83,54 +85,34 @@
 }
 .memory-desc {
   margin: 6px 0 2px;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink-muted);
 }
 .memory-last-used {
   margin: 0 0 2px;
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
 
 /* ---- scope (SCP-UI-1 / SMP-6a) ---- */
 .memory-scope-plain {
   margin: 0 0 2px;
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
+/* Drawn by the shared segmented control (global.css); a small one here. */
 .memory-scope {
-  display: flex;
-  width: fit-content;
   margin: 2px 0 4px;
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  overflow: hidden;
+  min-height: var(--control-sm);
 }
 .memory-scope-segment {
-  font-family: var(--font-sans);
-  font-size: 11px;
-  background: none;
-  border: none;
-  border-left: 1px solid var(--paper-edge-2);
-  color: var(--ink-muted);
-  padding: 4px 9px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.memory-scope-segment:first-child {
-  border-left: none;
-}
-.memory-scope-segment:hover {
-  color: var(--ink);
-}
-.memory-scope-segment.active {
-  background: var(--paper-edge);
-  color: var(--ink);
-  font-weight: 600;
+  font-size: var(--fs-caption);
+  padding: 0 9px;
+  min-height: calc(var(--control-sm) - 4px);
 }
 .memory-body {
   margin: 6px 0 8px;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   line-height: 1.6;
   color: var(--ink);
   white-space: pre-wrap;
@@ -148,7 +130,7 @@
 }
 .memory-proposal-head {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink);
 }
 .memory-proposal-row {
@@ -156,12 +138,13 @@
   gap: 10px;
   padding: 6px 0;
   border-top: 1px solid var(--paper-edge-2);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
 }
 .memory-proposal-kind {
   flex: none;
   width: 46px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
   color: var(--ink-faint);
 }
 .memory-proposal-body {
@@ -171,7 +154,7 @@
 .memory-proposal-body pre {
   margin: 4px 0 0;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   white-space: pre-wrap;
 }
@@ -182,8 +165,8 @@
   gap: 12px;
   padding: 8px 12px;
   border: 1px solid var(--paper-edge-2);
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: var(--radius);
+  font-size: var(--fs-ui);
   color: var(--ink-muted);
 }
 
@@ -199,7 +182,7 @@
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
   border-radius: var(--radius-lg);
-  box-shadow: 0 2px 14px rgb(0 0 0 / 8%);
+  box-shadow: var(--shadow-float);
 }
 .memory-toast-line {
   display: flex;
@@ -211,7 +194,7 @@
 }
 .memory-toast-text {
   flex: 1;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink);
 }
 /* PRO-UI-5: the rebuild toast opens the Self view on click. */
@@ -226,7 +209,7 @@
   background: none;
   padding: 0;
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink-muted);
   text-decoration: underline;
 }
@@ -235,7 +218,7 @@
 }
 .memory-toast-explain {
   margin: 6px 0 0;
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   line-height: 1.5;
   color: var(--ink-faint);
 }

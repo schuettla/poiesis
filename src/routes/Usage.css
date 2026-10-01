@@ -8,27 +8,9 @@
    heading level, which is exactly why it looked like a different application
    from the tab next to it. */
 
+/* Drawn by the shared segmented control (global.css). */
 .usage-ranges {
-  display: flex;
-  gap: 4px;
   margin-bottom: 4px;
-}
-.usage-range {
-  border: 1px solid transparent;
-  background: none;
-  border-radius: var(--radius);
-  padding: 3px 8px;
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--fs-ui);
-  color: var(--ink-muted);
-}
-.usage-range:hover {
-  color: var(--ink);
-}
-.usage-range.active {
-  border-color: var(--paper-edge-2);
-  color: var(--ink);
 }
 
 .usage-total {

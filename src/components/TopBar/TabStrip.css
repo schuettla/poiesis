@@ -54,7 +54,7 @@
 }
 .ts-nav:hover {
   color: var(--ink);
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 .ts-nav-left {
   border-right: 1px solid var(--paper-edge-2);
@@ -110,7 +110,7 @@
   min-width: 0;
   flex: 1;
   padding: 0 4px 0 10px;
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: inherit;
 }
 .ts-tab:hover .ts-tab-main {
@@ -143,7 +143,7 @@
 }
 .ts-tab.ts-mono .ts-tab-main {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
 }
 
 /* `SHL-27`: the session tab. Serif and a step larger, because it names a
@@ -160,7 +160,7 @@
 }
 .ts-session .ts-tab-main {
   font-family: var(--font-serif);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   padding-right: 12px;
 }
 
@@ -229,9 +229,9 @@
 }
 .ts-count {
   flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-muted);
   background: var(--paper-edge);
   /* The system's chip radius. This was a hand-picked 3px, which is not a step

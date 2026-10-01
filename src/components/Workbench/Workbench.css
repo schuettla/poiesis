@@ -107,7 +107,7 @@
 }
 .wb-context-btn:hover,
 .wb-context-btn[aria-expanded="true"] {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 .wb-folder-icon {
   display: flex;
@@ -151,7 +151,7 @@
    since it is the one level where nothing waits for you. */
 .wb-access {
   flex: none;
-  font-size: 11px;
+  font-size: var(--fs-caption);
   line-height: 1.6;
   color: var(--ink-faint);
   border: 1px solid var(--paper-edge-2);
@@ -205,10 +205,8 @@
   margin: 0;
   padding: 2px 7px 5px;
   font-family: var(--font-sans);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: var(--fs-caption);
+  font-weight: 600;
   color: var(--ink-faint);
 }
 .wb-pop-item {
@@ -232,7 +230,7 @@
   text-overflow: ellipsis;
 }
 .wb-pop-item:hover {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 .wb-pop-quiet {
   color: var(--ink-muted);
@@ -271,7 +269,7 @@
 .wb-pop-note {
   margin: 6px 7px 0;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   line-height: 1.45;
   color: var(--ink-muted);
 }
@@ -286,15 +284,18 @@
   margin: 0 7px;
 }
 /* Three equal parts across the popover rather than a cluster at its left. */
+.wb-segments-fill {
+  display: flex;
+  width: auto;
+}
 .wb-segments-fill .wb-segment {
   flex: 1;
-  padding: 5px 8px;
 }
 
 .wb-folder-path {
   margin: 0 7px 6px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   word-break: break-all;
 }
@@ -312,7 +313,7 @@
 }
 .wb-chip {
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   line-height: 1.5;
   color: var(--ink-muted);
   background: none;
@@ -330,7 +331,7 @@
 .wb-chip-button:hover,
 .wb-chip-button.on {
   color: var(--ink);
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 .wb-chip-note {
   color: var(--ink-faint);
@@ -344,7 +345,7 @@
 .wb-tasks-note {
   margin: 0;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   line-height: 1.45;
   color: var(--ink-muted);
 }
@@ -370,12 +371,12 @@
 }
 .wb-task-name {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
 }
 .wb-task-cmd {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   white-space: nowrap;
   overflow: hidden;
@@ -387,7 +388,7 @@
   gap: 4px;
   flex-shrink: 0;
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   cursor: pointer;
 }
@@ -418,7 +419,7 @@
 .wb-empty-blurb {
   margin: 0;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   line-height: 1.5;
   color: var(--ink-muted);
 }
@@ -442,7 +443,7 @@
 
 .wb-link {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   background: none;
   border: none;
@@ -452,13 +453,13 @@
 }
 .wb-link:hover {
   color: var(--ink);
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 
 .wb-error {
   margin: 8px 0 0;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   line-height: 1.45;
   color: var(--danger);
 }
@@ -480,7 +481,7 @@
 }
 .wb-index-status {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -490,7 +491,7 @@
 .wb-index-explain {
   margin: 4px 0 0;
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   line-height: 1.45;
   color: var(--ink-muted);
 }
@@ -502,7 +503,7 @@
   padding: 0 0 0 14px;
   list-style: disc;
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   line-height: 1.6;
   color: var(--ink-muted);
 }
@@ -520,44 +521,17 @@
 }
 .wb-trust-label {
   font-family: var(--font-sans);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
-}
-.wb-segments {
-  display: flex;
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-.wb-segment {
-  font-family: var(--font-sans);
-  font-size: 11.5px;
-  color: var(--ink-muted);
-  background: none;
-  border: none;
-  border-right: 1px solid var(--paper-edge-2);
-  padding: 3px 8px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.wb-segment:last-child {
-  border-right: none;
-}
-.wb-segment:hover {
-  background: var(--paper-edge);
-}
-.wb-segment.on {
-  color: var(--ink);
-  background: var(--paper-edge-2);
   font-weight: 600;
 }
+/* `.wb-segments` / `.wb-segment` are drawn by the shared segmented control
+   (global.css). */
 
 .wb-confirm p {
   margin: 0 0 8px;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   line-height: 1.45;
   color: var(--ink-muted);
 }
@@ -599,7 +573,7 @@
   cursor: pointer;
 }
 .wb-menu button:hover {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 .wb-menu hr {
   border: none;
@@ -635,7 +609,7 @@
 }
 .wb-dup-relation {
   margin: 0 0 6px;
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   text-transform: uppercase;
   letter-spacing: 0.02em;
@@ -659,7 +633,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
 }
 
@@ -677,7 +651,7 @@
 }
 .wb-icon:hover {
   color: var(--ink);
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 
 /* ---- stacked sections: Files, then Artifacts ---- */
@@ -712,25 +686,25 @@
   border-radius: var(--radius);
   cursor: pointer;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   white-space: nowrap;
 }
 .wb-tab:hover {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
   color: var(--ink);
 }
 .wb-tab.active {
-  background: color-mix(in srgb, var(--paper-edge) 100%, var(--ink) 12%);
+  background: var(--fill-selected);
   color: var(--ink);
   font-weight: 500;
 }
 /* The rail's stamp: mono, faint, tabular. */
 .wb-tab-count {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 400;
+  font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
+  font-weight: 400;
   color: var(--ink-faint);
 }
 .wb-tab.active .wb-tab-count {
@@ -814,7 +788,7 @@
 .wb-filter {
   width: 100%;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
@@ -850,7 +824,7 @@
   margin: 0;
   padding: 14px 14px;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   line-height: 1.5;
   color: var(--ink-faint);
 }
@@ -861,11 +835,10 @@
   gap: 6px;
   padding: 9px 12px 5px;
   font-family: var(--font-sans);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   flex-shrink: 0;
+  font-weight: 600;
 }
 .wb-section-count {
   margin-left: auto;
@@ -881,7 +854,7 @@
   min-height: 26px;
   border-radius: var(--radius);
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   cursor: pointer;
   user-select: none;
@@ -890,12 +863,12 @@
   outline-offset: -2px;
 }
 .wb-row:hover {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
   color: var(--ink);
 }
 /* The rail's "where you are" fill — see `.chat-row.active` in Rail.css. */
 .wb-row.active {
-  background: color-mix(in srgb, var(--paper-edge) 100%, var(--ink) 12%);
+  background: var(--fill-selected);
   color: var(--ink);
   font-weight: 500;
 }
@@ -905,7 +878,7 @@
 .wb-row-caret {
   width: 9px;
   flex-shrink: 0;
-  font-size: 9px;
+  font-size: var(--fs-micro);
   color: var(--ink-faint);
   text-align: center;
 }
@@ -927,15 +900,16 @@
 }
 .wb-touched {
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: var(--fs-caption);
   color: var(--local);
   font-variant-numeric: tabular-nums;
 }
 
 .wb-kind {
   flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-micro);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--ink-faint);
@@ -949,7 +923,7 @@
 .wb-save {
   flex-shrink: 0;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-muted);
   background: none;
   border: 1px solid transparent;
@@ -979,7 +953,7 @@
   flex: 1;
   min-width: 0;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
@@ -1008,7 +982,7 @@
   flex: 1;
   min-width: 0;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   font-weight: 600;
   color: var(--ink);
   white-space: nowrap;
@@ -1030,7 +1004,7 @@
   padding: 22px 16px;
   text-align: center;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .viewer-binary p {
@@ -1073,7 +1047,7 @@
   padding: 7px 12px;
   border-bottom: 1px solid var(--paper-edge-2);
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   line-height: 1.45;
   color: var(--ink-muted);
 }
@@ -1096,7 +1070,7 @@
   padding: 4px 12px;
   border-top: 1px solid var(--paper-edge);
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   text-align: right;
 }
@@ -1122,12 +1096,12 @@
   border-radius: var(--radius);
   cursor: pointer;
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 .editor-mode:hover {
   color: var(--ink-muted);
-  background: var(--canvas);
+  background: var(--fill-hover);
 }
 /* Ink and weight only. The Workbench's own tabs mark the active one with a 2px
    underline as well, but this row is 6px tall and sits directly on the header's
@@ -1296,7 +1270,7 @@
 }
 .pc-fix:hover:not(:disabled) {
   color: var(--ink);
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 .pc-fix:disabled {
   opacity: 0.4;
@@ -1327,7 +1301,7 @@
   margin: 0;
   padding: 14px 16px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   line-height: 1.6;
   color: var(--ink);
   white-space: pre-wrap;
@@ -1345,7 +1319,7 @@
   gap: 6px;
 }
 .viewer-run-outcome {
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .viewer-run-outcome.failed {
@@ -1355,7 +1329,7 @@
   margin: 0;
   padding: 4px 10px 8px;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--danger);
 }
 .viewer-run-body {
@@ -1368,7 +1342,7 @@
 .viewer-run-output {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   line-height: 1.5;
   color: var(--ink-muted);
   white-space: pre-wrap;
@@ -1386,7 +1360,7 @@
 .canvas-loading {
   padding: 24px;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink-muted);
   text-align: center;
 }
@@ -1406,20 +1380,19 @@
   width: 100%;
   padding: 8px 12px;
   font-family: var(--font-sans);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   background: none;
   border: none;
   cursor: pointer;
   text-align: left;
+  font-weight: 600;
 }
 .wb-changes-head:hover {
   color: var(--ink-muted);
 }
 .wb-changes-caret {
-  font-size: 9px;
+  font-size: var(--fs-micro);
 }
 .wb-changes-list {
   list-style: none;
@@ -1432,7 +1405,7 @@
   gap: 6px;
   padding: 2px 2px;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .wb-changes-list li.undone {
@@ -1447,7 +1420,7 @@
   min-width: 0;
   text-align: left;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
   background: none;
   border: none;
@@ -1463,7 +1436,7 @@
 .wb-change-when,
 .wb-change-undone {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
 
@@ -1492,7 +1465,7 @@
   background: none;
   border: none;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   cursor: pointer;
   padding: 3px 6px;
@@ -1500,12 +1473,12 @@
 }
 .wb-browser-stop:hover {
   color: var(--ink);
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 .wb-browser-page-title {
   margin: 2px 14px 0;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .wb-browser-shot {
@@ -1536,7 +1509,7 @@
 .wb-browser-trail {
   margin: 8px 14px 0;
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 
@@ -1576,11 +1549,11 @@
   min-width: 0;
 }
 .agents-row:hover {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
   color: var(--ink);
 }
 .agents-row.active {
-  background: color-mix(in srgb, var(--paper-edge) 100%, var(--ink) 12%);
+  background: var(--fill-selected);
   color: var(--ink);
 }
 /* Working or done, as the tab's live dot says it: breathing while it runs,

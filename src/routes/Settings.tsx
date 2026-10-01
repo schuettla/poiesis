@@ -16,7 +16,7 @@ import {
   type RerankSetupStatus,
   type DownloadProgress,
 } from "../lib/api";
-import { useAppStore, READING_SCALES, type PlanMode } from "../lib/store";
+import { useAppStore, READING_SCALES, MESSAGE_FONTS, type PlanMode } from "../lib/store";
 import PersonaEditor from "../components/Personas/PersonaEditor";
 import "./Surface.css";
 import "./Settings.css";
@@ -188,6 +188,8 @@ export default function Settings() {
   const setMode = useAppStore((s) => s.setMode);
   const readingScale = useAppStore((s) => s.readingScale);
   const setReadingScale = useAppStore((s) => s.setReadingScale);
+  const messageFont = useAppStore((s) => s.messageFont);
+  const setMessageFont = useAppStore((s) => s.setMessageFont);
   const contextBudget = useAppStore((s) => s.contextBudget);
   const autoCompact = useAppStore((s) => s.autoCompact);
   const setAutoCompact = useAppStore((s) => s.setAutoCompact);
@@ -295,8 +297,6 @@ export default function Settings() {
           )}
         </section>
 
-        {!expert && <RecallModeControl />}
-
         <section className="setting-block">
           <h2 className="setting-title">Theme</h2>
           <p className="setting-help">
@@ -321,12 +321,13 @@ export default function Settings() {
         </section>
 
         <section className="setting-block">
-          <h2 className="setting-title">Reading size</h2>
+          <h2 className="setting-title">Reading</h2>
           <p className="setting-help">
-            Scales the conversation — your messages, replies, steps and cards together.
+            How the conversation looks — your messages, replies, steps and cards together.
             Text reflows — nothing is cut off.
           </p>
-          <div className="setting-actions" role="group" aria-label="Reading size">
+          <h3 className="setting-subtitle">Text size</h3>
+          <div className="setting-actions" role="group" aria-label="Text size">
             {READING_SCALES.map((opt) => (
               <button
                 key={opt.value}
@@ -335,6 +336,21 @@ export default function Settings() {
                 onClick={() => setReadingScale(opt.value)}
               >
                 {opt.label}
+              </button>
+            ))}
+          </div>
+          <h3 className="setting-subtitle">Message font</h3>
+          <div className="setting-actions" role="group" aria-label="Message font">
+            {MESSAGE_FONTS.map((f) => (
+              <button
+                key={f.id}
+                className={`btn-secondary setting-font-choice ${messageFont === f.id ? "selected" : ""}`}
+                aria-pressed={messageFont === f.id}
+                title={`${f.kind} · ${f.label}`}
+                style={{ fontFamily: f.stack }}
+                onClick={() => setMessageFont(f.id)}
+              >
+                {f.label}
               </button>
             ))}
           </div>
@@ -357,6 +373,8 @@ export default function Settings() {
             </p>
           </section>
         )}
+
+        {!expert && <RecallModeControl />}
 
         <section className="setting-block">
           <h2 className="setting-title">Memory &amp; context</h2>

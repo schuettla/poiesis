@@ -19,7 +19,7 @@
   z-index: 16;
   /* Top pad adds to the stream's own bottom padding so the gap survives even
      if the last turn ends flush; bottom stays tight to keep the box low. */
-  padding: 10px 24px 12px;
+  padding: 10px 24px 14px;
 }
 .composer-wrap.drag-over .composer {
   border-color: var(--local);
@@ -32,31 +32,49 @@
   align-items: center;
   justify-content: center;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--local);
-  background: color-mix(in srgb, var(--paper) 86%, var(--local));
-  border: 1px dashed var(--local);
-  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--paper) 88%, var(--local));
+  border: 1.5px dashed color-mix(in srgb, var(--local) 60%, transparent);
+  border-radius: var(--radius-xl);
   pointer-events: none;
+  animation: fade-in var(--dur-fast) var(--ease-out);
 }
 
 .composer-col {
   max-width: 700px;
   margin: 0 auto;
 }
+/* Keeps the composer's right edge on the stream's when the narrow-column
+   rule in Chat.css gives the session menu its own lane (same threshold: this
+   box is the chat column minus its 24px side padding). */
+.composer-wrap {
+  container-type: inline-size;
+}
+@container (max-width: 752px) {
+  .composer-col {
+    margin-right: 32px;
+  }
+}
 
 .composer {
   background: var(--paper);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(0, 0, 0, 0.01);
-  padding: 10px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  padding: 8px 8px 8px 10px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  transition:
+    border-color var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out);
 }
+/* Focus lifts the box a little further off the page rather than drawing a
+   heavier line around it. */
 .composer:focus-within {
-  border-color: var(--ink-faint);
+  border-color: var(--paper-edge-2);
+  box-shadow: var(--shadow-float);
 }
 
 .attachment-row {
@@ -70,12 +88,13 @@
   align-items: center;
   gap: 6px;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
-  background: var(--paper-edge);
-  border: 1px solid var(--paper-edge-2);
+  background: var(--fill-quiet);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius);
   padding: 4px 6px 4px 10px;
+  animation: pop-in var(--dur) var(--ease-out);
 }
 .attachment-kind {
   color: var(--ink-faint);
@@ -85,7 +104,7 @@
   border: none;
   color: var(--ink-faint);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--fs-callout);
   line-height: 1;
   padding: 0 2px;
 }
@@ -104,7 +123,7 @@
   background: var(--paper-edge);
   border-radius: var(--radius);
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .media-target-glyph {
@@ -181,7 +200,7 @@
 }
 .media-target-back {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   background: none;
   border: none;
@@ -205,7 +224,7 @@
   background: var(--paper-edge);
   border-radius: var(--radius);
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
 }
 .media-intent-chip.low-confidence {
@@ -228,7 +247,7 @@
 }
 .mic-dismiss {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   background: none;
   border: none;
@@ -252,7 +271,7 @@
   background: var(--paper-edge);
   border-radius: var(--radius);
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   width: fit-content;
 }
@@ -265,7 +284,7 @@
   background: var(--paper-edge);
   border-radius: var(--radius);
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   width: fit-content;
 }
@@ -281,7 +300,7 @@
   border: none;
   color: var(--ink-faint);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--fs-callout);
   line-height: 1;
   padding: 0 2px;
 }
@@ -302,7 +321,7 @@
   overflow-y: auto;
 }
 .composer-menu-item.active {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 
 .composer input {
@@ -311,9 +330,9 @@
   border: none;
   outline: none;
   font-family: var(--font-sans);
-  font-size: 14.5px;
+  font-size: var(--fs-callout);
   color: var(--ink);
-  padding: 6px 0;
+  padding: 6px 2px;
 }
 .composer input::placeholder {
   color: var(--ink-faint);
@@ -321,30 +340,41 @@
 
 .composer .icon-btn {
   background: none;
-  border: 1px solid var(--paper-edge-2);
+  border: 1px solid transparent;
   color: var(--ink-muted);
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur) var(--ease-pop),
+    opacity var(--dur-fast) var(--ease-out);
 }
 .composer .icon-btn:hover {
-  border-color: var(--ink-faint);
+  background: var(--fill-hover);
   color: var(--ink);
+}
+.composer .icon-btn:active:not(:disabled) {
+  transform: scale(0.92);
+  transition-duration: 60ms;
 }
 .composer .plus-btn {
-  font-size: 16px;
+  font-size: 18px;
+  font-weight: 300;
   line-height: 1;
 }
+/* The + turns into a × while its menu is open: one control, two states. */
 .composer .plus-btn.on {
-  background: var(--paper-edge);
-  border-color: var(--ink-faint);
+  background: var(--fill-press);
   color: var(--ink);
+  transform: rotate(45deg);
 }
 
 /* The row under the box: context chip left, model chooser right. */
@@ -373,14 +403,14 @@
 /* The image-model select in Create-image mode. Distinct from .model-picker in
    the footer row below, which chooses the model that answers in chat. */
 .composer .image-model-picker {
-  height: 28px;
+  height: 30px;
   max-width: 150px;
   background: none;
-  border: 1px solid var(--paper-edge-2);
+  border: 1px solid var(--hairline);
   color: var(--ink-muted);
   border-radius: var(--radius);
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   padding: 0 6px;
   cursor: pointer;
   flex-shrink: 0;
@@ -394,9 +424,18 @@
   background: var(--ink);
   color: var(--paper);
   border-color: var(--ink);
+  box-shadow: var(--shadow-xs);
 }
 .composer .send:hover {
   color: var(--paper);
+  background: color-mix(in srgb, var(--ink) 86%, var(--paper));
+  transform: scale(1.04);
+}
+.composer .send:disabled {
+  opacity: 0.25;
+  box-shadow: none;
+  transform: none;
+  cursor: default;
 }
 
 /* ---- the `+` drop-up: attach / modes / skills / persona, with submenus ---- */
@@ -416,28 +455,35 @@
   z-index: 10;
   min-width: 300px;
   background: var(--paper);
-  border: 1px solid var(--paper-edge);
-  border-radius: var(--radius);
-  padding: 4px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  padding: 5px;
   display: flex;
   flex-direction: column;
+  transform-origin: bottom left;
+  animation: pop-up var(--dur) var(--ease-out);
 }
 .composer-menu-item {
   display: flex;
   align-items: flex-start;
   gap: 10px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 7px 10px;
   border: none;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: none;
   cursor: pointer;
   text-align: left;
   color: var(--ink);
   font-size: var(--fs-ui);
+  transition-duration: 80ms;
 }
 .composer-menu-item:hover {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
+}
+.composer-menu-item:active:not(:disabled) {
+  background: var(--fill-press);
 }
 .composer-menu-item:disabled {
   cursor: default;
@@ -447,9 +493,16 @@
   background: none;
 }
 .composer-menu-item .mi-icon {
-  color: var(--ink-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
   width: 18px;
-  text-align: center;
+  height: 18px;
+  color: var(--ink-muted);
+}
+.composer-menu-item:hover .mi-icon {
+  color: var(--ink);
 }
 .composer-menu-item .mi-body {
   flex: 1;
@@ -458,11 +511,12 @@
   gap: 2px;
 }
 .composer-menu-item .mi-hint {
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 .composer-menu-item .mi-check {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
   color: var(--ink);
   width: 14px;
 }
@@ -502,6 +556,7 @@
   color: var(--ink);
 }
 .composer-submenu {
+  animation: fade-in var(--dur-fast) var(--ease-out);
   display: flex;
   flex-direction: column;
   max-height: 300px;
@@ -514,9 +569,9 @@
   align-self: center;
   white-space: nowrap;
   background: none;
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  padding: 3px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
   margin-right: 6px;
   cursor: pointer;
   font: inherit;
@@ -525,5 +580,5 @@
 }
 .fleet-pill:hover {
   color: var(--ink);
-  background: var(--canvas);
+  background: var(--fill-hover);
 }

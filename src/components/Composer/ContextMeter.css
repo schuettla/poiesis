@@ -3,7 +3,7 @@
 .context-meter {
   width: 64px;
   height: 3px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--ink-faint);
   overflow: hidden;
   flex: none;

@@ -30,9 +30,9 @@
   gap: 8px;
   margin: 0 12px 12px 0;
   padding: 7px 8px;
-  border: 1px solid var(--paper-edge-2);
+  background: var(--fill-quiet);
   border-radius: var(--radius);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .rail-job-dot {
@@ -55,7 +55,7 @@
 }
 .rail-job-stop {
   flex: none;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   line-height: 1;
   background: none;
   border: none;
@@ -77,87 +77,103 @@
 .rail-top-actions {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 0 12px 14px 0;
+  gap: 1px;
+  margin: 0 12px 18px 0;
 }
+/* The top actions are sidebar rows, not outlined buttons: the same height,
+   inset, hover fill and selected fill as every chat row below them. Four
+   hairline boxes stacked over a borderless list read as two different
+   sidebars glued together. */
 .rail-top-btn {
   display: flex;
   align-items: center;
+  min-height: 30px;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink);
   background: none;
-  border: 1px solid var(--paper-edge-2);
+  border: none;
   border-radius: var(--radius);
-  padding: 7px 10px;
+  padding: 0 8px;
   text-align: left;
   cursor: pointer;
 }
 .rail-top-btn:hover {
-  border-color: var(--ink-faint);
+  background: var(--fill-hover);
+}
+.rail-top-btn:active {
+  background: var(--fill-press);
 }
 .rail-top-btn.active {
-  border-color: var(--ink-faint);
-  color: var(--ink);
+  background: var(--fill-selected);
   font-weight: 500;
 }
 .rail-top-btn .nav-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 15px;
-  margin-right: 9px;
-  color: var(--ink-faint);
+  width: 16px;
+  margin-right: 10px;
+  color: var(--ink-muted);
   flex-shrink: 0;
 }
 .rail-top-btn.active .nav-icon,
 .rail-top-btn:hover .nav-icon {
   color: var(--ink);
 }
+/* New chat leads: the one action the sidebar exists for gets the ink. */
+.rail-top-btn.new-chat {
+  font-weight: 500;
+}
+.rail-top-btn.new-chat .nav-icon {
+  color: var(--ink);
+}
 .rail-top-btn .rail-kbd {
   margin-left: auto;
-  padding: 2px 4px;
 }
 .rail.collapsed .rail-kbd {
   display: none;
 }
 
 /* `PRJ-3`: "Projects" opens the overview; the `+` beside it is the same quick
-   create the button used to be, kept as a narrow extension rather than a
-   second full row — one destination gets two doors instead of two rows. */
+   create the button used to be — a small icon button that surfaces on hover,
+   inside the same row, rather than a second bordered cell. */
 .rail-top-btn-row {
+  position: relative;
   display: flex;
   align-items: stretch;
 }
 .rail-top-btn-row .rail-top-btn {
   flex: 1;
   min-width: 0;
-  border-radius: var(--radius) 0 0 var(--radius);
-  border-right: none;
 }
 .rail-top-btn-add {
-  flex: none;
-  width: 30px;
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  margin-top: -11px;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0;
-  color: var(--ink-faint);
+  color: var(--ink-muted);
   background: none;
-  border: 1px solid var(--paper-edge-2);
-  border-radius: 0 var(--radius) var(--radius) 0;
+  border: none;
+  border-radius: var(--radius-sm);
   cursor: pointer;
+  opacity: 0;
+}
+.rail-top-btn-row:is(:hover, :focus-within) .rail-top-btn-add {
+  opacity: 1;
 }
 .rail-top-btn-add:hover {
-  border-color: var(--ink-faint);
   color: var(--ink);
+  background: var(--fill-press);
 }
 .rail.collapsed .rail-top-btn-add {
   display: none;
-}
-.rail.collapsed .rail-top-btn-row .rail-top-btn {
-  border-radius: var(--radius);
-  border-right: 1px solid var(--paper-edge-2);
 }
 
 /* Wraps one labeled run of rows — gives the group its own right clearance
@@ -172,12 +188,10 @@
   top: 0;
   z-index: 2;
   margin: 0;
-  padding: 4px 0 6px 7px;
+  padding: 6px 0 6px 8px;
   background: var(--canvas);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: var(--fs-caption);
+  font-weight: 600;
   color: var(--ink-faint);
 }
 
@@ -205,12 +219,15 @@
   align-items: center;
   gap: 6px;
   min-height: 30px;
-  padding: 0 7px;
+  padding: 0 8px;
   border-radius: var(--radius);
   font-size: var(--fs-ui);
   color: var(--ink-muted);
   white-space: nowrap;
   cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 .chat-row:focus-visible,
 .project-row:focus-visible {
@@ -218,8 +235,12 @@
 }
 .chat-row:hover,
 .project-row:hover {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
   color: var(--ink);
+}
+.chat-row:active,
+.project-row:active {
+  background: var(--fill-press);
 }
 
 /* Where you are: one step past hover's fill, not an inverted block. Hover
@@ -234,7 +255,7 @@
    conditions, so "more of it" means the same thing either way. */
 .chat-row.active,
 .project-row.current {
-  background: color-mix(in srgb, var(--paper-edge) 100%, var(--ink) 12%);
+  background: var(--fill-selected);
   color: var(--ink);
   font-weight: 500;
 }
@@ -260,7 +281,7 @@
    offer to reflect lives in the row menu. */
 .chat-digest {
   flex: none;
-  font-size: 11px;
+  font-size: var(--fs-caption);
   line-height: 1;
   color: var(--ink-faint);
 }
@@ -272,7 +293,7 @@
 .chat-workspace {
   flex: none;
   color: var(--ink-faint);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 /* The trailing slot: a reading at rest (when, or how many), the ⋯ on hover or
@@ -289,10 +310,10 @@
   margin-left: auto;
 }
 .row-stamp {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 400;
+  font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
+  font-weight: 400;
   color: var(--ink-faint);
   transition: opacity var(--t-fast);
 }
@@ -323,6 +344,7 @@
 }
 .chat-more:hover {
   color: var(--ink);
+  background: var(--fill-press);
 }
 :is(.chat-row, .project-row):is(:hover, :focus-within) .chat-more,
 .chat-more[aria-expanded="true"] {
@@ -338,8 +360,8 @@
 
 .rail-divider {
   border: none;
-  border-top: 1px solid var(--paper-edge-2);
-  margin: 2px 12px 8px 2px;
+  border-top: 1px solid var(--hairline);
+  margin: 4px 12px 8px 0;
   width: auto;
 }
 
@@ -361,18 +383,24 @@
   display: flex;
   align-items: center;
   min-height: 30px;
-  padding: 0 7px;
+  padding: 0 8px;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
   border-radius: var(--radius);
   font-size: var(--fs-ui);
   color: var(--ink-muted);
   cursor: pointer;
 }
 .rail-nav li:hover {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
   color: var(--ink);
 }
+.rail-nav li:active {
+  background: var(--fill-press);
+}
 .rail-nav li.active {
-  background: color-mix(in srgb, var(--paper-edge) 100%, var(--ink) 12%);
+  background: var(--fill-selected);
   color: var(--ink);
   font-weight: 500;
 }
@@ -380,9 +408,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 15px;
-  margin-right: 9px;
-  color: var(--ink-faint);
+  width: 16px;
+  margin-right: 10px;
+  color: var(--ink-muted);
   flex-shrink: 0;
 }
 .rail-nav li.active .nav-icon,
@@ -431,7 +459,8 @@
 }
 .rail.collapsed .rail-top-btn {
   justify-content: center;
-  padding: 8px 0;
+  padding: 0;
+  min-height: 34px;
 }
 .rail.collapsed .rail-top-btn .nav-icon {
   margin-right: 0;
@@ -478,19 +507,21 @@
   align-items: center;
   justify-content: center;
   width: 100%;
-  padding: 8px 0;
+  min-height: 34px;
+  padding: 0;
   background: none;
-  border: 1px solid var(--paper-edge-2);
+  border: none;
   border-radius: var(--radius);
-  color: var(--ink-faint);
+  color: var(--ink-muted);
   cursor: pointer;
 }
 .rail-session-btn:hover,
 .rail-session-btn[aria-expanded="true"] {
-  border-color: var(--ink-faint);
+  background: var(--fill-hover);
   color: var(--ink);
 }
 .rail-session-menu.row-menu {
+  transform-origin: top left;
   top: 0;
   left: calc(100% + 8px);
   right: auto;
@@ -502,18 +533,18 @@
   gap: 2px;
 }
 .rail-session-menu .row-menu-item {
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
 }
 .rail-session-menu .row-menu-item.active {
   color: var(--ink);
   font-weight: 500;
-  background: var(--paper-edge);
+  background: var(--fill-selected);
 }
 .row-menu-empty {
   display: flex;
   align-items: center;
   min-height: 34px;
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   padding: 8px 11px;
 }
@@ -531,7 +562,7 @@
 /* The active chat is inside this project, but the project is folded: its row
    takes the lighter fill, so "you are in here" survives the collapse. */
 .project-row-wrap:not(.expanded) > .project-row.contains-active:not(:hover) {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 
 /* The twisty and the row do different things: the row opens the project, the
@@ -554,7 +585,7 @@
   color: var(--ink);
 }
 .project-twisty svg {
-  transition: transform var(--t-fast);
+  transition: transform var(--dur) var(--ease-out);
 }
 .project-row-wrap.expanded .project-twisty svg {
   transform: rotate(90deg);
@@ -593,9 +624,10 @@
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--ink-faint);
-  border-radius: var(--radius);
-  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
   outline: none;
+  box-shadow: var(--ring);
 }
 
 /* An expanded project's sessions sit in place of the flat list, hung off a
@@ -613,7 +645,10 @@
   top: 2px;
   bottom: 2px;
   width: 1px;
-  background: var(--paper-edge-2);
+  background: var(--hairline);
+}
+.project-sessions {
+  animation: rise-in var(--dur) var(--ease-out);
 }
 .project-empty {
   padding: 6px 7px;

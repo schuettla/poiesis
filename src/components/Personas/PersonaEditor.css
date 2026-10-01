@@ -18,23 +18,24 @@
   gap: 10px;
 }
 .soul-title {
-  font-family: var(--font-mono);
-  font-size: 13px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-ui);
   color: var(--ink);
 }
 .soul-hint {
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 
 .soul-proposal {
   padding: 12px 14px;
   border: 1px solid var(--paper-edge-2);
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 .soul-proposal-why {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink);
 }
 .soul-diff {
@@ -47,14 +48,15 @@
   min-width: 0;
 }
 .soul-diff-label {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
 .soul-diff-side pre {
   margin: 4px 0 0;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   line-height: 1.5;
   color: var(--ink-muted);
   white-space: pre-wrap;
@@ -70,7 +72,7 @@
   border-bottom: 1px solid var(--paper-edge);
 }
 .persona-presets-label {
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 .persona-presets-row {
@@ -80,7 +82,7 @@
 }
 .persona-preset-chip {
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   background: none;
   border: none;
@@ -89,7 +91,7 @@
   cursor: pointer;
 }
 .persona-preset-chip:hover {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
   color: var(--ink);
 }
 .persona-preset-chip:disabled {
@@ -119,7 +121,7 @@
 }
 .persona-name {
   font-family: var(--font-sans);
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   font-weight: 600;
   color: var(--ink);
   display: flex;
@@ -128,18 +130,18 @@
 }
 .persona-default {
   font-family: var(--font-sans);
-  font-size: 10.5px;
+  font-size: var(--fs-caption);
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--local);
   border: 1px solid color-mix(in srgb, var(--local) 40%, transparent);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   padding: 1px 8px;
 }
 .persona-preview {
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   line-height: 1.5;
   overflow: hidden;
@@ -198,7 +200,7 @@
   align-items: center;
   gap: 8px;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
   cursor: pointer;
 }
@@ -207,7 +209,7 @@
   cursor: default;
 }
 .persona-tools-note {
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   font-style: italic;
 }

@@ -8,15 +8,15 @@
   width: 360px;
   background: var(--paper);
   border-left: 1px solid var(--paper-edge-2);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-float);
   z-index: 40;
   display: flex;
   flex-direction: column;
-  animation: slide-in 0.18s ease;
+  animation: slide-in var(--dur-slow) var(--ease-out);
 }
 @keyframes slide-in {
   from {
-    transform: translateX(12px);
+    transform: translateX(24px);
     opacity: 0;
   }
 }
@@ -25,11 +25,10 @@
 }
 .permission-eyebrow {
   font-family: var(--font-sans);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   margin: 0 0 10px;
+  font-weight: 600;
 }
 .permission-summary {
   font-family: var(--font-serif);
@@ -40,7 +39,7 @@
 }
 .permission-path {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   margin: 0 0 22px;
   word-break: break-all;
@@ -54,7 +53,7 @@
   max-height: 220px;
   overflow: auto;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   line-height: 1.55;
   color: var(--ink-muted);
   background: var(--paper-edge);
@@ -68,7 +67,7 @@
 .permission-command {
   display: block;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink);
   background: var(--paper-edge);
   border: 1px solid var(--paper-edge-2);
@@ -80,7 +79,7 @@
 /* A free-form command: one token per line, numbered, so nothing hides. */
 .permission-argv {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
   background: var(--paper-edge);
   border: 1px solid var(--paper-edge-2);
@@ -95,11 +94,11 @@
 }
 .permission-argv li::marker {
   color: var(--ink-faint);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 .permission-where {
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   margin: 0 0 2px;
 }
@@ -108,14 +107,14 @@
   align-items: baseline;
   gap: 8px;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   color: var(--ink);
   margin: 0 0 18px;
   cursor: pointer;
 }
 .permission-remember code {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
 }
 
 .permission-actions {
@@ -125,7 +124,7 @@
 }
 .permission-btn {
   font-family: var(--font-sans);
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   text-align: left;
   background: none;
   border: 1px solid var(--paper-edge-2);
@@ -147,7 +146,7 @@
 }
 .permission-queue {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   margin-top: 16px;
 }

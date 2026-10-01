@@ -8,6 +8,15 @@ import EffortPicker from "./EffortPicker";
 import ContextChip from "../Context/ContextChip";
 import ModelPicker from "../ModelPicker/ModelPicker";
 import ImageByPath from "../Conversation/ImageByPath";
+import {
+  ImageIcon,
+  LayoutIcon,
+  PaperclipIcon,
+  PersonIcon,
+  PlayIcon,
+  SectionIcon,
+  SparkleIcon,
+} from "../Icons/Icons";
 import "./Composer.css";
 
 /** Which nested panel of the `+` menu is showing, if any. */
@@ -596,7 +605,7 @@ export default function Composer({
                           attach();
                         }}
                       >
-                        <span className="mi-icon" aria-hidden="true">◱</span>
+                        <span className="mi-icon" aria-hidden="true"><PaperclipIcon size={15} /></span>
                         <span className="mi-body">
                           Attach files
                           <span className="mi-hint">images and PDFs — or just paste or drop one</span>
@@ -619,7 +628,7 @@ export default function Composer({
                           closeMenu();
                         }}
                       >
-                        <span className="mi-icon" aria-hidden="true">▦</span>
+                        <span className="mi-icon" aria-hidden="true"><LayoutIcon size={15} /></span>
                         <span className="mi-body">
                           Workspace mode
                           <span className="mi-hint">the agent composes a live interface; chat becomes the log</span>
@@ -641,7 +650,7 @@ export default function Composer({
                           closeMenu();
                         }}
                       >
-                        <span className="mi-icon" aria-hidden="true">⚒</span>
+                        <span className="mi-icon" aria-hidden="true"><SectionIcon view="tools" size={15} /></span>
                         <span className="mi-body">
                           Tools
                           <span className="mi-hint">
@@ -667,7 +676,7 @@ export default function Composer({
                           inputRef.current?.focus();
                         }}
                       >
-                        <span className="mi-icon" aria-hidden="true">◲</span>
+                        <span className="mi-icon" aria-hidden="true"><ImageIcon size={15} /></span>
                         <span className="mi-body">
                           Create image
                           <span className="mi-hint">your next message generates a picture</span>
@@ -685,7 +694,7 @@ export default function Composer({
                           inputRef.current?.focus();
                         }}
                       >
-                        <span className="mi-icon" aria-hidden="true">▶</span>
+                        <span className="mi-icon" aria-hidden="true"><PlayIcon size={15} /></span>
                         <span className="mi-body">
                           Create video
                           <span className="mi-hint">your next message generates a clip</span>
@@ -706,7 +715,7 @@ export default function Composer({
                           aria-haspopup="menu"
                           onClick={() => setSubmenu("skills")}
                         >
-                          <span className="mi-icon" aria-hidden="true">▦</span>
+                          <span className="mi-icon" aria-hidden="true"><SectionIcon view="skills" size={15} /></span>
                           <span className="mi-body">
                             Skills
                             <span className="mi-hint">name one directly instead of waiting for it to fire</span>
@@ -724,7 +733,7 @@ export default function Composer({
                           aria-haspopup="menu"
                           onClick={() => setSubmenu("start")}
                         >
-                          <span className="mi-icon" aria-hidden="true">◈</span>
+                          <span className="mi-icon" aria-hidden="true"><SparkleIcon size={15} /></span>
                           <span className="mi-body">
                             Start from a skill
                             <span className="mi-hint">start a new chat and run one of my skills</span>
@@ -739,7 +748,7 @@ export default function Composer({
                           aria-haspopup="menu"
                           onClick={() => setSubmenu("persona")}
                         >
-                          <span className="mi-icon" aria-hidden="true">◐</span>
+                          <span className="mi-icon" aria-hidden="true"><PersonIcon size={15} /></span>
                           <span className="mi-body">
                             Persona
                             <span className="mi-hint">
@@ -782,7 +791,7 @@ export default function Composer({
                                 inputRef.current?.focus();
                               }}
                             >
-                              <span className="mi-icon" aria-hidden="true">▦</span>
+                              <span className="mi-icon" aria-hidden="true"><SectionIcon view="skills" size={15} /></span>
                               <span className="mi-body">
                                 {s.name}
                                 <span className="mi-hint">{s.description}</span>
@@ -801,7 +810,7 @@ export default function Composer({
                                 startFromSkill(s);
                               }}
                             >
-                              <span className="mi-icon" aria-hidden="true">◈</span>
+                              <span className="mi-icon" aria-hidden="true"><SparkleIcon size={15} /></span>
                               <span className="mi-body">
                                 {s.name}
                                 <span className="mi-hint">
@@ -822,7 +831,7 @@ export default function Composer({
                                 closeMenu();
                               }}
                             >
-                              <span className="mi-icon" aria-hidden="true">○</span>
+                              <span className="mi-icon" aria-hidden="true"><PersonIcon size={15} /></span>
                               <span className="mi-body">No persona</span>
                               <span className="mi-check">{!activePersonaId ? "✓" : ""}</span>
                             </button>
@@ -837,7 +846,7 @@ export default function Composer({
                                   closeMenu();
                                 }}
                               >
-                                <span className="mi-icon" aria-hidden="true">◐</span>
+                                <span className="mi-icon" aria-hidden="true"><PersonIcon size={15} /></span>
                                 <span className="mi-body">{p.name}</span>
                                 <span className="mi-check">
                                   {activePersonaId === p.id ? "✓" : ""}
@@ -868,7 +877,7 @@ export default function Composer({
                     onMouseEnter={() => setSlashIndex(i)}
                     onClick={() => chooseSkill(s.name)}
                   >
-                    <span className="mi-icon" aria-hidden="true">▦</span>
+                    <span className="mi-icon" aria-hidden="true"><SectionIcon view="skills" size={15} /></span>
                     <span className="mi-body">
                       {s.name}
                       <span className="mi-hint">

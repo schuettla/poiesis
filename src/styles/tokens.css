@@ -2,10 +2,11 @@
    "Daylight" (light) and "Backlit" (dark): one monochrome liquid-crystal
    panel, read by ambient light or lit from behind. Names match the theme
    switch in Settings.
-   The whole UI is flat — panels share the surface colour and are separated
-   *only* by hairlines, so --paper-edge-2 is load-bearing structure, not
-   decoration. It must stay clearly visible against --paper or the layout
-   dissolves. Ground and ink both carry a faint green cast (the glass tint). */
+   The panels are flat — they share the surface colour and are separated by
+   hairlines, so --paper-edge-2 is load-bearing structure, not decoration. It
+   must stay clearly visible against --paper or the layout dissolves. Only
+   things that float over the panels (composer, menus, dialogs) take a soft
+   shadow. Ground and ink both carry a faint green cast (the glass tint). */
 
 :root {
   /* ---- Light: "Daylight" ----
@@ -60,7 +61,7 @@
   --font-mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
 
   /* editorial type scale (PRD §5.2) */
-  --fs-timeline: 12.5px;
+  --fs-timeline: 12px;
   --fs-ui: 13px;
   --fs-ui-lg: 15px;
   --fs-reading: 17.5px; /* long-form documents (Workbench markdown) */
@@ -69,6 +70,9 @@
   /* The chat answer: sans, a step smaller and a touch more open than a
      document page — it sits among UI, and reads best in the UI's own face. */
   --font-reading: var(--font-sans);
+  /* User-chosen face for chat messages, yours and the agent's (Settings →
+     Message font). Set from the store; defaults to the UI's own sans. */
+  --font-message: var(--font-sans);
   --fs-answer: 15.5px;
   --lh-answer: 1.72;
   --measure: 64ch;
@@ -76,17 +80,84 @@
      column; content reflows rather than truncating. */
   --reading-scale: 1;
 
-  /* structure — near-zero radius (crisp etched panels, not plastic) */
-  --radius: 4px;
-  --radius-lg: 6px;
+  /* ---- type ramp ----
+     One step per role, whole pixels only. The UI had drifted to thirteen
+     sizes between 9px and 15px, most of them half-pixel neighbours (11.5,
+     12.5, 13.5, 14.5) that read as "slightly off" rather than as hierarchy.
+     Every literal size in the sheets now maps onto one of these. */
+  --fs-micro: 10px; /* badges, counters inside chips */
+  --fs-caption: 11px; /* timestamps, kbd, section labels */
+  --fs-footnote: 12px; /* secondary lines, hints, metadata */
+  /* --fs-ui (13px) above is body; --fs-ui-lg (15px) is emphasised body */
+  --fs-callout: 14px; /* field text, list titles that lead a row */
+  --fs-title: 17px; /* card and dialog titles */
+  --fs-page: 28px; /* a page's own title */
+  /* Display sizes track tighter, the way optical sizes do. */
+  --tracking-tight: -0.011em;
+  --tracking-display: -0.02em;
 
-  /* The one shadow: a menu or popover lifted over the flat panels. Everything
-     else in the UI is separated by hairlines alone. */
-  --shadow-float: 0 6px 18px rgba(0, 0, 0, 0.14);
+  /* ---- spacing: a 4pt grid ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
 
-  /* motion */
-  --t-fast: 0.15s ease;
-  --t-mode: 0.25s ease;
+  /* ---- shape ----
+     Nested radii, macOS proportions: a control inside a card is one step
+     smaller than the card, so the two curves stay concentric. Still crisp —
+     softened from the old 4/6px, never pill-round. */
+  --radius-xs: 3px; /* code spans, keycaps, tiny chips */
+  --radius-sm: 5px; /* segments inside a control, small icon buttons */
+  --radius: 7px; /* buttons, fields, rows */
+  --radius-lg: 10px; /* cards, panels, menus */
+  --radius-xl: 14px; /* the composer, dialogs */
+  --radius-pill: 999px;
+
+  /* Control heights: everything that sits on one line with something else is
+     one of these, so a button beside a field beside a select line up. */
+  --control-sm: 26px;
+  --control: 32px;
+  --control-lg: 36px;
+
+  /* ---- interaction fills ----
+     Derived from ink rather than added as colours, so they sit correctly on
+     both the canvas and white paper and invert themselves in Backlit. */
+  --fill-hover: color-mix(in srgb, var(--ink) 5%, transparent);
+  --fill-press: color-mix(in srgb, var(--ink) 9%, transparent);
+  --fill-selected: color-mix(in srgb, var(--ink) 8%, transparent);
+  --fill-quiet: color-mix(in srgb, var(--ink) 3.5%, transparent);
+  --hairline: color-mix(in srgb, var(--paper-edge-2) 70%, transparent);
+
+  /* ---- elevation ----
+     The panels stay flat and hairline-separated; elevation is reserved for
+     things that genuinely float above them — the composer, menus, popovers,
+     dialogs. Neutral shadows only, so the palette is untouched. */
+  --shadow-xs: 0 1px 2px rgba(16, 24, 20, 0.05);
+  --shadow-sm: 0 1px 2px rgba(16, 24, 20, 0.04), 0 2px 10px rgba(16, 24, 20, 0.05);
+  --shadow-float: 0 0 0 0.5px rgba(16, 24, 20, 0.06), 0 10px 30px rgba(16, 24, 20, 0.12),
+    0 2px 8px rgba(16, 24, 20, 0.06);
+  --shadow-modal: 0 0 0 0.5px rgba(16, 24, 20, 0.08), 0 24px 70px rgba(16, 24, 20, 0.2),
+    0 6px 16px rgba(16, 24, 20, 0.08);
+  /* Focus halo: the indigo already used for the focus ring, softened. */
+  --ring: 0 0 0 3px color-mix(in srgb, var(--local) 22%, transparent);
+
+  /* ---- motion ----
+     Ease-out with a long tail for anything arriving or responding to the
+     pointer; a quicker, sharper deceleration (no overshoot) for small things that pop; symmetric for
+     layout that moves both ways. */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-pop: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 140ms;
+  --dur: 220ms;
+  --dur-slow: 360ms;
+  --t-fast: var(--dur-fast) var(--ease-out);
+  --t-mode: var(--dur-slow) var(--ease-in-out);
 }
 
 [data-mode="dark"] {
@@ -110,6 +181,24 @@
   --hl-token-constant: #dc9d68;
   --hl-token-function: #82bcc7;
   --hl-token-link: #9ca6ee;
+
+  /* Fills mix toward ink, which is light here — re-declared so the mix
+     resolves against this mode's ink rather than inheriting Daylight's. */
+  --fill-hover: color-mix(in srgb, var(--ink) 6%, transparent);
+  --fill-press: color-mix(in srgb, var(--ink) 10%, transparent);
+  --fill-selected: color-mix(in srgb, var(--ink) 9%, transparent);
+  --fill-quiet: color-mix(in srgb, var(--ink) 4%, transparent);
+  --hairline: color-mix(in srgb, var(--paper-edge-2) 80%, transparent);
+
+  /* On a dark ground a shadow has to be deeper to read at all, and a faint
+     light rim does the edge-defining work the shadow does in Daylight. */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 10px rgba(0, 0, 0, 0.25);
+  --shadow-float: 0 0 0 0.5px rgba(255, 255, 255, 0.06), 0 12px 34px rgba(0, 0, 0, 0.5),
+    0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-modal: 0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 28px 80px rgba(0, 0, 0, 0.6),
+    0 6px 16px rgba(0, 0, 0, 0.35);
+  --ring: 0 0 0 3px color-mix(in srgb, var(--local) 30%, transparent);
 }
 
 /* Respect OS reduced-motion: no pulsing dot, no blinking cursor, instant mode swap. */
@@ -117,6 +206,9 @@
   :root {
     --t-fast: 0s;
     --t-mode: 0s;
+    --dur-fast: 0s;
+    --dur: 0s;
+    --dur-slow: 0s;
   }
   * {
     animation-duration: 0s !important;

@@ -8,6 +8,14 @@
   min-height: 0;
   overflow: hidden;
   position: relative;
+  container-type: inline-size;
+}
+/* Once the column is too narrow for the reading measure plus a gutter, the
+   session menu would sit on top of the pinned question; give it its own lane. */
+@container (max-width: 800px) {
+  .chat-body .main {
+    padding-right: 56px;
+  }
 }
 
 /* Session actions, pinned to the top-right of the reading area. Outside the
@@ -19,18 +27,24 @@
   z-index: 15;
 }
 .session-more {
-  background: var(--paper);
-  border: 1px solid var(--paper-edge-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--canvas) 85%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid transparent;
   border-radius: var(--radius);
   color: var(--ink-muted);
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   line-height: 1;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   cursor: pointer;
 }
-.session-more:hover {
-  border-color: var(--ink-faint);
+.session-more:hover,
+.session-more[aria-expanded="true"] {
+  background: var(--fill-hover);
+  border-color: var(--hairline);
   color: var(--ink);
 }
 .main {
@@ -69,14 +83,17 @@
    no modal — it reads as something said, not something popped up. */
 .intro-card {
   max-width: 46ch;
-  padding: 16px 18px;
-  border: 1px solid var(--paper-edge-2);
+  padding: 16px 20px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  animation: rise-in var(--dur-slow) var(--ease-out);
 }
 .intro-body {
   margin: 0;
   font-family: var(--font-sans);
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   line-height: 1.65;
   color: var(--ink);
 }
@@ -87,7 +104,7 @@
   border: none;
   padding: 0;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   cursor: pointer;
 }

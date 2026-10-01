@@ -1,8 +1,5 @@
 # Poiesis Agent
 
-*(formerly Project Nexus — renamed 2026-07; internal identifiers were
-migrated to `poiesis` on 2026-08-11, see `plans/POIESIS_PLAN.md`.)*
-
 A **local-first, agentic desktop LLM application** for Windows. Chat with local
 models that run entirely on your machine, give the assistant real capabilities
 (files, folder reading, web search, code execution, image generation, external
@@ -749,11 +746,3 @@ A second manual pass found both halves of that: the thinking was being captured
 and thrown away, and the timeout that was supposed to catch a dead provider only
 guarded the gaps *between* chunks — so a provider that never sent a first chunk
 was never caught by it at all.
-
-**Specified but not built:**
-
-- Seeing images and scanned documents inside a folder — vision captioning, OCR,
-  table extraction (`plans/PERCEPTION_PLAN.md` Part IV).
-- The agent seeing the media it just generated (`SEE-1`), and the fal.ai media
-  backend (`BKD-3`) — both deferred in `plans/MULTIMODAL_PLAN.md`.
-- Orphaned-media cleanup runs on conversation delete only.

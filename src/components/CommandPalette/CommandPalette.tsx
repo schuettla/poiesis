@@ -9,6 +9,7 @@ import {
   MessageIcon,
   PlusIcon,
   SearchIcon,
+  SectionIcon,
   SettingsIcon,
   SparkleIcon,
 } from "../Icons/Icons";
@@ -211,7 +212,7 @@ function Palette({ onClose }: { onClose: () => void }) {
 
     const settings: Item[] = HUB_SECTIONS.map((s) => ({
       key: `settings:${s.view}`,
-      icon: <SettingsIcon />,
+      icon: s.view === "self" ? <SettingsIcon /> : <SectionIcon view={s.view} />,
       label: s.label,
       meta: "Settings",
       run: () => setView(s.view),

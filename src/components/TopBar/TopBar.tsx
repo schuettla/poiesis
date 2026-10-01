@@ -77,7 +77,9 @@ function Location() {
       ? (projectName ?? "Project")
       : view === "library"
         ? "Library"
-        : (HUB_SECTIONS.find((s) => s.view === view)?.label ?? "Settings");
+        : view === "projects"
+          ? "Projects"
+          : (HUB_SECTIONS.find((s) => s.view === view)?.label ?? "Settings");
 
   return (
     <div className={`topbar-where ${chat ? "is-chat" : "is-route"}`} title={label}>

@@ -42,6 +42,7 @@ import {
 
 const SYSTEM_PROMPT_KEY = "system_prompt";
 const READING_SCALE_KEY = "reading_scale";
+const MESSAGE_FONT_KEY = "message_font";
 const TELEMETRY_KEY = "telemetry_enabled";
 const AUTOCOMPACT_KEY = "context.autocompact";
 const MEMORY_ONBOARDED_KEY = "memory.onboarded";
@@ -382,6 +383,8 @@ interface AppState {
   // accessibility + privacy (§5.5, §6.3)
   readingScale: number;
   setReadingScale: (scale: number) => Promise<void>;
+  messageFont: string;
+  setMessageFont: (id: string) => Promise<void>;
   telemetryEnabled: boolean;
   setTelemetryEnabled: (on: boolean) => Promise<void>;
   /** "Show me everything" (SMP-1a) — reveals engine internals, per-note and
@@ -807,6 +810,36 @@ export const READING_SCALES = [
   { label: "Large", value: 1.15 },
   { label: "Larger", value: 1.3 },
 ];
+
+/** Faces for chat messages (yours and the agent's). All self-hosted and
+ * open-licensed (OFL), so they work offline like the rest of the type. */
+export const MESSAGE_FONTS = [
+  { id: "inter", label: "Inter", kind: "Sans", stack: "var(--font-sans)" },
+  {
+    id: "atkinson",
+    label: "Atkinson Hyperlegible",
+    kind: "Sans",
+    stack: '"Atkinson Hyperlegible", var(--font-sans)',
+  },
+  { id: "newsreader", label: "Newsreader", kind: "Serif", stack: "var(--font-serif)" },
+  {
+    id: "literata",
+    label: "Literata",
+    kind: "Serif",
+    stack: '"Literata Variable", Georgia, serif',
+  },
+  {
+    id: "source-serif",
+    label: "Source Serif",
+    kind: "Serif",
+    stack: '"Source Serif 4 Variable", Georgia, serif',
+  },
+] as const;
+
+function applyMessageFont(id: string) {
+  const font = MESSAGE_FONTS.find((f) => f.id === id) ?? MESSAGE_FONTS[0];
+  document.documentElement.style.setProperty("--font-message", font.stack);
+}
 
 function applyReadingScale(scale: number) {
   document.documentElement.style.setProperty("--reading-scale", String(scale));
@@ -1767,6 +1800,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ readingScale: scale });
     if (api.inTauri()) await api.setSetting(READING_SCALE_KEY, String(scale));
   },
+  messageFont: "inter",
+  setMessageFont: async (id) => {
+    applyMessageFont(id);
+    set({ messageFont: id });
+    if (api.inTauri()) await api.setSetting(MESSAGE_FONT_KEY, id);
+  },
   telemetryEnabled: false,
   setTelemetryEnabled: async (telemetryEnabled) => {
     set({ telemetryEnabled });
@@ -2276,6 +2315,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       rows,
       prompt,
       readingScaleRaw,
+      messageFontRaw,
       telemetryRaw,
       autoCompactRaw,
       expertRaw,
@@ -2295,6 +2335,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       api.listConversations(),
       api.getSetting(SYSTEM_PROMPT_KEY),
       api.getSetting(READING_SCALE_KEY),
+      api.getSetting(MESSAGE_FONT_KEY),
       api.getSetting(TELEMETRY_KEY),
       api.getSetting(AUTOCOMPACT_KEY),
       api.getSetting(EXPERT_KEY),
@@ -2326,6 +2367,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     const readingScale = readingScaleRaw ? Number(readingScaleRaw) || 1 : 1;
     applyReadingScale(readingScale);
+    const messageFont = MESSAGE_FONTS.some((f) => f.id === messageFontRaw)
+      ? (messageFontRaw as string)
+      : "inter";
+    applyMessageFont(messageFont);
     // Poiesis's birthday is set once, the first time it runs after this ships —
     // the growth narrative counts from there, not from an install timestamp we
     // never recorded.
@@ -2365,6 +2410,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeConversationId: conversations[0].id,
       systemPrompt: prompt ?? DEFAULT_SYSTEM_PROMPT,
       readingScale,
+      messageFont,
       telemetryEnabled: telemetryRaw === "true",
       // Homeostasis is on unless the user turned it off.
       autoCompact: autoCompactRaw !== "false",

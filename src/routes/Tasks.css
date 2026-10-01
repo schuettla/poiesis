@@ -2,11 +2,14 @@
    schedule and a run history, which is more than a row can hold without
    turning into a grid you have to decode. */
 
+/* Centred, with room under it: a baseline-aligned button hung its box below
+   the heading and into the line beneath. */
 .tasks-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
+  margin-bottom: 12px;
 }
 
 .task-list {
@@ -17,8 +20,10 @@
 }
 
 .task-card {
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
   padding: 14px 16px;
 }
 /* Paused is a quieter card, not a greyed-out one — it's still yours, it just
@@ -35,14 +40,14 @@
 }
 .task-name {
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: var(--fs-callout);
   font-weight: 600;
   color: var(--ink);
 }
 .task-cadence,
 .task-paused {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .task-paused::before {
@@ -51,7 +56,7 @@
 
 .task-prompt {
   margin: 6px 0 0;
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   line-height: 1.5;
   color: var(--ink);
   /* Instructions can be long; two lines is enough to recognise which task this
@@ -65,7 +70,7 @@
 .task-meta {
   margin: 6px 0 0;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 
@@ -97,10 +102,10 @@
   cursor: pointer;
   color: var(--ink-muted);
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
 }
 .task-run-open:hover {
-  background: var(--paper-edge);
+  background: var(--fill-hover);
   color: var(--ink);
 }
 .task-run-when {

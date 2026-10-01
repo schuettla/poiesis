@@ -35,24 +35,41 @@
   grid-template-columns: minmax(0, 1fr) auto;
   column-gap: 18px;
   align-items: baseline;
-  margin-bottom: 18px;
-  padding: 11px 14px;
+  margin-bottom: 20px;
+  padding: 12px 16px;
   background: var(--paper);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  animation: rise-in var(--dur-slow) var(--ease-out);
+}
+/* While pinned, the stream's top padding is a gap above the card that the
+   answer scrolls through — text peeking over the question. A band of canvas
+   closes it. Unpinned it covers only empty space (the stream's padding, or
+   the previous turn's bottom margin). Offsets are measured from the padding
+   box, so the extra 1px keeps the band clear of the card's top border. */
+.turn-user::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  bottom: calc(100% + 1px);
+  height: 28px;
+  background: var(--canvas);
+  pointer-events: none;
 }
 .turn-user > * {
   grid-column: 1;
 }
 .turn-user .role {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   font-weight: 600;
   color: var(--ink-muted);
   margin-bottom: 4px;
 }
 .turn-user .body {
-  font-family: var(--font-sans);
+  font-family: var(--font-message);
   font-size: var(--fs-ui-lg);
   font-weight: 500;
   line-height: 1.55;
@@ -65,9 +82,9 @@
 .turn-stamp {
   grid-column: 2;
   grid-row: 1;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
 .user-attachments {
@@ -78,11 +95,11 @@
 }
 .user-attachment {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
-  background: var(--paper-edge);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
+  background: var(--fill-quiet);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
   padding: 3px 10px;
 }
 /* `STR-3`: a dropped photo should look like the photo. */
@@ -102,11 +119,11 @@
   height: 64px;
   object-fit: cover;
   border-radius: var(--radius);
-  border: 1px solid var(--paper-edge-2);
+  border: 1px solid var(--hairline);
 }
 .user-attachment-name {
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   max-width: 64px;
   overflow: hidden;
@@ -117,6 +134,7 @@
 /* ---- agent run: execution log + final prose, one continuous unit ---- */
 .agent-run {
   margin-bottom: 36px;
+  animation: fade-in var(--dur-slow) var(--ease-out);
 }
 
 /* inline generated media (Phase 13, `STR-2`) */
@@ -130,8 +148,9 @@
   width: auto;
   height: auto;
   border-radius: var(--radius-lg);
-  border: 1px solid var(--paper-edge-2);
+  border: 1px solid var(--hairline);
   object-fit: contain;
+  animation: fade-in var(--dur-slow) var(--ease-out);
 }
 .chat-media-note {
   font-family: var(--font-sans);
@@ -237,14 +256,14 @@
   font-size: var(--fs-timeline);
   color: var(--ink-muted);
   background: transparent;
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
   padding: 3px 8px;
   cursor: pointer;
 }
 .chat-media-action:hover {
   color: var(--ink);
-  border-color: var(--ink-faint);
+  background: var(--fill-hover);
 }
 .chat-media-action:disabled {
   opacity: 0.5;
@@ -271,15 +290,14 @@
   align-items: center;
   gap: 8px;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   margin-bottom: 10px;
   padding-left: 1px;
 }
 .run-header .agent-label {
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: var(--fs-footnote);
+  font-weight: 600;
   color: var(--ink-muted);
 }
 .run-header .model-tag {
@@ -287,7 +305,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
   color: var(--ink-faint);
 }
 
@@ -301,7 +320,7 @@
 .thinking-label {
   margin-left: 4px;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 /* A turn that ended silently says so, rather than leaving a blank bubble that
@@ -311,7 +330,7 @@
 .run-no-answer {
   margin: 2px 0 4px;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   line-height: 1.55;
   color: var(--ink-faint);
 }
@@ -422,17 +441,20 @@
   margin-top: 14px;
   padding: 10px 13px;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   text-align: left;
   color: var(--ink-muted);
-  background: none;
-  border: 1px dashed var(--paper-edge-2);
+  background: var(--fill-quiet);
+  border: none;
   border-radius: var(--radius-lg);
   cursor: pointer;
-  transition: border-color var(--t-fast), color var(--t-fast);
 }
 .folder-invite:hover {
-  border-color: var(--ink-faint);
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.folder-invite:hover .folder-invite-arrow {
+  transform: translateX(2px);
   color: var(--ink);
 }
 .folder-invite-icon {
@@ -444,6 +466,7 @@
   margin-left: auto;
   flex-shrink: 0;
   color: var(--ink-faint);
+  transition: transform var(--dur) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 /* Files this turn changed on disk. Deliberately quieter than an artifact chip —
@@ -459,7 +482,7 @@
   align-items: center;
   gap: 8px;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .changed-file.undone {
@@ -467,7 +490,7 @@
 }
 .changed-file-name {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
   background: none;
   border: none;
@@ -479,45 +502,54 @@
 }
 .changed-file-undo {
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
   background: none;
   border: none;
-  padding: 1px 5px;
-  border-radius: var(--radius);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .changed-file-undo:hover {
   color: var(--ink);
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 .changed-file-undone {
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 .artifact-chip {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 5px 10px;
-  border: 1px solid var(--paper-edge-2);
+  padding: 6px 11px;
+  border: 1px solid var(--hairline);
   border-radius: var(--radius);
-  background: var(--paper-edge);
+  background: var(--paper);
+  box-shadow: var(--shadow-xs);
   cursor: pointer;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink);
-  transition: border-color 0.12s ease, background 0.12s ease;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out),
+    transform var(--dur) var(--ease-out);
 }
 .artifact-chip:hover {
-  border-color: var(--ink-faint);
-  background: var(--paper-edge-2);
+  border-color: var(--paper-edge-2);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+.artifact-chip:active {
+  transform: translateY(0) scale(0.98);
+  transition-duration: 60ms;
 }
 .artifact-chip-kind {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
+  font-weight: 500;
   color: var(--ink-faint);
 }
 .artifact-chip-title {
@@ -525,6 +557,11 @@
 }
 .artifact-chip-arrow {
   color: var(--ink-faint);
+  transition: transform var(--dur) var(--ease-out);
+}
+.artifact-chip:hover .artifact-chip-arrow {
+  transform: translateX(2px);
+  color: var(--ink);
 }
 
 /* ---- timeline ----
@@ -535,8 +572,8 @@
    done — the steps are how the answer was got, not the answer. */
 .timeline {
   margin: 0 0 16px;
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
   background: var(--paper);
   overflow: hidden;
 }
@@ -546,8 +583,8 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 32px;
-  padding: 0 10px 0 8px;
+  min-height: 34px;
+  padding: 0 12px 0 10px;
   background: none;
   border: none;
   font-family: var(--font-sans);
@@ -558,6 +595,7 @@
 }
 .timeline-head:hover {
   color: var(--ink);
+  background: var(--fill-quiet);
 }
 .timeline.open .timeline-head {
   border-bottom: 1px solid var(--paper-edge);
@@ -568,7 +606,10 @@
   color: var(--ink-faint);
 }
 .timeline-twisty svg {
-  transition: transform var(--t-fast);
+  transition: transform var(--dur) var(--ease-out);
+}
+.timeline.open .timeline-rows {
+  animation: fade-in var(--dur) var(--ease-out);
 }
 .timeline.open .timeline-twisty svg {
   transform: rotate(90deg);
@@ -589,15 +630,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
 .timeline-failed {
   flex: none;
   margin-left: auto;
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--danger);
 }
 
@@ -619,14 +660,14 @@
   border: none;
   border-bottom: 1px solid var(--paper-edge);
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   text-align: left;
   color: var(--ink-faint);
   cursor: pointer;
 }
 .timeline-earlier:hover {
   color: var(--ink);
-  background: var(--paper-edge);
+  background: var(--fill-hover);
 }
 
 /* One step is one grid row: dot · verb · target · readings. Nothing wraps —
@@ -652,7 +693,7 @@
   cursor: pointer;
 }
 .step.expandable > .step-head:hover {
-  background: var(--paper-edge);
+  background: var(--fill-quiet);
 }
 .step-meta {
   display: flex;
@@ -728,11 +769,12 @@
   min-width: 0;
 }
 .step .result {
+  font-family: var(--font-sans);
   max-width: 22ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--fs-caption);
   font-variant-numeric: tabular-nums;
   color: var(--ink-faint);
 }
@@ -747,12 +789,12 @@
   border: none;
   background: none;
   padding: 0;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--ink-faint);
 }
 .step-expand svg {
-  transition: transform var(--t-fast);
+  transition: transform var(--dur) var(--ease-out);
 }
 .step.open .step-expand svg {
   transform: rotate(90deg);
@@ -787,8 +829,9 @@
   border: none;
   background: none;
   text-align: left;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .recall-row.link {
@@ -828,14 +871,15 @@
   border-left: 1px solid var(--paper-edge-2);
 }
 .code-disclosure-lang {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
 .code-disclosure-source {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   line-height: 1.5;
   color: var(--ink-muted);
   white-space: pre-wrap;
@@ -850,7 +894,7 @@
 .task-live-line {
   flex-basis: 100%;
   padding-left: 10px;
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -868,14 +912,14 @@
 }
 .task-command {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   overflow-wrap: anywhere;
 }
 .task-tail {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   line-height: 1.5;
   color: var(--ink-muted);
   white-space: pre;
@@ -888,12 +932,13 @@
 .untrusted-chip {
   flex: none;
   border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: none;
   padding: 1px 8px;
   cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   letter-spacing: 0.02em;
   color: var(--ink-faint);
 }
@@ -917,15 +962,16 @@
 }
 .untrusted-source-label {
   display: block;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-caption);
   color: var(--ink-faint);
   margin-bottom: 2px;
 }
 .untrusted-source-text {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   line-height: 1.5;
   color: var(--ink-muted);
   white-space: pre-wrap;
@@ -941,12 +987,11 @@
    what it does best here: the headings inside an answer, so a long reply has
    an editorial spine you can scan down. */
 .run-text {
-  font-family: var(--font-reading);
+  font-family: var(--font-message);
   font-size: calc(var(--fs-answer) * var(--reading-scale));
   line-height: var(--lh-answer);
   letter-spacing: -0.003em;
   color: var(--ink);
-  max-width: var(--measure);
   overflow-wrap: break-word;
 }
 /* Inside the stream the whole stream is already zoomed (`.message-stream`
@@ -1000,7 +1045,8 @@
   color: var(--ink-faint);
 }
 .run-text ol > li::marker {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
   font-size: 0.85em;
 }
 .run-text strong {
@@ -1053,17 +1099,17 @@
 .run-text code {
   font-family: var(--font-mono);
   font-size: 0.84em;
-  background: var(--paper-edge);
-  padding: 0.1em 0.35em;
-  border-radius: var(--radius);
+  background: var(--fill-press);
+  padding: 0.12em 0.4em;
+  border-radius: var(--radius-xs);
 }
 .run-text pre {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   line-height: 1.55;
-  background: var(--paper-edge);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
+  background: var(--fill-quiet);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
   padding: 14px 16px;
   overflow-x: auto;
   margin: 1em 0;
@@ -1076,16 +1122,17 @@
 .run-text.streaming p:last-child::after {
   content: "";
   display: inline-block;
-  width: 7px;
-  height: 1em;
-  margin-left: 2px;
-  background: var(--ink-muted);
+  width: 2px;
+  height: 1.05em;
+  margin-left: 3px;
+  border-radius: 1px;
+  background: var(--ink);
   vertical-align: text-bottom;
-  animation: blink 1s steps(2, jump-none) infinite;
+  animation: blink 1.1s var(--ease-in-out) infinite;
 }
 @keyframes blink {
   50% {
-    opacity: 0;
+    opacity: 0.15;
   }
 }
 
@@ -1101,7 +1148,7 @@
   border: none;
   background: none;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   letter-spacing: 0.04em;
   color: var(--ink-faint);
   text-align: center;
@@ -1115,7 +1162,7 @@
 }
 .compact-note {
   margin: 0 0 8px;
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   line-height: 1.6;
   color: var(--ink-faint);
 }
@@ -1123,7 +1170,7 @@
   margin-top: 10px;
 }
 .compact-history > summary {
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   cursor: pointer;
 }
@@ -1135,7 +1182,7 @@
 }
 .compact-when {
   display: block;
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   letter-spacing: 0.02em;
   color: var(--ink-faint);
 }
@@ -1144,7 +1191,7 @@
   padding: 12px 14px;
   border-left: 2px solid var(--ink-faint);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   line-height: 1.6;
   color: var(--ink-muted);
   white-space: pre-wrap;
@@ -1159,15 +1206,18 @@
   flex-wrap: wrap;
   gap: 12px;
   margin-top: 10px;
-  padding: 10px 14px;
-  border: 1px solid var(--paper-edge-2);
+  padding: 12px 16px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  animation: rise-in var(--dur-slow) var(--ease-out);
 }
 .proposal-text {
   flex: 1;
   min-width: 200px;
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   line-height: 1.55;
   color: var(--ink-muted);
 }
@@ -1177,7 +1227,7 @@
 .proposal-risk {
   width: 100%;
   margin: 6px 0 0;
-  font-size: 12px;
+  font-size: var(--fs-footnote);
   line-height: 1.5;
   color: var(--ink-faint, var(--ink-muted));
 }
@@ -1196,7 +1246,7 @@
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 4px 10px;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   margin: 2px 0 8px;
 }
 .proposal-field-label {
@@ -1208,7 +1258,7 @@
 }
 .proposal-body-preview {
   white-space: pre-wrap;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   line-height: 1.55;
   color: var(--ink-muted);
   margin: 0 0 8px;
@@ -1220,7 +1270,7 @@
   min-height: 120px;
   resize: vertical;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   line-height: 1.5;
   padding: 8px;
   border: 1px solid var(--paper-edge-2);
@@ -1234,8 +1284,8 @@
    between the timeline and the prose — what happened, then who did it, then
    what came of it. */
 .fleet-card {
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
   background: var(--paper);
   margin: 8px 0 12px;
   overflow: hidden;
@@ -1304,7 +1354,7 @@
 }
 .fleet-action:hover {
   color: var(--ink);
-  background: var(--canvas);
+  background: var(--fill-hover);
 }
 .fleet-steer {
   grid-column: 1 / -1;
@@ -1351,10 +1401,8 @@
 .band-header {
   padding: 7px 12px 2px 30px;
   font-family: var(--font-sans);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: var(--fs-caption);
+  font-weight: 600;
   color: var(--ink-faint);
 }
 /* Every dot in a live band pulses together: the whole band is the unit. */
@@ -1366,7 +1414,7 @@
 .kept-disclosure {
   flex-basis: 100%;
   margin-top: 4px;
-  border: 1px solid var(--paper-edge-2);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius);
   overflow: hidden;
 }
@@ -1377,7 +1425,7 @@
   padding: 6px 9px;
   background: var(--paper-edge);
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .kept-ref {
@@ -1425,8 +1473,24 @@
    competing with the answer they follow. */
 .turn-actions {
   display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
   gap: 14px;
   margin-top: 6px;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease-out);
+}
+.agent-run:hover .turn-actions,
+.turn-actions:focus-within {
+  opacity: 1;
+}
+.turn-time {
+  font-family: var(--font-sans);
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+  white-space: nowrap;
 }
 
 /* ---- the plan (`PLN-UI-1`) ----
@@ -1437,8 +1501,8 @@
    steps below it are read inside. */
 .plan-card {
   margin: 0 0 8px;
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
   background: var(--paper);
 }
 /* The same head as the timeline's, so the two panels read as one story told
@@ -1459,10 +1523,10 @@
   color: var(--ink);
 }
 .plan-progress {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--ink-faint);
+  font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
 }
 /* `PLN-UI-3`: the mark that says this list is not the first one. */
 .plan-revised {
@@ -1485,7 +1549,8 @@
   grid-template-columns: auto 1fr;
   gap: 0 9px;
   align-items: start;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
   font-size: var(--fs-timeline);
   line-height: 1.5;
   color: var(--ink);
@@ -1553,7 +1618,8 @@
 .plan-past {
   margin: 6px 0 0;
   padding-left: 20px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
   line-height: 1.5;
   color: var(--ink-faint);
 }
