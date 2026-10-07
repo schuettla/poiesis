@@ -1,0 +1,31 @@
+/* Marks for spoken turns (VOC-UI-5): quiet, so a spoken conversation reads like
+   any other one. */
+
+.spoken-glyph {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 5px;
+  vertical-align: -1px;
+  color: var(--ink-faint);
+}
+
+.spoken-stop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 4px 0;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.spoken-stop-mark {
+  font-style: italic;
+}
+.spoken-full {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  font-size: var(--fs-ui);
+  line-height: 1.55;
+  color: var(--ink-muted);
+  white-space: pre-wrap;
+}

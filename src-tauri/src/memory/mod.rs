@@ -116,6 +116,11 @@ pub struct Fact {
     /// *other* projects see; it never hides an entry from its own project.
     #[serde(default)]
     pub project: Option<String>,
+    /// `CPX-5`: where a lesson came from, when that is worth saying. `rewind` is
+    /// a lesson learned because the user went back on abandoned work. Facts and
+    /// ordinary lessons never set this.
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 
 /// One lesson surfaced by relevance rather than always-injected
@@ -199,7 +204,7 @@ pub fn slugify(input: &str) -> Result<String, String> {
 }
 
 /// Today as YYYY-MM-DD, from the system clock.
-fn today() -> String {
+pub fn today() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -268,6 +273,7 @@ fn parse_entry(name: &str, text: &str) -> Fact {
     let mut last_seen = None;
     let mut expires_at = None;
     let mut project = None;
+    let mut origin = None;
 
     for line in header.lines() {
         let Some((key, value)) = line.split_once(':') else { continue };
@@ -295,6 +301,7 @@ fn parse_entry(name: &str, text: &str) -> Fact {
             // direction: a mis-tagged fact stays reachable instead of
             // disappearing into a project nobody can name.
             "project" => project = Some(value),
+            "origin" => origin = Some(value),
             _ => {}
         }
     }
@@ -316,6 +323,7 @@ fn parse_entry(name: &str, text: &str) -> Fact {
         last_seen,
         expires_at,
         project,
+        origin,
     }
 }
 
@@ -1245,6 +1253,7 @@ mod tests {
             recurrence: None,
             last_seen: None,
             expires_at: None,
+            origin: None,
             project: None,
         }
     }

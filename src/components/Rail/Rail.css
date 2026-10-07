@@ -124,6 +124,13 @@
 /* New chat leads: the one action the sidebar exists for gets the ink. */
 .rail-top-btn.new-chat {
   font-weight: 500;
+  background: var(--fill-quiet);
+}
+.rail-top-btn.new-chat:hover {
+  background: var(--fill-hover);
+}
+.rail-top-btn.new-chat:active {
+  background: var(--fill-press);
 }
 .rail-top-btn.new-chat .nav-icon {
   color: var(--ink);
@@ -416,6 +423,11 @@
 .rail-nav li.active .nav-icon,
 .rail-nav li:hover .nav-icon {
   color: var(--ink);
+}
+/* Settings is the foot of the rail and its one standing destination, so it
+   rests on the same quiet fill as New chat at the top. */
+.rail-nav-footer li {
+  background: var(--fill-quiet);
 }
 
 /* Something about the agent's self is waiting on the user (SOUL-UI-3). A dot,

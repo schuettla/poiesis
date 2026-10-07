@@ -143,6 +143,8 @@ function RecallModeControl() {
 function PlanFirst() {
   const planMode = useAppStore((s) => s.planMode);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
+  const planFirstDefault = useAppStore((s) => s.planFirstDefault);
+  const setPlanFirstDefault = useAppStore((s) => s.setPlanFirstDefault);
 
   const options: { value: PlanMode; label: string }[] = [
     { value: "always", label: "Always" },
@@ -152,14 +154,19 @@ function PlanFirst() {
 
   return (
     <section className="setting-block">
-      <h2 className="setting-title">Planning the work</h2>
+      <h2 className="setting-title">How I plan, by default</h2>
       <p className="setting-help">
         When a job has several parts I can write down what I mean to do, show you the list, and
         work through it — so you can see where I am and steer me while I am still going. Writing
         one costs a round trip before any work starts, so on <em>when it helps</em> I only do it
-        for jobs big enough to be worth it.
+        for jobs big enough to be worth it. This setting decides whether I keep a plan while I
+        work. <code>/plan</code> decides whether I may change anything before you approve it.
       </p>
-      <div className="setting-actions" role="group" aria-label="Planning the work">
+      <p className="setting-help">
+        For one message, type <code>/plan</code> to have me plan first and change nothing until
+        you approve.
+      </p>
+      <div className="setting-actions" role="group" aria-label="How I plan, by default">
         {options.map((o) => (
           <button
             key={o.value}
@@ -171,6 +178,16 @@ function PlanFirst() {
           </button>
         ))}
       </div>
+      {/* `DEF-4`: planning first as the way every message starts. The chip on a
+          message removes it for that message only; this is where it is kept. */}
+      <label className="toggle-line">
+        <input
+          type="checkbox"
+          checked={planFirstDefault}
+          onChange={(e) => void setPlanFirstDefault(e.target.checked)}
+        />
+        <span>Plan first for every message (you approve before I change anything)</span>
+      </label>
     </section>
   );
 }

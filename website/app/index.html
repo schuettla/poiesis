@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en" data-mode="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Poiesis window preview</title>
+  <meta name="robots" content="noindex" />
+  <link rel="stylesheet" href="app-fonts.css" />
+  <link rel="stylesheet" href="app.css" />
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body>
+  <!-- The real shell: the same classes, in the same order, as App.tsx, TopBar,
+       Rail, Chat, Composer and Workbench render. Styled by the app's own CSS. -->
+  <div id="root">
+    <div class="app" style="--dock-w: 340px">
+      <!-- ============ top bar (the title bar on Windows) ============ -->
+      <div class="topbar is-titlebar">
+        <div class="topbar-left">
+          <div class="brand">
+            <svg id="brandMark" class="poiesis-mark stage-2 state-idle" width="20" height="20" viewBox="0 0 24 24" role="img" aria-label="Poiesis Agent: resting">
+              <circle class="mark-membrane" cx="12" cy="12" r="8" fill="none" stroke-width="1" />
+              <g class="mark-orbits">
+                <circle class="mark-orbit" cx="12" cy="4" r="1.5" />
+                <circle class="mark-orbit" cx="18.93" cy="16" r="1.5" />
+              </g>
+              <circle class="mark-nucleus" cx="12" cy="12" r="3" />
+            </svg>
+            <span>Poiesis</span>
+          </div>
+          <button class="sidebar-toggle" aria-label="Collapse sidebar" title="Collapse sidebar"><i data-ic="sidebarL" data-size="17"></i></button>
+        </div>
+        <div class="topbar-where is-chat"><span class="topbar-where-label" id="topLabel">New chat</span></div>
+        <div class="topbar-right">
+          <button class="sidebar-toggle workbench-toggle on" aria-pressed="true" aria-label="Hide files and canvas" title="Hide files and canvas (Ctrl+\)"><i data-ic="sidebarR" data-size="17"></i></button>
+        </div>
+        <div class="window-controls">
+          <button class="wc-btn" aria-label="Minimize"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5.5h10" stroke="currentColor" stroke-width="1" /></svg></button>
+          <button class="wc-btn" aria-label="Maximize"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="0.5" y="0.5" width="9" height="9" rx="1" stroke="currentColor" /></svg></button>
+          <button class="wc-btn wc-close" aria-label="Close"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5l9 9M9.5 0.5l-9 9" stroke="currentColor" stroke-width="1" /></svg></button>
+        </div>
+      </div>
+
+      <!-- ============ rail ============ -->
+      <nav class="rail" aria-label="Conversations and sections">
+        <div class="rail-top-actions">
+          <button class="rail-top-btn new-chat" title="New chat"><span class="nav-icon"><i data-ic="plus"></i></span><span class="nav-label">New chat</span></button>
+          <button class="rail-top-btn search-btn" title="Search (Ctrl K)"><span class="nav-icon"><i data-ic="search"></i></span><span class="nav-label">Search</span><kbd class="kbd rail-kbd">Ctrl K</kbd></button>
+          <button class="rail-top-btn library-btn" title="Library"><span class="nav-icon"><i data-ic="bookmark"></i></span><span class="nav-label">Library</span></button>
+          <div class="rail-top-btn-row">
+            <button class="rail-top-btn projects-btn" title="Projects"><span class="nav-icon"><i data-ic="folder"></i></span><span class="nav-label">Projects</span></button>
+            <button class="rail-top-btn-add" title="New project" aria-label="New project"><i data-ic="plus" data-size="13"></i></button>
+          </div>
+        </div>
+
+        <div class="rail-scroll">
+          <div class="rail-group">
+            <p class="rail-label">Projects</p>
+            <ul class="chat-list project-list">
+              <li class="project-row-wrap expanded">
+                <div class="project-row contains-active" title="C:\Users\you\Documents">
+                  <button class="project-twisty" aria-label="Collapse Paperwork" aria-expanded="true"><i data-ic="chevR" data-size="12" data-sw="1.6"></i></button>
+                  <span class="project-dot has-folder"></span>
+                  <span class="chat-title">Paperwork</span>
+                  <span class="row-slot"><span class="row-stamp project-count" id="projCount">1</span>
+                    <div class="chat-menu-wrap"><button class="chat-more" aria-label="More actions for Paperwork"><i data-ic="kebab"></i></button></div></span>
+                </div>
+                <ul class="chat-list project-sessions" id="projSessions">
+                  <li class="chat-row" tabindex="0"><span class="chat-title">Tax folder cleanup</span><span class="chat-digest" title="I learned something from this conversation">◆</span><span class="row-slot"><time class="row-stamp">Tue</time><div class="chat-menu-wrap"><button class="chat-more" aria-label="More actions"><i data-ic="kebab"></i></button></div></span></li>
+                </ul>
+              </li>
+            </ul>
+          </div>
+          <div class="rail-group">
+            <p class="rail-label">Today</p>
+            <ul class="chat-list">
+              <li class="chat-row" tabindex="0"><span class="chat-title">Plan the Friday demo</span><span class="row-slot"><time class="row-stamp">2h</time><div class="chat-menu-wrap"><button class="chat-more" aria-label="More actions"><i data-ic="kebab"></i></button></div></span></li>
+              <li class="chat-row" tabindex="0"><span class="chat-title">Rewrite the README intro</span><span class="row-slot"><time class="row-stamp">5h</time><div class="chat-menu-wrap"><button class="chat-more" aria-label="More actions"><i data-ic="kebab"></i></button></div></span></li>
+            </ul>
+          </div>
+          <div class="rail-group">
+            <p class="rail-label">Previous 7 days</p>
+            <ul class="chat-list">
+              <li class="chat-row" tabindex="0"><span class="chat-title">Trip to Lisbon</span><span class="chat-digest" title="I learned something from this conversation">◆</span><span class="row-slot"><time class="row-stamp">Sat</time><div class="chat-menu-wrap"><button class="chat-more" aria-label="More actions"><i data-ic="kebab"></i></button></div></span></li>
+              <li class="chat-row" tabindex="0"><span class="chat-title">Summarise the lease</span><span class="row-slot"><time class="row-stamp">Thu</time><div class="chat-menu-wrap"><button class="chat-more" aria-label="More actions"><i data-ic="kebab"></i></button></div></span></li>
+            </ul>
+          </div>
+        </div>
+
+        <hr class="rail-divider" />
+        <ul class="rail-nav rail-nav-footer">
+          <li tabindex="0" title="Settings">
+            <span class="nav-icon"><i data-ic="settings"></i></span>
+            <span class="nav-label">Settings</span>
+            <span class="nav-badge" role="img" aria-label="Changes waiting for review" title="Changes waiting for review"></span>
+            <div class="engine-status ready" aria-label="Local runtime: Runtime ready">
+              <span class="engine-dot"></span><span class="engine-label">ready</span>
+            </div>
+          </li>
+        </ul>
+      </nav>
+
+      <!-- ============ the conversation ============ -->
+      <div class="chat-body">
+        <div class="session-menu-wrap"><button class="session-more" aria-label="Session actions">⋯</button></div>
+        <div class="main">
+          <div class="conversation">
+            <div class="empty-state" id="empty">
+              <canvas class="orb" data-orb="breathing" data-size="64" aria-hidden="true"></canvas>
+              <p class="empty-line">No messages yet — say hello to get started.</p>
+            </div>
+
+            <div class="message-stream pre" id="stream" data-selectable="true">
+              <div class="turn-group">
+                <div class="turn-user pre" id="turnUser">
+                  <div class="body">Find the Brandt invoice and tell me what I owe.</div>
+                  <span class="turn-stamp" aria-hidden="true">10:42</span>
+                </div>
+
+                <div class="agent-run pre" id="run">
+                  <div class="run-header">
+                    <span class="provenance-dot local" aria-hidden="true"></span>
+                    <span class="agent-label">Agent</span>
+                    <span class="model-tag">Llama 3.1 8B</span>
+                  </div>
+
+                  <div class="timeline live open pre" id="tl">
+                    <button class="timeline-head" id="tlHead" aria-expanded="true">
+                      <span class="timeline-twisty" aria-hidden="true"><i data-ic="chevR" data-size="12" data-sw="1.6"></i></span>
+                      <span class="timeline-title" id="tlTitle">Working</span>
+                      <span class="timeline-summary" id="tlSum">1 step</span>
+                    </button>
+                    <div class="timeline-rows" id="tlRows" role="list" aria-label="Steps the agent took">
+                      <div class="step pre" role="listitem" data-verb="recalled memory" data-target="invoices-by-year" data-orb="weaving" data-result="1 note">
+                        <div class="step-head"><span class="step-dot"></span><span class="verb">recalled memory</span><span class="target">invoices-by-year</span><span class="step-meta"><span class="result"></span></span></div>
+                      </div>
+                      <div class="step pre" role="listitem" data-verb="searched" data-target="“Brandt invoice”" data-orb="searching" data-result="3 hits in 2 files">
+                        <div class="step-head"><span class="step-dot"></span><span class="verb">searched</span><span class="target">“Brandt invoice”</span><span class="step-meta"><span class="result"></span></span></div>
+                      </div>
+                      <div class="step pre" role="listitem" data-verb="read" data-target="brandt-0412.pdf" data-orb="working" data-result="28 lines">
+                        <div class="step-head"><span class="step-dot"></span><span class="verb">read</span><span class="target">brandt-0412.pdf</span><span class="step-meta"><span class="result"></span></span></div>
+                      </div>
+                      <div class="step pre" role="listitem" data-verb="remembered" data-target="brandt-invoices" data-orb="weaving" data-result="saved">
+                        <div class="step-head"><span class="step-dot"></span><span class="verb">remembered</span><span class="target">brandt-invoices</span><span class="step-meta"><span class="result"></span></span></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="run-text streaming pre" id="answer">
+                    <p>You owe <strong>1,240.00 EUR</strong> to Brandt GmbH. The invoice is due on <strong>30 October</strong>.</p>
+                    <p>I found it in Documents/2026, because you told me earlier that you file invoices by year.</p>
+                  </div>
+
+                  <div class="thinking pre" id="thinking" role="status" aria-label="Agent is working"><canvas class="orb" data-orb="working" data-size="20" aria-hidden="true"></canvas></div>
+                  <div class="run-meter-row pre" id="meter">
+                    <span class="run-meter-orb"><canvas class="orb" id="meterOrb" data-orb="working" data-size="20" aria-hidden="true"></canvas></span>
+                    <p class="run-meter" id="meterText"></p>
+                  </div>
+
+                  <div class="turn-actions pre" id="actions">
+                    <button class="why-link">why this answer?</button>
+                    <button class="why-link">Try again from here</button>
+                    <span class="turn-time">Oct 6, 2026, 10:42 AM</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ composer ============ -->
+      <div class="composer-wrap">
+        <div class="composer-col">
+          <div class="composer">
+            <div class="composer-menu-wrap"><button class="icon-btn plus-btn" aria-label="Add to this message" title="Add files, a folder, or something I made">+</button></div>
+            <button class="icon-btn slash-btn" aria-label="Commands" title="Commands  ( / )">/</button>
+            <div class="composer-input-wrap">
+              <input id="input" type="text" placeholder="Message Poiesis Agent  ·  / for commands  ·  + to add files" aria-label="Message Poiesis Agent" autocomplete="off" readonly />
+            </div>
+            <button class="icon-btn send" id="send" aria-label="Send message" title="Send">↑</button>
+          </div>
+          <div class="composer-footer">
+            <div class="cf-left">
+              <div class="context-chip-wrap"><button class="context-chip" title="See what I'm working from, layer by layer">Soul · Notes</button></div>
+            </div>
+            <div class="cf-right">
+              <div class="effort-picker">
+                <button class="effort-trigger" aria-label="How hard to think: Think briefly">
+                  <span class="effort-meter" aria-hidden="true"><i class="on"></i><i></i><i></i></span>
+                  <span class="effort-name">Think briefly</span>
+                  <span class="caret" aria-hidden="true"><i data-ic="chevU" data-size="10" data-sw="1.8"></i></span>
+                </button>
+              </div>
+              <div class="model-picker compact up">
+                <button class="model-picker-trigger" aria-label="Model: Llama 3.1 8B" title="Model: Llama 3.1 8B">
+                  <span class="provenance-dot local" aria-hidden="true"></span>
+                  <span class="model-picker-name">Llama 3.1 8B</span>
+                  <span class="caret" aria-hidden="true"><i data-ic="chevU" data-size="10" data-sw="1.8"></i></span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ Workbench: the agent's side of the desk ============ -->
+      <aside class="workbench" aria-label="Workbench">
+        <div class="wb-head">
+          <div class="wb-context">
+            <button class="wb-context-btn" title="C:\Users\you\Documents">
+              <span class="wb-folder-icon" aria-hidden="true"><i data-ic="folder" data-size="14"></i></span>
+              <span class="wb-crumbs">
+                <span class="wb-crumb-project">Paperwork</span>
+                <span class="wb-crumb-sep" aria-hidden="true">/</span>
+                <span class="wb-folder-name">Documents</span>
+              </span>
+              <span class="wb-access wb-access-confirm" title="You approve each change before it happens.">Asks first</span>
+              <i data-ic="chevR" data-size="12" data-cls="wb-context-caret"></i>
+            </button>
+            <button class="wb-icon" title="Refresh the file list" aria-label="Refresh the file list"><i data-ic="refresh" data-size="13"></i></button>
+          </div>
+        </div>
+        <div class="wb-tabs" role="tablist" aria-label="Workbench sections">
+          <button role="tab" aria-selected="true" class="wb-tab active">Files</button>
+          <button role="tab" aria-selected="false" class="wb-tab">Artifacts</button>
+          <button role="tab" aria-selected="false" class="wb-tab">Changes</button>
+        </div>
+        <div class="wb-tabpanel" role="tabpanel">
+          <section class="wb-section-block wb-files">
+            <div class="wb-filter-wrap"><input class="wb-filter" placeholder="Filter files" aria-label="Filter files" readonly /></div>
+            <div class="wb-tree" role="tree" aria-label="Files">
+              <div class="wb-row is-dir" role="treeitem" style="padding-left: 10px"><span class="wb-row-caret">▸</span><span class="wb-row-icon"><i data-ic="treeFolder" data-size="13"></i></span><span class="wb-row-name">2025</span></div>
+              <div class="wb-row is-dir" role="treeitem" style="padding-left: 10px"><span class="wb-row-caret">▾</span><span class="wb-row-icon"><i data-ic="treeFolderOpen" data-size="13"></i></span><span class="wb-row-name">2026</span></div>
+              <div class="wb-row" id="rowBrandt" role="treeitem" style="padding-left: 23px"><span class="wb-row-caret"></span><span class="wb-row-icon"><i data-ic="file" data-size="13"></i></span><span class="wb-row-name">brandt-0412.pdf</span></div>
+              <div class="wb-row" role="treeitem" style="padding-left: 23px"><span class="wb-row-caret"></span><span class="wb-row-icon"><i data-ic="file" data-size="13"></i></span><span class="wb-row-name">insurance-renewal.pdf</span></div>
+              <div class="wb-row" role="treeitem" style="padding-left: 23px"><span class="wb-row-caret"></span><span class="wb-row-icon"><i data-ic="file" data-size="13"></i></span><span class="wb-row-name">rent-october.pdf</span></div>
+              <div class="wb-row is-dir" role="treeitem" style="padding-left: 10px"><span class="wb-row-caret">▸</span><span class="wb-row-icon"><i data-ic="treeFolder" data-size="13"></i></span><span class="wb-row-name">Taxes</span></div>
+              <div class="wb-row" role="treeitem" style="padding-left: 10px"><span class="wb-row-caret"></span><span class="wb-row-icon"><i data-ic="file" data-size="13"></i></span><span class="wb-row-name">notes.md</span></div>
+            </div>
+            <div class="wb-files-foot">
+              <div class="wb-index-row">
+                <span class="wb-index-status">I've read 142 files · 2h ago</span>
+                <button class="wb-link">Read again</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </aside>
+
+      <!-- the memory toast: fixed to the window, as in the app -->
+      <div class="memory-toast pre" id="toast" role="status">
+        <div class="memory-toast-line">
+          <span class="memory-toast-mark" aria-hidden="true">◆</span>
+          <span class="memory-toast-text">I'll remember that: Brandt invoices are in Documents/2026</span>
+          <button class="memory-toast-undo" id="undo">Undo</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="orb.js"></script>
+  <script src="demo.js"></script>
+</body>
+</html>

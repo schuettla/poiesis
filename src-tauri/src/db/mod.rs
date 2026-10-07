@@ -19,7 +19,7 @@ pub mod index_roots;
 pub mod phash;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 29;
+const SCHEMA_VERSION: i64 = 30;
 
 /// The rationale a skill-revision proposal is written with (`OUT-2`). Only
 /// display text — the proposal is *identified* by its `skill-revision` target,
@@ -210,6 +210,9 @@ pub struct UsageBucket {
     pub prompt_tokens: u64,
     pub output_tokens: u64,
     pub runs: u64,
+    /// `RUN-1d`: how many of `runs` were an agent's, rolled up from a child
+    /// conversation. Only ever set on a conversation bucket.
+    pub agents_runs: u64,
 }
 
 impl UsageBucket {
@@ -269,6 +272,10 @@ pub struct Message {
     /// `PLN-UI-5`: the plan this turn's run worked to, serialized as
     /// `agent::plan::Plan`. `None` for a turn that never wrote one.
     pub plan_json: Option<String>,
+    /// `VTN-7`: this turn was spoken (a user turn that was heard, or a reply
+    /// that was read out). False for anything typed or written before v30.
+    #[serde(default)]
+    pub spoken: bool,
     pub created_at: i64,
     /// Attachments on this turn (CHT-5). Populated by `list_messages`.
     #[serde(default)]
@@ -1021,6 +1028,11 @@ impl Db {
             Self::add_column(&conn, "projects", "allow_json", "TEXT")?;
             conn.execute("UPDATE projects SET exec_policy = 'inherit' WHERE exec_policy = 'ask'", [])?;
         }
+        if current < 30 {
+            // v30 (`VTN-7`): which turns were spoken. Every older row was typed
+            // or written, which is what the default says.
+            Self::add_column(&conn, "messages", "spoken", "INTEGER NOT NULL DEFAULT 0")?;
+        }
         // v24 (`OBS-2`): `run_usage` is created by SCHEMA above and has no
         // columns to add to an existing table, so there is nothing to do here
         // beyond bumping the version. v25 (`CTX-2`) adds `session_events` the
@@ -1559,9 +1571,18 @@ impl Db {
             // A turn is appended before its run starts; the plan arrives with
             // `finalize_message`, once the run has one.
             plan_json: None,
+            spoken: false,
             created_at: ts,
             attachments: saved,
         })
+    }
+
+    /// `VTN-7`: marks a turn as spoken. A separate call, not a field of
+    /// `NewMessage`, so the many ordinary writers stay as they are.
+    pub fn mark_spoken(&self, id: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE messages SET spoken = 1 WHERE id = ?1", params![id])?;
+        Ok(())
     }
 
     /// Update an assistant message's content + steps once streaming completes.
@@ -1639,7 +1660,7 @@ impl Db {
     pub fn list_messages(&self, conversation_id: &str) -> Result<Vec<Message>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json
+            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json, spoken
              FROM messages WHERE conversation_id = ?1 ORDER BY created_at ASC",
         )?;
         let mut rows = stmt
@@ -1679,7 +1700,7 @@ impl Db {
     pub fn list_messages_until(&self, conversation_id: &str, upto_id: &str) -> Result<Vec<Message>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json
+            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json, spoken
              FROM messages
              WHERE conversation_id = ?1
                AND rowid <= (SELECT rowid FROM messages WHERE id = ?2)
@@ -1993,13 +2014,43 @@ impl Db {
         let mut by_conversation: HashMap<String, UsageBucket> = HashMap::new();
         let mut total = UsageBucket::default();
 
+        // `RUN-1d`: an agent's runs are written under its own conversation, so
+        // grouped by raw id the parent's row would leave out everything its
+        // agents spent. Fold a child into the conversation that started it.
+        let mut parents: HashMap<String, Option<String>> = HashMap::new();
+        let mut root_of = |id: &str| -> String {
+            let mut current = id.to_string();
+            // Delegation is shallow, but a cycle in bad data must not hang this.
+            for _ in 0..8 {
+                let parent = parents
+                    .entry(current.clone())
+                    .or_insert_with(|| {
+                        conn.query_row(
+                            "SELECT parent_conversation_id FROM conversations WHERE id = ?1",
+                            params![current],
+                            |r| r.get::<_, Option<String>>(0),
+                        )
+                        .ok()
+                        .flatten()
+                    })
+                    .clone();
+                match parent {
+                    Some(p) => current = p,
+                    None => break,
+                }
+            }
+            current
+        };
+
         for row in rows {
             let (conversation_id, model_name, provenance, prompt, output, created_at) = row?;
             let day = day_key(created_at);
+            let root = root_of(&conversation_id);
+            let is_agent = root != conversation_id;
             for (map, key, provenance) in [
                 (&mut by_day, day, provenance.clone()),
                 (&mut by_model, model_name.clone(), provenance.clone()),
-                (&mut by_conversation, conversation_id.clone(), provenance.clone()),
+                (&mut by_conversation, root.clone(), provenance.clone()),
             ] {
                 let bucket = map.entry(key.clone()).or_insert_with(|| UsageBucket {
                     key,
@@ -2009,6 +2060,11 @@ impl Db {
                 bucket.prompt_tokens += prompt;
                 bucket.output_tokens += output;
                 bucket.runs += 1;
+            }
+            if is_agent {
+                if let Some(bucket) = by_conversation.get_mut(&root) {
+                    bucket.agents_runs += 1;
+                }
             }
             total.prompt_tokens += prompt;
             total.output_tokens += output;
@@ -2059,6 +2115,22 @@ impl Db {
         conversation_id: &str,
         message_id: &str,
     ) -> Result<(Conversation, Option<String>), DbError> {
+        self.fork_conversation_at(conversation_id, message_id, false)
+    }
+
+    /// `UCM-2`: the same branch, with the choice of where the cut falls.
+    ///
+    /// `inclusive: false` is "Try again from here": copy everything before the
+    /// turn and hand back the user turn that prompted it. `inclusive: true` is
+    /// `/fork`: keep the boundary message and everything the run after it wrote
+    /// to the log, and hand back nothing to resend — the branch is the
+    /// conversation exactly as it stands.
+    pub fn fork_conversation_at(
+        &self,
+        conversation_id: &str,
+        message_id: &str,
+        inclusive: bool,
+    ) -> Result<(Conversation, Option<String>), DbError> {
         let cutoff: i64 = {
             let conn = self.conn.lock().unwrap();
             conn.query_row(
@@ -2070,12 +2142,35 @@ impl Db {
         let source = self
             .get_conversation(conversation_id)?
             .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-        let upto_seq = self.seq_at_time(conversation_id, cutoff)?;
+        // An inclusive cut keeps the boundary turn *and* the log its run wrote,
+        // which is stamped after the message row. The log is therefore cut at the
+        // next message, or not at all when the boundary is the last one.
+        let upto_seq = if inclusive {
+            let next: Option<i64> = {
+                let conn = self.conn.lock().unwrap();
+                conn.query_row(
+                    "SELECT MIN(created_at) FROM messages WHERE conversation_id = ?1 AND created_at > ?2",
+                    params![conversation_id, cutoff],
+                    |r| r.get(0),
+                )
+                .unwrap_or(None)
+            };
+            match next {
+                Some(at) => self.seq_at_time(conversation_id, at - 1)?,
+                None => i64::MAX,
+            }
+        } else {
+            self.seq_at_time(conversation_id, cutoff)?
+        };
 
         let conn = self.conn.lock().unwrap();
         let new_conv_id = new_id();
         let ts = now_ms();
-        let title = format!("{} (again)", source.title);
+        let title = if inclusive {
+            format!("{} (branch)", source.title)
+        } else {
+            format!("{} (again)", source.title)
+        };
         conn.execute(
             "INSERT INTO conversations(id, title, model_id, persona_id, overrides_json, workspace,
                                       folder_path, folder_trust, project_id, created_at, updated_at)
@@ -2098,16 +2193,17 @@ impl Db {
 
         // Everything before the turn being redone, oldest first.
         let mut stmt = conn.prepare(
-            "SELECT id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json
-             FROM messages WHERE conversation_id = ?1 AND created_at < ?2 ORDER BY created_at",
+            "SELECT id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json, spoken
+             FROM messages WHERE conversation_id = ?1 AND (created_at < ?2 OR (?3 AND created_at = ?2))
+             ORDER BY created_at",
         )?;
         // `PLN-T4`: `plan_json` travels with the turn, so a branch shows the
         // plan the run it copied was working to rather than a blank card.
-        type Row = (String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, i64, Option<String>);
+        type Row = (String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, i64, Option<String>, i64);
         let mut rows: Vec<Row> = stmt
-            .query_map(params![conversation_id, cutoff], |r| {
+            .query_map(params![conversation_id, cutoff, inclusive], |r| {
                 Ok((
-                    r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?,
+                    r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -2116,7 +2212,7 @@ impl Db {
         // The trailing user turn is the one to resend, so it is not copied —
         // otherwise it would appear twice the moment the caller sends it.
         let resend = match rows.last() {
-            Some(last) if last.1 == "user" => rows.pop().map(|r| r.2),
+            Some(last) if last.1 == "user" && !inclusive => rows.pop().map(|r| r.2),
             _ => None,
         };
 
@@ -2131,9 +2227,9 @@ impl Db {
             }
             conn.execute(
                 "INSERT INTO messages(id, conversation_id, role, content, model_name, model_provenance,
-                                      steps_json, stop_reason, created_at, plan_json)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![new_msg_id, new_conv_id, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8],
+                                      steps_json, stop_reason, created_at, plan_json, spoken)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![new_msg_id, new_conv_id, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9],
             )?;
             conn.execute(
                 "INSERT INTO attachments(id, message_id, kind, name, path, artifact_id)
@@ -2247,6 +2343,28 @@ impl Db {
         )?;
         let rows = stmt
             .query_map([conversation_id], |r| {
+                Ok(SessionEvent {
+                    seq: r.get(0)?,
+                    kind: r.get(1)?,
+                    payload_json: r.get(2)?,
+                    created_at: r.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// The newest `limit` log rows of one kind across every conversation, newest
+    /// first. What `CPX-5` reads to learn what the user keeps saying no to, which
+    /// no single conversation can tell.
+    pub fn recent_session_events_of_kind(&self, kind: &str, limit: i64) -> Result<Vec<SessionEvent>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT seq, kind, payload_json, created_at FROM session_events
+             WHERE kind = ?1 ORDER BY created_at DESC, seq DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![kind, limit], |r| {
                 Ok(SessionEvent {
                     seq: r.get(0)?,
                     kind: r.get(1)?,
@@ -2591,7 +2709,7 @@ impl Db {
     pub fn list_messages_window(&self, conversation_id: &str, max: usize) -> Result<Vec<Message>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json
+            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json, spoken
              FROM messages WHERE conversation_id = ?1
              ORDER BY rowid DESC LIMIT ?2",
         )?;
@@ -4219,6 +4337,7 @@ impl Db {
             stop_reason: row.get(7)?,
             created_at: row.get(8)?,
             plan_json: row.get(9)?,
+            spoken: row.get::<_, i64>(10)? != 0,
             attachments: Vec::new(),
         })
     }
@@ -4830,6 +4949,39 @@ mod tests {
         assert_eq!(db.usage_summary(now_ms() + 1000).unwrap().total.runs, 0);
     }
 
+    /// `RUN-T1d`: what an agent spent belongs to the chat that started it. The
+    /// totals and the per-model rows do not change, only where it is filed.
+    #[test]
+    fn an_agents_spend_is_filed_under_the_chat_that_started_it() {
+        let db = Db::open_in_memory().unwrap();
+        let lead = db.create_conversation("the lead", None, false).unwrap();
+        let child = db.create_conversation("an agent's work", None, false).unwrap();
+        db.set_conversation_parent(&child.id, &lead.id).unwrap();
+        let other = db.create_conversation("elsewhere", None, false).unwrap();
+
+        db.record_run_usage("r1", &lead.id, "claude-sonnet-4-5", "cloud", 1000, 100, 3).unwrap();
+        db.record_run_usage("r2", &child.id, "claude-haiku-4-5", "cloud", 500, 50, 2).unwrap();
+        db.record_run_usage("r3", &child.id, "claude-haiku-4-5", "cloud", 500, 50, 2).unwrap();
+        db.record_run_usage("r4", &other.id, "qwen3-8b", "local", 10, 10, 1).unwrap();
+
+        let s = db.usage_summary(0).unwrap();
+        let row = s.by_conversation.iter().find(|r| r.key == lead.id).unwrap();
+        assert_eq!(row.runs, 3, "its own run and both of its agent's");
+        assert_eq!(row.agents_runs, 2);
+        assert_eq!(row.total_tokens(), 1100 + 550 + 550);
+        assert!(
+            s.by_conversation.iter().all(|r| r.key != child.id),
+            "the child has no row of its own any more"
+        );
+        let quiet = s.by_conversation.iter().find(|r| r.key == other.id).unwrap();
+        assert_eq!(quiet.agents_runs, 0);
+
+        // Nothing is double counted or lost.
+        assert_eq!(s.total.runs, 4);
+        assert_eq!(s.total.total_tokens(), 1100 + 550 + 550 + 20);
+        assert_eq!(s.by_model.iter().map(|m| m.runs).sum::<u64>(), 4);
+    }
+
     /// The bug behind an empty Usage panel: a run whose provider reported no
     /// usage was dropped entirely, so somebody using a free tier that reports
     /// nothing saw a blank page after a day of real work. A run counted with no
@@ -4903,6 +5055,39 @@ mod tests {
     /// resends every old turn word for word, overflows, and compacts again.
     /// The boundary has to be re-pointed, because the fork's messages are copies
     /// with new ids and the old id names nothing here.
+    /// `VTN-7`: a turn is typed until it is marked, the mark survives a reload,
+    /// and a fork carries it.
+    #[test]
+    fn a_spoken_turn_stays_marked_and_a_fork_keeps_the_mark() {
+        let db = Db::open_in_memory().unwrap();
+        let source = db.create_conversation("Talk", None, false).unwrap();
+        let msg = |role: &str, content: &str| NewMessage {
+            role: role.into(),
+            content: content.into(),
+            model_name: None,
+            model_provenance: None,
+            steps_json: None,
+            attachments: vec![],
+        };
+        let typed = db.append_message(&source.id, &msg("user", "typed")).unwrap();
+        let said = db.append_message(&source.id, &msg("user", "said")).unwrap();
+        db.mark_spoken(&said.id).unwrap();
+        let answer = db.append_message(&source.id, &msg("assistant", "answer")).unwrap();
+        let after = db.append_message(&source.id, &msg("user", "next")).unwrap();
+        let _ = db.append_message(&source.id, &msg("assistant", "later answer")).unwrap();
+        assert!(!typed.spoken);
+
+        let rows = db.list_messages(&source.id).unwrap();
+        let spoken: Vec<(&str, bool)> = rows.iter().map(|m| (m.content.as_str(), m.spoken)).collect();
+        assert_eq!(spoken[..2], [("typed", false), ("said", true)]);
+        assert!(!rows.iter().find(|m| m.id == answer.id).unwrap().spoken);
+
+        let (fork, _) = db.fork_conversation(&source.id, &after.id).unwrap();
+        let copied = db.list_messages(&fork.id).unwrap();
+        assert_eq!(copied.iter().find(|m| m.content == "said").map(|m| m.spoken), Some(true));
+        assert_eq!(copied.iter().find(|m| m.content == "typed").map(|m| m.spoken), Some(false));
+    }
+
     #[test]
     fn a_fork_keeps_the_summary_it_can_still_account_for() {
         let db = Db::open_in_memory().unwrap();

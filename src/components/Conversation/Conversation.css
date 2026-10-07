@@ -212,6 +212,19 @@
   justify-content: center;
   gap: 8px;
 }
+/* The orb holds the middle of the tile; the clock and Cancel that join it after
+   a few seconds drop to the foot so the two never sit on top of each other. */
+.chat-media-orb {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.chat-media-orb ~ .chat-media-waiting {
+  justify-content: flex-end;
+  padding-bottom: 12px;
+}
 .chat-media-elapsed {
   font-family: var(--font-sans);
   font-size: var(--fs-timeline);
@@ -314,11 +327,10 @@
 .thinking {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
   padding: 3px 0 6px;
 }
 .thinking-label {
-  margin-left: 4px;
   font-family: var(--font-sans);
   font-size: var(--fs-footnote);
   color: var(--ink-faint);
@@ -342,6 +354,23 @@
   font-size: var(--fs-timeline);
   font-variant-numeric: tabular-nums;
   color: var(--ink-faint);
+}
+/* The orb's slot is always 20px wide, orb or not, so the line does not slide
+   sideways each time a step starts or ends. */
+.run-meter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 4px;
+}
+.run-meter-row .run-meter {
+  margin: 0;
+  min-width: 0;
+}
+.run-meter-orb {
+  flex: none;
+  width: 20px;
+  height: 20px;
 }
 /* The model's thinking, while it is thinking. Deliberately quieter than the
    meter above it: this is evidence the run is alive, not something to read. */
@@ -396,31 +425,6 @@
 }
 .mid-run-mark.pending {
   opacity: 0.7;
-}
-.thinking-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ink-faint);
-  animation: thinking-pulse 1.4s ease-in-out infinite;
-}
-.thinking-dot:nth-child(2) {
-  animation-delay: 0.2s;
-}
-.thinking-dot:nth-child(3) {
-  animation-delay: 0.4s;
-}
-@keyframes thinking-pulse {
-  0%,
-  80%,
-  100% {
-    opacity: 0.25;
-    transform: scale(0.8);
-  }
-  40% {
-    opacity: 1;
-    transform: scale(1);
-  }
 }
 
 /* ---- inline artifact chips (CHT-6): open straight into the Canvas panel ---- */
@@ -1307,18 +1311,19 @@
 .fleet-row + .fleet-row {
   border-top: 1px solid var(--paper-edge);
 }
+/* One 20px cell for either mark, so a row that is running (orb) and one that
+   has ended (dot) keep their text on the same line. */
+.fleet-lead {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+}
 .fleet-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-}
-.fleet-row.running .fleet-dot {
-  animation: fleet-pulse 1.4s ease-in-out infinite;
-}
-@keyframes fleet-pulse {
-  50% {
-    opacity: 0.35;
-  }
 }
 .fleet-agent {
   color: var(--ink);
@@ -1622,4 +1627,79 @@
   font-variant-numeric: tabular-nums;
   line-height: 1.5;
   color: var(--ink-faint);
+}
+
+/* `REG-4`: a command that changed something, as one muted line among the turns. */
+.command-note {
+  margin: 14px 0;
+  text-align: center;
+  font-size: var(--fs-footnote);
+  letter-spacing: 0.02em;
+  color: var(--ink-faint);
+}
+.command-note-meta {
+  color: var(--ink-faint);
+  opacity: 0.8;
+}
+.command-note.failed {
+  text-decoration: line-through;
+}
+
+/* `SKC-2`: a skill command's bubble — `/name` and what it was asked, with the
+   instructions it loaded one click away. */
+.command-chip {
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.command-chip summary {
+  cursor: pointer;
+  list-style: none;
+}
+.command-chip summary::-webkit-details-marker {
+  display: none;
+}
+.command-chip-name {
+  font-family: var(--font-mono);
+  color: var(--ink);
+}
+.command-chip-args {
+  color: var(--ink);
+}
+.command-chip-note {
+  margin: 6px 0 0;
+  color: var(--ink-faint);
+  line-height: 1.5;
+}
+
+/* `SKC-4`: the instructions `/init` proposes, shown whole before they are accepted. */
+.proposal-preview {
+  margin: 8px 0;
+  padding: 8px 10px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-footnote);
+  line-height: 1.5;
+  color: var(--ink-muted);
+  background: var(--paper-edge);
+  border-radius: var(--radius-sm);
+}
+
+/* `PLF-4`: the approval row under a plan I wrote while planning first. */
+.plan-approval {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+  font-size: var(--fs-ui);
+}
+.plan-approval-text {
+  flex: 1;
+  min-width: 180px;
+  color: var(--ink-muted);
 }

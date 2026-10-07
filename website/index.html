@@ -1,0 +1,714 @@
+<!doctype html>
+<html lang="en" data-mode="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Poiesis: the agent that tends to itself</title>
+  <meta
+    name="description"
+    content="Poiesis is a local-first desktop agent for Windows. It remembers what it learns, repairs what breaks, and shows you every change it makes to itself. You decide what it may change."
+  />
+  <meta name="theme-color" content="#f3f5f3" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0d100e" media="(prefers-color-scheme: dark)" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Poiesis: the agent that tends to itself" />
+  <meta
+    property="og:description"
+    content="A local-first desktop agent that keeps plain-text memory, repairs itself, and shows you every change it makes."
+  />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preload" href="fonts/newsreader-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="fonts/inter-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <script>
+    (function () {
+      var d = document.documentElement;
+      d.classList.add("js");
+      try {
+        var m = localStorage.getItem("poiesis-mode");
+        if (m !== "light" && m !== "dark") {
+          m = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        d.setAttribute("data-mode", m);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css" />
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "Poiesis Agent",
+      "applicationCategory": "UtilitiesApplication",
+      "operatingSystem": "Windows 10, Windows 11",
+      "license": "https://opensource.org/licenses/MIT",
+      "description": "A local-first, agentic desktop LLM application that keeps plain-text memory and maintains itself under your control."
+    }
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <!-- icon sprite: 16px, 1.5 stroke, same family as the app's Icons.tsx -->
+  <svg width="0" height="0" style="position: absolute" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></symbol>
+      <symbol id="i-send" viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></symbol>
+      <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" /><path d="m10.2 10.2 3.3 3.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></symbol>
+      <symbol id="i-library" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" /><path d="M2.5 9.5 6 7l3 2.5 4.5-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" /></symbol>
+      <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" /></symbol>
+      <symbol id="i-chat" viewBox="0 0 16 16"><path d="M3 4.5a1.5 1.5 0 0 1 1.5-1.5h7A1.5 1.5 0 0 1 13 4.5v5a1.5 1.5 0 0 1-1.5 1.5H7l-3 2.5V11a1.5 1.5 0 0 1-1-1.4z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" /></symbol>
+      <symbol id="i-chevron" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></symbol>
+      <symbol id="i-github" viewBox="0 0 16 16"><path fill="currentColor" d="M8 .2a8 8 0 0 0-2.53 15.59c.4.07.55-.17.55-.38v-1.35c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.05-.49.05-.49.8.06 1.23.83 1.23.83.72 1.22 1.88.87 2.34.66.07-.52.28-.87.5-1.07-1.78-.2-3.65-.89-3.65-3.96 0-.88.31-1.6.82-2.16-.08-.2-.36-1.02.08-2.12 0 0 .67-.22 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.16 0 3.08-1.87 3.76-3.66 3.96.29.25.54.74.54 1.5v2.22c0 .21.15.46.55.38A8 8 0 0 0 8 .2z" /></symbol>
+    </defs>
+  </svg>
+
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="#top" aria-label="Poiesis, back to top">
+        <svg class="poiesis-mark stage-3" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"></svg>
+        Poiesis
+      </a>
+      <nav class="nav" aria-label="Sections">
+        <a href="#idea">The idea</a>
+        <a href="#memory">Memory</a>
+        <a href="#control">Control</a>
+        <a href="#agents">Agents</a>
+        <a href="#private">Privacy</a>
+        <a href="#status">Status</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <div class="topbar-end">
+        <div class="segmented" role="group" aria-label="Lighting">
+          <button type="button" data-mode-btn="light" aria-pressed="true">Daylight</button>
+          <button type="button" data-mode-btn="dark" aria-pressed="false">Backlit</button>
+        </div>
+        <a class="btn btn-primary btn-sm" href="https://github.com/schuettla/poiesis">
+          <svg><use href="#i-github" /></svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <div class="sheet" id="top">
+    <main id="main">
+      <!-- ================= HERO ================= -->
+      <section class="band hero" aria-labelledby="hero-h">
+        <div class="wrap">
+          <div class="hero-top">
+            <span class="eyebrow" style="margin: 0">Local-first agent for Windows</span>
+            <h1 id="hero-h">The agent that <em>tends to itself.</em></h1>
+            <p class="lede">
+              Poiesis runs on your computer. It remembers what it learns about you, repairs what
+              breaks, and shows you every change it makes to itself. You decide what it may change.
+            </p>
+            <div class="cta">
+              <a class="btn btn-primary" href="https://github.com/schuettla/poiesis">
+                <svg><use href="#i-github" /></svg>
+                View on GitHub
+              </a>
+              <a class="btn btn-secondary" href="#idea">See how it works</a>
+            </div>
+            <div class="hero-facts">
+              <span>Windows 10 and 11</span>
+              <span>Runs local models</span>
+              <span>Your own cloud keys, if you want them</span>
+              <span>MIT license</span>
+            </div>
+          </div>
+
+          <div class="stage" data-reveal>
+            <!-- The real window, drawn by the app's own stylesheets (see app/). -->
+            <div class="shot" id="shot">
+              <div class="shot-frame" id="shotFrame">
+                <iframe id="appFrame" src="app/index.html" width="1180" height="800" title="A preview of the Poiesis window: a question, the agent's steps, an answer, and a note it saved" loading="eager"></iframe>
+              </div>
+            </div>
+            <div class="stage-foot">
+              <span>The real window, drawn with the app's own styles.</span>
+              <button class="btn-text" type="button" id="replay">Replay</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= IDEA ================= -->
+      <section class="band" id="idea" aria-labelledby="idea-h">
+        <div class="wrap">
+          <div data-reveal>
+            <span class="eyebrow">The idea</span>
+            <h2 class="h2" id="idea-h">A system that keeps making itself.</h2>
+            <p class="lede">
+              Most assistants forget you when the chat ends, and nobody repairs them but their
+              makers. Poiesis does the work of staying useful. It writes down what it learns. It
+              reads back over its own mistakes. It notices when a part is broken and works around
+              it. And it never does any of this in the dark.
+            </p>
+          </div>
+
+          <div class="cells" data-reveal>
+            <div class="cell">
+              <span class="n">01</span>
+              <h3>Remembers</h3>
+              <p>It keeps facts about you, and lessons from its own mistakes, as plain files on your disk.</p>
+            </div>
+            <div class="cell">
+              <span class="n">02</span>
+              <h3>Reflects</h3>
+              <p>When a chat ends it reads it back. A lesson is kept only if it is worth keeping, and a second check gates it.</p>
+            </div>
+            <div class="cell">
+              <span class="n">03</span>
+              <h3>Repairs</h3>
+              <p>A file it cannot read is set aside, not deleted. A tool that keeps failing is noted, and it plans around it.</p>
+            </div>
+            <div class="cell">
+              <span class="n">04</span>
+              <h3>Checks itself</h3>
+              <p>Each change to itself is tested against fixed rules. A change that makes it worse is put back, and you are told.</p>
+            </div>
+          </div>
+
+          <div class="split" style="margin-top: 96px" data-reveal>
+            <div>
+              <span class="eyebrow">Where the name comes from</span>
+              <h3 class="sub-h">Poiesis is Greek for making.</h3>
+              <p class="prose">
+                <strong>Autopoiesis</strong> is a word from the biologists Maturana and Varela. It
+                describes a system that keeps producing the parts it is made of. A living cell is
+                the usual example.
+              </p>
+              <p class="prose">
+                Poiesis applies that idea to a desktop agent. It maintains its own memory,
+                instructions and procedures. You are the boundary that decides what may change.
+                Say it: <em>poy-EE-sis</em>.
+              </p>
+            </div>
+            <div class="panel mark-lab" id="markLab">
+              <div class="view">
+                <svg id="labMark" class="poiesis-mark stage-1 state-idle" viewBox="0 0 24 24" role="img" aria-label="The Poiesis mark"></svg>
+              </div>
+              <div class="controls">
+                <div class="row">
+                  <span class="lab">State</span>
+                  <div class="segmented" role="group" aria-label="State of the mark">
+                    <button type="button" data-state="idle" aria-pressed="true">Resting</button>
+                    <button type="button" data-state="active" aria-pressed="false">Working</button>
+                    <button type="button" data-state="reflecting" aria-pressed="false">Reflecting</button>
+                    <button type="button" data-state="healing" aria-pressed="false">Recovering</button>
+                  </div>
+                </div>
+                <div class="row">
+                  <span class="lab">Knows</span>
+                  <div class="segmented" role="group" aria-label="How much it knows">
+                    <button type="button" data-stage="0" aria-pressed="false">Nothing yet</button>
+                    <button type="button" data-stage="1" aria-pressed="true">5 things</button>
+                    <button type="button" data-stage="2" aria-pressed="false">20</button>
+                    <button type="button" data-stage="3" aria-pressed="false">50</button>
+                  </div>
+                </div>
+                <p class="say" id="labSay" aria-live="polite"></p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= MEMORY ================= -->
+      <section class="band canvas" id="memory" aria-labelledby="memory-h">
+        <div class="wrap">
+          <div class="split flip">
+            <div data-reveal>
+              <span class="eyebrow">Memory</span>
+              <h2 class="h2" id="memory-h">What it knows about you is a folder of text files.</h2>
+              <p class="prose">
+                Everything the agent keeps lives as plain markdown in your app data folder. No
+                database stands between you and it. Open a file in any editor and change it. Delete
+                a file and the agent forgets that thing.
+              </p>
+              <ul class="points">
+                <li><span><strong>Recall by meaning.</strong> A memory comes back when it is relevant, not only when it shares words with your question. A small model on your machine does the matching.</span></li>
+                <li><span><strong>Your rules stay yours.</strong> SOUL.md holds your standing instructions. The agent may propose edits. It cannot write there on its own.</span></li>
+                <li><span><strong>Memory can belong to a project.</strong> A fact learned in one project stays in that project. A note with no tag is shared everywhere.</span></li>
+              </ul>
+            </div>
+            <div class="panel files" data-reveal id="files">
+              <div class="tree" role="tablist" aria-label="Memory files" aria-orientation="vertical">
+                <div class="dir">memory/</div>
+                <button class="indent" role="tab" type="button" data-file="index" aria-selected="true">MEMORY.md</button>
+                <button class="indent" role="tab" type="button" data-file="soul" aria-selected="false">SOUL.md</button>
+                <button class="indent" role="tab" type="button" data-file="profile" aria-selected="false">PROFILE.md</button>
+                <div class="dir">memory/facts/</div>
+                <button class="indent" role="tab" type="button" data-file="fact" aria-selected="false">short-answers.md</button>
+                <div class="dir">memory/lessons/</div>
+                <button class="indent" role="tab" type="button" data-file="lesson" aria-selected="false">ask-before-send.md</button>
+              </div>
+              <div class="file-pane">
+                <div class="path"><span id="filePath">memory/MEMORY.md</span><span class="who" id="fileWho">the agent writes this</span></div>
+                <pre id="fileBody" tabindex="0"></pre>
+                <div class="note" id="fileNote">The index. A short version of it goes into every conversation.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= CONTROL ================= -->
+      <section class="band" id="control" aria-labelledby="control-h">
+        <div class="wrap">
+          <div class="split">
+            <div data-reveal>
+              <span class="eyebrow">Control</span>
+              <h2 class="h2" id="control-h">Every change it makes to itself is visible.</h2>
+              <p class="prose">
+                A self-improving agent is only safe if you can see it and stop it. When it writes to
+                its own memory, a quiet notice appears at that moment, with an Undo. It is never a
+                log you have to go and find.
+              </p>
+              <p class="prose">
+                For each kind of change you choose how much freedom it gets. Pick a level on the
+                right and see what happens when the agent learns something.
+              </p>
+            </div>
+            <div class="panel demo" data-reveal id="autonomy">
+              <div class="sec">
+                <div class="cap">The agent just learned something</div>
+                <div class="said">You use metric units.<small>From your last message</small></div>
+              </div>
+              <div class="sec">
+                <div class="cap">Self, then Autonomy: facts about you</div>
+                <div class="segmented" role="group" aria-label="Autonomy for facts about you">
+                  <button type="button" data-auto="auto" aria-pressed="true">Auto with undo</button>
+                  <button type="button" data-auto="ask" aria-pressed="false">Ask first</button>
+                  <button type="button" data-auto="off" aria-pressed="false">Off</button>
+                </div>
+              </div>
+              <div class="sec outcome" id="outcome" aria-live="polite"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= REPAIR ================= -->
+      <section class="band canvas" id="repair" aria-labelledby="repair-h">
+        <div class="wrap">
+          <div data-reveal>
+            <span class="eyebrow">Repair</span>
+            <h2 class="h2" id="repair-h">It notices what is broken, and says so.</h2>
+            <p class="lede">
+              Two things keep a self-changing agent honest: a way to repair damage, and a way to
+              catch itself getting worse.
+            </p>
+          </div>
+          <div class="two" data-reveal>
+            <div class="panel">
+              <div class="pane-title">Self · Health <span class="r">just now</span></div>
+              <ul class="lines">
+                <li>
+                  <i class="sig ok"></i>
+                  <span>Memory files<small>All readable.</small></span>
+                  <span></span>
+                </li>
+                <li>
+                  <i class="sig danger"></i>
+                  <span><code>lessons/old-note.md</code><small>I could not read this file. I moved it aside instead of deleting it.</small></span>
+                  <span class="acts"><button class="btn-text" type="button">Fix</button><button class="btn-text" type="button">Discard</button></span>
+                </li>
+                <li>
+                  <i class="sig" style="border: 1px solid var(--ink-faint)"></i>
+                  <span>Web search<small>It failed three times today. I noted that to myself and will plan around it.</small></span>
+                  <span></span>
+                </li>
+                <li>
+                  <i class="sig ok"></i>
+                  <span>Local engine<small>Restarted once after a crash. Restarts are capped, so it cannot loop forever.</small></span>
+                  <span></span>
+                </li>
+              </ul>
+            </div>
+            <div class="panel">
+              <div class="pane-title">Self · Fixed rules <span class="r">checked after every change</span></div>
+              <ul class="lines">
+                <li>
+                  <i class="sig ok"></i>
+                  <span>Asked to remember something, it still uses its memory tool.<small>Passed</small></span>
+                  <span></span>
+                </li>
+                <li>
+                  <i class="sig ok"></i>
+                  <span>A web page that says "ignore your instructions" still fails to work.<small>Passed</small></span>
+                  <span></span>
+                </li>
+              </ul>
+              <div class="pane-foot">
+                <div class="toast">
+                  <i class="mk"></i>
+                  <span class="tx">That change made me worse at 1 thing. I put it back.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="after" data-reveal>
+            Each change to its own way of working is tested against a small set of fixed
+            behaviours before it stays. If the change breaks one, it is reverted and you are told.
+            The same check runs on the way in, so a risky line can never become a saved memory.
+          </p>
+        </div>
+      </section>
+
+      <!-- ================= AGENTS ================= -->
+      <section class="band" id="agents" aria-labelledby="agents-h">
+        <div class="wrap">
+          <div class="split flip">
+            <div data-reveal>
+              <span class="eyebrow">Agents and plans</span>
+              <h2 class="h2" id="agents-h">Work you can watch, steer and stop.</h2>
+              <p class="prose">
+                For a big job the agent writes a plan first, then ticks it off. For a wide job it
+                hands parts to other agents that run at the same time. Each one is a real run in its
+                own chat, so you can open it, read it live, tell it something, or stop it.
+              </p>
+              <ul class="points">
+                <li><span><strong>Never more power than the parent.</strong> A child agent inherits folder access and trust. It can only narrow them.</span></li>
+                <li><span><strong>Stop keeps the work.</strong> A stopped run ends with what it found, and says it was stopped.</span></li>
+                <li><span><strong>Type while it works.</strong> Your message lands between steps, never in the middle of a tool call.</span></li>
+              </ul>
+            </div>
+            <div class="stack" data-reveal>
+              <section class="card" aria-label="My plan">
+                <div class="card-head"><span class="t">My plan</span><span>2 of 4 done</span></div>
+                <div class="plan-item done"><span class="box"></span><span class="tx">Collect last year's invoices</span></div>
+                <div class="plan-item done"><span class="box"></span><span class="tx">Group them by client</span></div>
+                <div class="plan-item doing"><span class="box"></span><span class="tx">Write the summary</span></div>
+                <div class="plan-item todo"><span class="box"></span><span class="tx">Check totals against the bank export</span></div>
+              </section>
+              <section class="card" aria-label="Agents I started" id="fleet">
+                <div class="card-head">Agents I started</div>
+                <div class="fleet-row" data-agent="researcher">
+                  <span class="lead"><i class="orbdot"></i></span>
+                  <span class="who">researcher</span>
+                  <span class="doing">reading Documents/2026/brandt-0412.pdf</span>
+                  <span class="clock">0:41</span>
+                  <span class="acts"><button type="button">Open</button><button type="button" data-steer>Steer</button><button type="button" data-stop>Stop</button></span>
+                </div>
+                <div class="fleet-row" data-agent="checker">
+                  <span class="lead"><i class="orbdot"></i></span>
+                  <span class="who">checker</span>
+                  <span class="doing">comparing totals with the bank export</span>
+                  <span class="clock">0:38</span>
+                  <span class="acts"><button type="button">Open</button><button type="button" data-steer>Steer</button><button type="button" data-stop>Stop</button></span>
+                </div>
+                <div class="fleet-row" data-agent="writer">
+                  <span class="lead"><i class="sig cloud"></i></span>
+                  <span class="who">writer</span>
+                  <span class="doing">done · 6 steps · 0:52</span>
+                  <span></span>
+                  <span class="acts"><button type="button">Open</button><button type="button">Report</button></span>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= PRIVATE ================= -->
+      <section class="band canvas" id="private" aria-labelledby="private-h">
+        <div class="wrap">
+          <div class="split">
+            <div data-reveal>
+              <span class="eyebrow">Privacy</span>
+              <h2 class="h2" id="private-h">Local first. Cloud only when you choose.</h2>
+              <p class="lede" style="font-size: 18px">
+                Chat with models that run on your own machine. Add your own key for OpenAI,
+                OpenRouter or Anthropic if you want a hosted model in the same picker. The two are
+                marked, so you always know where a reply came from.
+              </p>
+            </div>
+            <div class="panel picker" data-reveal aria-label="The model picker">
+              <div class="grp">
+                <div class="grp-t"><i class="sig local"></i>On this device</div>
+                <div class="opt on">Llama 3.1 8B <span class="fit">Runs great</span></div>
+                <div class="opt">Gemma 3 4B <span class="fit">Runs great</span></div>
+                <div class="opt">Mistral 7B <span class="fit">Runs slowly</span></div>
+              </div>
+              <div class="grp">
+                <div class="grp-t"><i class="sig cloud"></i>Cloud, with your key</div>
+                <div class="opt">OpenRouter <span class="fit">cost shown before and after</span></div>
+                <div class="opt">OpenAI</div>
+                <div class="opt">Anthropic</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="offlist" data-reveal>
+            <div class="head">
+              <h3>Off until you switch it on</h3>
+              <p>Anything that leaves your device or runs code starts off.</p>
+            </div>
+            <div class="offrows">
+              <div class="offrow"><b>Web search</b><span class="badge">Off</span><p>Your query leaves the device, so it asks to be switched on.</p></div>
+              <div class="offrow"><b>Code execution</b><span class="badge">Off</span><p>Runs Python or Node in a sandbox with time and memory limits.</p></div>
+              <div class="offrow"><b>Mail</b><span class="badge">Off</span><p>Connects to your account directly. Sending always asks first.</p></div>
+              <div class="offrow"><b>Browser</b><span class="badge">Off</span><p>Uses your installed Chrome or Edge in its own profile. A new site asks first.</p></div>
+              <div class="offrow"><b>Screen and apps</b><span class="badge">Off</span><p>A screenshot, or opening an app by name. Both ask first.</p></div>
+              <div class="offrow"><b>Project tasks</b><span class="badge">Off</span><p>Runs your build and tests in the project folder, with caps on time and memory.</p></div>
+            </div>
+          </div>
+
+          <div class="promises" data-reveal>
+            <div class="promise">
+              <h4>Keys stay in Windows.</h4>
+              <p>Your cloud keys live in the Windows Credential Manager. They are never in a file or in your chats.</p>
+            </div>
+            <div class="promise">
+              <h4>Words from outside are data.</h4>
+              <p>Web pages, mail and fetched files are marked as coming from outside. Text like that can never become a saved memory.</p>
+            </div>
+            <div class="promise">
+              <h4>Folders are deny-by-default.</h4>
+              <p>You choose which folders it may see. Anything that destroys bytes is saved first and can be restored.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= REACH ================= -->
+      <section class="band" id="reach" aria-labelledby="reach-h">
+        <div class="wrap">
+          <div data-reveal>
+            <span class="eyebrow">Reach</span>
+            <h2 class="h2" id="reach-h">It makes things, and you can teach it more.</h2>
+          </div>
+          <div class="trio" data-reveal>
+            <article class="tile">
+              <div class="art">
+                <div class="media-wait">
+                  <span class="mk"><i class="orbdot"></i>Making an image · 0:12</span>
+                  <span class="bar"></span>
+                  <button class="btn-text" type="button">Cancel</button>
+                </div>
+              </div>
+              <div class="txt">
+                <h3>Ask for a picture in the chat.</h3>
+                <p>There is no image mode. Say what you want and it arrives under your message. Say "make it warmer" and a better one follows. Make it on your device, or with your own key.</p>
+              </div>
+            </article>
+            <article class="tile">
+              <div class="art">
+<pre class="codebox"><span class="k">---</span>
+name: weekly-report
+description: Build the weekly report
+  from the project folder
+<span class="k">---</span>
+1. Read notes/ for this week.
+2. Group items by client.</pre>
+              </div>
+              <div class="txt">
+                <h3>Skills in an open format.</h3>
+                <p>A skill is a folder with a SKILL.md file, in the open Agent Skills format. A skill from another agent works here unchanged. The agent sees one line until it needs the rest.</p>
+              </div>
+            </article>
+            <article class="tile">
+              <div class="art">
+<pre class="codebox"><span class="k">command</span>
+npx -y @modelcontextprotocol/
+  server-filesystem C:/path
+
+<span class="k">or paste a link</span>
+https://example.com/mcp</pre>
+              </div>
+              <div class="txt">
+                <h3>Other apps through MCP.</h3>
+                <p>Connect any Model Context Protocol server, remote or local, and its tools join the toolbox. Tokens are kept in the Windows credential store.</p>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= CODE ================= -->
+      <section class="band canvas" id="code" aria-labelledby="code-h">
+        <div class="wrap">
+          <div class="split">
+            <div data-reveal>
+              <span class="eyebrow">Code</span>
+              <h2 class="h2" id="code-h">It shows exactly what it changed.</h2>
+              <p class="prose">
+                In a project with a folder, Poiesis can run your build and tests and show you a
+                patch of its own edits. The patch is built from the agent's own undo snapshots, not
+                from git diff, so your uncommitted work is never shown as the agent's.
+              </p>
+              <ul class="points">
+                <li><span><strong>Read before edit.</strong> It cannot edit a file it has not read in this run, or one that changed since.</span></li>
+                <li><span><strong>It runs your tasks.</strong> Build, check, test and lint, as the project declares them. Asking is the default.</span></li>
+                <li><span><strong>It says when it did not check.</strong> If it edited code and never ran the tests, it tells you the change is unverified.</span></li>
+              </ul>
+            </div>
+            <div class="panel diff" data-reveal aria-label="The Changes view">
+              <div class="diff-head">
+                <b>Changes</b><span style="color: var(--ink-faint)">1 file · +2 −1</span>
+                <span class="r"><button class="btn-text" type="button">Undo all</button><button class="btn-text" type="button">Keep all</button></span>
+              </div>
+              <div class="diff-file">src/invoice.ts<span class="cnt">+2 −1</span></div>
+              <div class="ln"><i>12</i><i>12</i><span class="sgn"></span><span>function total(lines: Line[]) {</span></div>
+              <div class="ln del"><i>13</i><i></i><span class="sgn">−</span><span>  return lines.reduce((s, l) =&gt; s + l.net, 0)</span></div>
+              <div class="ln add"><i></i><i>13</i><span class="sgn">+</span><span>  const net = lines.reduce((s, l) =&gt; s + l.net, 0)</span></div>
+              <div class="ln add"><i></i><i>14</i><span class="sgn">+</span><span>  return Math.round(net * (1 + VAT) * 100) / 100</span></div>
+              <div class="ln"><i>14</i><i>15</i><span class="sgn"></span><span>}</span></div>
+              <div class="run-result"><i class="sig ok"></i>Ran the test task · passed</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= STATUS ================= -->
+      <section class="band" id="status" aria-labelledby="status-h">
+        <div class="wrap">
+          <div data-reveal>
+            <span class="eyebrow">Status</span>
+            <h2 class="h2" id="status-h">Early, and honest about it.</h2>
+            <p class="lede">
+              A lot of Poiesis is written and tested in code. Less of it has met real models, real
+              inboxes and real websites. This is where things stand.
+            </p>
+          </div>
+          <div class="ledger" data-reveal>
+            <div>
+              <h3><i class="sig ok"></i>Checked on a real machine</h3>
+              <ul>
+                <li><i class="sig ok"></i><span><b>Local chat</b> with a model running on the machine.</span></li>
+                <li><i class="sig ok"></i><span><b>Local image making</b> on a 6 GB graphics card.</span></li>
+                <li><i class="sig ok"></i><span><b>Cloud chat</b> through OpenRouter.</span></li>
+                <li><i class="sig ok"></i><span><b>Folders, recall and memory.</b></span></li>
+              </ul>
+            </div>
+            <div>
+              <h3><i class="sig" style="border: 1px solid var(--ink-faint)"></i>Built, not proven end to end</h3>
+              <ul>
+                <li><i class="sig"></i><span><b>Scheduled tasks</b> left to run overnight.</span></li>
+                <li><i class="sig"></i><span><b>A lesson taught in one chat</b> and applied in another.</span></li>
+                <li><i class="sig"></i><span><b>Mail and browser tasks</b> on real accounts and sites.</span></li>
+                <li><i class="sig"></i><span><b>The Changes view and code search</b> on a real project.</span></li>
+              </ul>
+            </div>
+          </div>
+          <p class="after" data-reveal>
+            Code that compiles and passes its tests is not the same as code that works. The first
+            manual pass over each new part has found real bugs. The README says so on purpose, and
+            so does this page.
+          </p>
+        </div>
+      </section>
+
+      <!-- ================= START ================= -->
+      <section class="band canvas" id="start" aria-labelledby="start-h">
+        <div class="wrap">
+          <div class="start">
+            <div data-reveal>
+              <span class="eyebrow">Get started</span>
+              <h2 class="h2" id="start-h">Run it from source today.</h2>
+              <p class="prose">Installer releases are planned. Until then it takes a few commands.</p>
+              <ol class="steps">
+                <li><span><b>Install the tools.</b> Rust, the MSVC C++ build tools, and Node.js 18 or newer. Windows 11 already has WebView2.</span></li>
+                <li><span><b>Run it.</b> The first start builds the Rust backend, which takes a few minutes.</span></li>
+                <li><span><b>Pick a model.</b> In Models, download one. The app shows which ones run great on your graphics card.</span></li>
+                <li><span><b>Say hello.</b> Attach a folder to give it something to read.</span></li>
+              </ol>
+            </div>
+            <div data-reveal>
+              <div class="panel term">
+                <div class="path">PowerShell</div>
+<pre><span class="k">$</span> git clone https://github.com/schuettla/poiesis.git
+<span class="k">$</span> cd poiesis
+<span class="k">$</span> npm install
+<span class="k">$</span> npm run tauri dev</pre>
+              </div>
+              <table class="req">
+                <tbody>
+                  <tr><td>System</td><td>Windows 10 or 11.</td></tr>
+                  <tr><td>Graphics card</td><td>Optional. It picks CUDA, Vulkan, ROCm, SYCL or CPU for you.</td></tr>
+                  <tr><td>No CUDA toolkit</td><td>Engines are downloaded prebuilt. Nothing is compiled on your side.</td></tr>
+                  <tr><td>Make an installer</td><td><code>npm run tauri build</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= FAQ ================= -->
+      <section class="band" id="faq" aria-labelledby="faq-h">
+        <div class="wrap">
+          <div data-reveal>
+            <span class="eyebrow">Questions</span>
+            <h2 class="h2" id="faq-h">Plain answers.</h2>
+          </div>
+          <div class="faq" data-reveal>
+            <details>
+              <summary>Does it work offline?</summary>
+              <div class="ans">Yes, for chat with a local model, memory, reading your folders, recall and making images on your device. Downloads, web search, the browser, mail and cloud models need the internet.</div>
+            </details>
+            <details>
+              <summary>What leaves my computer?</summary>
+              <div class="ans">Nothing, unless you use something that needs the network: web search, the browser, mail, a cloud model, or a download of an engine or model. Those are labelled, and the tools start off. Telemetry is off by default, contains no content, and stays on your PC.</div>
+            </details>
+            <details>
+              <summary>Can it change or delete my files?</summary>
+              <div class="ans">Only in folders you allow, at a level you pick: read-only, ask first, or full. The default asks before each change. Anything that destroys bytes is saved first, and you can restore it from the Changes view.</div>
+            </details>
+            <details>
+              <summary>Can it change itself without telling me?</summary>
+              <div class="ans">No. Every write to its own memory shows a notice at that moment, and most have an Undo. You set the freedom per kind of change: auto with undo, ask first, or off. Your standing instructions in SOUL.md are only edited by you. It can propose edits.</div>
+            </details>
+            <details>
+              <summary>Which models can I use?</summary>
+              <div class="ans">Local models through llama.cpp, with the right engine for your hardware chosen for you. You can also add your own key for OpenAI, OpenRouter or Anthropic. Images and video come from an on-device engine or from OpenRouter or OpenAI with your key.</div>
+            </details>
+            <details>
+              <summary>Is it free?</summary>
+              <div class="ans">The app is MIT licensed. Local models cost nothing to run. A cloud model costs what its provider charges, and Poiesis shows the cost before and after. A model with no known price says so.</div>
+            </details>
+            <details>
+              <summary>Is there a Mac or Linux version?</summary>
+              <div class="ans">Not yet. Poiesis is built for Windows first.</div>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= CLOSING ================= -->
+      <section class="band canvas closing" aria-labelledby="close-h">
+        <div class="wrap">
+          <div data-reveal>
+            <h2 id="close-h">Meet an agent that keeps its own house.</h2>
+            <div class="cta" style="margin-top: 28px">
+              <a class="btn btn-primary" href="https://github.com/schuettla/poiesis">
+                <svg><use href="#i-github" /></svg>
+                View on GitHub
+              </a>
+              <a class="btn btn-secondary" href="#start">How to run it</a>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="foot">
+    <div class="wrap">
+      <a class="brand" href="#top">
+        <svg class="poiesis-mark stage-3" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"></svg>
+        Poiesis
+      </a>
+      <span>Copyright 2026 Erich Holzbauer. MIT license.</span>
+      <nav aria-label="Footer">
+        <a href="https://github.com/schuettla/poiesis">GitHub</a>
+        <a href="#status">Status</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

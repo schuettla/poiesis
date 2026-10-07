@@ -31,6 +31,10 @@
   background: var(--ink-faint);
   flex-shrink: 0;
 }
+.engine-orb {
+  display: flex;
+  flex-shrink: 0;
+}
 .engine-status.ready .engine-dot {
   background: var(--ok);
 }

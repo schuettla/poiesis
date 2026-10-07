@@ -48,6 +48,7 @@ export default defineConfig(async () => ({
   // test opts into jsdom per-file with a `@vitest-environment` docblock.
   test: {
     environment: "node",
+    setupFiles: ["./src/testSetup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
   },
 }));

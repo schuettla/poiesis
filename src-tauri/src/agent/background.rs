@@ -91,6 +91,8 @@ pub struct Spawn {
     pub toolsets: Vec<Toolset>,
     pub provenance: String,
     pub context_window: Option<usize>,
+    /// `PLF-2`: the lead was planning first, so this child may change nothing.
+    pub read_only: bool,
     pub max_steps: usize,
     /// Seconds, counted from when the child actually starts rather than from
     /// when it was queued — otherwise a full pool spends a child's whole budget
@@ -237,6 +239,8 @@ async fn run_one(spawn: Spawn) {
         // `PLN`: one plan per run. A child writes its own or none; it never
         // inherits its parent's.
         plan: None,
+        options: Default::default(),
+        read_only: spawn.read_only,
     };
 
     let outcome = run_agent(

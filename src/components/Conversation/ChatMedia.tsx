@@ -4,6 +4,7 @@ import { readImageDataUri, inTauri } from "../../lib/api";
 import { parseArtifactMeta, useAppStore } from "../../lib/store";
 import type { Attachment } from "../../lib/types";
 import { downloadArtifact } from "../Workbench/artifactFiles";
+import Orb from "../Orb/Orb";
 
 /** Holds the final aspect ratio while a generation is in flight, so the
  * transcript never reflows when the media lands (`STR-2`). The elapsed counter
@@ -47,7 +48,12 @@ export function ChatMediaPending({
       {partial ? (
         <img className="chat-media-partial" src={partial} alt="" aria-hidden="true" />
       ) : (
-        <div className="chat-media-shimmer" aria-hidden="true" />
+        <>
+          <div className="chat-media-shimmer" aria-hidden="true" />
+          <div className="chat-media-orb">
+            <Orb state="composing" size={64} />
+          </div>
+        </>
       )}
       {elapsed >= 3 && (
         <div className="chat-media-waiting">

@@ -494,6 +494,7 @@ async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
                     toolsets: del.toolsets.clone(),
                     provenance: del.provenance.to_string(),
                     context_window: del.context_window,
+                    read_only: del.read_only,
                     max_steps,
                     timeout_secs: timeout_secs as u64,
                 }
@@ -528,6 +529,9 @@ async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
             // `PLN`: one plan per run. A child may write its own; it never
             // touches its lead's.
             plan: None,
+            options: Default::default(),
+            // `PLF-2`: below a plan-first run, nothing changes either.
+            read_only: del.read_only,
         };
         // Boxed because this is `run_agent` calling itself through a tool call:
         // without it the future's size is defined in terms of itself.

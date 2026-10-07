@@ -1,0 +1,56 @@
+/* `CMP-6`: what the next message alone has been told to do. */
+.modifier-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.modifier-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 9px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.modifier-chip-glyph {
+  color: var(--ink-faint);
+}
+.modifier-chip-label {
+  color: var(--ink);
+}
+/* Only offered once the chip is hovered or focused: a rarely-wanted action
+   should not sit in front of every chip. */
+.modifier-chip-default {
+  display: none;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--ink-faint);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.modifier-chip:hover .modifier-chip-default,
+.modifier-chip:focus-within .modifier-chip-default {
+  display: inline;
+}
+.modifier-chip-default:hover {
+  color: var(--ink);
+}
+.modifier-chip-x {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 4px;
+  color: var(--ink-faint);
+  font-size: var(--fs-callout);
+  line-height: 1;
+}
+.modifier-chip-x:hover {
+  color: var(--ink);
+}

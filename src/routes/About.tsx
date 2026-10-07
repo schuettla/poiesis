@@ -11,6 +11,11 @@ const ATTRIBUTIONS = [
   { name: "React", license: "MIT", what: "User interface" },
   { name: "Newsreader, Inter, JetBrains Mono", license: "OFL / MIT", what: "Typefaces" },
   { name: "rusqlite / SQLite", license: "MIT / Public Domain", what: "Local storage + search" },
+  { name: "sherpa-onnx", license: "Apache-2.0", what: "Voice: listening and speaking on this device" },
+  { name: "Silero VAD", license: "MIT", what: "Voice: telling speech from silence" },
+  { name: "NVIDIA Parakeet TDT 0.6B v3", license: "CC-BY-4.0", what: "Voice: understanding speech" },
+  { name: "Kokoro", license: "Apache-2.0", what: "Voice: English voices" },
+  { name: "Thorsten Voice, Alba", license: "CC0 / CC-BY-4.0", what: "Voice: German and British English voices" },
   { name: "Model weights", license: "Per-model (shown on each model)", what: "e.g. Llama Community, Apache-2.0" },
 ];
 

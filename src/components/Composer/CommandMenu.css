@@ -1,0 +1,126 @@
+/* The `/` menu. It borrows the `composer-menu` drop-up (position, paper, shadow)
+   and adds only what a command list needs: sections, a mono name, a reason on
+   rows that can't run. No motion of its own, no colour for state. */
+
+.composer-slash-menu.command-menu {
+  min-width: 340px;
+  max-width: min(520px, 100%);
+  max-height: 360px;
+  overflow-y: auto;
+  left: 0;
+  right: auto;
+}
+
+.command-menu-filter {
+  margin: 2px 4px 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  outline: none;
+}
+.command-menu-filter:focus {
+  border-color: var(--ink-faint);
+}
+
+.command-menu-header {
+  padding: 8px 10px 3px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.command-menu-row .mi-body {
+  gap: 1px;
+  min-width: 0;
+}
+.command-menu-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.command-menu-name {
+  font-family: var(--font-mono);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+}
+/* The slash is drawn, not typed: the row's text is the name itself. */
+.command-menu-name::before {
+  content: "/";
+  color: var(--ink-faint);
+}
+.command-menu-arg {
+  font-family: var(--font-mono);
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.command-menu-choice {
+  font-size: var(--fs-ui);
+  color: var(--ink);
+}
+
+/* A row that can't run says why, in place of what it does. */
+.command-menu-row.disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.command-menu-row.disabled:hover {
+  background: none;
+}
+.command-menu-row.disabled.active {
+  background: var(--fill-hover);
+}
+
+/* `CPX-6`: "I can do this myself too". A fixed glyph, never a count or a state. */
+.command-menu-glyph {
+  align-self: center;
+  flex: none;
+  color: var(--ink-faint);
+  font-size: var(--fs-footnote);
+  cursor: pointer;
+  padding: 0 2px;
+}
+.command-menu-glyph:hover {
+  color: var(--ink);
+}
+
+.command-menu-note {
+  padding: 7px 10px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+
+.command-menu-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+  padding: 6px 10px 3px;
+  border-top: 1px solid var(--paper-edge);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.command-menu-foot-key {
+  font-family: var(--font-mono);
+}
+
+/* Said to a screen reader, never drawn. */
+.command-menu-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

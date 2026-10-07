@@ -1,11 +1,17 @@
-import { useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef } from "react";
 import { useActiveConversation, useAppStore } from "../lib/store";
 import UserTurn from "../components/Conversation/UserTurn";
 import AgentRun from "../components/Conversation/AgentRun";
 import CompactDivider from "../components/Conversation/CompactDivider";
+import CommandNote from "../components/Conversation/CommandNote";
+import RewindDialog from "../components/Conversation/RewindDialog";
 import Introduction from "../components/Conversation/Introduction";
 import FolderInvite from "../components/Conversation/FolderInvite";
+import Orb from "../components/Orb/Orb";
+import { orbForPresence } from "../components/Orb/orbState";
 import Composer from "../components/Composer/Composer";
+import VoiceMode from "../components/Voice/VoiceMode";
+import { useVoiceStore } from "../lib/voice/voiceStore";
 import MemoryToast from "../components/Memory/MemoryToast";
 import RecallOffer from "../components/RecallRuntime/RecallOffer";
 import SessionStrip from "../components/Blocks/SessionStrip";
@@ -13,7 +19,7 @@ import SessionMenu from "../components/Conversation/SessionMenu";
 import Workspace from "./Workspace";
 import "../components/Conversation/Conversation.css";
 import "./Chat.css";
-import type { Message } from "../lib/types";
+import type { CommandNoteView, Message } from "../lib/types";
 
 /** One user turn plus every turn that follows it up to (not including) the
  * next user turn — a leading run of non-user messages before the first user
@@ -29,12 +35,30 @@ function groupTurns(messages: Message[]): Message[][] {
   return groups;
 }
 
+/** Where each traced command sits: just before the first message made after it,
+ * or at the end. A skill command (`messageId` set) is the chip on its own bubble
+ * and has no line of its own. */
+function placeNotes(notes: CommandNoteView[], messages: Message[]) {
+  const before = new Map<string, CommandNoteView[]>();
+  const end: CommandNoteView[] = [];
+  for (const n of notes) {
+    if (n.messageId) continue;
+    const next = messages.find((m) => m.createdAt !== undefined && m.createdAt > n.at);
+    if (!next) end.push(n);
+    else before.set(next.id, [...(before.get(next.id) ?? []), n]);
+  }
+  return { before, end };
+}
+
 export default function Chat() {
   const workspaceMode = useAppStore((s) => s.workspaceMode);
   const conversation = useActiveConversation();
   const sendMessage = useAppStore((s) => s.sendMessage);
   const stopGenerating = useAppStore((s) => s.stopGenerating);
   const busy = useAppStore((s) => s.busy);
+  const presence = useAppStore((s) => s.presence);
+  const checkingMyself = useAppStore((s) => s.checkupRunning);
+  const voiceShown = useVoiceStore((s) => s.shown);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const msgs = conversation?.messages ?? [];
@@ -46,6 +70,8 @@ export default function Chat() {
   }, [conversation?.messages.length, lastMessage?.text]);
 
   const isEmpty = !conversation || conversation.messages.length === 0;
+  const allNotes = useAppStore((s) => (conversation ? s.commandNotes[conversation.id] : undefined));
+  const notes = placeNotes(allNotes ?? [], msgs);
 
   // Workspace mode: same session, inverted layout — the composed interface is
   // the interaction point, the message stream demotes to an optional log.
@@ -68,6 +94,10 @@ export default function Chat() {
             {!isEmpty && <SessionStrip />}
             {isEmpty ? (
               <div className="empty-state">
+                {/* The same presence the mark in the top bar carries, at
+                    avatar size: breathing at rest, and the kind of work when
+                    reflection or recovery is running in the background. */}
+                <Orb state={orbForPresence(presence)} size={64} />
                 <p className="empty-line">No messages yet — say hello to get started.</p>
                 <Introduction />
                 <FolderInvite />
@@ -98,9 +128,25 @@ export default function Chat() {
                       const isFirstUnsummarized =
                         i > 0 &&
                         conversation!.messages[i - 1].id === conversation!.summaryUptoMessageId;
-                      if (!isFirstUnsummarized || !conversation!.summary) return turn;
+                      const lines = (notes.before.get(m.id) ?? []).map((n) => (
+                        <CommandNote key={n.id} note={n} />
+                      ));
+                      if (!isFirstUnsummarized || !conversation!.summary) {
+                        // A fragment, not a wrapper: a user turn is sticky within
+                        // its group, and a div around it would become the box it
+                        // sticks within.
+                        return lines.length ? (
+                          <Fragment key={`notes-${m.id}`}>
+                            {lines}
+                            {turn}
+                          </Fragment>
+                        ) : (
+                          turn
+                        );
+                      }
                       return (
                         <div key={`div-${m.id}`}>
+                          {lines}
                           <CompactDivider
                             summary={conversation!.summary}
                             conversationId={conversation!.id}
@@ -111,12 +157,26 @@ export default function Chat() {
                     })}
                   </div>
                 ))}
+                {notes.end.map((n) => (
+                  <CommandNote key={n.id} note={n} />
+                ))}
+                {/* `CHK-UI-2`: said up front, because the last check is a real
+                    model call and would otherwise look like nothing happened. */}
+                {checkingMyself && (
+                  <div className="command-note" role="status">
+                    <span aria-hidden="true">◆ </span>I'm checking myself. The last check asks my model something, so
+                    it takes a moment.
+                  </div>
+                )}
               </div>
             )}
           </div>
         </div>
+        {voiceShown && <VoiceMode />}
       </div>
-      <Composer onSend={sendMessage} busy={busy} onStop={stopGenerating} />
+      {/* The voice surface has its own bar, so the box is not shown under it. */}
+      {!voiceShown && <Composer onSend={sendMessage} busy={busy} onStop={stopGenerating} />}
+      <RewindDialog />
       <MemoryToast />
       <RecallOffer />
     </>

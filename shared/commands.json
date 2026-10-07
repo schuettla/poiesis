@@ -1,0 +1,488 @@
+[
+  {
+    "name": "effort",
+    "aliases": [],
+    "section": "turn",
+    "kind": "modifier",
+    "args": { "type": "choice", "source": "effort", "hint": "low|medium|high", "required": true },
+    "summary": "How hard to think, for the next message only",
+    "who": "user",
+    "needs": []
+  },
+  {
+    "name": "steps",
+    "aliases": [],
+    "section": "turn",
+    "kind": "modifier",
+    "args": { "type": "number", "hint": "1-50", "required": true },
+    "summary": "How many steps I may take, for the next message only",
+    "who": "user",
+    "needs": []
+  },
+  {
+    "name": "stop",
+    "aliases": [],
+    "section": "turn",
+    "kind": "ui",
+    "args": { "type": "none" },
+    "summary": "Stop me and every agent I started",
+    "who": "user",
+    "needs": ["run"]
+  },
+  {
+    "name": "continue",
+    "aliases": [],
+    "section": "turn",
+    "kind": "action",
+    "args": { "type": "none" },
+    "summary": "Continue where I stopped",
+    "who": "user",
+    "needs": ["conv", "norun", "interrupted"]
+  },
+  {
+    "name": "retry",
+    "aliases": [],
+    "section": "turn",
+    "kind": "action",
+    "args": { "type": "none" },
+    "summary": "Try the last question again on a branch",
+    "who": "user",
+    "needs": ["conv", "norun", "turn"]
+  },
+
+  {
+    "name": "plan",
+    "aliases": [],
+    "section": "turn",
+    "kind": "modifier",
+    "args": { "type": "text", "hint": "task (optional)", "required": false },
+    "summary": "Plan first: I read but change nothing until you approve",
+    "who": "both",
+    "agentClass": "modes",
+    "suggestible": true,
+    "needs": []
+  },
+  {
+    "name": "btw",
+    "aliases": [],
+    "section": "turn",
+    "kind": "action",
+    "args": { "type": "text", "hint": "question", "required": true },
+    "summary": "Ask on the side; the answer stays out of the conversation",
+    "who": "user",
+    "needs": ["conv"]
+  },
+
+  {
+    "name": "new",
+    "aliases": ["clear"],
+    "section": "conversation",
+    "kind": "ui",
+    "args": { "type": "choice", "source": "skills", "hint": "skill (optional)", "required": false },
+    "summary": "A new chat, or start one from a skill",
+    "who": "user",
+    "needs": []
+  },
+  {
+    "name": "rename",
+    "aliases": [],
+    "section": "conversation",
+    "kind": "action",
+    "args": { "type": "text", "hint": "title", "required": true },
+    "summary": "Rename this chat",
+    "who": "user",
+    "needs": ["conv"],
+    "trace": true
+  },
+  {
+    "name": "fork",
+    "aliases": [],
+    "section": "conversation",
+    "kind": "action",
+    "args": { "type": "none" },
+    "summary": "Branch here, keeping everything so far",
+    "who": "user",
+    "needs": ["conv", "norun", "turn"],
+    "trace": true
+  },
+  {
+    "name": "export",
+    "aliases": [],
+    "section": "conversation",
+    "kind": "action",
+    "args": { "type": "none" },
+    "summary": "Save this conversation as a Markdown file",
+    "who": "user",
+    "needs": ["conv"]
+  },
+  {
+    "name": "rewind",
+    "aliases": [],
+    "section": "conversation",
+    "kind": "action",
+    "args": { "type": "choice", "source": "turns", "hint": "turn", "required": true },
+    "summary": "Go back to before a turn, on a branch; the original stays",
+    "who": "user",
+    "needs": ["conv", "norun", "turn"]
+  },
+  {
+    "name": "compact",
+    "aliases": [],
+    "section": "conversation",
+    "kind": "action",
+    "args": { "type": "text", "hint": "focus (optional)", "required": false },
+    "summary": "Summarise older turns now, paying attention to a focus",
+    "who": "both",
+    "agentClass": "context",
+    "suggestible": true,
+    "needs": ["conv", "norun", "turn"]
+  },
+  {
+    "name": "context",
+    "aliases": [],
+    "section": "conversation",
+    "kind": "ui",
+    "args": { "type": "none" },
+    "summary": "What I'm holding in mind right now",
+    "who": "user",
+    "needs": ["conv"]
+  },
+  {
+    "name": "why",
+    "aliases": [],
+    "section": "conversation",
+    "kind": "ui",
+    "args": { "type": "none" },
+    "summary": "Why I gave my last answer",
+    "who": "user",
+    "needs": ["conv", "turn"]
+  },
+  {
+    "name": "talk",
+    "aliases": ["voice"],
+    "section": "conversation",
+    "kind": "ui",
+    "args": { "type": "none" },
+    "summary": "Talk with me out loud, and hear me answer",
+    "who": "user",
+    "needs": ["conv"]
+  },
+
+  {
+    "name": "remember",
+    "aliases": [],
+    "section": "me",
+    "kind": "action",
+    "args": { "type": "text", "hint": "fact", "required": true },
+    "summary": "I'll remember that",
+    "who": "user",
+    "needs": [],
+    "trace": true
+  },
+  {
+    "name": "forget",
+    "aliases": [],
+    "section": "me",
+    "kind": "action",
+    "args": { "type": "choice", "source": "facts", "hint": "what", "required": true },
+    "summary": "I'll forget it",
+    "who": "user",
+    "needs": [],
+    "trace": true
+  },
+  {
+    "name": "always",
+    "aliases": [],
+    "section": "me",
+    "kind": "action",
+    "args": { "type": "text", "hint": "instruction", "required": true },
+    "summary": "I'll always do that",
+    "who": "user",
+    "needs": [],
+    "trace": true
+  },
+  {
+    "name": "reflect",
+    "aliases": [],
+    "section": "me",
+    "kind": "action",
+    "args": { "type": "none" },
+    "summary": "Let me think back over this conversation",
+    "who": "user",
+    "suggestible": true,
+    "needs": ["conv", "norun", "turn"],
+    "trace": true
+  },
+  {
+    "name": "checkup",
+    "aliases": [],
+    "section": "me",
+    "kind": "action",
+    "args": { "type": "none" },
+    "summary": "Let me check myself",
+    "who": "user",
+    "suggestible": true,
+    "needs": []
+  },
+  {
+    "name": "skillify",
+    "aliases": ["make-skill"],
+    "section": "me",
+    "kind": "skill",
+    "args": { "type": "text", "hint": "name (optional)", "required": false },
+    "summary": "I'll turn what we just did into a skill",
+    "who": "user",
+    "suggestible": true,
+    "needs": ["conv", "norun", "turn"],
+    "trace": true
+  },
+  {
+    "name": "tidy",
+    "aliases": [],
+    "section": "me",
+    "kind": "action",
+    "args": { "type": "none" },
+    "summary": "Let me tidy up my memory",
+    "who": "user",
+    "needs": ["norun"],
+    "trace": true
+  },
+  {
+    "name": "self",
+    "aliases": [],
+    "section": "me",
+    "kind": "ui",
+    "args": { "type": "none" },
+    "summary": "Visit me",
+    "who": "user",
+    "needs": []
+  },
+  {
+    "name": "autonomy",
+    "aliases": [],
+    "section": "me",
+    "kind": "ui",
+    "args": { "type": "none" },
+    "summary": "How much I may change without asking",
+    "who": "user",
+    "needs": []
+  },
+
+  {
+    "name": "workspace",
+    "aliases": [],
+    "section": "modes",
+    "kind": "action",
+    "args": { "type": "choice", "source": "onoff", "hint": "on|off", "required": false },
+    "summary": "Let me compose a live interface; chat becomes the log",
+    "who": "both",
+    "agentClass": "modes",
+    "needs": [],
+    "trace": true
+  },
+  {
+    "name": "tools",
+    "aliases": [],
+    "section": "modes",
+    "kind": "action",
+    "args": { "type": "choice", "source": "onoff", "hint": "on|off", "required": true },
+    "summary": "Let me use my tools",
+    "who": "user",
+    "needs": [],
+    "trace": true
+  },
+  {
+    "name": "persona",
+    "aliases": [],
+    "section": "modes",
+    "kind": "action",
+    "args": { "type": "choice", "source": "personas", "hint": "name (optional)", "required": false },
+    "summary": "Who I am in this chat",
+    "who": "user",
+    "needs": ["conv"],
+    "trace": true
+  },
+  {
+    "name": "model",
+    "aliases": [],
+    "section": "modes",
+    "kind": "action",
+    "args": { "type": "choice", "source": "models", "hint": "name", "required": true },
+    "summary": "Switch model, like the picker does",
+    "who": "user",
+    "needs": [],
+    "trace": true
+  },
+
+  {
+    "name": "delegate",
+    "aliases": [],
+    "section": "agents",
+    "kind": "skill",
+    "args": { "type": "text", "hint": "task", "required": true },
+    "summary": "Hand this to a background agent and keep talking",
+    "who": "user",
+    "needs": ["conv", "norun"],
+    "trace": true
+  },
+  {
+    "name": "agents",
+    "aliases": [],
+    "section": "agents",
+    "kind": "ui",
+    "args": { "type": "none" },
+    "summary": "Show what my agents are doing",
+    "who": "user",
+    "needs": []
+  },
+  {
+    "name": "schedule",
+    "aliases": [],
+    "section": "agents",
+    "kind": "ui",
+    "args": { "type": "text", "hint": "when and task (optional)", "required": false },
+    "summary": "Run something later or on a repeat",
+    "who": "both",
+    "agentClass": "schedule",
+    "needs": ["conv"]
+  },
+
+  {
+    "name": "image",
+    "aliases": [],
+    "section": "create",
+    "kind": "modifier",
+    "args": { "type": "text", "hint": "prompt (optional)", "required": false },
+    "summary": "The next message makes a picture",
+    "who": "user",
+    "needs": ["norun"]
+  },
+  {
+    "name": "video",
+    "aliases": [],
+    "section": "create",
+    "kind": "modifier",
+    "args": { "type": "text", "hint": "prompt (optional)", "required": false },
+    "summary": "The next message makes a clip",
+    "who": "user",
+    "needs": ["norun"]
+  },
+
+  {
+    "name": "goal",
+    "aliases": [],
+    "section": "work",
+    "kind": "action",
+    "args": { "type": "text", "hint": "goal until condition", "required": true },
+    "summary": "Keep working until something is true, up to 5 rounds",
+    "who": "user",
+    "needs": ["conv"],
+    "trace": true
+  },
+  {
+    "name": "init",
+    "aliases": [],
+    "section": "work",
+    "kind": "skill",
+    "args": { "type": "none" },
+    "summary": "Let me learn this project and propose its instructions",
+    "who": "user",
+    "needs": ["conv", "norun", "folder"],
+    "trace": true
+  },
+  {
+    "name": "review",
+    "aliases": [],
+    "section": "work",
+    "kind": "skill",
+    "args": { "type": "text", "hint": "focus (optional)", "required": false },
+    "summary": "Have a reviewer go over my changes",
+    "who": "user",
+    "needs": ["conv", "norun", "folder"],
+    "trace": true
+  },
+  {
+    "name": "verify",
+    "aliases": [],
+    "section": "work",
+    "kind": "skill",
+    "args": { "type": "none" },
+    "summary": "Run the project's check and fix what fails",
+    "who": "user",
+    "needs": ["conv", "norun", "folder"],
+    "trace": true
+  },
+  {
+    "name": "changes",
+    "aliases": [],
+    "section": "work",
+    "kind": "ui",
+    "args": { "type": "none" },
+    "summary": "Show what I changed",
+    "who": "user",
+    "needs": ["conv"]
+  },
+  {
+    "name": "undo",
+    "aliases": [],
+    "section": "work",
+    "kind": "action",
+    "args": { "type": "text", "hint": "file (optional)", "required": false },
+    "summary": "Take back my file changes",
+    "who": "user",
+    "needs": ["conv", "changes"],
+    "trace": true
+  },
+  {
+    "name": "keep",
+    "aliases": [],
+    "section": "work",
+    "kind": "action",
+    "args": { "type": "none" },
+    "summary": "Keep my changes",
+    "who": "user",
+    "needs": ["conv", "changes"],
+    "trace": true
+  },
+  {
+    "name": "permissions",
+    "aliases": [],
+    "section": "work",
+    "kind": "ui",
+    "args": { "type": "none" },
+    "summary": "What I'm allowed to touch",
+    "who": "user",
+    "needs": []
+  },
+
+  {
+    "name": "usage",
+    "aliases": [],
+    "section": "inspect",
+    "kind": "ui",
+    "args": { "type": "none" },
+    "summary": "What this chat has cost",
+    "who": "user",
+    "needs": ["conv"]
+  },
+  {
+    "name": "activity",
+    "aliases": [],
+    "section": "inspect",
+    "kind": "ui",
+    "args": { "type": "none" },
+    "summary": "Everything I did, in order",
+    "who": "user",
+    "needs": []
+  },
+  {
+    "name": "help",
+    "aliases": [],
+    "section": "inspect",
+    "kind": "ui",
+    "args": { "type": "none" },
+    "summary": "Every command, with what it does",
+    "who": "user",
+    "needs": []
+  }
+]

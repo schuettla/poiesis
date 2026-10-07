@@ -18,11 +18,24 @@ import type {
   SubRun,
   View,
   WorkbenchSelection,
+  CommandNoteView,
+  CommandOutcome,
+  RunSummary,
+  SendOptions,
+  TurnModifiers,
+  PendingQuestion,
+  ActiveSuggestion,
+  HarnessProposalView,
+  SideAnswer,
 } from "./types";
 import { NEW_PROJECT_NAME } from "./types";
 import { mockConversations, mockModels } from "./mockData";
 import * as api from "./api";
+import { save } from "@tauri-apps/plugin-dialog";
+import { proposedDraft, type TaskDraft } from "./when";
+import { afterRun as afterGoalRun, newGoal, openingTurn, type Goal, type GoalHost } from "./goal";
 import { budgetTurns, withSummary, KEEP_RECENT, KEEP_RECENT_WORKSPACE } from "./context";
+import { getSpeechBridge } from "./voice/bridge";
 import {
   EMPTY_PREFS,
   PREF_KEYS,
@@ -145,11 +158,45 @@ export const AUTONOMY_CLASSES: {
     fallback: "ask",
     rungs: ["auto", "ask", "off"],
   },
+  // `CPX-1`: the four the harness tool reads (`AGC-1`). First person, like the rest.
+  {
+    id: "context",
+    label: "Making room in my head during long work",
+    blurb: "I clear old tool output I no longer need word for word. I can bring any of it back.",
+    fallback: "auto",
+    rungs: ["auto", "off"],
+  },
+  {
+    id: "suggest",
+    label: "Suggesting commands to you",
+    blurb: "When one of your slash commands would clearly help, I say so, once. Off means I never do.",
+    fallback: "auto",
+    rungs: ["auto", "off"],
+  },
+  {
+    id: "modes",
+    label: "Switching modes (Workspace, Plan first)",
+    blurb: "I can ask to turn a mode on. You decide.",
+    fallback: "ask",
+    rungs: ["auto", "ask", "off"],
+  },
+  {
+    id: "schedule",
+    label: "Scheduling work for later",
+    blurb: "I can propose running something later or on a repeat. I always ask first.",
+    fallback: "ask",
+    rungs: ["ask", "off"],
+  },
 ];
+/** What the living mark is doing (`PRES-1`). `tending` is me working on myself
+ * for a moment (making room, tidying, a checkup); `listening` is a run waiting
+ * for your answer (`CPX-2`). Both sit under `active` rather than over it: one
+ * motion at a time. */
+export type Presence = "idle" | "active" | "reflecting" | "healing" | "tending" | "listening";
 const DEFAULT_SYSTEM_PROMPT =
   "You are Poiesis Agent, a local-first assistant that maintains itself: you keep durable memory, learn lessons from your own mistakes, and propose — never impose — changes to how you work. Be concise and clear.";
 
-interface AppState {
+export interface AppState {
   bootstrapped: boolean;
   /** True once the model lists (library, cloud, media) have actually come
    * back at least once. `bootstrapped` flips before they do, so anything
@@ -295,6 +342,99 @@ interface AppState {
    * the agent's UI is the interaction point, the message stream is a log. */
   workspaceMode: boolean;
   setWorkspaceMode: (on: boolean) => void;
+
+  // ---- commands (`COMMANDS_PLAN`) ----
+  /** `CMP-6`: what the user decided about the next message only. Read and
+   * cleared by `sendMessage` and `resumeLastRun`, so a chip never outlives the
+   * message it was for. */
+  turnModifiers: TurnModifiers;
+  setTurnModifier: (patch: Partial<TurnModifiers>) => void;
+  clearTurnModifier: (key: keyof TurnModifiers) => void;
+  /** `DEF-2`: turn a chip into the default. The chip stays for this message. */
+  makeModifierDefault: (key: keyof TurnModifiers) => Promise<void>;
+  /** Ask the composer to take this text and focus (`/` button, `Ctrl /`, a mode
+   * chip's label). The nonce makes a second identical request register. */
+  composerRequest: { text: string; nonce: number } | null;
+  requestComposer: (text: string) => void;
+  /** `REG-4`: commands that changed something, by conversation, oldest first. */
+  commandNotes: Record<string, CommandNoteView[]>;
+  recordCommand: (
+    conversationId: string | null,
+    note: Omit<CommandNoteView, "id" | "at"> & { at?: number }
+  ) => void;
+  /** Ask the composer to run this text as a command, as if the user typed it
+   * and pressed Enter (accepting a suggestion, `AGC-2`). */
+  commandRequest: { text: string; nonce: number } | null;
+  /** `AGC-3`: the question the run is waiting on, if any. A pending question
+   * turns the next thing typed into its answer instead of a steer. */
+  pendingQuestion: PendingQuestion | null;
+  /** Answer it with a choice, several, your own words, or a mix. `false` when
+   * the run is gone, so the caller can send the words as a message instead. */
+  answerQuestion: (answer: api.QuestionAnswer) => Promise<boolean>;
+  /** `AGC-2`: the one suggestion on screen. One at a time, never stacked. */
+  activeSuggestion: ActiveSuggestion | null;
+  acceptSuggestion: () => void;
+  dismissSuggestion: () => void;
+  /** `AGC-4`: what I have asked to change, waiting for you. */
+  harnessProposals: HarnessProposalView[];
+  resolveHarnessProposal: (id: string, accept: boolean) => Promise<void>;
+  /** `DEF-4`: every message starts with the Plan first chip on. Removing the
+   * chip is "not this time" and never changes this. */
+  planFirstDefault: boolean;
+  setPlanFirstDefault: (on: boolean) => Promise<void>;
+  /** `PLF-4`: Go ahead: runs the plan I wrote, with nothing restricted. */
+  approvePlan: (plan: api.PlanView) => Promise<void>;
+  /** `PLF-4`: Change something: the next message revises the plan, and is
+   * read-only too. */
+  planRevising: boolean;
+  revisePlan: () => void;
+  /** `RWD-UI-1`: the turn whose "go back to before this" dialog is open. */
+  rewindRequest: string | null;
+  requestRewind: (messageId: string | null) => void;
+  /** `RWD-UI-2`: a receipt for going back. */
+  rewindToast: string | null;
+  dismissRewindToast: () => void;
+  /** `RWD-1`: go back to before one of your turns, on a branch. */
+  rewindTo: (messageId: string, opts: { undoFiles: boolean; putBack: boolean }) => Promise<void>;
+  /** `BTW-UI-1`: the side question on screen, if any. */
+  sideAnswer: SideAnswer | null;
+  askSide: (question: string) => Promise<void>;
+  keepSideAnswer: () => Promise<void>;
+  dismissSideAnswer: () => void;
+  /** `CHK-UI-2`: I am looking at myself. */
+  checkupRunning: boolean;
+  runCheckup: () => Promise<void>;
+  /** `GOL-1`: the goal each conversation is working toward, if any. The user's
+   * alone: only `startGoal` makes one, and nothing the agent does can. */
+  goals: Record<string, Goal>;
+  /** Make the goal and send its first turn. */
+  startGoal: (conversationId: string, text: string, until: string) => Promise<void>;
+  /** End the goal, and the turn that is running toward it. */
+  stopGoal: (conversationId: string) => void;
+  /** `UCM-9`: save the conversation as Markdown where the user chooses. Resolves
+   * with the path, or `null` when they chose nowhere. */
+  exportConversation: (conversationId: string) => Promise<string | null>;
+  /** A receipt for saving. */
+  savedToast: string | null;
+  dismissSavedToast: () => void;
+  /** Prompts that connected servers offer, as commands. */
+  mcpPrompts: api.McpPromptView[];
+  refreshMcpPrompts: () => Promise<void>;
+  /** `RUN-3`: the latest run's summary per conversation, for the run bar. Not
+   * persisted. A new send replaces it; leaving the chat or the × clears it. */
+  runSummaries: Record<string, RunSummary>;
+  dismissRunSummary: (conversationId: string) => void;
+  /** `/autonomy` and `/self` land on a tab of the Self panel. */
+  selfTabRequest: {
+    tab: "memory" | "lessons" | "health" | "autonomy";
+    nonce: number;
+    /** `CPX-6`: an autonomy class to scroll to, from a `◆` in the menu. */
+    focus?: string;
+  } | null;
+  openSelf: (tab?: "memory" | "lessons" | "health" | "autonomy", focus?: string) => void;
+  /** `UCM-10`: the chat the Usage view should scroll to and highlight. */
+  usageFocus: string | null;
+  openUsage: (conversationId: string | null) => void;
   /** Generate an image from `prompt` and show it inline in the chat — the
    * inferred route (`PIK-3`) and the composer's legacy direct path both land
    * here; it always resolves to whichever backend is available (9F). */
@@ -464,7 +604,7 @@ interface AppState {
 
   // the autopoietic layer (Phase 11)
   /** What the organism is doing right now, for the living mark (PRES-1). */
-  presence: "idle" | "active" | "reflecting" | "healing";
+  presence: Presence;
   /** Conversations currently being reflected on — the rail shows them digesting
    * (PRES-2). In-memory only. */
   reflectingIds: string[];
@@ -548,7 +688,7 @@ interface AppState {
    * Handed to the Tasks section, which opens its editor prefilled. Held in the
    * store rather than passed as a route param because the two surfaces are in
    * different columns of the app shell with no router between them. */
-  taskDraft: { name: string; prompt: string; conversationId: string } | null;
+  taskDraft: TaskDraft | null;
   scheduleConversation: (conversationId: string) => void;
   clearTaskDraft: () => void;
 
@@ -585,9 +725,14 @@ interface AppState {
   /** `HRN-UI-5`: continue the last run instead of starting over, with its tool
    * results intact. */
   resumeLastRun: () => Promise<void>;
+  /** `UCM-2`: show a branch `/fork` just made and make it the live chat. */
+  openSessionFromFork: (conversation: api.DbConversation) => Promise<void>;
+  /** `UCM-3`: summarise the older turns now, keeping `focus` in particular.
+   * Resolves with a sentence for the user when it could not, else `null`. */
+  compactNow: (conversationId: string, focus?: string) => Promise<string | null>;
   renameConversation: (id: string, title: string) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
-  sendMessage: (text: string, attachments?: Attachment[]) => Promise<void>;
+  sendMessage: (text: string, attachments?: Attachment[], opts?: SendOptions) => Promise<void>;
   /** Send a structured block interaction as a new turn (Generative UI, Phase B). */
   sendBlockAction: (
     blockId: string,
@@ -1015,6 +1160,8 @@ function toMessage(m: api.DbMessage): Message {
     // A turn that stopped short keeps saying so across a reload — the mark is
     // about the answer's completeness, not about this session.
     stopReason: m.stop_reason && m.stop_reason !== "completed" ? m.stop_reason : undefined,
+    spoken: m.spoken ? true : undefined,
+    unspoken: api.parseUnspoken(m.steps_json),
     attachments: m.attachments?.length
       ? m.attachments.map((a) => ({
           id: a.id,
@@ -1528,6 +1675,337 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
     if (convId && api.inTauri()) api.setConversationWorkspace(convId, workspaceMode).catch(() => {});
   },
+  turnModifiers: {},
+  setTurnModifier: (patch) => set((s) => ({ turnModifiers: { ...s.turnModifiers, ...patch } })),
+  clearTurnModifier: (key) =>
+    set((s) => {
+      const next = { ...s.turnModifiers };
+      delete next[key];
+      // A default's marker goes with the chip it marks.
+      if (key === "planFirst") delete next.planFirstIsDefault;
+      return { turnModifiers: next, ...(key === "planFirst" ? { planRevising: false } : {}) };
+    }),
+  makeModifierDefault: async (key) => {
+    const mods = get().turnModifiers;
+    const convId = get().activeConversationId;
+    if (key === "effort" && mods.effort) {
+      if (api.inTauri()) await api.setSetting("models.reasoning_effort", mods.effort).catch(() => {});
+      // The picker holds its own copy of the default; tell it.
+      window.dispatchEvent(new CustomEvent("poiesis:effort-default", { detail: mods.effort }));
+      get().recordCommand(convId, {
+        name: "effort",
+        args: mods.effort,
+        by: "user",
+        outcome: "done",
+        note: `/effort ${mods.effort} is now my default`,
+      });
+    } else if (key === "planFirst" && mods.planFirst) {
+      if (api.inTauri()) await api.setSetting(PLAN_FIRST_DEFAULT_KEY, "true").catch(() => {});
+      set((s) => ({
+        planFirstDefault: true,
+        turnModifiers: { ...s.turnModifiers, planFirstIsDefault: true },
+      }));
+      get().recordCommand(convId, {
+        name: "plan",
+        args: "",
+        by: "user",
+        outcome: "done",
+        note: "/plan is now my default",
+      });
+    } else if (key === "maxSteps" && mods.maxSteps) {
+      if (api.inTauri()) await api.setSetting("agent.max_steps", String(mods.maxSteps)).catch(() => {});
+      get().recordCommand(convId, {
+        name: "steps",
+        args: String(mods.maxSteps),
+        by: "user",
+        outcome: "done",
+        note: `/steps ${mods.maxSteps} is now my default`,
+      });
+    }
+  },
+  composerRequest: null,
+  requestComposer: (text) => set({ composerRequest: { text, nonce: Date.now() } }),
+  commandNotes: {},
+  recordCommand: (conversationId, note) => {
+    if (!conversationId) return;
+    const full: CommandNoteView = {
+      ...note,
+      id: `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      at: note.at ?? Date.now(),
+    };
+    set((s) => ({
+      commandNotes: {
+        ...s.commandNotes,
+        [conversationId]: [...(s.commandNotes[conversationId] ?? []), full],
+      },
+    }));
+    // `REG-4`: kept in the session log, where a reload and a fork both find it.
+    if (api.inTauri() && isPersistedId(conversationId)) {
+      api
+        .recordCommandTrace(conversationId, {
+          name: full.name,
+          args: full.args,
+          by: full.by,
+          outcome: full.outcome,
+          note: full.note ?? null,
+          messageId: full.messageId ?? null,
+        })
+        .catch(() => {});
+    }
+  },
+  commandRequest: null,
+  pendingQuestion: null,
+  answerQuestion: async (answer) => {
+    const q = get().pendingQuestion;
+    if (!q) return false;
+    // Off the screen first: the card is a question, not a receipt. The step row
+    // keeps what you chose.
+    set((s) => ({ pendingQuestion: null, presence: afterListening(s) }));
+    if (!api.inTauri()) return false;
+    return api.answerQuestion(q.runId, q.id, answer).catch(() => false);
+  },
+  activeSuggestion: null,
+  acceptSuggestion: () => {
+    const sug = get().activeSuggestion;
+    if (!sug) return;
+    // Runs as if typed (`AGC-2`); the composer owns the command input.
+    set({ activeSuggestion: null, commandRequest: { text: `/${sug.command}`, nonce: Date.now() } });
+    get().recordCommand(sug.convId, {
+      name: "suggest",
+      args: sug.command,
+      by: "user",
+      outcome: "accepted",
+      note: `you said yes to /${sug.command}`,
+    });
+  },
+  dismissSuggestion: () => {
+    const sug = get().activeSuggestion;
+    if (!sug) return;
+    set({ activeSuggestion: null });
+    // Declined is a signal I learn from (`CPX-5`), not just a closed chip.
+    get().recordCommand(sug.convId, {
+      name: "suggest",
+      args: sug.command,
+      by: "user",
+      outcome: "declined",
+      note: `you said not now to /${sug.command}`,
+    });
+  },
+  harnessProposals: [],
+  resolveHarnessProposal: async (id, accept) => {
+    const p = get().harnessProposals.find((x) => x.id === id);
+    if (!p) return;
+    set((s) => ({ harnessProposals: s.harnessProposals.filter((x) => x.id !== id) }));
+    const what = proposalWhat(p);
+    get().recordCommand(p.convId, {
+      name: p.name,
+      args: p.payload.mode ?? p.payload.task ?? "",
+      by: "user",
+      outcome: accept ? "accepted" : "declined",
+      note: `you said ${accept ? "yes" : "not now"} to ${what}`,
+    });
+    // The effect belongs to your session, so the frontend carries it out.
+    if (accept) await applyHarnessProposal(get, p);
+  },
+  planFirstDefault: false,
+  setPlanFirstDefault: async (on) => {
+    set((s) => {
+      const mods = { ...s.turnModifiers };
+      if (on && !mods.planFirst) {
+        mods.planFirst = true;
+        mods.planFirstIsDefault = true;
+      } else if (!on && mods.planFirstIsDefault) {
+        // Only a chip that came from the default goes with it; one you asked for
+        // by hand is still for this message.
+        delete mods.planFirst;
+        delete mods.planFirstIsDefault;
+      }
+      return { planFirstDefault: on, turnModifiers: mods };
+    });
+    if (api.inTauri()) await api.setSetting(PLAN_FIRST_DEFAULT_KEY, on ? "true" : "false");
+  },
+  approvePlan: async (plan) => {
+    // The turn that carries it never carries the chip, whatever is set
+    // (`PLF-4`): approval that planned first again would never reach the work.
+    await get().sendMessage("Go ahead with the plan.", [], { approvedPlan: plan });
+  },
+  planRevising: false,
+  revisePlan: () => {
+    set((s) => ({
+      planRevising: true,
+      turnModifiers: { ...s.turnModifiers, planFirst: true, planFirstIsDefault: undefined },
+    }));
+    get().requestComposer("");
+  },
+  rewindRequest: null,
+  requestRewind: (messageId) => set({ rewindRequest: messageId }),
+  rewindToast: null,
+  dismissRewindToast: () => set({ rewindToast: null }),
+  rewindTo: async (messageId, { undoFiles, putBack }) => {
+    const convId = get().activeConversationId;
+    if (!convId || !api.inTauri()) return;
+    tendBriefly(set);
+    const out = await api.rewindConversation(convId, messageId, undoFiles);
+    await get().openSessionFromFork(out.conversation);
+    if (putBack) get().requestComposer(out.prompt);
+    if (out.files_undone > 0) {
+      get().refreshChanges(convId).catch(() => {});
+      get().refreshTree().catch(() => {});
+    }
+    const shown = previewOf(out.prompt);
+    const files =
+      out.files_undone > 0
+        ? ` I took back my changes to ${out.files_undone} file${out.files_undone === 1 ? "" : "s"}.`
+        : "";
+    const failed = out.files_failed?.length
+      ? ` I couldn't put back ${out.files_failed.join(", ")}.`
+      : "";
+    set({ rewindToast: `◆ I went back to before “${shown}”. The original is still in your list.${files}${failed}` });
+  },
+  goals: {},
+  startGoal: async (conversationId, text, until) => {
+    const goal = newGoal(text, until);
+    putGoal(set, conversationId, goal);
+    // An ordinary turn, so everything an ordinary turn does is done for it.
+    await get().sendMessage(openingTurn(goal));
+  },
+  stopGoal: (conversationId) => {
+    const goal = get().goals[conversationId];
+    if (!goal || goal.status !== "active") return;
+    putGoal(set, conversationId, { ...goal, status: "stopped", checking: false });
+    // Stopping the goal means stopping the work toward it, not letting a turn
+    // run on that nobody wants.
+    if (get().activeRun?.convId === conversationId) get().stopGenerating();
+  },
+  exportConversation: async (conversationId) => {
+    if (!api.inTauri()) return null;
+    const conv = get().conversations.find((c) => c.id === conversationId);
+    const stem = (conv?.title ?? "conversation")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "");
+    const dest = await save({
+      defaultPath: `${stem || "conversation"}.md`,
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    if (!dest) return null;
+    const markdown = await api.exportConversation(conversationId);
+    await api.saveArtifactFile(dest, "markdown", markdown);
+    set({ savedToast: `◆ Saved to ${dest}` });
+    return dest;
+  },
+  savedToast: null,
+  dismissSavedToast: () => set({ savedToast: null }),
+  mcpPrompts: [],
+  refreshMcpPrompts: async () => {
+    if (!api.inTauri()) return;
+    try {
+      set({ mcpPrompts: await api.listMcpPrompts() });
+    } catch {
+      // Keep the last list: a failed read should not empty the menu.
+    }
+  },
+  sideAnswer: null,
+  askSide: async (question) => {
+    const convId = get().activeConversationId;
+    const q = question.trim();
+    if (!convId || !q || !api.inTauri()) return;
+    // Only one at a time: a new question replaces the one on screen.
+    set({ sideAnswer: { convId, question: q, answer: "", status: "waiting" } });
+    const mine = (s: AppState) => s.sideAnswer?.convId === convId && s.sideAnswer.question === q;
+    try {
+      await api.sideQuestion(
+        convId,
+        q,
+        (e) => {
+          if (e.type === "token") {
+            set((s) =>
+              mine(s) ? { sideAnswer: { ...s.sideAnswer!, answer: s.sideAnswer!.answer + e.text, status: "streaming" } } : {}
+            );
+          } else if (e.type === "done") {
+            set((s) => (mine(s) ? { sideAnswer: { ...s.sideAnswer!, status: "done" } } : {}));
+          } else if (e.type === "error") {
+            set((s) => (mine(s) ? { sideAnswer: { ...s.sideAnswer!, status: "error", error: e.message } } : {}));
+          }
+        },
+        cloudTarget()
+      );
+    } catch (err) {
+      set((s) => (mine(s) ? { sideAnswer: { ...s.sideAnswer!, status: "error", error: String(err) } } : {}));
+    }
+  },
+  keepSideAnswer: async () => {
+    const side = get().sideAnswer;
+    if (!side || side.status !== "done" || !api.inTauri()) return;
+    // Now it is a conversation: both turns, ordinary messages, in order.
+    const model = get().models.find((m) => m.id === get().selectedModelId) ?? get().models[0];
+    const asked = await api.appendMessage({ conversationId: side.convId, role: "user", content: side.question });
+    const answered = await api.appendMessage({
+      conversationId: side.convId,
+      role: "assistant",
+      content: side.answer,
+      modelName: model?.name,
+      modelProvenance: model?.provenance,
+    });
+    set((s) => ({
+      sideAnswer: null,
+      conversations: s.conversations.map((c) =>
+        c.id === side.convId
+          ? { ...c, updatedAt: Date.now(), messages: [...c.messages, toMessage(asked), toMessage(answered)] }
+          : c
+      ),
+    }));
+  },
+  dismissSideAnswer: () => {
+    if (api.inTauri()) api.cancelSideQuestion().catch(() => {});
+    set({ sideAnswer: null });
+  },
+  checkupRunning: false,
+  runCheckup: async () => {
+    const convId = get().activeConversationId;
+    if (get().checkupRunning || !api.inTauri()) return;
+    // `CHK-UI-2`: while I look at myself the mark is tending, and stays so until
+    // I am done: it is the whole duration, not a moment.
+    set(() => ({ checkupRunning: true, presence: "tending" as const }));
+    try {
+      const out = await api.checkup(cloudTarget());
+      const needing = out.lines.filter((l) => l.state === "needs_you").length;
+      const note =
+        needing === 0
+          ? "I checked myself and nothing needs you."
+          : `I checked myself and ${needing === 1 ? "one thing needs" : `${needing} things need`} you.`;
+      // Persisted through its own trace, so a reload shows the same card.
+      get().recordCommand(convId, {
+        name: "checkup",
+        args: JSON.stringify(out.lines),
+        by: "user",
+        outcome: "done",
+        note,
+      });
+    } finally {
+      set((s) => ({
+        checkupRunning: false,
+        presence: s.presence === "tending" ? (s.busy ? "active" : s.reflectingIds.length ? "reflecting" : "idle") : s.presence,
+      }));
+    }
+  },
+  runSummaries: {},
+  dismissRunSummary: (conversationId) =>
+    set((s) => {
+      const next = { ...s.runSummaries };
+      delete next[conversationId];
+      return { runSummaries: next };
+    }),
+  selfTabRequest: null,
+  openSelf: (tab = "memory", focus) => {
+    set({ selfTabRequest: { tab, nonce: Date.now(), focus } });
+    get().setView("self");
+  },
+  usageFocus: null,
+  openUsage: (conversationId) => {
+    set({ usageFocus: conversationId });
+    get().setView("usage");
+  },
   createImage: async (prompt, modelPath) => {
     await startMediaTurn(set, get, {
       text: prompt,
@@ -1877,6 +2355,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         // PRO-9: undo restores PROFILE.md from the snapshot the rebuild took
         // of itself, not a fact-trash round trip.
         await api.undoProfileRebuild();
+      } else if (toast.op === "always") {
+        // `UCM-7`: the text before the instruction was added, written back
+        // whole. It may be empty, which is why this does not test the token.
+        await api.setSoul(toast.undoToken);
       } else if (toast.op === "forget" && toast.undoToken) {
         // Undo the actual operation: a forget is undone by restoring from
         // trash, anything else (a save) by forgetting the entry it created.
@@ -1961,6 +2443,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       // the first turn assembles a prompt that has to agree with the backend.
       const mode = await api.getSetting(PLAN_MODE_KEY);
       set({ planMode: mode === "always" || mode === "never" ? mode : "auto" });
+      // `DEF-4`: and whether every message starts by planning first.
+      const first = (await api.getSetting(PLAN_FIRST_DEFAULT_KEY)) === "true";
+      set((st) => ({
+        planFirstDefault: first,
+        turnModifiers: first && !st.turnModifiers.planFirst
+          ? { ...st.turnModifiers, planFirst: true, planFirstIsDefault: true }
+          : st.turnModifiers,
+      }));
     } catch {
       /* keep the default */
     }
@@ -2457,6 +2947,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().refreshSelf();
     get().refreshToolHealth();
     get().refreshScheduler();
+    get().refreshMcpPrompts();
     listenForSelfEvents(set, get);
     maybeDailyProfileTick(get);
     scheduleCatchUpReflection(get);
@@ -2469,6 +2960,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     // so "did the conversation actually change" has to be judged here, before
     // any of the below overwrites it with itself.
     const switchingConversation = id !== get().activeConversationId;
+    // `RUN-3`: a finished run's summary does not follow you out of the chat.
+    if (switchingConversation) {
+      const leaving = get().activeConversationId;
+      const left = leaving ? get().runSummaries[leaving] : undefined;
+      if (leaving && left && !left.live) get().dismissRunSummary(leaving);
+    }
 
     reflectOnLeaving(get, id);
 
@@ -2554,9 +3051,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       /* ignore */
     }
     const messages = rows.map(toMessage);
+    // `REG-4`: the commands this chat traced, so a reload shows the notes the
+    // session did, and a skill command's bubble keeps its `/name` chip.
+    let traces: api.CommandRecord[] = [];
+    try {
+      traces = await api.conversationCommands(id);
+    } catch {
+      /* a chat without its notes is still a chat */
+    }
     for (const m of messages) {
       if (blocksByMessage[m.id]) m.blocks = blocksByMessage[m.id];
       if (artifactIdsByMessage[m.id]) m.artifactIds = artifactIdsByMessage[m.id];
+      const traced = traces.find((t) => t.messageId === m.id);
+      if (traced) m.command = { name: traced.name, args: traced.args };
     }
     // `JOB-1`: a generation can outlive the view that started it. Re-attach to
     // anything still running so the turn shows its tile and its Cancel again,
@@ -2594,6 +3101,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       conversations: s.conversations.map((c) =>
         c.id === id ? { ...c, messages } : c
       ),
+      commandNotes: {
+        ...s.commandNotes,
+        // What this session wrote since it opened is already in the log, so the
+        // log is the whole truth; nothing is merged.
+        [id]: traces.map((t) => ({
+          id: `cmd-${t.at}-${t.name}`,
+          name: t.name,
+          args: t.args,
+          by: t.by,
+          outcome: t.outcome as CommandNoteView["outcome"],
+          note: t.note ?? undefined,
+          at: t.at,
+          messageId: t.messageId ?? undefined,
+        })),
+      },
       surfaces: { ...s.surfaces, [id]: surface },
       // Nothing is selected on arrival — opening a chat shouldn't yank the
       // viewer onto an old artifact.
@@ -2720,10 +3242,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     const persona = conv?.personaId
       ? state.personas.find((p) => p.id === conv.personaId)
       : undefined;
+    // `/continue` carries `/steps` and `/effort` like any other turn. It never
+    // carries Plan first: it picks up a run that was already going, and making
+    // it read-only half way would strand it.
+    const turn = turnRunOptions({ ...state.turnModifiers, planFirst: undefined });
+    reseedModifiers(set, get);
     await streamAssistantTurn(set, get, {
       convId,
       assistantId,
       persistedAssistantId,
+      turn,
       // Deliberately empty: a resumed run's transcript is rebuilt in Rust from
       // the session log, because that is the only place the interrupted run's
       // tool results survive. Reassembling here would send the prose back and
@@ -2733,6 +3261,39 @@ export const useAppStore = create<AppState>((set, get) => ({
       temperature: conv?.overrides?.temperature ?? personaTemperature(persona),
       resume: true,
     });
+  },
+
+  openSessionFromFork: async (conversation) => {
+    set((s) => ({ conversations: [toConversation(conversation), ...s.conversations] }));
+    await get().setActiveConversation(conversation.id);
+  },
+
+  compactNow: async (convId, focus) => {
+    const state = get();
+    const conv = state.conversations.find((c) => c.id === convId);
+    const model = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
+    if (!conv || !model) return "Start a conversation first.";
+    // The same cut auto-compaction makes, only taken now instead of at overflow:
+    // everything after the last summary except the turns I'd keep verbatim.
+    const keep = conv.workspace ? KEEP_RECENT_WORKSPACE : KEEP_RECENT;
+    const all = conv.messages.filter((m) => m.text.trim().length > 0 && isPersistedId(m.id));
+    const from = conv.summaryUptoMessageId
+      ? all.findIndex((m) => m.id === conv.summaryUptoMessageId)
+      : -1;
+    const pending = all.slice(from + 1);
+    if (pending.length <= keep) return "There isn't enough older conversation to summarise yet.";
+    const boundary = pending[pending.length - keep - 1];
+    try {
+      const summary = await api.compactConversation(convId, boundary.id, targetFor(model), focus);
+      set((s) => ({
+        conversations: s.conversations.map((c) =>
+          c.id === convId ? { ...c, summary, summaryUptoMessageId: boundary.id } : c
+        ),
+      }));
+      return null;
+    } catch (e) {
+      return String(e);
+    }
   },
 
   renameConversation: async (id, title) => {
@@ -2760,11 +3321,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     persistTabSet(get());
   },
 
-  sendMessage: async (text, attachments = []) => {
+  sendMessage: async (text, attachments = [], sendOpts) => {
     const state = get();
     const convId = state.activeConversationId;
     if (!convId || state.busy) return;
     const model = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
+
+    // `GOL-UI-1`: what a goal ended with stays on the bar until the next send.
+    const ended = state.goals[convId];
+    if (ended && ended.status !== "active") putGoal(set, convId, null);
 
     // Belt and braces (`PIK-2`): `run_agent` must never be handed an image or
     // video model. The composer already routes these to `createMedia`, but a
@@ -2775,6 +3340,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
+    // `CMP-6`: the chips are for this message and no other. Taken here, in the
+    // one place every user turn passes through, so none can outlive its send.
+    const turn = turnRunOptions(state.turnModifiers, sendOpts);
+    reseedModifiers(set, get);
+    // `VTN-1`: the user spoke this turn and will hear the reply.
+    const spoken = sendOpts?.spoken === true;
+
     const conv = state.conversations.find((c) => c.id === convId);
     const isFirstMessage = !conv || conv.messages.length === 0;
 
@@ -2784,6 +3356,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       role: "user",
       text,
       attachments: attachments.length ? attachments : undefined,
+      // `SKC-2`: a skill command's bubble says which one it was.
+      command: sendOpts?.skill
+        ? { name: sendOpts.skill, args: sendOpts.skillArgs ?? "" }
+        : undefined,
+      spoken: spoken || undefined,
       createdAt: Date.now(),
     };
     const assistantId = `a-${Date.now()}`;
@@ -2794,6 +3371,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       steps: [],
       text: "",
       streaming: true,
+      spoken: spoken || undefined,
       createdAt: Date.now() + 1,
     };
     set((s) => ({
@@ -2832,20 +3410,33 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Persist the user message and an empty assistant row.
     let persistedAssistantId = assistantId;
     try {
-      await api.appendMessage({
+      const userRow = await api.appendMessage({
         conversationId: convId,
         role: "user",
         content: text,
         attachments: attachments.length
           ? attachments.map((a) => ({ kind: a.kind, name: a.name, path: a.path || "" }))
           : undefined,
+        spoken: spoken || undefined,
       });
+      // `SKC-2`: the trace carries the message's real id, which is how its
+      // bubble finds its `/name` chip again after a reload.
+      if (sendOpts?.skill) {
+        get().recordCommand(convId, {
+          name: sendOpts.skill,
+          args: sendOpts.skillArgs ?? "",
+          by: "user",
+          outcome: "done",
+          messageId: userRow.id,
+        });
+      }
       const row = await api.appendMessage({
         conversationId: convId,
         role: "assistant",
         content: "",
         modelName: model.name,
         modelProvenance: model.provenance,
+        spoken: spoken || undefined,
       });
       persistedAssistantId = row.id;
     } catch {
@@ -2896,6 +3487,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       textForModel = `(Workspace updates since your last reply: ${pending.join("; ")}.)\n\n${textForModel}`;
       set((s) => ({ pendingActions: { ...s.pendingActions, [convId]: [] } }));
     }
+    // `CMP-3`: things the user pointed at with `+`. Named in the model's copy
+    // only; it reads them with `read_conversation` / `read_artifact` itself.
+    for (const ref of sendOpts?.refs ?? []) {
+      textForModel +=
+        ref.kind === "conversation"
+          ? `\n\n[Context: the earlier conversation "${ref.label}" (id ${ref.id}). Read it with read_conversation before answering.]`
+          : `\n\n[Context: "${ref.label}" from the library (artifact id ${ref.id}). Read it with read_artifact before answering.]`;
+    }
     for (const pdf of pdfs) {
       try {
         const extracted = await api.extractPdfText(pdf.path);
@@ -2945,6 +3544,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       toolHealth: get().toolHealth,
       skills: skillsForPersona(get().skills, persona?.skills_json),
       planMode: get().planMode,
+      spoken,
       ...projectPrompt(get(), convId),
     });
     const effectiveTemperature =
@@ -2969,6 +3569,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       temperature: effectiveTemperature,
       initialSteps: recalled ? [recalled] : undefined,
       contextRefs: buildContextRefs({ personaId: persona?.id ?? null, memory, injectedFacts, matches }),
+      turn,
+      spoken,
     });
   },
 
@@ -3190,6 +3792,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   stopGenerating: () => {
+    // Stop always stops the goal too (`GOL-3`): going on after being told to
+    // stop is the one thing it must never do.
+    const convId = get().activeConversationId;
+    const goal = convId ? get().goals[convId] : undefined;
+    if (convId && goal?.status === "active") putGoal(set, convId, { ...goal, status: "stopped", checking: false });
+    // `VXP-2`: stop also silences a spoken reply, whether or not a run is still going.
+    getSpeechBridge()?.stopSpeaking();
     if (api.inTauri()) api.stopChat().catch(() => {});
   },
 
@@ -3198,6 +3807,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const run = get().activeRun;
     const convId = get().activeConversationId;
     if (!body || !run || !convId || run.convId !== convId || !api.inTauri()) return false;
+
+    // `AGC-3`: a run that is waiting on a question hears the next thing typed as
+    // its answer. This is the one place that decides that, so the composer never
+    // has to know whether a question is open.
+    const waiting = get().pendingQuestion;
+    if (waiting && waiting.convId === convId && waiting.runId === run.runId) {
+      return get().answerQuestion({ choices: [], text: body });
+    }
 
     // The message goes on screen before the backend has seen it: the point of
     // the feature is that typing lands immediately. `midRun: "pending"` is what
@@ -4480,6 +5097,24 @@ export function applySubEvent(set: StoreSet, runId: string, event: api.AgentEven
       case "steered":
         next = { ...run, steerPending: false };
         break;
+      case "run_progress":
+        // `RUN-1b`: a child's spend so far, priced by the side that knows its
+        // model. Only the cost and usage; the run's status is told elsewhere.
+        next = {
+          ...run,
+          usage: event.usage ?? run.usage,
+          costUsd: event.cost_usd !== undefined ? event.cost_usd : run.costUsd,
+        };
+        break;
+      case "run_ended":
+        // `RUN-1b`: the final figure. `null` stays `null`: an agent I cannot
+        // price is not a free one, and the bar must be able to say so.
+        next = {
+          ...run,
+          usage: event.usage ?? run.usage,
+          costUsd: event.cost_usd !== undefined ? event.cost_usd : (run.costUsd ?? null),
+        };
+        break;
       case "permission":
         // `SUB-UI-4`: the panel must say which agent is asking. Two children can
         // ask at once, so these queue rather than replace.
@@ -4697,6 +5332,174 @@ function targetFor(model: Model): api.ChatTarget {
   return { provenance: "local" };
 }
 
+/** `RUN-3`: fold a change into one conversation's run summary. A run that has
+ * no summary yet (an event that arrives first) is not given one: only
+ * `run_started` creates it. */
+function patchRunSummary(
+  set: StoreSet,
+  convId: string,
+  patch: (summary: RunSummary) => Partial<RunSummary>
+) {
+  set((s) => {
+    const current = s.runSummaries[convId];
+    if (!current) return {};
+    return { runSummaries: { ...s.runSummaries, [convId]: { ...current, ...patch(current) } } };
+  });
+}
+
+/** A note the agent's act put in the transcript. Not persisted here: the backend
+ * wrote the `command` row itself, and a reload reads it back. */
+function pushAgentNote(set: StoreSet, convId: string, note: Omit<CommandNoteView, "id" | "at">) {
+  const full: CommandNoteView = {
+    ...note,
+    id: `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    at: Date.now(),
+  };
+  set((s) => ({
+    commandNotes: { ...s.commandNotes, [convId]: [...(s.commandNotes[convId] ?? []), full] },
+  }));
+}
+
+/** `GOL-1`: set a conversation's goal, or clear it. */
+function putGoal(set: StoreSet, convId: string, goal: Goal | null) {
+  set((s) => {
+    const goals = { ...s.goals };
+    if (goal) goals[convId] = goal;
+    else delete goals[convId];
+    return { goals };
+  });
+}
+
+/** `GOL-3`: what the goal loop needs from this store. */
+function goalHost(set: StoreSet, get: () => AppState): GoalHost {
+  return {
+    get: (id) => get().goals[id],
+    isOpen: (id) => get().activeConversationId === id,
+    patch: (id, patch) => {
+      const cur = get().goals[id];
+      if (cur) putGoal(set, id, { ...cur, ...patch });
+    },
+    check: async (id, goal) => {
+      const s = get();
+      const model = s.models.find((m) => m.id === s.selectedModelId) ?? s.models[0];
+      if (!api.inTauri() || !model) throw new Error("no model to check with");
+      return api.goalCheck(id, goal.text, goal.until, targetFor(model));
+    },
+    note: (id, text) =>
+      get().recordCommand(id, { name: "goal", args: "", by: "agent", outcome: "done", note: text }),
+    send: (_id, text) => get().sendMessage(text),
+  };
+}
+
+/** `DEF-4`: where Plan first by default is kept. */
+export const PLAN_FIRST_DEFAULT_KEY = "agent.plan_first_default";
+
+/** The chips a message starts with. Plan first is already on when it is my
+ * default (`DEF-4`), and says so (`DEF-5`). */
+function seededModifiers(s: Pick<AppState, "planFirstDefault">): TurnModifiers {
+  return s.planFirstDefault ? { planFirst: true, planFirstIsDefault: true } : {};
+}
+
+/** After a send: the chips go, except the one my default puts back (`DEF-4`).
+ * Written only when something changes, so an ordinary send does not touch the
+ * store at all. */
+function reseedModifiers(set: StoreSet, get: () => AppState) {
+  const s = get();
+  const next = seededModifiers(s);
+  const same = JSON.stringify(s.turnModifiers) === JSON.stringify(next);
+  if (!same || s.planRevising) set(() => ({ turnModifiers: next, planRevising: false }));
+}
+
+/** One short line standing in for a turn, as the backend names it in a title. */
+function previewOf(text: string): string {
+  const first = (text.split("\n")[0] ?? "").trim();
+  return first.length > 48 ? `${first.slice(0, 47).trimEnd()}…` : first;
+}
+
+/** What the presence returns to when a question is answered or the run ends. */
+function afterListening(s: AppState): Presence {
+  if (s.presence !== "listening") return s.presence;
+  return s.busy ? "active" : s.reflectingIds.length ? "reflecting" : "idle";
+}
+
+/** `CPX-2`: tending to myself for a moment, then back to whatever was
+ * underneath. Replaces `active` while it lasts and does not layer over it. */
+function tendBriefly(set: StoreSet) {
+  set(() => ({ presence: "tending" as const }));
+  setTimeout(() => {
+    set((s) =>
+      s.presence === "tending"
+        ? { presence: s.busy ? "active" : s.reflectingIds.length ? "reflecting" : "idle" }
+        : {}
+    );
+  }, 1600);
+}
+
+/** The words for a proposal in a note, in the first person's counterpart. */
+function proposalWhat(p: HarnessProposalView): string {
+  if (p.name === "switch_mode") {
+    return p.payload.mode === "plan_first" ? "switching to Plan first" : "switching to Workspace";
+  }
+  if (p.name === "schedule") return `running “${p.payload.task ?? "this"}” ${p.payload.when ?? "later"}`;
+  return "making room";
+}
+
+/** `AGC-4`: the first-person note for what I asked, as the backend wrote it into
+ * the log. Kept in step with `commands::decide`, so what shows now and what
+ * shows after a reload read the same. */
+function proposalNote(p: Pick<HarnessProposalView, "name" | "reason" | "payload">): string {
+  if (p.name === "switch_mode") {
+    const label = p.payload.mode === "plan_first" ? "Plan first" : "Workspace";
+    return `I asked to switch to ${label}: ${p.reason}`;
+  }
+  if (p.name === "schedule") return `I asked to run this ${p.payload.when ?? "later"}: ${p.payload.task ?? ""}`;
+  return `I asked to make room: ${p.reason}`;
+}
+
+/** Carry out a proposal you said yes to. */
+async function applyHarnessProposal(get: () => AppState, p: HarnessProposalView): Promise<void> {
+  const s = get();
+  if (p.name === "switch_mode") {
+    if (p.payload.mode === "plan_first") {
+      // The next turn only. It never re-scopes a run that is already going (`PLF-6`).
+      s.setTurnModifier({ planFirst: true });
+    } else {
+      s.setWorkspaceMode(true);
+      // Workspace needs `render_ui`, so it turns tools on too.
+      s.setToolsEnabled(true);
+    }
+  } else if (p.name === "schedule") {
+    const conv = s.conversations.find((c) => c.id === p.convId);
+    // A draft that already says it. Nothing is scheduled until you press Save.
+    useAppStore.setState({
+      taskDraft: proposedDraft(conv?.title ?? "New task", p.convId, p.payload.when, p.payload.task),
+    });
+    s.setView("tasks");
+  } else if (p.name === "compact") {
+    await s.compactNow(p.convId);
+  }
+}
+
+/** `REG-5`: the composer's chips (and a named skill) as the backend's
+ * `RunOptions`. `undefined` when there is nothing to say, so an ordinary turn
+ * sends exactly what it sent before commands existed. */
+export function turnRunOptions(
+  mods: TurnModifiers,
+  sendOpts?: SendOptions
+): api.TurnRunOptions | undefined {
+  const turn: api.TurnRunOptions = {};
+  if (mods.effort) turn.effort = mods.effort;
+  if (mods.maxSteps) turn.maxSteps = mods.maxSteps;
+  // `PLF-4`: an approved plan runs unrestricted, so the chip is not sent with it.
+  if (sendOpts?.approvedPlan) turn.approvedPlan = sendOpts.approvedPlan;
+  else if (mods.planFirst) turn.planFirst = true;
+  if (sendOpts?.skill) {
+    turn.skill = sendOpts.skill;
+    if (sendOpts.skillArgs) turn.skillArgs = sendOpts.skillArgs;
+  }
+  return Object.keys(turn).length ? turn : undefined;
+}
+
 /** Optimistic ids are minted client-side and mean nothing to the backend. */
 export function isPersistedId(id: string): boolean {
   return !id.startsWith("u-") && !id.startsWith("a-");
@@ -4792,9 +5595,17 @@ async function streamAssistantTurn(
      * new one. `turns` is then unused — the transcript comes from the session
      * log, which is the only place the interrupted run's tool results survive. */
     resume?: boolean;
+    /** `REG-5`: what the user decided about this turn only. */
+    turn?: api.TurnRunOptions;
+    /** `VTN-3`: the reply is read out as it streams. */
+    spoken?: boolean;
   }
 ): Promise<void> {
   const { convId, assistantId, persistedAssistantId, turns, model, temperature } = opts;
+  // `VTN-3`: while voice is on, a spoken turn's text and steps go to the voice
+  // session, which owns the audio. `speakGen` says which reply they belong to.
+  const speech = opts.spoken ? getSpeechBridge() : null;
+  const speakGen = speech?.current() ?? 0;
   let acc = "";
   const steps: AgentStep[] = [...(opts.initialSteps ?? [])];
   if (steps.length) patchAssistant(set, convId, assistantId, { steps: [...steps] });
@@ -4814,6 +5625,9 @@ async function streamAssistantTurn(
   const parallelOf: Record<string, string> = {};
   /** `HRN-3`: set by `run_ended`, written to the row when the turn finalizes. */
   let stopReason: api.StopReason | undefined;
+  /** The run failed before it could say how it ended (no model, a dropped
+   * stream). The goal loop must not read that as finished work (`GOL-3`). */
+  let failed = false;
   /** `PLN-UI-1`: the plan this run is working to, as it last told us. Held here
    * as well as on the turn so it can be written to the row when the turn
    * finalizes (`PLN-UI-5`). */
@@ -4836,6 +5650,7 @@ async function streamAssistantTurn(
         switch (e.type) {
           case "token":
             acc += e.text;
+            speech?.token(speakGen, e.text);
             patchAssistant(set, convId, assistantId, { text: acc, streaming: true });
             // The model has started speaking, so whatever it was thinking is
             // over. Clearing here keeps the indicator honest without needing a
@@ -4866,6 +5681,19 @@ async function streamAssistantTurn(
                 // this, so the card is never blank while the run is live.
                 plan,
               },
+              // `RUN-3`: a new run replaces the last one's summary.
+              runSummaries: {
+                ...get().runSummaries,
+                [convId]: {
+                  runId: e.run_id,
+                  startedAt: Date.now(),
+                  live: true,
+                  files: [],
+                  costUsd: null,
+                  localRun: model.provenance === "local",
+                  plan,
+                },
+              },
             }));
             break;
           case "run_progress":
@@ -4884,6 +5712,7 @@ async function streamAssistantTurn(
                   }
                 : {}
             );
+            patchRunSummary(set, convId, () => ({ costUsd: e.cost_usd ?? null }));
             break;
           case "run_ended":
             // `HRN-3`: keep the reason on the turn. A run that hit its step
@@ -4902,6 +5731,20 @@ async function streamAssistantTurn(
               patchAssistant(set, convId, assistantId, { plan: e.plan });
             }
             set((s) => (s.activeRun?.runId === e.run_id ? { activeRun: null } : {}));
+            // A question nobody answered dies with its run (stopped, or ended).
+            set((s) =>
+              s.pendingQuestion?.runId === e.run_id
+                ? { pendingQuestion: null, presence: afterListening(s) }
+                : {}
+            );
+            // `RUN-3`: the run is over, but what it did stays on the bar.
+            patchRunSummary(set, convId, (cur) => ({
+              live: false,
+              costUsd: e.cost_usd ?? cur.costUsd,
+              stopReason: e.stop_reason,
+              plan: e.plan ?? cur.plan,
+            }));
+            get().refreshChanges(convId).catch(() => {});
             break;
           case "plan":
             // `PLN-UI-1`: the plan the model just wrote or revised. It goes on
@@ -4914,6 +5757,7 @@ async function streamAssistantTurn(
                 ? { activeRun: { ...s.activeRun, plan: e.plan } }
                 : {}
             );
+            patchRunSummary(set, convId, () => ({ plan: e.plan }));
             break;
           case "steered":
             // The run picked up something typed at it mid-flight. Settle the
@@ -4931,6 +5775,81 @@ async function streamAssistantTurn(
                       ),
                     }
               ),
+            }));
+            break;
+          case "harness_command":
+            // `AGC-4`: I did something to my own session. The backend wrote the
+            // row; this puts the note in the transcript now and lets the mark
+            // show it (`CPX-2`).
+            pushAgentNote(set, convId, {
+              name: e.name,
+              args: "",
+              by: "agent",
+              outcome: e.outcome as CommandOutcome,
+              note: e.note ?? undefined,
+            });
+            tendBriefly(set);
+            break;
+          case "harness_proposal": {
+            const view: HarnessProposalView = {
+              id: e.id,
+              runId: e.run_id,
+              convId,
+              messageId: assistantId,
+              name: e.name,
+              reason: e.reason,
+              payload: e.payload,
+            };
+            pushAgentNote(set, convId, {
+              name: e.name,
+              args: e.payload.mode ?? e.payload.task ?? "",
+              by: "agent",
+              outcome: "proposed",
+              note: proposalNote(view),
+            });
+            if (e.payload.auto && e.name === "switch_mode") {
+              // `modes` is set to `auto`: carried out for the next message, and
+              // said so. The user only has to ignore it to be fine with it.
+              get().recordCommand(convId, {
+                name: e.name,
+                args: e.payload.mode ?? "",
+                by: "user",
+                outcome: "accepted",
+                note: `I switched on ${proposalWhat(view).replace("switching to ", "")}, as you let me`,
+              });
+              void applyHarnessProposal(get, view);
+            } else {
+              set((st) => ({ harnessProposals: [...st.harnessProposals.filter((x) => x.id !== e.id), view] }));
+            }
+            break;
+          }
+          case "suggestion":
+            // `AGC-2`: one at a time, replacing any older one (Rule 6).
+            pushAgentNote(set, convId, {
+              name: "suggest",
+              args: e.command,
+              by: "agent",
+              outcome: "proposed",
+              note: `I suggested /${e.command}: ${e.reason}`,
+            });
+            set(() => ({
+              activeSuggestion: { convId, runId: e.run_id, command: e.command, reason: e.reason },
+            }));
+            break;
+          case "question":
+            // `AGC-3`: the run is paused on this. The mark listens until it is
+            // answered, and the next thing typed answers it.
+            set(() => ({
+              pendingQuestion: {
+                runId: e.run_id,
+                id: e.id,
+                convId,
+                messageId: assistantId,
+                question: e.question,
+                options: e.options,
+                multi: e.multi,
+              },
+              presence: "listening" as const,
             }));
             break;
           case "sub_spawned": {
@@ -4978,6 +5897,7 @@ async function streamAssistantTurn(
             for (const id of e.ids) parallelOf[id] = e.ids[0];
             break;
           case "step_start":
+            speech?.step(speakGen, e.verb);
             steps.push({
               id: e.id,
               verb: e.verb,
@@ -5089,6 +6009,10 @@ async function streamAssistantTurn(
             set((st) => ({
               touchedFiles: { ...st.touchedFiles, [e.path]: Date.now() },
             }));
+            // `RUN-2`: counted live, once per path.
+            patchRunSummary(set, convId, (cur) =>
+              cur.files.includes(e.path) ? {} : { files: [...cur.files, e.path] }
+            );
             if (e.undo_token) {
               fileChangeIds.push(e.undo_token);
               patchAssistant(set, convId, assistantId, { fileChangeIds: [...fileChangeIds] });
@@ -5260,6 +6184,7 @@ async function streamAssistantTurn(
             patchAssistant(set, convId, assistantId, { streaming: false });
             break;
           case "error":
+            failed = true;
             acc = acc || `That didn't work: ${e.message}`;
             patchAssistant(set, convId, assistantId, { text: acc, streaming: false });
             break;
@@ -5270,6 +6195,7 @@ async function streamAssistantTurn(
         temperature,
         assistantMessageId: persistedAssistantId,
         target: targetFor(model),
+        turn: opts.turn,
       }
     );
     if (nothingToResume) {
@@ -5279,9 +6205,23 @@ async function streamAssistantTurn(
       patchAssistant(set, convId, assistantId, { text: acc, streaming: false });
     }
   } catch (err) {
+    failed = true;
     acc = acc || `That didn't work: ${String(err)}`;
     patchAssistant(set, convId, assistantId, { text: acc, streaming: false });
   } finally {
+    // `VTN-6`: the turn is not over while Poiesis is still talking, and what is
+    // saved is what the user heard. A reply they cut off keeps only the pieces
+    // that finished playing; the whole of it is kept beside the timeline.
+    let unspoken: string | undefined;
+    if (speech) {
+      const outcome = await speech.end(speakGen);
+      if (outcome.interrupted) {
+        unspoken = acc;
+        acc = outcome.heard;
+        stopReason = "interrupted";
+        patchAssistant(set, convId, assistantId, { text: acc, unspoken, stopReason, streaming: false });
+      }
+    }
     // Back to resting unless a self-process is still working (PRES-1). The run
     // is dropped here as well as on `run_ended`, so a stream that dies without
     // a closing event can't leave the composer thinking it can still steer.
@@ -5289,6 +6229,8 @@ async function streamAssistantTurn(
       busy: false,
       activeRun: null,
       presence: st.reflectingIds.length ? "reflecting" : "idle",
+      // A question nobody answered is not waiting on a stream that has ended.
+      pendingQuestion: st.pendingQuestion?.convId === convId ? null : st.pendingQuestion,
       // A steer the run never got round to reading stops claiming to be in
       // flight — it stays in the transcript as an ordinary unanswered turn.
       conversations: st.conversations.map((c) =>
@@ -5303,7 +6245,7 @@ async function streamAssistantTurn(
       ),
     }));
     try {
-      const stepsJson = steps.length ? JSON.stringify(steps) : undefined;
+      const stepsJson = api.stepsJsonFor(steps, unspoken);
       const contextJson = opts.contextRefs ? JSON.stringify(opts.contextRefs) : undefined;
       const planJson = plan?.items.length ? JSON.stringify(plan) : undefined;
       await api.finalizeMessage(
@@ -5319,6 +6261,12 @@ async function streamAssistantTurn(
       // address it this session, not only after the next reload.
       if (persistedAssistantId !== assistantId) {
         patchAssistant(set, convId, assistantId, { id: persistedAssistantId });
+        // What I asked of you in this turn follows the turn to its real id.
+        set((st) => ({
+          harnessProposals: st.harnessProposals.map((p) =>
+            p.messageId === assistantId ? { ...p, messageId: persistedAssistantId } : p
+          ),
+        }));
       }
     } catch {
       /* ignore */
@@ -5327,6 +6275,13 @@ async function streamAssistantTurn(
     // what lets a tool that starts failing earn its caution during the session
     // it is failing in, rather than after the next restart (HEAL-2).
     if (steps.length) useAppStore.getState().refreshToolHealth();
+    // `GOL-3`: the lead's own turn has ended. If the user set a goal here, this is
+    // where it decides whether to go on. Not awaited: the send that started this
+    // turn must not wait for every round of a goal.
+    void afterGoalRun(goalHost(set, get), convId, {
+      stopReason: stopReason ?? (failed ? "error" : undefined),
+      awaitingApproval: plan?.awaiting_approval,
+    });
   }
 }
 
@@ -5621,6 +6576,8 @@ export interface ComposePromptOpts {
    * instructions with no name have nothing to attribute them to. */
   projectName?: string;
   projectInstructions?: string;
+  /** `VTN-2`: the user is talking by voice and will hear the reply spoken. */
+  spoken?: boolean;
 }
 
 /** `PRJ-7`: the project half of a turn's standing context, read beside the
@@ -5686,8 +6643,16 @@ export function composeSystemPrompt(base: string, opts: ComposePromptOpts): stri
     const cautions = toolCautions(opts.toolHealth);
     if (cautions) out += `\n\n${cautions}`;
   }
+  // `VTN-2`: last, so nothing above can talk the model back into markdown.
+  if (opts.spoken) out += `\n\n${SPOKEN_GUIDANCE}`;
   return out;
 }
+
+/** `VTN-2`: what a spoken reply is. Word for word `SPOKEN_GUIDANCE` in
+ * `agent/context.rs`; `fixtures/voice/spoken-prompt.golden.txt` holds the two
+ * together. */
+export const SPOKEN_GUIDANCE =
+  "The user is talking to you by voice and will hear your reply spoken aloud. Answer in short spoken sentences. Do not use markdown, lists, tables or code in the reply; if something needs to be on screen, put it in an artifact and say so in one short sentence.";
 
 /** Per-entry cap (description + when_to_use combined) and whole-block cap for
  * the `SKL-2` stage-1 disclosure — matches the Agent Skills standard's own
@@ -5721,7 +6686,10 @@ function skillsForPersona(
 }
 
 function skillsBlock(skills: api.SkillView[] | undefined): string {
-  const enabled = (skills ?? []).filter((s) => s.enabled);
+  // `SKC-3`: a skill only the user can run (`disable-model-invocation`) is not
+  // part of the catalogue the model reads. Same rule as `skills_block` in
+  // `agent/context.rs`, and the golden gate holds the two together.
+  const enabled = (skills ?? []).filter((s) => s.enabled && s.model_invocable !== false);
   if (!enabled.length) return "";
   const header = "Skills available (read one with the `skill` tool before doing the work it covers):";
   const lines: string[] = [header];

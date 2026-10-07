@@ -11,6 +11,7 @@ import {
   type ConnectorView,
   type ConnectorStatus,
 } from "../lib/api";
+import { useAppStore } from "../lib/store";
 import "./Surface.css";
 import "./Apps.css";
 
@@ -33,6 +34,8 @@ export default function Apps() {
     if (!inTauri()) return;
     try {
       setConnectors(await listConnectors());
+      // What a server offers as prompts follows what is connected and turned on.
+      void useAppStore.getState().refreshMcpPrompts();
     } catch (e) {
       setError(String(e));
     }

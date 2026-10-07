@@ -451,6 +451,18 @@ export default function Skills() {
                   </div>
                   <div className="connector-url">{s.description}</div>
                   {s.when_to_use && <div className="skill-when">Use when: {s.when_to_use}</div>}
+                  {/* `SKC-1`: what makes a skill a `/` command. */}
+                  {s.argument_hint && (
+                    <div className="skill-when">
+                      Type <code>/{s.name}</code> then {s.argument_hint}
+                    </div>
+                  )}
+                  {s.model_invocable === false && (
+                    <div className="skill-when">Only you can run this — I never start it myself.</div>
+                  )}
+                  {s.user_invocable === false && (
+                    <div className="skill-when">Not in the / menu — only I can use it.</div>
+                  )}
                   {s.used > 0 && (
                     <div className="skill-usage">
                       {s.rough > 0 ? `used ${s.used}× · ${s.rough} rough` : `used ${s.used}×`}

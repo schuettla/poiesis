@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import type { SubRun } from "../../lib/types";
 import { stillWorking } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
+import Orb from "../Orb/Orb";
+import { orbForSubRun } from "../Orb/orbState";
 
 /**
  * `SUB-UI-1`: the agents a turn handed work to, shown inside the turn itself.
@@ -91,7 +93,15 @@ function FleetRow({ run }: { run: SubRun }) {
 
   return (
     <div className={`fleet-row ${run.status}`}>
-      <span className="fleet-dot" style={{ background: dotColor(run.agent) }} aria-hidden="true" />
+      {/* Running (or queued): the orb says what this child is doing, so several
+          at once read as several things happening. Ended: the agent's own dot. */}
+      <span className="fleet-lead">
+        {running ? (
+          <Orb state={orbForSubRun(run)} />
+        ) : (
+          <span className="fleet-dot" style={{ background: dotColor(run.agent) }} aria-hidden="true" />
+        )}
+      </span>
       <span className="fleet-agent" title={run.task}>
         {run.agent}
       </span>

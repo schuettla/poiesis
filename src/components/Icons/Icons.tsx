@@ -371,6 +371,35 @@ export function PaperclipIcon(props: IconProps) {
   );
 }
 
+/** A microphone: a capsule, the pickup arc under it, and a short stem. */
+export function MicIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <rect x="7.5" y="2.5" width="5" height="9" rx="2.5" />
+      <path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5" strokeLinecap="round" />
+    </Glyph>
+  );
+}
+
+/** The mic with a slash through it: the mic is muted. */
+export function MicOffIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <rect x="7.5" y="2.5" width="5" height="9" rx="2.5" />
+      <path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5M3 3l14 14" strokeLinecap="round" />
+    </Glyph>
+  );
+}
+
+/** Five bars of a sound wave: talk to Poiesis. */
+export function WaveformIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M3 8.5v3M6.5 5.5v9M10 3v14M13.5 6.5v7M17 8.5v3" strokeLinecap="round" />
+    </Glyph>
+  );
+}
+
 export function ImageIcon(props: IconProps) {
   return (
     <Glyph {...props}>

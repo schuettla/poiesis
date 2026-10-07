@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
 import { useAppStore } from "../lib/store";
+import type { TaskDraft } from "../lib/when";
 import "./Surface.css";
 import "../components/Self/Self.css";
 import "./Tasks.css";
@@ -297,13 +298,23 @@ function TaskEditor({
   onSave,
 }: {
   job: api.ScheduledJob | null;
-  draft: { name: string; prompt: string; conversationId: string } | null;
+  draft: TaskDraft | null;
   onCancel: () => void;
   onSave: (input: api.ScheduledJobInput) => Promise<void>;
 }) {
   const [name, setName] = useState(job?.name ?? draft?.name ?? "");
   const [prompt, setPrompt] = useState(job?.prompt ?? draft?.prompt ?? "");
-  const [cadence, setCadence] = useState<api.Cadence>(job?.cadence ?? "daily");
+  // A draft from `/schedule` may say `null`: I could not read a rhythm from the
+  // words, so the choice is left to the user instead of guessed.
+  const [cadence, setCadence] = useState<api.Cadence | null>(
+    job ? job.cadence : draft && draft.cadence !== undefined ? draft.cadence : "daily"
+  );
+  const firstSegment = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!job && draft && draft.cadence === null) firstSegment.current?.focus();
+    // Once, when the form opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [scope, setScope] = useState<string | null>(job?.scope ?? null);
   const [enabled, setEnabled] = useState(job?.enabled ?? true);
   const [saving, setSaving] = useState(false);
@@ -318,7 +329,7 @@ function TaskEditor({
   }
 
   async function save() {
-    if (!name.trim() || !prompt.trim()) return;
+    if (!name.trim() || !prompt.trim() || !cadence) return;
     setSaving(true);
     try {
       await onSave({
@@ -360,9 +371,10 @@ function TaskEditor({
         />
       </label>
       <div className="self-segmented" role="group" aria-label="How often">
-        {(Object.keys(CADENCE_LABELS) as api.Cadence[]).map((c) => (
+        {(Object.keys(CADENCE_LABELS) as api.Cadence[]).map((c, i) => (
           <button
             key={c}
+            ref={i === 0 ? firstSegment : undefined}
             className={`self-segment ${cadence === c ? "active" : ""}`}
             aria-pressed={cadence === c}
             onClick={() => setCadence(c)}
@@ -371,6 +383,8 @@ function TaskEditor({
           </button>
         ))}
       </div>
+      {!job && draft?.whenNote && <p className="self-line self-note">{draft.whenNote}</p>}
+      {!cadence && <p className="self-line self-note">Choose how often I should run this.</p>}
       <div className="setting-actions">
         <button className="btn-text" onClick={pickScope}>
           {scope ? `Folder: ${scope}` : "Give it a folder to read (optional)"}
@@ -389,7 +403,7 @@ function TaskEditor({
         <button
           className="btn-primary"
           onClick={save}
-          disabled={saving || !name.trim() || !prompt.trim()}
+          disabled={saving || !name.trim() || !prompt.trim() || !cadence}
         >
           {job ? "Save changes" : "Create task"}
         </button>

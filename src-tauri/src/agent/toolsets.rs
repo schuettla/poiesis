@@ -474,6 +474,24 @@ impl Toolset {
         }
     }
 
+    /// `PLF-1`: does this call change anything outside the run: a file, the
+    /// user's memory, a sent message, a running program, a page?
+    ///
+    /// Written out tool by tool rather than guessed from a toolset, because one
+    /// toolset is not one answer (`read_file` and `write_file` are both File
+    /// access). A name nobody classified is treated as mutating: while the agent
+    /// is planning first, wrongly refusing a read costs a step, and wrongly
+    /// allowing a write costs the user's trust. `every_advertised_tool_is_classified`
+    /// fails on any tool that is added without being placed.
+    ///
+    /// Delegation is allowed: the child inherits the read-only ceiling.
+    pub fn mutates(self, tool: &str) -> bool {
+        if self == Toolset::Subagents {
+            return false;
+        }
+        classify_mutation(tool).unwrap_or(true)
+    }
+
     /// The OpenAI tool schemas this toolset advertises.
     pub fn tool_specs(self) -> Vec<serde_json::Value> {
         let v = match self {
@@ -569,6 +587,31 @@ impl Toolset {
     }
 }
 
+/// `PLF-1`: `Some(true)` changes something, `Some(false)` only reads, `None` is
+/// a tool nobody has placed yet.
+fn classify_mutation(tool: &str) -> Option<bool> {
+    const MUTATING: &[&str] = &[
+        "write_file", "edit_file", "create_dir", "move_file", "delete_file", "run_code", "run_task",
+        "run_command", "send_mail", "reply_mail", "generate_image", "create_artifact",
+        "update_artifact", "render_ui", "present", "remember", "memory", "propose_soul_edit",
+        "propose_skill", "propose_project_instructions", "browser_click", "browser_type", "browser_press", "open_app",
+    ];
+    const READ_ONLY: &[&str] = &[
+        "read_file", "list_directory", "search_files", "find_symbol", "changes", "web_search",
+        "fetch_url", "search_folder", "find_similar", "search_history", "read_conversation",
+        "list_mail", "search_mail", "read_mail", "read_artifact", "check_preview", "browse",
+        "browser_read", "browser_scroll", "browser_screenshot", "screenshot", "skill", "delegate",
+        "check_agents", "collect_agents",
+    ];
+    if MUTATING.contains(&tool) {
+        Some(true)
+    } else if READ_ONLY.contains(&tool) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// The enabled built-in toolsets, in display order.
 pub fn enabled(db: &Db) -> Vec<Toolset> {
     Toolset::ALL.into_iter().filter(|s| s.is_enabled(db)).collect()
@@ -600,6 +643,34 @@ pub fn all_info(db: &Db) -> Vec<ToolsetInfo> {
 mod tests {
     use super::*;
     use crate::db::Db;
+
+    /// `PLF-T1`: a tool added without being placed would be refused in plan-first
+    /// mode by default, which is safe but silent. This makes it loud instead.
+    #[test]
+    fn every_advertised_tool_is_classified() {
+        let mut unplaced = Vec::new();
+        for toolset in Toolset::ALL {
+            for spec in toolset.tool_specs() {
+                let name = spec.pointer("/function/name").and_then(|n| n.as_str()).unwrap_or("?");
+                if classify_mutation(name).is_none() {
+                    unplaced.push(format!("{} ({})", name, toolset.id()));
+                }
+            }
+        }
+        assert!(unplaced.is_empty(), "tools nobody placed as reading or changing: {unplaced:?}");
+    }
+
+    #[test]
+    fn writes_mutate_reads_do_not_and_delegation_is_allowed() {
+        assert!(Toolset::FileSystem.mutates("write_file"));
+        assert!(Toolset::FileSystem.mutates("delete_file"));
+        assert!(!Toolset::FileSystem.mutates("read_file"));
+        assert!(Toolset::CodeRun.mutates("run_task"));
+        assert!(Toolset::Memory.mutates("memory"));
+        assert!(!Toolset::Subagents.mutates("delegate"));
+        assert!(!Toolset::Subagents.mutates("collect_agents"));
+        assert!(Toolset::FileSystem.mutates("a_tool_nobody_placed"), "unplaced is treated as changing");
+    }
 
     #[test]
     fn a_headless_run_renders_nothing() {

@@ -1,0 +1,15 @@
+/* `RWD-UI-1`: the two questions a rewind asks, inside the confirm card. */
+.rewind-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 14px;
+}
+.rewind-option {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  cursor: pointer;
+}

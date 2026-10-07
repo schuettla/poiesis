@@ -1556,18 +1556,21 @@
   background: var(--fill-selected);
   color: var(--ink);
 }
-/* Working or done, as the tab's live dot says it: breathing while it runs,
-   a still faint dot once it has stopped. */
+/* Working or done: the orb while it runs, a still faint dot once it has
+   stopped. The dot sits in a 20px-wide cell so the names stay aligned. */
 .agents-row-dot {
   flex: none;
   width: 6px;
   height: 6px;
+  margin: 0 7px;
   border-radius: 50%;
   background: var(--ink-faint);
 }
-.agents-row-dot.live {
-  background: var(--ink);
-  animation: wb-tab-breathe 2.6s ease-in-out infinite;
+.agents-row-orb {
+  flex: none;
+  display: flex;
+  width: 20px;
+  height: 20px;
 }
 .agents-row-agent {
   flex: none;

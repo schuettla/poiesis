@@ -10,7 +10,7 @@ use crate::cloud::{drive_turn, ChatEndpoint, Effort};
 use crate::db::Db;
 use crate::mcp::McpClient;
 use crate::permissions::{PermissionManager, PermissionRequest};
-use crate::runtime::proxy::{CancelFlag, Delta, ProxyError, ToolCallReq, TurnOutcome};
+use crate::runtime::proxy::{CancelFlag, Delta, ProxyError, ToolCallReq, TurnOutcome, Usage};
 use crate::runtime::{EmbedManager, RerankManager, RuntimeManager};
 use crate::secrets::{self, SERVICE_MCP};
 
@@ -75,6 +75,12 @@ const MAX_PLAN_NUDGES: usize = 1;
 /// six pure-bookkeeping turns is doing something other than working.
 const MAX_FREE_PLAN_STEPS: usize = 6;
 
+/// `PLF-3`: what a plan-first run is told, as the last thing in its transcript.
+const PLAN_FIRST_NOTE: &str = "Plan first: investigate as much as you need, but change nothing. Write the plan with the plan tool, then stop and summarise it. The user approves it before anything changes.";
+
+/// `PLF-2`: what a call that would change something is told while planning first.
+const PLAN_FIRST_REFUSAL: &str = "I'm planning first. Nothing changes until you approve the plan.";
+
 /// Where an MCP-provided tool lives, so a call can be routed to its server.
 #[derive(Clone)]
 struct McpBinding {
@@ -83,6 +89,8 @@ struct McpBinding {
     /// HTTP endpoint URL, or (for stdio) the server command line.
     url: String,
     transport: String,
+    /// `PLF-1`: the server said this tool changes nothing.
+    read_only: bool,
 }
 
 /// One live MCP client per connector, reused for the whole run (LOOP-1): the
@@ -136,6 +144,9 @@ impl ToolRegistry {
         conversation_id: &str,
         ceiling: Option<&[Toolset]>,
         may_delegate: bool,
+        // `PLF-2`: drop every tool that changes something. Only the loop's own
+        // `plan` and the reads are left.
+        read_only: bool,
     ) -> Self {
         #[derive(serde::Deserialize, Default)]
         struct CachedConfig {
@@ -181,6 +192,17 @@ impl ToolRegistry {
                 .map(|class| crate::autonomy::autonomy_gate(db, class) != crate::autonomy::Rung::Off)
                 .unwrap_or(true)
         });
+        if read_only {
+            specs.retain(|s| {
+                let Some(name) = s.pointer("/function/name").and_then(|n| n.as_str()) else {
+                    return false;
+                };
+                match enabled.iter().find(|t| t.handles(name)) {
+                    Some(toolset) => !toolset.mutates(name),
+                    None => false,
+                }
+            });
+        }
         // `COD-7`/`COD-8`: a project that runs nothing is not offered a tool that
         // can only refuse, and `run_command` exists only where expert mode, the
         // Settings switch and the project's own opt-in all say so. Every call is
@@ -231,6 +253,11 @@ impl ToolRegistry {
                     if taken.contains(&tool.name) {
                         continue; // don't shadow a built-in or earlier connector
                     }
+                    // `PLF-1`: a tool whose server did not say it only reads is
+                    // not offered while planning first.
+                    if read_only && !tool.is_read_only() {
+                        continue;
+                    }
                     taken.insert(tool.name.clone());
                     specs.push(tool.to_openai_spec());
                     mcp.insert(
@@ -240,6 +267,7 @@ impl ToolRegistry {
                             connector_name: c.name.clone(),
                             url: url.clone(),
                             transport: c.transport.clone(),
+                            read_only: tool.is_read_only(),
                         },
                     );
                 }
@@ -519,6 +547,8 @@ impl AgentEventSink {
         max_steps: usize,
         ms: u64,
         context_tokens: usize,
+        usage: Option<crate::runtime::proxy::Usage>,
+        cost_usd: Option<f64>,
     ) {
         self.send(AgentEvent::RunProgress {
             run_id: run_id.to_string(),
@@ -526,6 +556,8 @@ impl AgentEventSink {
             max_steps,
             ms,
             context_tokens,
+            usage,
+            cost_usd,
         });
     }
     #[allow(clippy::too_many_arguments)]
@@ -536,6 +568,7 @@ impl AgentEventSink {
         steps: usize,
         ms: u64,
         usage: Option<crate::runtime::proxy::Usage>,
+        cost_usd: Option<f64>,
         plan: Option<super::plan::Plan>,
     ) {
         self.send(AgentEvent::RunEnded {
@@ -544,6 +577,7 @@ impl AgentEventSink {
             steps,
             ms,
             usage,
+            cost_usd,
             plan,
         });
     }
@@ -843,6 +877,19 @@ where
     }
 }
 
+/// `RUN-1`: what a run's usage cost, or `None` when that is not knowable.
+///
+/// Three kinds of unknown collapse to `None` on purpose: a local run (it costs
+/// nothing and says so elsewhere, not as `$0.00`), a provider that reported no
+/// usage, and a model that is not in the price table. None of them is free.
+fn run_cost(provenance: &str, model_name: &str, usage: Option<Usage>) -> Option<f64> {
+    if provenance == "local" {
+        return None;
+    }
+    let usage = usage?;
+    crate::cloud::pricing::cost_usd(model_name, usage.prompt_tokens, usage.output_tokens)
+}
+
 /// `OBS-3`: roughly how many tokens a transcript will cost to send.
 ///
 /// Four characters to the token, the same rule the frontend's `estimateTokens`
@@ -867,6 +914,218 @@ fn estimate_tokens(messages: &[serde_json::Value]) -> usize {
         })
         .sum();
     chars.div_ceil(4)
+}
+
+/// `PLF-2`: would this call change something? Unknown names are not refused here
+/// (they fail on their own), and connector tools are refused unless the server
+/// said they only read.
+fn refuses_in_plan_first(registry: &ToolRegistry, name: &str) -> bool {
+    match registry.builtin_for(name) {
+        Some(toolset) => toolset.mutates(name),
+        None => registry.mcp.get(name).is_some_and(|binding| !binding.read_only),
+    }
+}
+
+/// `AGC-1`/`AGC-3`: which of the loop's own tools this run is offered.
+///
+/// A child never speaks to the user: it keeps only `compact`, which touches
+/// nothing but its own transcript, and never `ask_user`, because a child reports
+/// back to its lead and the lead asks (one voice talking to the person). A run
+/// nobody is watching cannot be asked anything either. A run with tools off has
+/// no tool table to put them in.
+fn own_tools(db: &Db, tools_enabled: bool, headless: bool, is_child: bool) -> (Vec<&'static str>, bool) {
+    if !tools_enabled {
+        return (Vec::new(), false);
+    }
+    (super::commands::agent_callable(db, headless || is_child), !headless && !is_child)
+}
+
+/// `CLR-1`: the share of the window past which old tool output starts to go.
+const CLEAR_ABOVE: (usize, usize) = (3, 4);
+/// `CLR-2`: how far clearing goes once it has started.
+const CLEAR_DOWN_TO: (usize, usize) = (1, 2);
+/// `CLR-2`: the newest tool results automatic clearing leaves alone.
+const KEEP_RECENT_RESULTS: usize = 4;
+/// `CLR-4`: the newest tool results an explicit `compact` leaves alone.
+const KEEP_RECENT_RESULTS_ASKED: usize = 2;
+/// A result this short costs less to keep than the stub that would replace it.
+const CLEAR_MIN_CHARS: usize = 1000;
+const CLEARED_MARK: &str = "[I cleared this result to make room.";
+
+/// What one pass of `clear_old_results` did.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Cleared {
+    count: usize,
+    tokens: usize,
+}
+
+/// `CLR-2`: take old, large tool output out of the transcript and leave a stub
+/// the model can follow back to the full text with `read_result`.
+///
+/// Oldest first, never the newest `keep_recent`, never anything that is not a
+/// tool result (the user's words, the model's own turns and the system prompt
+/// stay exactly as they were), and never a loaded skill: its instructions are
+/// the one tool output the model must still have on turn thirty. With `window`
+/// it stops as soon as the estimate is under half of it; with `None` it clears
+/// everything eligible.
+///
+/// A result the run already kept on disk (`HRN-8`) is stubbed against the
+/// reference it already has, not kept a second time as its own preview.
+fn clear_old_results(
+    messages: &mut [serde_json::Value],
+    store: &super::results::ResultStore,
+    keep_recent: usize,
+    window: Option<usize>,
+) -> Cleared {
+    // Which tool calls were loaded skills, found from the assistant turns that
+    // made them: a result message carries only the call's id.
+    let mut skill_calls = std::collections::HashSet::new();
+    for m in messages.iter() {
+        for call in m.get("tool_calls").and_then(|c| c.as_array()).into_iter().flatten() {
+            if call.pointer("/function/name").and_then(|n| n.as_str()) == Some("skill") {
+                if let Some(id) = call.get("id").and_then(|i| i.as_str()) {
+                    skill_calls.insert(id.to_string());
+                }
+            }
+        }
+    }
+    let tool_at: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.get("role").and_then(|r| r.as_str()) == Some("tool"))
+        .map(|(i, _)| i)
+        .collect();
+    let eligible = tool_at.len().saturating_sub(keep_recent);
+
+    let mut out = Cleared::default();
+    for &i in &tool_at[..eligible] {
+        if let Some(w) = window {
+            if estimate_tokens(messages) < w * CLEAR_DOWN_TO.0 / CLEAR_DOWN_TO.1 {
+                break;
+            }
+        }
+        let call_id = messages[i].get("tool_call_id").and_then(|c| c.as_str()).unwrap_or("").to_string();
+        let Some(content) = messages[i].get("content").and_then(|c| c.as_str()).map(str::to_string) else {
+            continue;
+        };
+        if content.starts_with(CLEARED_MARK)
+            || content.chars().count() <= CLEAR_MIN_CHARS
+            || skill_calls.contains(&call_id)
+        {
+            continue;
+        }
+        let reference = match existing_reference(&content).filter(|r| store.knows(r)) {
+            Some(r) => r,
+            None => match store.keep_forced(&call_id, &content) {
+                Some(r) => r,
+                None => continue,
+            },
+        };
+        let stub = format!(
+            "{CLEARED_MARK} read_result {{\"ref\": \"{reference}\"}} brings it back.]"
+        );
+        out.tokens += estimate_tokens(std::slice::from_ref(&messages[i]));
+        messages[i]["content"] = serde_json::Value::String(stub);
+        out.tokens = out.tokens.saturating_sub(estimate_tokens(std::slice::from_ref(&messages[i])));
+        out.count += 1;
+    }
+    out
+}
+
+/// The reference in a `[truncated: … read_result {"ref": "res_…"` preview.
+fn existing_reference(content: &str) -> Option<String> {
+    let tail = content.split("[truncated:").nth(1)?;
+    let after = tail.split("\"ref\": \"").nth(1)?;
+    let reference = after.split('"').next()?;
+    reference.starts_with("res_").then(|| reference.to_string())
+}
+
+/// `CLR-1`/`CLR-4`: whether to clear this turn, and how: how many of the newest
+/// results to keep, and the window to stop at (`None` clears everything
+/// eligible). `None` means leave the transcript alone, which is what the `context`
+/// rung set to `Off` always says: the run then behaves exactly as it did before
+/// clearing existed.
+fn clearing_plan(
+    db: &Db,
+    window: Option<usize>,
+    tokens: usize,
+    asked: bool,
+) -> Option<(usize, Option<usize>)> {
+    if crate::autonomy::autonomy_gate(db, "context") == crate::autonomy::Rung::Off {
+        return None;
+    }
+    if asked {
+        return Some((KEEP_RECENT_RESULTS_ASKED, None));
+    }
+    let window = window?;
+    (tokens > window * CLEAR_ABOVE.0 / CLEAR_ABOVE.1).then_some((KEEP_RECENT_RESULTS, Some(window)))
+}
+
+/// `CLR-3`: what the transcript says when I made room.
+fn made_room_note(cleared: &Cleared) -> String {
+    format!(
+        "I made room: I cleared {} old result{} I no longer need word for word.",
+        cleared.count,
+        if cleared.count == 1 { "" } else { "s" }
+    )
+}
+
+/// `REG-5`: what the user decided about *this* turn only. Built from the
+/// composer's modifier chips, passed through `agent_chat_cmd` and `resume_run_cmd`,
+/// and dropped when the turn ends. A delegated child gets `RunOptions::default()`,
+/// so a modifier never leaks into the agents a run starts.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunOptions {
+    /// Overrides `models.reasoning_effort` for this run. Parsed with
+    /// [`Effort::parse`], so an unknown word is the default rather than an error.
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// Overrides `agent.max_steps` for this run, clamped to 1..=50.
+    #[serde(default)]
+    pub max_steps: Option<usize>,
+    /// `SKC-2`: the skill the user named with `/name`, loaded before the first
+    /// model token instead of trusting the model to call `skill` itself.
+    #[serde(default)]
+    pub skill: Option<String>,
+    #[serde(default)]
+    pub skill_args: Option<String>,
+    /// `PLF`: may read, may not change. Writes a plan and stops for approval.
+    /// Not the `plan` setting, which only decides whether the plan tool exists.
+    #[serde(default)]
+    pub plan_first: bool,
+    /// `PLF-4`: the plan the user approved. The run starts with it, nothing is
+    /// restricted, and `plan_first` is forced off so approval cannot loop.
+    #[serde(default)]
+    pub approved_plan: Option<super::plan::Plan>,
+}
+
+impl RunOptions {
+    /// `PLF-4`/`DEF-4`: settle what an approval turn means. The approved plan
+    /// becomes the run's starting plan with the approval flag cleared, and the
+    /// restriction comes off whatever a default or a stray chip said, because a
+    /// Go ahead that planned first again would never get to the work.
+    pub fn settle_approval(
+        mut self,
+        resuming: Option<super::plan::Plan>,
+    ) -> (Option<super::plan::Plan>, RunOptions) {
+        match self.approved_plan.take() {
+            Some(mut plan) => {
+                plan.awaiting_approval = false;
+                self.plan_first = false;
+                (Some(plan), self)
+            }
+            None => (resuming, self),
+        }
+    }
+
+    /// The effort this run asks for: the chip, else the stored default.
+    fn effort_or(&self, db: &Db) -> Effort {
+        self.effort
+            .as_deref()
+            .map(Effort::parse)
+            .unwrap_or_else(|| reasoning_effort(db))
+    }
 }
 
 /// Where a run sits in the fleet: its registry entry, its budget, and — for a
@@ -901,6 +1160,12 @@ pub struct RunContext<'a> {
     /// continued — and the model, told nothing, would write a second one.
     /// `None` for every run that is not a resume.
     pub plan: Option<super::plan::Plan>,
+    /// `REG-5`: per-turn decisions from the composer. Default for every run that
+    /// is not a user's own turn.
+    pub options: RunOptions,
+    /// `PLF-2`: the ceiling a plan-first run puts on every agent below it. A
+    /// delegated child is handed the parent's value and can never lift it.
+    pub read_only: bool,
 }
 
 impl<'a> RunContext<'a> {
@@ -912,7 +1177,29 @@ impl<'a> RunContext<'a> {
         provenance: &'a str,
         context_window: Option<usize>,
     ) -> Self {
-        Self { run, limits, fleet, ceiling: None, provenance, context_window, plan: None }
+        Self {
+            run,
+            limits,
+            fleet,
+            ceiling: None,
+            provenance,
+            context_window,
+            plan: None,
+            options: RunOptions::default(),
+            read_only: false,
+        }
+    }
+
+    /// Whether this run may change nothing: it was asked to plan first, or it is
+    /// below a run that was.
+    pub fn is_read_only(&self) -> bool {
+        self.read_only || self.options.plan_first
+    }
+
+    /// The same turn, with the user's per-turn choices applied (`REG-5`).
+    pub fn with_options(mut self, options: RunOptions) -> Self {
+        self.options = options;
+        self
     }
 
     /// The same turn, continuing a run that already had a plan (`PLN-T4`).
@@ -943,6 +1230,8 @@ pub struct DelegationContext<'a> {
     /// both of these unchanged.
     pub provenance: &'a str,
     pub context_window: Option<usize>,
+    /// `PLF-2`: a child of a plan-first run is read-only too.
+    pub read_only: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1112,6 +1401,20 @@ struct TurnCtx<'a> {
     ledger: super::ledger::Ledger,
     /// When the run began, in epoch milliseconds (`COD-11`'s "this run").
     started_at_ms: i64,
+    /// `AGC-1`: the `harness` names this run may use. Empty means the tool is not
+    /// offered at all. Resolved once per run, like `plan_mode`.
+    harness_names: Vec<&'static str>,
+    /// `AGC-3`: whether `ask_user` is offered. Lead runs a person is watching only.
+    ask_offered: bool,
+    /// `PLF-2`: this run, and every agent below it, may change nothing.
+    read_only: bool,
+    /// `PLF-3`: this run was asked to plan first, so what it writes is a plan
+    /// waiting for approval.
+    plan_first: bool,
+    /// `CLR-4`: the model called `harness{compact}`. Clearing mutates the
+    /// transcript, which dispatch cannot see, so it is done at the top of the
+    /// next turn, where `prepare_turn` has `&mut RunState`.
+    compact_asked: std::sync::atomic::AtomicBool,
 }
 
 /// `HRN-6`: everything that changes from one turn to the next.
@@ -1339,6 +1642,15 @@ async fn run_agent_inner(
     let (run, limits) = (rc.run, rc.limits);
     sink.run_started(&run.id, limits.max_iterations, rc.context_window);
 
+    // `PLF`: planning first. One system message on the run's own transcript, not
+    // on the assembled system prompt, so the golden gate does not move.
+    let read_only = rc.is_read_only();
+    let plan_first = rc.options.plan_first;
+    let mut messages = messages;
+    if plan_first {
+        messages.push(serde_json::json!({ "role": "system", "content": PLAN_FIRST_NOTE }));
+    }
+
     // Unified tool table: built-in toolsets + enabled MCP connectors (§7.5),
     // narrowed to the parent's own toolsets when this run is a delegated child.
     let registry = ToolRegistry::build(
@@ -1348,6 +1660,7 @@ async fn run_agent_inner(
         rc.ceiling,
         // `SUB-5`: no room left below this run means no `delegate` tool at all.
         rc.fleet.is_some() && limits.max_depth > 0,
+        read_only,
     );
     let mut tool_names = registry.tool_names();
     let mut invocable = registry.invocable_names();
@@ -1358,10 +1671,27 @@ async fn run_agent_inner(
         tool_names.push(name.to_string());
         invocable.push(name.to_string());
     }
-    let plan_mode = super::plan::PlanMode::current(db);
+    // `PLF-2`: the plan is what a plan-first run exists to write, so the tool is
+    // offered even where the setting says never.
+    let plan_mode = match super::plan::PlanMode::current(db) {
+        super::plan::PlanMode::Never if plan_first => super::plan::PlanMode::Auto,
+        mode => mode,
+    };
     if plan_mode.offers_tool() {
         tool_names.push("plan".to_string());
         invocable.push("plan".to_string());
+    }
+    // `AGC-1`/`AGC-3`: a child never speaks to the user, so it keeps only
+    // `compact` (which touches nothing but its own transcript); and a run with
+    // tools off has no tool table to put either in.
+    let (harness_names, ask_offered) = own_tools(db, tools_enabled, headless, run.parent.is_some());
+    if !harness_names.is_empty() {
+        tool_names.push("harness".to_string());
+        invocable.push("harness".to_string());
+    }
+    if ask_offered {
+        tool_names.push("ask_user".to_string());
+        invocable.push("ask_user".to_string());
     }
 
     let cx = TurnCtx {
@@ -1381,7 +1711,7 @@ async fn run_agent_inner(
         data_dir,
         model_name,
         temperature,
-        effort: reasoning_effort(db),
+        effort: rc.options.effort_or(db),
         tools_enabled,
         headless,
         cancel: run.cancel.clone(),
@@ -1397,6 +1727,7 @@ async fn run_agent_inner(
             max_depth: limits.max_depth,
             provenance: rc.provenance,
             context_window: rc.context_window,
+            read_only,
         }),
         registry,
         mcp_pool: Default::default(),
@@ -1414,6 +1745,11 @@ async fn run_agent_inner(
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0)
             .saturating_sub(run.elapsed_ms() as i64),
+        harness_names,
+        ask_offered,
+        read_only,
+        plan_first,
+        compact_asked: Default::default(),
     };
 
     // `CTX-2`: the model's view of this conversation, written as the run goes.
@@ -1472,10 +1808,22 @@ async fn run_agent_inner(
         // `PLN-5`: what the run meant to do, as it stood when it stopped. A run
         // that ran out of budget can now say which items it never reached
         // instead of only that it stopped.
-        let plan = cx.plan.lock().unwrap();
+        let mut plan = cx.plan.lock().unwrap();
+        // `PLF-3`: what a plan-first run leaves is a plan nobody has approved.
+        if plan_first && !plan.is_empty() {
+            plan.awaiting_approval = true;
+        }
         let final_plan = (!plan.is_empty()).then(|| plan.clone());
         drop(plan);
-        sink.run_ended(&run.id, reason, run.steps(), run.elapsed_ms(), run.usage(), final_plan);
+        sink.run_ended(
+            &run.id,
+            reason,
+            run.steps(),
+            run.elapsed_ms(),
+            run.usage(),
+            run_cost(rc.provenance, model_name, run.usage()),
+            final_plan,
+        );
         RunOutcome { text, stop_reason: reason, steps: run.steps(), usage: run.usage() }
     };
 
@@ -1486,6 +1834,13 @@ async fn run_agent_inner(
         if !plan.is_empty() {
             sink.plan(&run.id, &plan);
         }
+    }
+
+    // `SKC-2`: the user named a skill with `/name`. Load it now, through the very
+    // call the model would have made, so the timeline shows `used my … skill`
+    // before the first token and nothing depends on the model deciding to.
+    if let Some(name) = rc.options.skill.as_deref() {
+        cx.preload_skill(&mut st, name, rc.options.skill_args.as_deref()).await;
     }
 
     // `HRN-6`: one turn is six named phases. Everything that used to sit inline
@@ -1617,6 +1972,8 @@ impl TurnCtx<'_> {
         // see, so they belong in the log before the request, not after it.
         flush_log(obs, &st.messages, &mut st.logged);
 
+        self.make_room(st);
+
         st.iteration += 1;
         run.bump_steps();
         self.sink.run_progress(
@@ -1625,8 +1982,51 @@ impl TurnCtx<'_> {
             limits.max_iterations,
             run.elapsed_ms(),
             estimate_tokens(&st.messages),
+            run.usage(),
+            run_cost(self.rc.provenance, self.model_name, run.usage()),
         );
         None
+    }
+
+    /// `CLR-1`/`CLR-4`: clear old tool output when the transcript is past 75% of
+    /// the model's window, or when the model asked for it with `harness`.
+    ///
+    /// Done in the preamble because it rewrites earlier messages, which only
+    /// this phase may do. The session log is untouched (`CLR-5`): it already
+    /// holds every result as it arrived, so a resume replays the originals and
+    /// clears again if it has to. With the `context` rung `Off` nothing is
+    /// cleared and the run behaves exactly as it did before this existed.
+    fn make_room(&self, st: &mut RunState) {
+        let asked = self.compact_asked.swap(false, std::sync::atomic::Ordering::Relaxed);
+        let Some((keep, window)) =
+            clearing_plan(self.db, self.rc.context_window, estimate_tokens(&st.messages), asked)
+        else {
+            return;
+        };
+        let cleared = clear_old_results(&mut st.messages, &self.results, keep, window);
+        if cleared.count == 0 {
+            return;
+        }
+        let note = made_room_note(&cleared);
+        super::log::record_command(
+            self.db,
+            self.conversation_id,
+            Some(&self.rc.run.id),
+            &super::log::CommandTrace {
+                name: "compact".into(),
+                args: format!("{} results, about {}k tokens", cleared.count, cleared.tokens.div_ceil(1000)),
+                by: "agent".into(),
+                outcome: "done".into(),
+                note: Some(note.clone()),
+                message_id: None,
+            },
+        );
+        self.sink.emit(AgentEvent::HarnessCommand {
+            run_id: self.rc.run.id.clone(),
+            name: "compact".into(),
+            outcome: "done".into(),
+            note: Some(note),
+        });
     }
 
     /// **assemble** — the tools this turn is allowed to use.
@@ -1647,7 +2047,12 @@ impl TurnCtx<'_> {
             return &[];
         }
         let plans = self.plan_mode.offers_tool();
-        if self.results.has_any() || plans {
+        // `AGC-1`/`AGC-3`: the loop's own two tools, for the whole run.
+        let own: Vec<serde_json::Value> = super::commands::harness_spec(&self.harness_names)
+            .into_iter()
+            .chain(self.ask_offered.then(super::commands::ask_user_spec))
+            .collect();
+        if self.results.has_any() || plans || !own.is_empty() {
             *scratch = self
                 .registry
                 .specs
@@ -1655,6 +2060,7 @@ impl TurnCtx<'_> {
                 .cloned()
                 .chain(self.results.has_any().then(super::results::tool_specs).unwrap_or_default())
                 .chain(plans.then(super::plan::tool_specs).unwrap_or_default())
+                .chain(own)
                 .collect();
             return scratch;
         }
@@ -2009,14 +2415,48 @@ fn partition_calls(registry: &ToolRegistry, calls: &[ToolCallReq]) -> (Vec<usize
 /// plan in the same turn as the search it describes is exactly what it should
 /// do, and that turn is charged for the search, as it should be. Only a turn
 /// that is *purely* bookkeeping goes free.
+///
+/// `AGC-1`/`AGC-3`: `harness` and `ask_user` are bookkeeping too. Neither does
+/// the user's task, and a run that asks a question must not spend its budget on
+/// the asking. `MAX_FREE_PLAN_STEPS` still bounds how many such turns are free.
 fn is_bookkeeping(calls: &[ToolCallReq]) -> bool {
-    !calls.is_empty() && calls.iter().all(|c| super::plan::handles(&c.name))
+    !calls.is_empty()
+        && calls
+            .iter()
+            .all(|c| super::plan::handles(&c.name) || super::commands::handles(&c.name))
+}
+
+/// `SKC-2`: the `skill` call a `/name` stands for. The `arguments` field is not
+/// in the tool's spec — only a preload sends it, which is how `$ARGUMENTS` is
+/// filled for the user's words and left alone for the model's own calls.
+fn skill_preload_call(name: &str, args: Option<&str>) -> ToolCallReq {
+    ToolCallReq {
+        id: format!("call_skill_{}", uuid::Uuid::new_v4().simple()),
+        name: "skill".to_string(),
+        arguments: serde_json::json!({ "name": name, "arguments": args.unwrap_or("") }).to_string(),
+    }
 }
 
 /// Execute a batch of tool calls: echo them into the message history, run each
 /// through its toolset or MCP server (emitting timeline steps), and append results.
 #[allow(clippy::too_many_arguments)]
 impl TurnCtx<'_> {
+/// `SKC-2`: put a user-named skill into the transcript as the call/result pair
+/// the model would have produced itself.
+///
+/// Goes through `dispatch_batch`, so trust scoring, untrusted wrapping, the
+/// `loaded_skills` claim (a later model call for the same skill is answered with
+/// a pointer, not a second copy) and the timeline step all behave as they do for
+/// any other `skill` call. Skipped, quietly, when the run cannot call tools or
+/// the Skills toolset is off: the user's message is still there to answer.
+async fn preload_skill(&self, st: &mut RunState, name: &str, args: Option<&str>) {
+    if !self.tools_enabled || self.headless || !self.tool_names.iter().any(|n| n == "skill") {
+        return;
+    }
+    self.dispatch_batch(st, &[skill_preload_call(name, args)]).await;
+}
+
+
 /// **dispatch** and **record** — run a turn's tool calls, then write down what
 /// each one did: the transcript the model sees next turn, the reliability stat,
 /// the fail-then-fix pair, and the step line the user reads.
@@ -2436,7 +2876,11 @@ async fn dispatch(
     // a row that a resume or a fork can read.
     if super::plan::handles(name) && self.plan_mode.offers_tool() {
         let output = super::plan::execute(&self.plan, args)?;
-        let plan = self.plan.lock().unwrap();
+        let mut plan = self.plan.lock().unwrap();
+        // `PLF-3`: written while planning first, so it waits for approval.
+        if self.plan_first {
+            plan.awaiting_approval = true;
+        }
         self.sink.plan(&self.rc.run.id, &plan);
         super::log::record_plan(self.db, self.conversation_id, &self.rc.run.id, &plan);
         let note = match plan.current() {
@@ -2444,6 +2888,20 @@ async fn dispatch(
             None => "\u{2014} every step done".to_string(),
         };
         return Ok((output, Some(note)));
+    }
+    // `AGC-1`/`AGC-3`: the agent's own session. Like `plan`, this belongs to the
+    // run, not to a toolset, and the name is only live when this run offered it.
+    if name == "harness" && !self.harness_names.is_empty() {
+        return self.harness(call_id, args);
+    }
+    if name == "ask_user" && self.ask_offered {
+        return self.ask_user(call_id, args).await;
+    }
+    // `PLF-2`: a registry without the mutating specs is not enough. A content-form
+    // call is parsed by name, and a model that remembers a tool from earlier in
+    // the conversation can still ask for it.
+    if self.read_only && refuses_in_plan_first(registry, name) {
+        return Err(PLAN_FIRST_REFUSAL.to_string());
     }
     if let Some(toolset) = registry.builtin_for(name) {
         let ctx = ToolContext {
@@ -2485,6 +2943,122 @@ async fn dispatch(
         Err(format!("No toolset or connector provides the tool '{name}'."))
     }
 }
+}
+
+impl TurnCtx<'_> {
+    /// Write the agent's act into the log in the same shape a user's command has
+    /// (`REG-4`), so one `CommandNote` speaks for either.
+    fn trace(&self, name: &str, args: &str, outcome: &str, note: &str) {
+        super::log::record_command(
+            self.db,
+            self.conversation_id,
+            Some(&self.rc.run.id),
+            &super::log::CommandTrace {
+                name: name.into(),
+                args: args.into(),
+                by: "agent".into(),
+                outcome: outcome.into(),
+                note: Some(note.into()),
+                message_id: None,
+            },
+        );
+    }
+
+    /// Ask the user to let me change something that is theirs. The run does not
+    /// wait: it carries on, and the user answers when they like.
+    fn propose(&self, call_id: &str, name: &str, args: &str, reason: &str, payload: serde_json::Value, note: &str) {
+        self.trace(name, args, "proposed", note);
+        self.sink.emit(AgentEvent::HarnessProposal {
+            run_id: self.rc.run.id.clone(),
+            id: call_id.to_string(),
+            name: name.to_string(),
+            reason: reason.to_string(),
+            payload,
+        });
+    }
+
+    /// `AGC-1`/`AGC-2`: one `harness` call. `commands::decide` says what it comes
+    /// to (the rung of its class, the manifest, what was already suggested); this
+    /// carries that out, so the rules are testable without a run.
+    fn harness(&self, call_id: &str, args: &serde_json::Value) -> Result<(String, Option<String>), String> {
+        use super::commands::Act;
+        let call: super::commands::HarnessCall = serde_json::from_value(args.clone())
+            .map_err(|e| format!("That is not a valid harness call: {e}"))?;
+        let mut act = super::commands::decide(self.db, self.conversation_id, &self.harness_names, &call)?;
+        if self.read_only {
+            act = act.asked_only();
+        }
+        match act {
+            Act::Compact => {
+                self.compact_asked.store(true, std::sync::atomic::Ordering::Relaxed);
+                Ok((
+                    "I'll clear old tool output before my next step. read_result brings any of it back."
+                        .to_string(),
+                    None,
+                ))
+            }
+            Act::Say(text) => Ok((text, None)),
+            Act::Suggest { command, reason } => {
+                self.trace("suggest", &command, "proposed", &format!("I suggested /{command}: {reason}"));
+                self.sink.emit(AgentEvent::Suggestion {
+                    run_id: self.rc.run.id.clone(),
+                    command,
+                    reason,
+                });
+                Ok((
+                    "I've offered it to the user as a one-tap suggestion. Carry on without waiting for an answer."
+                        .to_string(),
+                    None,
+                ))
+            }
+            Act::Propose { name, args, reason, payload, note, reply } => {
+                self.propose(call_id, &name, &args, &reason, payload, &note);
+                Ok((reply, None))
+            }
+        }
+    }
+
+    /// `AGC-3`: put a real fork to the user and wait. The run is paused for as
+    /// long as it takes, and a Stop ends the wait with the same words the model
+    /// is given for any other stopped call.
+    async fn ask_user(&self, call_id: &str, args: &serde_json::Value) -> Result<(String, Option<String>), String> {
+        let question = args
+            .get("question")
+            .and_then(|q| q.as_str())
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+            .ok_or_else(|| "`question` is required.".to_string())?
+            .to_string();
+        let mut options: Vec<super::QuestionOption> = args
+            .get("options")
+            .cloned()
+            .and_then(|o| serde_json::from_value(o).ok())
+            .unwrap_or_default();
+        options.retain(|o| !o.label.trim().is_empty());
+        if options.len() < 2 {
+            return Err("Offer 2 to 4 options. If there is only one sensible answer, just do it.".to_string());
+        }
+        options.truncate(4);
+        let multi = args.get("multi").and_then(|m| m.as_bool()).unwrap_or(false);
+
+        let run = self.rc.run;
+        let waiting = run.ask(call_id);
+        self.sink.emit(AgentEvent::Question {
+            run_id: run.id.clone(),
+            id: call_id.to_string(),
+            question,
+            options,
+            multi,
+        });
+        match crate::runtime::proxy::until_cancelled(&self.cancel, waiting).await {
+            Some(Ok(answer)) => Ok((answer.to_result(), Some(answer.to_note()))),
+            Some(Err(_)) => Err("The question was withdrawn before the user answered.".to_string()),
+            None => {
+                run.drop_question(call_id);
+                Err("The user stopped the run before answering.".to_string())
+            }
+        }
+    }
 }
 
 /// Invoke a tool on a remote MCP server (MCP-4): reuse this run's live client for
@@ -2547,6 +3121,11 @@ fn describe(name: &str, args: &serde_json::Value, registry: &ToolRegistry) -> (S
         super::results::describe(name, args)
     } else if super::plan::handles(name) {
         super::plan::describe(name, args)
+    } else if name == "harness" {
+        // `CPX-3`: a self-act reads as the first person acting, never as a tool.
+        super::commands::describe_harness(args)
+    } else if name == "ask_user" {
+        super::commands::describe_ask(args)
     } else if let Some(toolset) = registry.builtin_for(name) {
         toolset.describe(name, args)
     } else if let Some(binding) = registry.mcp.get(name) {
@@ -2592,11 +3171,299 @@ mod tests {
         may_delegate: bool,
     ) -> ToolRegistry {
         let mgr = RuntimeManager::new(std::env::temp_dir().join("poiesis-test"));
-        ToolRegistry::build(db, &mgr, conversation_id, ceiling, may_delegate)
+        ToolRegistry::build(db, &mgr, conversation_id, ceiling, may_delegate, false)
     }
 
     fn call(id: &str, name: &str) -> ToolCallReq {
         ToolCallReq { id: id.into(), name: name.into(), arguments: "{}".into() }
+    }
+
+    /// `SKC-T2`: the preload is an ordinary `skill` call, carrying the user's
+    /// words so `$ARGUMENTS` has something to be filled with.
+    #[test]
+    fn a_named_skill_becomes_a_skill_call_with_the_users_words() {
+        let call = skill_preload_call("review", Some("the parser"));
+        assert_eq!(call.name, "skill");
+        let args: serde_json::Value = serde_json::from_str(&call.arguments).unwrap();
+        assert_eq!(args["name"], "review");
+        assert_eq!(args["arguments"], "the parser");
+        // No words is an empty string, not a missing key: the placeholder is
+        // still filled, with nothing, rather than left in the body as text.
+        let bare: serde_json::Value =
+            serde_json::from_str(&skill_preload_call("init", None).arguments).unwrap();
+        assert_eq!(bare["arguments"], "");
+        assert_ne!(skill_preload_call("a", None).id, skill_preload_call("a", None).id);
+    }
+
+    /// `REG-5`: the chips override the stored defaults for one run, and an
+    /// unknown word is the default rather than an error.
+    #[test]
+    fn run_options_override_the_stored_defaults_for_one_run() {
+        let db = Db::open_in_memory().unwrap();
+        db.set_setting("models.reasoning_effort", "medium").unwrap();
+        let none = RunOptions::default();
+        assert_eq!(none.effort_or(&db), Effort::Medium);
+        let high = RunOptions { effort: Some("high".into()), ..Default::default() };
+        assert_eq!(high.effort_or(&db), Effort::High);
+        let nonsense = RunOptions { effort: Some("heroic".into()), ..Default::default() };
+        assert_eq!(nonsense.effort_or(&db), Effort::Low, "unknown is the default, not an error");
+    }
+
+    /// `RUN-T1`: cost is known only for a hosted model with a price and a usage
+    /// report. A local run, an unreported run and an unpriced model are `None`.
+    #[test]
+    fn cost_is_none_whenever_it_cannot_be_known() {
+        let used = Some(Usage { prompt_tokens: 1_000_000, output_tokens: 0 });
+        assert_eq!(run_cost("local", "claude-sonnet-4-5", used), None, "on this machine");
+        assert_eq!(run_cost("cloud", "claude-sonnet-4-5", None), None, "no usage reported");
+        assert_eq!(run_cost("cloud", "no-such-model-xyz", used), None, "no price");
+        let priced = run_cost("cloud", "claude-sonnet-4-5", used).expect("priced");
+        assert!(priced > 0.0);
+    }
+
+    /// A result store in a throwaway directory, as `results.rs`'s own tests do.
+    fn results_store() -> crate::agent::results::ResultStore {
+        let run = format!("run_{}", uuid::Uuid::new_v4().simple());
+        crate::agent::results::ResultStore::new(&std::env::temp_dir().join("poiesis-test"), "conv", &run)
+    }
+
+    /// One tool turn: the assistant's call and the result that came back.
+    fn tool_turn(id: &str, name: &str, out: &str) -> Vec<serde_json::Value> {
+        vec![
+            assistant_tool_call_message(&[ToolCallReq {
+                id: id.into(),
+                name: name.into(),
+                arguments: "{}".into(),
+            }]),
+            tool_result_message(id, out),
+        ]
+    }
+
+    fn transcript(turns: &[(&str, &str, String)]) -> Vec<serde_json::Value> {
+        let mut m = vec![
+            serde_json::json!({ "role": "system", "content": "You are Poiesis." }),
+            serde_json::json!({ "role": "user", "content": "read everything" }),
+        ];
+        for (id, name, out) in turns {
+            m.extend(tool_turn(id, name, out));
+        }
+        m
+    }
+
+    /// `CLR-T1`: the newest results stay, nothing but results changes, and a stub
+    /// leads back to the full text with `read_result`.
+    #[test]
+    fn clearing_keeps_the_newest_results_and_touches_only_results() {
+        let big = |n: usize| format!("file {n}\n{}", "x".repeat(3000));
+        let mut m = transcript(&[
+            ("call_aaa111", "read_file", big(1)),
+            ("call_bbb222", "read_file", big(2)),
+            ("call_ccc333", "read_file", big(3)),
+            ("call_ddd444", "read_file", big(4)),
+            ("call_eee555", "read_file", big(5)),
+            ("call_fff666", "read_file", big(6)),
+        ]);
+        let before: Vec<_> = m.iter().filter(|x| x["role"] != "tool").cloned().collect();
+        let store = results_store();
+
+        let cleared = clear_old_results(&mut m, &store, 4, None);
+        assert_eq!(cleared.count, 2, "six results, the newest four stay");
+        assert!(cleared.tokens > 1000, "it reports what it saved: {cleared:?}");
+
+        let after: Vec<_> = m.iter().filter(|x| x["role"] != "tool").cloned().collect();
+        assert_eq!(before, after, "system, user and assistant turns are never touched");
+        let tools: Vec<&str> = m.iter().filter(|x| x["role"] == "tool").map(|x| x["content"].as_str().unwrap()).collect();
+        assert!(tools[0].starts_with(CLEARED_MARK) && tools[1].starts_with(CLEARED_MARK));
+        assert!(tools[2..].iter().all(|t| t.starts_with("file ")), "the newest four are whole");
+
+        // The stub is a way back, not a loss.
+        let reference = existing_stub_reference(tools[0]);
+        let back = crate::agent::results::execute(&store, "read_result", &serde_json::json!({ "ref": reference })).unwrap();
+        assert!(back.starts_with("file 1"));
+        assert!(store.has_any(), "read_result is offered once something was kept");
+    }
+
+    fn existing_stub_reference(stub: &str) -> String {
+        stub.split("\"ref\": \"").nth(1).unwrap().split('"').next().unwrap().to_string()
+    }
+
+    /// `CLR-2`: with a window it stops as soon as the estimate is under half.
+    #[test]
+    fn clearing_stops_once_the_transcript_is_under_half_the_window() {
+        let turns: Vec<(&str, &str, String)> = (0..8)
+            .map(|i| (["call_a00001", "call_a00002", "call_a00003", "call_a00004", "call_a00005", "call_a00006", "call_a00007", "call_a00008"][i], "read_file", "y".repeat(4000)))
+            .collect();
+        let mut m = transcript(&turns);
+        // Eight results of about a thousand tokens each: over three quarters of
+        // this window, and four of them cleared brings it under half.
+        let window = 8400;
+        assert!(estimate_tokens(&m) > window * 3 / 4, "the setup is over the line");
+        let cleared = clear_old_results(&mut m, &results_store(), 2, Some(window));
+        assert!(cleared.count >= 1 && cleared.count < 6, "stopped part-way: {cleared:?}");
+        assert!(estimate_tokens(&m) < window / 2 + 100, "and it is now under half");
+        let last = m.last().unwrap()["content"].as_str().unwrap();
+        assert!(!last.starts_with(CLEARED_MARK), "the newest result is whole");
+    }
+
+    /// A loaded skill, a short result and one already cleared are all left alone.
+    #[test]
+    fn a_loaded_skill_a_short_result_and_a_cleared_one_stay_as_they_are() {
+        let skill = "# Review\n".to_string() + &"step\n".repeat(800);
+        let mut m = transcript(&[
+            ("call_skill1", "skill", skill.clone()),
+            ("call_short1", "read_file", "tiny".to_string()),
+            ("call_cleared", "read_file", format!("{CLEARED_MARK} read_result {{\"ref\": \"res_zzzzzz\"}} brings it back.]")),
+            ("call_recent1", "read_file", "z".repeat(3000)),
+        ]);
+        let cleared = clear_old_results(&mut m, &results_store(), 1, None);
+        assert_eq!(cleared, Cleared::default());
+        assert_eq!(m[3]["content"].as_str().unwrap(), skill, "the skill's instructions stay");
+    }
+
+    /// `HRN-8` already kept this on disk: the stub points at that, not at a copy
+    /// of the preview.
+    #[test]
+    fn a_result_already_kept_is_stubbed_against_its_own_reference() {
+        let store = results_store();
+        let (reference, preview) = store.keep("call_kept01", &"w".repeat(20_000)).unwrap();
+        assert!(preview.chars().count() > CLEAR_MIN_CHARS);
+        let mut m = transcript(&[
+            ("call_kept01", "read_file", preview),
+            ("call_late001", "read_file", "q".repeat(3000)),
+        ]);
+        let cleared = clear_old_results(&mut m, &store, 1, None);
+        assert_eq!(cleared.count, 1);
+        let stub = m[3]["content"].as_str().unwrap();
+        assert_eq!(existing_stub_reference(stub), reference);
+        let back = crate::agent::results::execute(&store, "read_result", &serde_json::json!({ "ref": reference })).unwrap();
+        assert!(back.contains("wwww"), "the original, not a preview of it");
+    }
+
+    /// `CLR-T1`: the rung `Off` disables it, a known window is needed, and the
+    /// threshold is three quarters.
+    #[test]
+    fn clearing_waits_for_three_quarters_and_the_rung_off_withdraws_it() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(clearing_plan(&db, None, 999_999, false), None, "no known window, no automatic clearing");
+        assert_eq!(clearing_plan(&db, Some(1000), 750, false), None, "exactly 75% is not past it");
+        assert_eq!(clearing_plan(&db, Some(1000), 751, false), Some((KEEP_RECENT_RESULTS, Some(1000))));
+        assert_eq!(clearing_plan(&db, None, 10, true), Some((KEEP_RECENT_RESULTS_ASKED, None)), "asked needs no threshold");
+        db.set_setting("autonomy.context", "off").unwrap();
+        assert_eq!(clearing_plan(&db, Some(1000), 999, false), None);
+        assert_eq!(clearing_plan(&db, None, 10, true), None, "Off holds even when the model asked");
+    }
+
+    /// `PLF-T2`: a read-only registry offers no tool that changes anything, and
+    /// the dispatch check refuses one that is asked for anyway.
+    #[test]
+    fn a_read_only_registry_has_no_writes_and_dispatch_refuses_one_asked_for_anyway() {
+        let db = Db::open_in_memory().unwrap();
+        let conv = db.create_conversation("c", None, false).unwrap().id;
+        let normal = registry_for(&db, &conv, None, true);
+        assert!(normal.tool_names().iter().any(|n| n == "write_file"), "the setup offers writes");
+
+        let mgr = RuntimeManager::new(std::env::temp_dir().join("poiesis-test"));
+        let reading = ToolRegistry::build(&db, &mgr, &conv, None, true, true);
+        let names = reading.tool_names();
+        assert!(names.iter().any(|n| n == "read_file"), "reads stay: {names:?}");
+        for write in ["write_file", "edit_file", "delete_file", "move_file", "create_dir"] {
+            assert!(!names.iter().any(|n| n == write), "{write} must not be offered: {names:?}");
+        }
+        assert!(
+            names.iter().any(|n| n == "delegate"),
+            "delegation stays: a child inherits the ceiling: {names:?}"
+        );
+
+        // The spec is gone, but a model can still ask by name.
+        assert!(refuses_in_plan_first(&normal, "write_file"));
+        assert!(!refuses_in_plan_first(&normal, "read_file"));
+        assert!(!refuses_in_plan_first(&normal, "delegate"));
+    }
+
+    /// `PLF-1`: a connector tool is allowed only when its server said it reads.
+    #[test]
+    fn a_connector_tool_needs_the_servers_word_that_it_only_reads() {
+        let db = Db::open_in_memory().unwrap();
+        let conv = db.create_conversation("c", None, false).unwrap().id;
+        let mut registry = registry_for(&db, &conv, None, false);
+        let binding = |read_only| McpBinding {
+            connector_id: "c".into(),
+            connector_name: "Notes".into(),
+            url: "http://x".into(),
+            transport: "http".into(),
+            read_only,
+        };
+        registry.mcp.insert("list_notes".into(), binding(true));
+        registry.mcp.insert("delete_note".into(), binding(false));
+        assert!(!refuses_in_plan_first(&registry, "list_notes"));
+        assert!(refuses_in_plan_first(&registry, "delete_note"), "no hint means no");
+    }
+
+    /// `PLF-2`: a child inherits the ceiling, and the chip is what sets it.
+    #[test]
+    fn a_run_is_read_only_when_asked_to_plan_first_or_below_one_that_was() {
+        let fleet = Fleet::new();
+        let handle = fleet.open("conv", CancelFlag::default(), None, 0);
+        let limits = RunLimits::default();
+        let ordinary = RunContext::top(&handle, &limits, None, "local", None);
+        assert!(!ordinary.is_read_only());
+        let planning = RunContext::top(&handle, &limits, None, "local", None)
+            .with_options(RunOptions { plan_first: true, ..Default::default() });
+        assert!(planning.is_read_only());
+        let mut child = RunContext::top(&handle, &limits, None, "local", None);
+        child.read_only = true;
+        assert!(child.is_read_only(), "a child handed the ceiling has it, whatever its own options say");
+    }
+
+    /// `PLF-T3`: Go ahead starts from the approved plan, with the flag cleared and
+    /// nothing restricted, even if the chip was still on.
+    #[test]
+    fn go_ahead_runs_the_approved_plan_unrestricted() {
+        let plan = crate::agent::plan::Plan { awaiting_approval: true, ..Default::default() };
+        let options = RunOptions { plan_first: true, approved_plan: Some(plan), ..Default::default() };
+        let (starting, settled) = options.settle_approval(None);
+        assert!(!settled.plan_first, "approval never loops back into planning");
+        assert!(settled.approved_plan.is_none());
+        assert!(!starting.expect("the approved plan is where the run starts").awaiting_approval);
+
+        // No approval: the resumed plan and the options pass through untouched.
+        let resumed = crate::agent::plan::Plan { revisions: 2, ..Default::default() };
+        let (kept, same) = RunOptions { plan_first: true, ..Default::default() }.settle_approval(Some(resumed));
+        assert!(same.plan_first);
+        assert_eq!(kept.unwrap().revisions, 2);
+    }
+
+    /// `AGC-T2`: only a lead run a person is watching can ask them anything.
+    #[test]
+    fn only_a_watched_lead_run_may_ask_the_user() {
+        let db = Db::open_in_memory().unwrap();
+        let (names, ask) = own_tools(&db, true, false, false);
+        assert!(ask && names.len() == 4, "a lead run has everything");
+        let (names, ask) = own_tools(&db, true, false, true);
+        assert!(!ask, "a child never asks the user");
+        assert_eq!(names, vec!["compact"], "a child keeps only compact");
+        let (names, ask) = own_tools(&db, true, true, false);
+        assert!(!ask && names == vec!["compact"], "an unattended run cannot be asked");
+        assert_eq!(own_tools(&db, false, false, false), (Vec::new(), false), "no tools, no harness");
+    }
+
+    /// `AGC-1`/`AGC-3`: asking and steering the session are not the user's task,
+    /// so a turn of nothing else is free; mixed with real work it is charged.
+    #[test]
+    fn harness_and_ask_user_are_bookkeeping_but_only_alone() {
+        assert!(is_bookkeeping(&[call("1", "harness")]));
+        assert!(is_bookkeeping(&[call("1", "ask_user"), call("2", "plan")]));
+        assert!(!is_bookkeeping(&[call("1", "harness"), call("2", "read_file")]));
+    }
+
+    #[test]
+    fn a_step_chip_is_clamped_like_the_setting() {
+        let db = Db::open_in_memory().unwrap();
+        db.set_setting("agent.max_steps", "20").unwrap();
+        assert_eq!(RunLimits::top(&db).with_max_steps(None).max_iterations, 20);
+        assert_eq!(RunLimits::top(&db).with_max_steps(Some(5)).max_iterations, 5);
+        assert_eq!(RunLimits::top(&db).with_max_steps(Some(400)).max_iterations, 50);
+        assert_eq!(RunLimits::top(&db).with_max_steps(Some(0)).max_iterations, 1);
     }
 
     /// `HRN-6`: an observer that writes down what it was told, so the watermark

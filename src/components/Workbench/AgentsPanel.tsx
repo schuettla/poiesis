@@ -4,6 +4,8 @@ import * as api from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import Timeline from "../Conversation/Timeline";
 import RunText from "../Conversation/RunText";
+import Orb from "../Orb/Orb";
+import { orbForSubRun } from "../Orb/orbState";
 
 /**
  * `SUB-UI-2`, split by `SHL-22`: the Agents sub-view is the run list, an
@@ -82,10 +84,13 @@ export default function AgentsPanel({ conversationId }: { conversationId: string
               className={`agents-row ${open ? "active" : ""} ${run.status}`}
               onClick={() => openItem({ kind: "run", id: run.runId })}
             >
-              <span
-                className={`agents-row-dot ${ended(run) ? "" : "live"}`}
-                aria-label={ended(run) ? "finished" : "working"}
-              />
+              {ended(run) ? (
+                <span className="agents-row-dot" aria-label="finished" />
+              ) : (
+                <span className="agents-row-orb" role="img" aria-label="working">
+                  <Orb state={orbForSubRun(run)} />
+                </span>
+              )}
               <span className="agents-row-agent">{run.agent}</span>
               <span className="agents-row-task">{run.task}</span>
             </button>

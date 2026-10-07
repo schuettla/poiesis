@@ -10,8 +10,9 @@
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import PlanCard from "./PlanCard";
+import { useAppStore } from "../../lib/store";
 import type { PlanView } from "../../lib/api";
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
@@ -30,9 +31,9 @@ afterEach(() => {
   container.remove();
 });
 
-function render(plan: PlanView): HTMLElement {
+function render(plan: PlanView, actionable = false): HTMLElement {
   act(() => {
-    root.render(<PlanCard plan={plan} />);
+    root.render(<PlanCard plan={plan} actionable={actionable} />);
   });
   return container;
 }
@@ -115,5 +116,44 @@ describe("the plan card", () => {
 
   it("renders nothing for an empty plan rather than an empty card", () => {
     expect(render({ items: [], revisions: 0 }).textContent).toBe("");
+  });
+});
+
+/**
+ * `PLF-T3`: a plan I wrote while planning first has nothing done yet, and it
+ * waits for you. The row is there only while it can be acted on, and Go ahead
+ * hands the plan to the one send path.
+ */
+describe("a plan waiting for approval (PLF-4)", () => {
+  const waiting: PlanView = { ...base, awaiting_approval: true };
+  const labels = () =>
+    Array.from(container.querySelectorAll(".plan-approval button")).map((b) => b.textContent);
+
+  it("offers Go ahead and Change something, and says nothing has changed", () => {
+    render(waiting, true);
+    expect(labels()).toEqual(["Go ahead", "Change something"]);
+    expect(container.querySelector(".plan-approval")?.textContent).toContain("Nothing has changed yet");
+  });
+
+  it("is not offered on a plan nobody is waiting on", () => {
+    render(base, true);
+    expect(container.querySelector(".plan-approval")).toBeNull();
+  });
+
+  it("is not offered when it could no longer be acted on (an older turn, or a run going)", () => {
+    render(waiting, false);
+    expect(container.querySelector(".plan-approval")).toBeNull();
+  });
+
+  it("Go ahead sends the plan, and Change something asks what to change", () => {
+    const approvePlan = vi.fn().mockResolvedValue(undefined);
+    const revisePlan = vi.fn();
+    useAppStore.setState({ approvePlan, revisePlan });
+    render(waiting, true);
+    const [go, change] = Array.from(container.querySelectorAll<HTMLButtonElement>(".plan-approval button"));
+    act(() => go.click());
+    expect(approvePlan).toHaveBeenCalledWith(waiting);
+    act(() => change.click());
+    expect(revisePlan).toHaveBeenCalledTimes(1);
   });
 });

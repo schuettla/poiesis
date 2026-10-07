@@ -126,3 +126,9 @@ button.usage-row:not(:disabled):hover .usage-name {
   line-height: 1.6;
   color: var(--ink-faint);
 }
+
+/* `UCM-10`: the chat `/usage` was asked about. Said with an edge, not a colour. */
+.usage-row.focused {
+  box-shadow: inset 2px 0 0 var(--ink);
+  background: var(--fill-hover);
+}

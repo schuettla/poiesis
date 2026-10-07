@@ -1,0 +1,40 @@
+/* `CMP-7`: state that outlasts one message, named beside the footer. */
+.mode-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.mode-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-pill);
+  background: var(--paper-edge);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.mode-chip-label {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 2px 2px 8px;
+  font: inherit;
+  color: inherit;
+}
+.mode-chip-label:hover {
+  color: var(--ink);
+}
+.mode-chip-x {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 7px 0 3px;
+  color: var(--ink-faint);
+  font-size: var(--fs-callout);
+  line-height: 1;
+}
+.mode-chip-x:hover {
+  color: var(--ink);
+}

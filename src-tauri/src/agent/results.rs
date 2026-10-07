@@ -69,18 +69,7 @@ impl ResultStore {
         if output.len() <= INLINE_CAP {
             return None;
         }
-        // Derived from the call id so the handle and the timeline step it came
-        // from can be lined up later, and short so it costs the model nothing
-        // to quote back.
-        let tail: String = call_id
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric())
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .take(6)
-            .collect();
-        let reference = format!("res_{tail}");
+        let reference = reference_for(call_id);
         if std::fs::create_dir_all(&self.dir).is_err() {
             return None;
         }
@@ -93,6 +82,24 @@ impl ResultStore {
         Some((reference.clone(), preview_for(&reference, output)))
     }
 
+    /// `CLR-2`: keep a result that was pasted in full, because the loop is about
+    /// to take it out of the transcript. Unlike `keep` there is no size test: the
+    /// caller already decided. Returns the reference the model can read it back
+    /// with, or `None` when it could not be written (then it stays where it is).
+    pub fn keep_forced(&self, call_id: &str, output: &str) -> Option<String> {
+        let reference = reference_for(call_id);
+        std::fs::create_dir_all(&self.dir).ok()?;
+        std::fs::write(self.dir.join(format!("{reference}.txt")), output).ok()?;
+        self.refs.lock().ok()?.insert(reference.clone(), self.dir.join(format!("{reference}.txt")));
+        self.any.store(true, std::sync::atomic::Ordering::Relaxed);
+        Some(reference)
+    }
+
+    /// Is this a reference this run can read back?
+    pub fn knows(&self, reference: &str) -> bool {
+        self.path_of(reference).is_some()
+    }
+
     fn path_of(&self, reference: &str) -> Option<PathBuf> {
         self.refs.lock().ok()?.get(reference).cloned()
     }
@@ -103,6 +110,20 @@ impl ResultStore {
             .ok_or_else(|| format!("No kept result called {reference} in this run."))?;
         std::fs::read_to_string(&path).map_err(|e| format!("Could not read {reference}: {e}"))
     }
+}
+
+/// Derived from the call id so the handle and the timeline step it came from can
+/// be lined up later, and short so it costs the model nothing to quote back.
+fn reference_for(call_id: &str) -> String {
+    let tail: String = call_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .take(6)
+        .collect();
+    format!("res_{tail}")
 }
 
 /// What replaces a kept result in the transcript.

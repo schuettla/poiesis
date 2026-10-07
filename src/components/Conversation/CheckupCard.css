@@ -1,0 +1,54 @@
+/* `CHK-UI-1`: state words, not colours. Muted, one line each, a plain link. */
+.checkup-card {
+  max-width: 560px;
+  margin: 14px auto;
+  padding: 10px 14px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-ui);
+}
+.checkup-card-head {
+  margin: 0 0 6px;
+  font-size: var(--fs-footnote);
+  letter-spacing: 0.02em;
+  color: var(--ink-muted);
+}
+.checkup-card-time {
+  color: var(--ink-faint);
+}
+.checkup-card-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.checkup-card-line {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--ink);
+}
+.checkup-card-state {
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.checkup-card-line.needs_you .checkup-card-state {
+  color: var(--ink);
+}
+.checkup-card-link {
+  padding: 0;
+  font: inherit;
+  color: var(--ink-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.checkup-card-link:hover {
+  color: var(--ink);
+}

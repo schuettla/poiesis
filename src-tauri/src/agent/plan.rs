@@ -97,6 +97,11 @@ pub struct Plan {
     /// what the plan used to say, not to replay its statuses.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub previous: Vec<Vec<String>>,
+    /// `PLF-3`: the run that wrote this was planning first, so nothing has
+    /// changed yet and the user has to approve it. Persisted with the plan, so
+    /// the approval row is still there after a reload.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub awaiting_approval: bool,
 }
 
 impl Plan {

@@ -1,0 +1,208 @@
+/* The Voice tab of Runtime (VOC-UI-6). Cards, rows and tags come from Runtime.css
+   and Models.css; only what is new is here. */
+
+.voice-rt-filter {
+  margin-bottom: 12px;
+}
+.voice-rt-voices {
+  gap: 6px;
+}
+.voice-rt-row {
+  gap: 10px;
+  padding: 8px 10px 8px 13px;
+  cursor: default;
+}
+.voice-rt-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.voice-rt-pick:disabled {
+  cursor: default;
+}
+.voice-rt-pick:disabled .backend-radio {
+  border-color: var(--paper-edge-2);
+}
+.voice-rt-pick:focus-visible {
+  outline: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--ring);
+}
+.voice-rt-who {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.voice-rt-who .backend-name {
+  flex: none;
+}
+.voice-rt-meta {
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+}
+.voice-rt-meta:empty {
+  display: none;
+}
+.voice-rt-play,
+.voice-rt-get {
+  flex-shrink: 0;
+  min-height: var(--control-sm);
+  padding: 0 11px;
+}
+.voice-rt-remove {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.voice-rt-remove:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--fill-hover);
+}
+.voice-rt-remove:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.voice-rt-dl {
+  width: 180px;
+  flex-shrink: 0;
+}
+
+.voice-rt-field {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  font-size: var(--fs-ui);
+}
+.voice-rt-field label,
+.voice-rt-label {
+  width: 120px;
+  flex-shrink: 0;
+  color: var(--ink-muted);
+}
+.voice-rt-key {
+  padding: 3px 8px;
+  font: inherit;
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  background: var(--fill-selected);
+  border-radius: var(--radius-sm);
+}
+.voice-rt-value {
+  min-width: 48px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+.voice-rt-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.voice-rt-check input {
+  appearance: none;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  background: var(--paper);
+  border: 1.5px solid var(--ink-faint);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.voice-rt-check input:hover {
+  border-color: var(--ink-muted);
+}
+.voice-rt-check input:checked {
+  background: var(--ink);
+  border-color: var(--ink);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5 6.5 11.5 12.5 4.5'/%3E%3C/svg%3E");
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.voice-rt-check input:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+/* The speed slider: a thin track filled with ink up to the thumb, and a round
+   ink thumb with a paper ring, the same pair as the primary button. */
+.voice-rt-slider {
+  appearance: none;
+  flex: 1;
+  max-width: 280px;
+  height: 20px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.voice-rt-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(to right, var(--ink) var(--fill, 50%), var(--paper-edge) var(--fill, 50%));
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.voice-rt-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  background: var(--ink);
+  border: 3px solid var(--paper);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--ink), var(--shadow-xs);
+  transition: transform var(--t-fast);
+}
+.voice-rt-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+.voice-rt-slider:focus-visible {
+  outline: none;
+}
+.voice-rt-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 1px var(--ink), var(--ring);
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-rt-slider::-webkit-slider-thumb,
+  .voice-rt-check input {
+    transition: none;
+  }
+}
+
+.voice-rt-meter {
+  height: 6px;
+  margin-top: 12px;
+  overflow: hidden;
+  background: var(--fill-selected);
+  border-radius: var(--radius-pill);
+}
+.voice-rt-meter-fill {
+  height: 100%;
+  background: var(--ok);
+  transition: width 60ms linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-rt-meter-fill {
+    transition: none;
+  }
+}

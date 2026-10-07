@@ -1,5 +1,9 @@
 import { useEffect } from "react";
 import { useAppStore, useLiveItems } from "./lib/store";
+import { inTauri, voiceSettings } from "./lib/api";
+import { leaveVoice, openVoice } from "./lib/voice/controller";
+import { getVoiceHotkey, matchesHotkey, setVoiceHotkey } from "./lib/voice/hotkey";
+import { useVoiceStore } from "./lib/voice/voiceStore";
 import TopBar from "./components/TopBar/TopBar";
 import Rail from "./components/Rail/Rail";
 import Workbench from "./components/Workbench/Workbench";
@@ -43,6 +47,38 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [toggleDock]);
+
+  // `VOC-UI-9`: the voice hotkey opens a voice conversation, or ends the one
+  // that is open. The key is a setting (changed in the Voice tab).
+  useEffect(() => {
+    if (!inTauri()) return;
+    voiceSettings()
+      .then((v) => setVoiceHotkey(v.hotkey))
+      .catch(() => undefined);
+    const onKey = (e: KeyboardEvent) => {
+      if (!matchesHotkey(e, getVoiceHotkey())) return;
+      e.preventDefault();
+      if (useVoiceStore.getState().shown) void leaveVoice();
+      else if (useAppStore.getState().view === "chat") void openVoice();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // `Ctrl /` from anywhere: go to the chat, put a `/` in the composer and let
+  // its menu open itself. Unlike `Ctrl+W` this fires while typing, because the
+  // composer is exactly where it is meant to be used.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key !== "/") return;
+      e.preventDefault();
+      const s = useAppStore.getState();
+      if (s.view !== "chat") s.setView("chat");
+      s.requestComposer("/");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // `SHL-18`/`SHL-24`: what is left of the strip's keyboard bindings. Reads
   // live state via `getState()` on each keydown rather than subscribing, so

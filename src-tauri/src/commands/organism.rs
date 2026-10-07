@@ -87,6 +87,66 @@ pub async fn check_golden_cmd(
         .map_err(PoiesisError::Message)
 }
 
+/// `CHK-1`: "is anything wrong with me", in my own voice. Every area is probed
+/// on its own with a four-second clock, all at once; the behaviour check is a
+/// real model call, so it gets longer and the card says so while it runs.
+#[tauri::command]
+pub async fn checkup_cmd(
+    db: State<'_, Db>,
+    mem: State<'_, MemoryStore>,
+    mgr: State<'_, RuntimeManager>,
+    target: Option<crate::commands::agent::ChatTarget>,
+) -> Result<crate::agent::checkup::Checkup, PoiesisError> {
+    use crate::agent::checkup::{self, within};
+
+    let using_remote = matches!(
+        target.as_ref().and_then(|t| t.provenance.as_deref()),
+        Some("cloud") | Some("endpoint")
+    );
+    let engine = within(mgr.status())
+        .await
+        .unwrap_or_else(|_| crate::runtime::process::EngineStatus {
+            running: false,
+            port: None,
+            model_path: None,
+            ctx_size: None,
+            structured_tool_output: false,
+            restarts_session: 0,
+            self_heal_gave_up: false,
+        });
+
+    let enabled: Vec<_> = db
+        .list_connectors()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| c.enabled)
+        .collect();
+    let probes = enabled.iter().map(|c| async {
+        let outcome = match within(crate::commands::connectors::probe_connector(&db, &mgr.client, &c.id)).await {
+            Err(timed_out) => Err(timed_out),
+            Ok(Err(e)) => Err(e.to_string()),
+            Ok(Ok(status)) if status.ok => Ok(()),
+            Ok(Ok(status)) => Err(status.error.unwrap_or_else(|| "It didn't answer.".into())),
+        };
+        (c.name.clone(), outcome)
+    });
+    let golden = async {
+        // A model call, so not the four-second clock.
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(90),
+            crate::agent::golden::check_now(&mgr.client, &mgr, &db, &mem, target.as_ref()),
+        )
+        .await
+        {
+            Err(_) => Err("It took too long.".to_string()),
+            Ok(Err(e)) => Err(e),
+            Ok(Ok(s)) => Ok((s.passed, s.total, s.failing)),
+        }
+    };
+    let (connectors, behaviour) = tokio::join!(futures_util::future::join_all(probes), golden);
+    Ok(checkup::run(&db, engine, using_remote, connectors, behaviour).await)
+}
+
 /// 7-day per-tool reliability for one model (HEAL-2). Separate from `Vitality`
 /// because the frontend refreshes it on every model change and after every turn
 /// that used a tool — this touches one indexed table and nothing on disk.

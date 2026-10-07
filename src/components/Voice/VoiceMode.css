@@ -1,0 +1,210 @@
+/* The voice conversation (VOC-UI-3). It sits over the conversation pane only. The
+   orb is the face: its size follows the live level, and everything else is
+   quiet text. No colors beyond the design tokens. */
+
+.voice-mode {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--canvas);
+}
+
+.voice-center {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+}
+
+/* The orb library only has 64 px and smaller designs, so it is drawn at 64 and
+   enlarged. `--voice-level` runs 0 to 1. */
+.voice-orb {
+  --voice-level: 0;
+  width: 128px;
+  height: 128px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: scale(calc(1 + var(--voice-level) * 0.15));
+  transition: transform 80ms linear;
+}
+.voice-orb > * {
+  transform: scale(2);
+}
+
+.voice-state {
+  min-height: 1.4em;
+  margin: 0;
+  font-size: var(--fs-callout);
+  color: var(--ink-muted);
+}
+
+.voice-captions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: var(--measure);
+  min-height: 4.5em;
+}
+.voice-user {
+  margin: 0;
+  font-size: var(--fs-ui-lg);
+  color: var(--ink-muted);
+  transition: opacity var(--dur-slow) var(--ease-out);
+}
+.voice-user.is-older {
+  opacity: 0.45;
+}
+.voice-reply {
+  margin: 0;
+  font-size: var(--fs-title);
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.voice-note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 360px;
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+.voice-note-error {
+  color: var(--danger);
+}
+.voice-hint {
+  margin: 0;
+  max-width: 360px;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+
+.voice-artifact {
+  align-self: center;
+  max-width: min(360px, 80%);
+  margin-bottom: 8px;
+  padding: 6px 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+}
+.voice-artifact:hover {
+  background: var(--fill-hover);
+}
+
+.voice-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--hairline);
+}
+.voice-bar .voice-privacy {
+  margin-left: auto;
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+}
+.voice-live {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-caption);
+  color: var(--ink-muted);
+}
+.voice-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+.voice-btn {
+  height: var(--control);
+  padding: 0 12px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.voice-btn:hover {
+  background: var(--fill-hover);
+}
+.voice-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+/* The mute button is a square control in the bar's own border and radius. */
+.voice-mute {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--control);
+  height: var(--control);
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.voice-mute:hover {
+  background: var(--fill-hover);
+}
+.voice-mute:active {
+  background: var(--fill-press);
+}
+.voice-mute:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+.voice-mute.on {
+  color: var(--danger);
+  background: var(--fill-press);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--hairline));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The orb keeps its size; the state text and the animation still change. */
+  .voice-orb {
+    transform: none;
+    transition: none;
+  }
+  .voice-user {
+    transition: none;
+  }
+}
+
+/* The top bar's mic: red while the mic is open, whatever is on screen (VOC-UI-10). */
+.voice-mic-open {
+  position: relative;
+  color: var(--danger);
+}
+.voice-mic-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+}

@@ -10,6 +10,7 @@ import {
 import { useAppStore } from "../lib/store";
 import ImageRuntime from "../components/ImageModels/ImageRuntime";
 import RecallRuntime from "../components/RecallRuntime/RecallRuntime";
+import VoiceRuntime from "../components/VoiceRuntime/VoiceRuntime";
 import YourServers from "../components/YourServers/YourServers";
 import type { RuntimeTab } from "../lib/types";
 import "./Surface.css";
@@ -26,7 +27,7 @@ function basename(path: string | null): string {
 }
 
 export default function Runtime() {
-  // `RTM-8`: Chat · Images · Your servers · Recall. `runtimeTab` is the deep
+  // `RTM-8`: Chat · Images · Voice · Your servers · Recall. `runtimeTab` is the deep
   // link (the picker and Models' "Your server" groups open `servers`).
   const runtimeTab = useAppStore((s) => s.runtimeTab);
   const [tab, setTab] = useState<RuntimeTab>(runtimeTab ?? "chat");
@@ -151,6 +152,7 @@ export default function Runtime() {
             [
               ["chat", "Chat"],
               ["images", "Images"],
+              ["voice", "Voice"],
               ["servers", "Your servers"],
               ...(expert ? [["recall", "Recall"]] : []),
             ] as [RuntimeTab, string][]
@@ -170,6 +172,7 @@ export default function Runtime() {
         {tab === "images" && <ImageRuntime />}
         {tab === "servers" && <YourServers />}
         {tab === "recall" && expert && <RecallRuntime />}
+        {tab === "voice" && <VoiceRuntime />}
 
         {tab === "chat" && (
           <>

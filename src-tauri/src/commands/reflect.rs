@@ -64,6 +64,10 @@ pub struct LessonDraft {
     /// "high" | "low"
     #[serde(default)]
     pub confidence: String,
+    /// `CPX-5`: the model says this lesson is about work the user went back on.
+    /// Only believed when the conversation really was rewound.
+    #[serde(default)]
+    pub from_rewind: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -183,6 +187,12 @@ pub async fn reflect_conversation_cmd(
             .join("; ")
     };
 
+    // `CPX-5`: what the user did to correct me. Going back on a turn is abandoned
+    // work, the strongest negative signal there is.
+    let signals = crate::agent::log::user_signals(&db, &conversation_id);
+    let signals_text = if signals.is_empty() { "none".to_string() } else { signals.join(" ") };
+    let was_rewound = crate::agent::log::was_rewound(&db, &conversation_id);
+
     let prompt = format!(
         "Below is a finished conversation, the assistant's tool-failure counts, and any mistakes \
          it corrected itself within the conversation. Extract AT MOST {MAX_LESSONS} lessons about \
@@ -193,9 +203,12 @@ pub async fn reflect_conversation_cmd(
          return {{\"lessons\":[]}}.\n\
          JSON schema:\n\
          {{\"lessons\":[{{\"name\":\"kebab-case-slug\",\"description\":\"one line\",\
-         \"body\":\"2-4 sentences, imperative voice\",\"confidence\":\"high|low\"}}]}}\n\
+         \"body\":\"2-4 sentences, imperative voice\",\"confidence\":\"high|low\",\
+         \"from_rewind\":false}}]}}\n\
+         Set from_rewind to true only for a lesson about work the user went back on.\n\
          Tool failures: {failure_text}\n\
          Mistakes you corrected yourself during this conversation: {fixes_text}\n\
+         What the user did to correct you: {signals_text}\n\
          Conversation:\n{transcript}"
     );
     let msgs = vec![
@@ -353,6 +366,9 @@ pub async fn reflect_conversation_cmd(
                     recurrence: None,
                     last_seen: None,
                     expires_at: None,
+                    // `CPX-5`: a lesson that came from going back keeps saying
+                    // so. Believed only when the conversation really was rewound.
+                    origin: (draft.from_rewind && was_rewound).then(|| "rewind".to_string()),
                     // `PRJ-8`: a lesson drawn from a session in a project is
                     // about that project's work. Reflection runs over one
                     // conversation, so the tag follows from it.

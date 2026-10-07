@@ -2,25 +2,24 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { inTauri, pickFiles, stillWorking } from "../../lib/api";
 import { useAppStore, useExpert, useSelectedModel } from "../../lib/store";
 import { detectIntent } from "../../lib/mediaIntent";
-import type { Attachment, Model } from "../../lib/types";
+import type { Attachment, ContextRef, Model, SendOptions } from "../../lib/types";
 import ContextMeter from "./ContextMeter";
 import EffortPicker from "./EffortPicker";
 import ContextChip from "../Context/ContextChip";
 import ModelPicker from "../ModelPicker/ModelPicker";
 import ImageByPath from "../Conversation/ImageByPath";
-import {
-  ImageIcon,
-  LayoutIcon,
-  PaperclipIcon,
-  PersonIcon,
-  PlayIcon,
-  SectionIcon,
-  SparkleIcon,
-} from "../Icons/Icons";
+import ConfirmDialog from "../Confirm/ConfirmDialog";
+import CommandMenu from "./CommandMenu";
+import PlusMenu from "./PlusMenu";
+import ModifierChips from "./ModifierChips";
+import ModeChips from "./ModeChips";
+import RunBar from "./RunBar";
+import SuggestionChip from "./SuggestionChip";
+import BtwCard from "./BtwCard";
+import { useCommandInput } from "./useCommandInput";
+import MicButton from "../Voice/MicButton";
+import { joinSpoken } from "../../lib/voice/dictation";
 import "./Composer.css";
-
-/** Which nested panel of the `+` menu is showing, if any. */
-type Submenu = "skills" | "start" | "persona";
 
 const IMAGE_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
 
@@ -45,7 +44,7 @@ export default function Composer({
   busy,
   onStop,
 }: {
-  onSend: (text: string, attachments?: Attachment[]) => void;
+  onSend: (text: string, attachments?: Attachment[], opts?: SendOptions) => void;
   busy?: boolean;
   onStop?: () => void;
 }) {
@@ -54,39 +53,30 @@ export default function Composer({
   const [dragOver, setDragOver] = useState(false);
   const modelNotice = useAppStore((s) => s.modelNotice);
   const dismissModelNotice = useAppStore((s) => s.dismissModelNotice);
-  const toolsEnabled = useAppStore((s) => s.toolsEnabled);
-  const setToolsEnabled = useAppStore((s) => s.setToolsEnabled);
-  const workspaceMode = useAppStore((s) => s.workspaceMode);
-  const setWorkspaceMode = useAppStore((s) => s.setWorkspaceMode);
-  // One entry point for everything the composer can do — attachments, modes,
-  // skills and personas all hang off the `+`, with nested panels rather than a
-  // row of competing buttons.
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [submenu, setSubmenu] = useState<Submenu | null>(null);
-  const startFromSkill = useAppStore((s) => s.startFromSkill);
+  // `CMP-3`: things the `+` pointed at (an earlier chat, a library page) that
+  // go out with the next message.
+  const [refs, setRefs] = useState<ContextRef[]>([]);
   // `HRN-UI-1`: a live agent run is something you can talk to. Media jobs also
   // set `busy` but register no run, so this is what tells the two apart.
   const steerActiveRun = useAppStore((s) => s.steerActiveRun);
   const canSteer = useAppStore((s) => s.activeRun !== null);
+  // `AGC-3`: while the run waits on a question, what you type answers it.
+  const asking = useAppStore((s) => s.pendingQuestion !== null);
   // `SUB-UI-3`: how many agents the running turn has out right now. Stop takes
   // all of them, and the user has to know that before pressing it.
   const convId = useAppStore((s) => s.activeConversationId);
+  const activeConversationId = convId;
   const subRunMap = useAppStore((s) => s.subRuns);
-  const setDockOpen = useAppStore((s) => s.setDockOpen);
-  const setDockView = useAppStore((s) => s.setDockView);
+  const turnEffort = useAppStore((s) => s.turnModifiers.effort);
+  const clearTurnModifier = useAppStore((s) => s.clearTurnModifier);
+  const setTurnModifier = useAppStore((s) => s.setTurnModifier);
+  const planFirstOn = useAppStore((s) => !!s.turnModifiers.planFirst);
+  // `PLF-4`: "Change something" asks what to change, in the box.
+  const planRevising = useAppStore((s) => s.planRevising);
+  const composerRequest = useAppStore((s) => s.composerRequest);
   const agentsWorking = Object.values(subRunMap).filter(
     (r) => stillWorking(r.status) && r.parentConversationId === convId
   ).length;
-  // Filter outside the selector, not inside it: zustand v5 compares snapshots
-  // by identity, so a selector returning a fresh array re-renders forever.
-  const skills = useAppStore((s) => s.skills);
-  const enabledSkills = useMemo(() => skills.filter((sk) => sk.enabled), [skills]);
-  const personas = useAppStore((s) => s.personas);
-  const applyPersona = useAppStore((s) => s.applyPersona);
-  const activeConversationId = useAppStore((s) => s.activeConversationId);
-  const activePersonaId = useAppStore(
-    (s) => s.conversations.find((c) => c.id === s.activeConversationId)?.personaId ?? ""
-  );
   const inputRef = useRef<HTMLInputElement>(null);
 
   // ---- media: the declared route (`PIK-2`) ----
@@ -183,45 +173,43 @@ export default function Composer({
   const showImplicitRef =
     wantsMedia && !!lastMediaArtifact && lastMediaArtifact.conversationId === activeConversationId;
 
-  function closeMenu() {
-    setMenuOpen(false);
-    setSubmenu(null);
+  function sendWithExtras(text: string, opts?: SendOptions) {
+    const extras: SendOptions = { ...opts, refs: refs.length ? refs : undefined };
+    onSend(text, attachments, extras.skill || extras.refs ? extras : undefined);
+    setValue("");
+    setAttachments([]);
+    setRefs([]);
   }
 
-  // SKL-UI-2, the direct-invocation half of the standard: typing `/` opens the
-  // skill list inline. The query is *derived* from the text rather than held in
-  // an "is it open" flag — backspacing past the slash or typing a space closes
-  // it on its own, so the menu can never be showing for text that isn't there.
-  // Only a leading `/` counts: mid-sentence slashes are dates and paths.
-  const slashQuery = useMemo(() => {
-    const m = /^\/(\S*)$/.exec(value);
-    return m ? m[1].toLowerCase() : null;
-  }, [value]);
+  // `CMP-1`: the `/` menu, its query, its keys and running a command live in one
+  // hook. `submit` below asks it first whether the text is a command at all.
+  const cmd = useCommandInput({
+    value,
+    setValue,
+    focus: () => inputRef.current?.focus(),
+    sendSkill: (text, skill, skillArgs) => sendWithExtras(text, { skill, skillArgs }),
+    sendText: (text) => sendWithExtras(text),
+    busy: !!busy,
+  });
 
-  const slashMatches = useMemo(
-    () =>
-      slashQuery === null
-        ? []
-        : enabledSkills.filter((s) => s.name.toLowerCase().includes(slashQuery)),
-    [slashQuery, enabledSkills]
-  );
-
-  // Escape hides the list without destroying what was typed; typing again
-  // (which changes the query) brings it back.
-  const [slashDismissed, setSlashDismissed] = useState(false);
-  const [slashIndex, setSlashIndex] = useState(0);
+  // The `/` button, `Ctrl /`, and a mode chip's label all reach the composer as
+  // a request for some text and focus. The nonce makes a repeat register.
+  const requestNonce = composerRequest?.nonce;
   useEffect(() => {
-    setSlashIndex(0);
-    setSlashDismissed(false);
-  }, [slashQuery]);
-
-  const slashOpen = slashQuery !== null && !slashDismissed && slashMatches.length > 0;
-
-  function chooseSkill(skillName: string) {
-    setValue(`/${skillName} `);
-    setSlashDismissed(true);
+    if (!composerRequest) return;
+    setValue(composerRequest.text);
     inputRef.current?.focus();
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestNonce]);
+
+  // Accepting a suggestion (`AGC-2`) runs its command as if it had been typed.
+  const commandRequest = useAppStore((s) => s.commandRequest);
+  const commandNonce = commandRequest?.nonce;
+  useEffect(() => {
+    if (!commandRequest) return;
+    cmd.tryRun(commandRequest.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commandNonce]);
 
   function backToChat() {
     selectModel(lastChatModelId);
@@ -229,6 +217,8 @@ export default function Composer({
 
   function submit() {
     const text = value.trim();
+    // A command is not a message: run it and send nothing (`CMP-9`).
+    if (text.startsWith("/") && cmd.tryRun(text)) return;
     if (busy) {
       // `HRN-UI-1`: while a run is working, Enter talks to it. The run reads
       // this at the top of its next iteration, so it lands between tool calls
@@ -283,10 +273,17 @@ export default function Composer({
       return;
     }
 
-    if (!text && attachments.length === 0) return;
-    onSend(text, attachments);
-    setValue("");
-    setAttachments([]);
+    if (!text && attachments.length === 0 && refs.length === 0) return;
+    sendWithExtras(text);
+  }
+
+  function chooseFromPopover(i: number) {
+    const line = cmd.model.lines.filter((l) => l.kind === "command")[i];
+    if (line && line.kind === "command") cmd.chooseFromPopover(line.row.view);
+  }
+
+  function addAttachment(a: Attachment) {
+    setAttachments((list) => [...list, a]);
   }
 
   // Pasted / dropped images carry their bytes inline (no filesystem path).
@@ -344,7 +341,11 @@ export default function Composer({
     setAttachments((a) => a.filter((x) => x.id !== id));
   }
 
-  const placeholder = canSteer
+  const placeholder = asking
+    ? "Answer my question, in your own words or from the choices above"
+    : planRevising
+    ? "What should change in the plan?"
+    : canSteer
     ? "Tell me something while I work"
     : showImplicitRef
     ? "Describe the change…"
@@ -352,7 +353,7 @@ export default function Composer({
       ? "Describe a video…"
       : mediaTarget === "image"
         ? "Describe an image…"
-        : "Message Poiesis Agent  ·  / for a skill  ·  paste or drop an image";
+        : "Message Poiesis Agent  ·  / for commands  ·  + to add files";
 
   return (
     <div
@@ -367,7 +368,13 @@ export default function Composer({
       onDrop={onDrop}
     >
       <div className="composer-col">
-        {attachments.length > 0 && (
+        {/* `RUN`: what the run is doing and did, above everything else here. */}
+        <RunBar />
+        {/* `AGC-2`: at most one, and only for what could run right now. */}
+        <SuggestionChip />
+        {/* `BTW-UI-1`: a side answer, outside the conversation. */}
+        <BtwCard />
+        {(attachments.length > 0 || refs.length > 0) && (
           <div className="attachment-row">
             {attachments.map((a) => (
               <span className="attachment-chip" key={a.id}>
@@ -377,6 +384,19 @@ export default function Composer({
                   className="attachment-remove"
                   aria-label={`Remove ${a.name}`}
                   onClick={() => removeAttachment(a.id)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {refs.map((r) => (
+              <span className="attachment-chip" key={`${r.kind}:${r.id}`}>
+                <span className="attachment-kind">{r.kind === "conversation" ? "↳" : "▤"}</span>
+                {r.label}
+                <button
+                  className="attachment-remove"
+                  aria-label={`Remove ${r.label}`}
+                  onClick={() => setRefs((list) => list.filter((x) => x !== r))}
                 >
                   ×
                 </button>
@@ -564,6 +584,20 @@ export default function Composer({
           </div>
         )}
 
+        {/* `CMP-6`: what the next message alone has been told to do. */}
+        <ModifierChips />
+
+        {/* `CMP-9`: a command that couldn't run says why, in the same quiet
+            voice as the model notice. */}
+        {cmd.error && (
+          <div className="composer-model-notice" role="status">
+            <span>{cmd.error}</span>
+            <button className="implicit-ref-remove" aria-label="Dismiss" onClick={cmd.clearError}>
+              ×
+            </button>
+          </div>
+        )}
+
         {/* `MOD-3`: said once when the default model couldn't be used. */}
         {modelNotice && (
           <div className="composer-model-notice" role="status">
@@ -575,320 +609,31 @@ export default function Composer({
         )}
 
         <div className="composer">
-          <div className="composer-menu-wrap">
-            <button
-              className={`icon-btn plus-btn ${menuOpen || workspaceMode ? "on" : ""}`}
-              aria-label="Attach files, modes and skills"
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              title="Attach, modes & skills"
-              onClick={() => {
-                setSubmenu(null);
-                setMenuOpen((v) => !v);
-              }}
-            >
-              +
-            </button>
-            {menuOpen && (
-              <>
-                <div className="composer-menu-backdrop" onClick={closeMenu} />
-                <div className="composer-menu" role="menu">
-                  {submenu === null && (
-                    <>
-                      {/* Attaching is a thing you do, not a mode you're in, so
-                          it keeps its own entry at the top. */}
-                      <button
-                        className="composer-menu-item"
-                        role="menuitem"
-                        onClick={() => {
-                          closeMenu();
-                          attach();
-                        }}
-                      >
-                        <span className="mi-icon" aria-hidden="true"><PaperclipIcon size={15} /></span>
-                        <span className="mi-body">
-                          Attach files
-                          <span className="mi-hint">images and PDFs — or just paste or drop one</span>
-                        </span>
-                        <span className="mi-check" />
-                      </button>
-
-                      <div className="composer-menu-sep" role="separator" />
-
-                      <button
-                        className="composer-menu-item"
-                        role="menuitemcheckbox"
-                        aria-checked={workspaceMode}
-                        onClick={() => {
-                          const next = !workspaceMode;
-                          setWorkspaceMode(next);
-                          // Workspace needs the render_ui tool — turning the mode on
-                          // force-enables tools so the surface can actually compose.
-                          if (next) setToolsEnabled(true);
-                          closeMenu();
-                        }}
-                      >
-                        <span className="mi-icon" aria-hidden="true"><LayoutIcon size={15} /></span>
-                        <span className="mi-body">
-                          Workspace mode
-                          <span className="mi-hint">the agent composes a live interface; chat becomes the log</span>
-                        </span>
-                        <span className="mi-check">{workspaceMode ? "✓" : ""}</span>
-                      </button>
-                      <button
-                        className="composer-menu-item"
-                        role="menuitemcheckbox"
-                        aria-checked={toolsEnabled}
-                        aria-disabled={workspaceMode}
-                        disabled={workspaceMode}
-                        title={workspaceMode ? "Required by Workspace mode" : undefined}
-                        onClick={() => {
-                          // Locked on while workspace mode is active — the workspace
-                          // can't compose without the render_ui tool.
-                          if (workspaceMode) return;
-                          setToolsEnabled(!toolsEnabled);
-                          closeMenu();
-                        }}
-                      >
-                        <span className="mi-icon" aria-hidden="true"><SectionIcon view="tools" size={15} /></span>
-                        <span className="mi-body">
-                          Tools
-                          <span className="mi-hint">
-                            {workspaceMode
-                              ? "required by Workspace mode"
-                              : "let the assistant use its enabled tools"}
-                          </span>
-                        </span>
-                        <span className="mi-check">{toolsEnabled ? "✓" : ""}</span>
-                      </button>
-                      {/* `PIK-3`: explicit overrides, not a mode — pin the
-                          intent for the next message only, same as typing
-                          "draw…" would infer, but for a prompt that doesn't
-                          say so itself ("a fox in a hat" with no verb). */}
-                      <button
-                        className="composer-menu-item"
-                        role="menuitemcheckbox"
-                        aria-checked={pinnedIntent === "image"}
-                        onClick={() => {
-                          setPinnedIntent((p) => (p === "image" ? null : "image"));
-                          setChipDismissed(false);
-                          closeMenu();
-                          inputRef.current?.focus();
-                        }}
-                      >
-                        <span className="mi-icon" aria-hidden="true"><ImageIcon size={15} /></span>
-                        <span className="mi-body">
-                          Create image
-                          <span className="mi-hint">your next message generates a picture</span>
-                        </span>
-                        <span className="mi-check">{pinnedIntent === "image" ? "✓" : ""}</span>
-                      </button>
-                      <button
-                        className="composer-menu-item"
-                        role="menuitemcheckbox"
-                        aria-checked={pinnedIntent === "video"}
-                        onClick={() => {
-                          setPinnedIntent((p) => (p === "video" ? null : "video"));
-                          setChipDismissed(false);
-                          closeMenu();
-                          inputRef.current?.focus();
-                        }}
-                      >
-                        <span className="mi-icon" aria-hidden="true"><PlayIcon size={15} /></span>
-                        <span className="mi-body">
-                          Create video
-                          <span className="mi-hint">your next message generates a clip</span>
-                        </span>
-                        <span className="mi-check">{pinnedIntent === "video" ? "✓" : ""}</span>
-                      </button>
-
-                      {(enabledSkills.length > 0 || personas.length > 0) && (
-                        <div className="composer-menu-sep" role="separator" />
-                      )}
-
-                      {/* SKL-UI-2: direct invocation half of the Agent Skills
-                          standard — pick one, its name lands in the message. */}
-                      {enabledSkills.length > 0 && (
-                        <button
-                          className="composer-menu-item"
-                          role="menuitem"
-                          aria-haspopup="menu"
-                          onClick={() => setSubmenu("skills")}
-                        >
-                          <span className="mi-icon" aria-hidden="true"><SectionIcon view="skills" size={15} /></span>
-                          <span className="mi-body">
-                            Skills
-                            <span className="mi-hint">name one directly instead of waiting for it to fire</span>
-                          </span>
-                          <span className="mi-more" aria-hidden="true">›</span>
-                        </button>
-                      )}
-                      {/* SKL-5, carrying RCP-UI-2 forward: a skill is also a way
-                          to *start*, so it belongs where the other ways to start
-                          a turn live. */}
-                      {enabledSkills.length > 0 && (
-                        <button
-                          className="composer-menu-item"
-                          role="menuitem"
-                          aria-haspopup="menu"
-                          onClick={() => setSubmenu("start")}
-                        >
-                          <span className="mi-icon" aria-hidden="true"><SparkleIcon size={15} /></span>
-                          <span className="mi-body">
-                            Start from a skill
-                            <span className="mi-hint">start a new chat and run one of my skills</span>
-                          </span>
-                          <span className="mi-more" aria-hidden="true">›</span>
-                        </button>
-                      )}
-                      {personas.length > 0 && (
-                        <button
-                          className="composer-menu-item"
-                          role="menuitem"
-                          aria-haspopup="menu"
-                          onClick={() => setSubmenu("persona")}
-                        >
-                          <span className="mi-icon" aria-hidden="true"><PersonIcon size={15} /></span>
-                          <span className="mi-body">
-                            Persona
-                            <span className="mi-hint">
-                              {personas.find((p) => p.id === activePersonaId)?.name ??
-                                "who I am in this chat"}
-                            </span>
-                          </span>
-                          <span className="mi-more" aria-hidden="true">›</span>
-                        </button>
-                      )}
-                    </>
-                  )}
-
-                  {submenu !== null && (
-                    <>
-                      <button
-                        className="composer-menu-back"
-                        onClick={() => setSubmenu(null)}
-                        aria-label="Back to the main menu"
-                      >
-                        <span aria-hidden="true">‹</span>
-                        {submenu === "skills"
-                          ? "Skills"
-                          : submenu === "start"
-                            ? "Start from a skill"
-                            : "Persona"}
-                      </button>
-                      <div className="composer-submenu">
-                        {submenu === "skills" &&
-                          enabledSkills.map((s) => (
-                            <button
-                              className="composer-menu-item"
-                              role="menuitem"
-                              key={s.name}
-                              onClick={() => {
-                                closeMenu();
-                                setValue((v) =>
-                                  v.trim() ? `${v.trim()} /${s.name} ` : `/${s.name} `
-                                );
-                                inputRef.current?.focus();
-                              }}
-                            >
-                              <span className="mi-icon" aria-hidden="true"><SectionIcon view="skills" size={15} /></span>
-                              <span className="mi-body">
-                                {s.name}
-                                <span className="mi-hint">{s.description}</span>
-                              </span>
-                              <span className="mi-check" />
-                            </button>
-                          ))}
-                        {submenu === "start" &&
-                          enabledSkills.map((s) => (
-                            <button
-                              className="composer-menu-item"
-                              role="menuitem"
-                              key={s.name}
-                              onClick={() => {
-                                closeMenu();
-                                startFromSkill(s);
-                              }}
-                            >
-                              <span className="mi-icon" aria-hidden="true"><SparkleIcon size={15} /></span>
-                              <span className="mi-body">
-                                {s.name}
-                                <span className="mi-hint">
-                                  {s.when_to_use ? `when: ${s.when_to_use}` : s.description}
-                                </span>
-                              </span>
-                              <span className="mi-check" />
-                            </button>
-                          ))}
-                        {submenu === "persona" && (
-                          <>
-                            <button
-                              className="composer-menu-item"
-                              role="menuitemcheckbox"
-                              aria-checked={!activePersonaId}
-                              onClick={() => {
-                                if (activeConversationId) applyPersona(activeConversationId, null);
-                                closeMenu();
-                              }}
-                            >
-                              <span className="mi-icon" aria-hidden="true"><PersonIcon size={15} /></span>
-                              <span className="mi-body">No persona</span>
-                              <span className="mi-check">{!activePersonaId ? "✓" : ""}</span>
-                            </button>
-                            {personas.map((p) => (
-                              <button
-                                key={p.id}
-                                className="composer-menu-item"
-                                role="menuitemcheckbox"
-                                aria-checked={activePersonaId === p.id}
-                                onClick={() => {
-                                  if (activeConversationId) applyPersona(activeConversationId, p.id);
-                                  closeMenu();
-                                }}
-                              >
-                                <span className="mi-icon" aria-hidden="true"><PersonIcon size={15} /></span>
-                                <span className="mi-body">{p.name}</span>
-                                <span className="mi-check">
-                                  {activePersonaId === p.id ? "✓" : ""}
-                                </span>
-                              </button>
-                            ))}
-                          </>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
+          <PlusMenu
+            onAttachFiles={attach}
+            onAddAttachment={addAttachment}
+            onAddRef={(r) => setRefs((list) => (list.some((x) => x.id === r.id) ? list : [...list, r]))}
+            pending={attachments.length > 0 || refs.length > 0}
+          />
+          {/* `CMP-4`: `+` adds to the message, `/` does something. */}
+          <button
+            className={`icon-btn slash-btn ${cmd.model.open ? "on" : ""}`}
+            aria-label="Commands"
+            aria-haspopup="listbox"
+            aria-expanded={cmd.model.open}
+            title="Commands  ( / )"
+            onClick={cmd.openFromButton}
+          >
+            /
+          </button>
           <div className="composer-input-wrap">
-            {slashOpen && (
-              <div className="composer-menu composer-slash-menu" role="listbox" aria-label="Skills">
-                {slashMatches.map((s, i) => (
-                  <button
-                    className={`composer-menu-item ${i === slashIndex ? "active" : ""}`}
-                    role="option"
-                    aria-selected={i === slashIndex}
-                    key={s.name}
-                    // The input's blur would fire before a click lands and
-                    // close the menu out from under the pointer.
-                    onMouseDown={(e) => e.preventDefault()}
-                    onMouseEnter={() => setSlashIndex(i)}
-                    onClick={() => chooseSkill(s.name)}
-                  >
-                    <span className="mi-icon" aria-hidden="true"><SectionIcon view="skills" size={15} /></span>
-                    <span className="mi-body">
-                      {s.name}
-                      <span className="mi-hint">
-                        {s.when_to_use ? `when: ${s.when_to_use}` : s.description}
-                      </span>
-                    </span>
-                    <span className="mi-check" />
-                  </button>
-                ))}
-              </div>
-            )}
+            {cmd.model.popover && <div className="composer-menu-backdrop" onClick={cmd.closePopover} />}
+            <CommandMenu
+              model={cmd.model}
+              onHover={cmd.setIndex}
+              onChoose={(i) => (cmd.model.popover ? chooseFromPopover(i) : cmd.activateAt(i))}
+              onFilter={cmd.model.popover ? cmd.setFilter : undefined}
+            />
             <input
               ref={inputRef}
               type="text"
@@ -899,32 +644,20 @@ export default function Composer({
               onPaste={onPaste}
               autoComplete="off"
               role="combobox"
-              aria-expanded={slashOpen}
-              aria-controls="composer-slash-menu"
+              aria-expanded={cmd.model.open}
+              aria-controls={cmd.model.listId}
+              aria-activedescendant={cmd.activeId}
               onKeyDown={(e) => {
-                // The skill list owns the arrows and Enter while it's open —
-                // otherwise Enter would send "/we" as a message.
-                if (slashOpen) {
-                  if (e.key === "ArrowDown") {
-                    e.preventDefault();
-                    setSlashIndex((i) => (i + 1) % slashMatches.length);
-                    return;
-                  }
-                  if (e.key === "ArrowUp") {
-                    e.preventDefault();
-                    setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length);
-                    return;
-                  }
-                  if (e.key === "Enter" || e.key === "Tab") {
-                    e.preventDefault();
-                    chooseSkill(slashMatches[slashIndex].name);
-                    return;
-                  }
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    setSlashDismissed(true);
-                    return;
-                  }
+                // The command list owns the arrows, Tab, Escape and Enter while
+                // it is open — otherwise Enter would send "/we" as a message.
+                if (cmd.onKeyDown(e)) return;
+                // `PLF-5`: Shift+Tab is the one mode-cycling key. It flips the
+                // Plan first chip for this message and does nothing else.
+                if (e.key === "Tab" && e.shiftKey) {
+                  e.preventDefault();
+                  if (planFirstOn) clearTurnModifier("planFirst");
+                  else setTurnModifier({ planFirst: true });
+                  return;
                 }
                 if (e.key === "Escape" && !value) {
                   if (mediaTarget !== null) {
@@ -946,18 +679,11 @@ export default function Composer({
               }}
             />
           </div>
-          {agentsWorking > 0 && (
-            <button
-              className="fleet-pill"
-              title="Show me what they are doing"
-              onClick={() => {
-                setDockView("agents");
-                setDockOpen(true);
-              }}
-            >
-              {agentsWorking} agent{agentsWorking === 1 ? "" : "s"} working
-            </button>
-          )}
+          <MicButton
+            onText={(t) => setValue((v) => joinSpoken(v, t))}
+            onSendText={(t) => sendWithExtras(joinSpoken(value, t))}
+            canSend={!busy}
+          />
           {busy && canSteer && value.trim() ? (
             // Typing during a run means you have something to say to it, not
             // that you want it stopped — so the same key sends, and Stop is
@@ -996,17 +722,33 @@ export default function Composer({
         <div className="composer-footer">
           <div className="cf-left">
             <ContextChip />
+            <ModeChips />
           </div>
           <div className="cf-right">
             <ContextMeter draft={value} />
             {/* Beside the model, because it is a property of the answer that
                 model is about to give. Hidden for an image or video model,
                 where there is nothing to think about. */}
-            {!mediaTarget && <EffortPicker />}
+            {!mediaTarget && (
+              <EffortPicker chip={turnEffort} onPick={() => clearTurnModifier("effort")} />
+            )}
             <ModelPicker compact dropUp />
           </div>
         </div>
       </div>
+      {cmd.confirm && (
+        <ConfirmDialog
+          title={cmd.confirm.title}
+          body={cmd.confirm.body}
+          confirmLabel={cmd.confirm.confirmLabel}
+          onCancel={cmd.clearConfirm}
+          onConfirm={() => {
+            const run = cmd.confirm!.run;
+            cmd.clearConfirm();
+            void run();
+          }}
+        />
+      )}
     </div>
   );
 }

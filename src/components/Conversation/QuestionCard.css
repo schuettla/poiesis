@@ -1,0 +1,81 @@
+/* `AGC-3`: the question card. Permission-panel register, like the proposal card:
+   bordered, calm, no colour for urgency. The run is waiting, and that is all the
+   card says. */
+.question-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 12px 16px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  animation: rise-in var(--dur-slow) var(--ease-out);
+}
+.question-card:focus-visible {
+  outline: 2px solid var(--ink-faint);
+  outline-offset: 2px;
+}
+.question-card-head {
+  margin: 0;
+  font-size: var(--fs-footnote);
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+}
+.question-card-text {
+  margin: 0;
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  color: var(--ink);
+}
+.question-card-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.question-card-option {
+  display: grid;
+  grid-template-columns: 20px auto 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  font: inherit;
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  background: none;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.question-card-option:hover,
+.question-card-option.on {
+  border-color: var(--ink-muted);
+}
+.question-card-option.on {
+  background: var(--paper-sunk, var(--paper));
+}
+.question-card-key {
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.question-card-detail {
+  color: var(--ink-muted);
+}
+.question-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.question-card-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  background: none;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}

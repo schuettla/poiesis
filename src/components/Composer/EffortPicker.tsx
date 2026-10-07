@@ -47,7 +47,17 @@ function Meter({ bars }: { bars: number }) {
   );
 }
 
-export default function EffortPicker() {
+export default function EffortPicker({
+  chip,
+  onPick,
+}: {
+  /** `DEF-1`: a `/effort` chip for the next message only. While one is set the
+   * picker shows *its* value, marked, and the default stays what it was. */
+  chip?: string;
+  /** Called when a value is picked in the list, so the chip can go: the two
+   * must never disagree on screen. */
+  onPick?: () => void;
+} = {}) {
   const [value, setValue] = useState<string>(DEFAULT.value);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -56,6 +66,16 @@ export default function EffortPicker() {
     getSetting(EFFORT_KEY)
       .then((v) => setValue(v ?? DEFAULT.value))
       .catch(() => {});
+  }, []);
+
+  // `DEF-2`: a chip was made the default somewhere else (`make default`).
+  useEffect(() => {
+    function onDefault(e: Event) {
+      const v = (e as CustomEvent<string>).detail;
+      if (typeof v === "string") setValue(v);
+    }
+    window.addEventListener("poiesis:effort-default", onDefault);
+    return () => window.removeEventListener("poiesis:effort-default", onDefault);
   }, []);
 
   // Same dismissal contract as the model picker beside it: a click anywhere
@@ -77,12 +97,15 @@ export default function EffortPicker() {
     };
   }, [open]);
 
-  const current: Effort = EFFORTS.find((e) => e.value === value) ?? DEFAULT;
+  const standing: Effort = EFFORTS.find((e) => e.value === value) ?? DEFAULT;
+  const chipped = chip ? EFFORTS.find((e) => e.value === chip) : undefined;
+  const current: Effort = chipped ?? standing;
 
   function choose(e: Effort) {
     setValue(e.value);
     setOpen(false);
     setSetting(EFFORT_KEY, e.value).catch(() => {});
+    onPick?.();
   }
 
   return (
@@ -91,12 +114,21 @@ export default function EffortPicker() {
         className="effort-trigger"
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`How hard to think: ${current.label}`}
-        title={`${current.hint} Only models that can think are affected; the rest ignore it.`}
+        aria-label={`How hard to think: ${current.label}${chipped ? " (just this message)" : ""}`}
+        title={
+          chipped
+            ? `Just this message. My default is ${standing.label.toLowerCase()}.`
+            : `${current.hint} Only models that can think are affected; the rest ignore it.`
+        }
         onClick={() => setOpen((o) => !o)}
       >
         <Meter bars={current.bars} />
         <span className="effort-name">{current.label}</span>
+        {chipped && (
+          <span className="effort-once" aria-hidden="true">
+            ·
+          </span>
+        )}
         <span className="caret" aria-hidden="true">
           <ChevronIcon dir="up" size={10} strokeWidth={1.8} />
         </span>

@@ -157,7 +157,7 @@ function StepLimit() {
     <section className="setting-block">
       <div className="delegation-caps step-limit">
         <label className="delegation-cap">
-          <span>How many steps one turn of mine may take</span>
+          <span>How many steps I take by default</span>
           <input
             type="number"
             min={1}
@@ -169,7 +169,8 @@ function StepLimit() {
         </label>
         <p className="delegation-note">
           A step is one round of tool calls. When the count runs out I stop and answer with what I
-          have, rather than failing. Raise it for long builds; most questions never reach 12.
+          have, rather than failing. Raise it for long builds; most questions never reach 12. For
+          one message, type <code>/steps 30</code>.
         </p>
       </div>
     </section>

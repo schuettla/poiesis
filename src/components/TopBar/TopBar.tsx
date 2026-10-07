@@ -2,6 +2,7 @@ import { useActiveConversation, useAppStore, useLiveItems } from "../../lib/stor
 import { HUB_SECTIONS } from "../../lib/types";
 import { SidebarIcon } from "../Icons/Icons";
 import PoiesisMark from "../Mark/PoiesisMark";
+import MicIndicator from "../Voice/MicIndicator";
 import TabStrip from "./TabStrip";
 import WindowControls, { framelessWindow, onTitleBarMouseDown } from "./WindowControls";
 import "./TopBar.css";
@@ -122,6 +123,7 @@ export default function TopBar() {
       </div>
       {strip ? <TabStrip /> : <Location />}
       <div className="topbar-right">
+        <MicIndicator />
         <WorkbenchToggle />
       </div>
       <WindowControls />

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Poiesis — a local-first, agentic desktop LLM application"
 authors = ["Poiesis contributors"]
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.90"
 
 # The library powers both the desktop binary and (eventually) integration tests.
 [lib]
@@ -52,10 +52,10 @@ base64 = "0.22"
 # enough decode support for the formats IDX already recognises as images.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
 
-# Code-shaped navigation (COD-14..16): top-level symbols per file. Pinned to the
-# releases whose rust-version fits ours (1.77): tree-sitter 0.26+ and
-# tree-sitter-language 0.1.8 need 1.90. The grammars pull tree-sitter-language
-# "0.1", so the direct pin here is what holds it down.
+# Code-shaped navigation (COD-14..16): top-level symbols per file. Held at these
+# releases for API stability, not for the compiler (the floor is 1.90 now): the
+# grammars pull tree-sitter-language "0.1", so the direct pin here holds it
+# down. Unpinning is a separate change.
 tree-sitter = "=0.25.10"
 tree-sitter-language = "=0.1.5"
 tree-sitter-rust = "0.24"
@@ -98,6 +98,13 @@ url = "2"
 # Screen & app launch (SYS-1): cross-platform display/window capture.
 xcap = "0.9"
 
+# Voice (VOC-0.2): one in-process speech engine for voice detection, hearing and
+# speaking. CPU only, so it never competes with the chat model for VRAM.
+sherpa-onnx = { version = "1.13.8", optional = true }
+# Model archives from the sherpa-onnx releases are .tar.bz2.
+tar = { version = "0.4", optional = true }
+bzip2 = { version = "0.5", optional = true }
+
 # Win32 Job Objects: bind the engine child to a kill-on-close job so an ungraceful
 # parent death (crash) can't leave an orphaned llama-server holding VRAM (§7.4).
 [target.'cfg(windows)'.dependencies]
@@ -107,6 +114,10 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_Threading",
   "Win32_Security",
 ] }
+
+[features]
+default = ["voice"]
+voice = ["dep:sherpa-onnx", "dep:tar", "dep:bzip2"]
 
 [profile.release]
 panic = "abort"

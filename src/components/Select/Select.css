@@ -1,0 +1,101 @@
+/* A dropdown that looks like the rest of the app. The trigger is a field
+   (same height, border and radius as `.btn-secondary`); the list is the same
+   floating panel the pickers use. */
+.select {
+  position: relative;
+  display: inline-block;
+  min-width: 200px;
+}
+
+.select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: var(--control);
+  padding: 0 10px 0 12px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  text-align: left;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-xs);
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.select-trigger:hover {
+  background: var(--fill-hover);
+}
+.select-trigger:focus-visible,
+.select-trigger[aria-expanded="true"] {
+  outline: none;
+  border-color: var(--ink-muted);
+  box-shadow: var(--ring);
+}
+.select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.select-caret {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--ink-faint);
+  transition: transform var(--t-fast);
+}
+.select-trigger[aria-expanded="true"] .select-caret {
+  transform: rotate(180deg);
+}
+
+.select-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  box-sizing: border-box;
+  min-width: 100%;
+  max-height: 320px;
+  padding: 5px;
+  overflow-y: auto;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  transform-origin: top left;
+  animation: pop-in var(--dur) var(--ease-out);
+}
+.select-option {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 9px;
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  white-space: nowrap;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.select-option.active {
+  background: var(--fill-hover);
+}
+.select-option.selected {
+  font-weight: 500;
+  background: var(--fill-selected);
+}
+.select-option-hint {
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .select-list {
+    animation: none;
+  }
+  .select-caret {
+    transition: none;
+  }
+}

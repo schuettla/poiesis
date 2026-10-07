@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS messages (
   model_name       TEXT,                   -- assistant turns: model used
   model_provenance TEXT,                   -- 'local' | 'cloud'
   steps_json       TEXT,                   -- serialized agent-run timeline (CHT-9)
-  stop_reason      TEXT,                   -- HRN-3: completed|aborted|timeout|max_steps|error
+  stop_reason      TEXT,                   -- HRN-3: completed|aborted|timeout|max_steps|error|interrupted (VTN-6: a spoken reply the user cut off)
+  spoken           INTEGER NOT NULL DEFAULT 0, -- VTN-7: 1 for a spoken turn
   created_at       INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);

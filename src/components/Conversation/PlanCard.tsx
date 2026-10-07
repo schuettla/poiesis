@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { PlanItem, PlanView } from "../../lib/api";
+import { useAppStore } from "../../lib/store";
 
 /**
  * `PLN-UI-1`: the work a run means to do, above the steps that carry it out.
@@ -17,8 +18,10 @@ import type { PlanItem, PlanView } from "../../lib/api";
  * failure this whole feature exists to avoid, and it is the failure `step 1 of
  * 12` was: a status line that described something other than the work.
  */
-export default function PlanCard({ plan }: { plan: PlanView }) {
+export default function PlanCard({ plan, actionable = false }: { plan: PlanView; actionable?: boolean }) {
   const [showEarlier, setShowEarlier] = useState(false);
+  const approve = useAppStore((s) => s.approvePlan);
+  const revise = useAppStore((s) => s.revisePlan);
   if (!plan.items.length) return null;
 
   const done = plan.items.filter((i) => i.status === "done").length;
@@ -51,6 +54,21 @@ export default function PlanCard({ plan }: { plan: PlanView }) {
           <PlanRow key={`${n}-${item.text}`} item={item} />
         ))}
       </ul>
+      {/* `PLF-4`: a plan I wrote while planning first. Nothing has changed yet, and
+          nothing will until you say so. Only on the last turn and only while I am
+          idle: approving an older plan would run work the conversation has since
+          moved past. */}
+      {plan.awaiting_approval && actionable && (
+        <div className="plan-approval" role="group" aria-label="Approve my plan">
+          <span className="plan-approval-text">This is my plan. Nothing has changed yet.</span>
+          <button className="btn-text" onClick={() => void approve(plan)}>
+            Go ahead
+          </button>
+          <button className="btn-text" onClick={revise}>
+            Change something
+          </button>
+        </div>
+      )}
       {plan.previous && plan.previous.length > 0 && (
         <details
           className="plan-history"

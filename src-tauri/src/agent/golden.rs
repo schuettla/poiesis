@@ -681,6 +681,7 @@ mod tests {
                 recurrence: None,
                 last_seen: None,
                 expires_at: None,
+                origin: None,
             },
         )
         .unwrap();

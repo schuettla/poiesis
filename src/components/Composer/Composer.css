@@ -377,6 +377,29 @@
   transform: rotate(45deg);
 }
 
+/* Lit, not turned: something is waiting to go out with the message. */
+.composer .plus-btn.lit {
+  background: var(--fill-press);
+  color: var(--ink);
+}
+
+/* `CMP-4`: `/` does, where `+` adds. Same size and weight as its neighbour. */
+.composer .slash-btn {
+  font-family: var(--font-mono);
+  font-size: var(--fs-ui);
+}
+.composer .slash-btn.on {
+  background: var(--fill-press);
+  color: var(--ink);
+}
+
+.composer-menu-empty {
+  margin: 0;
+  padding: 10px;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+
 /* The row under the box: context chip left, model chooser right. */
 .composer-footer {
   display: flex;
@@ -389,6 +412,10 @@
 .composer-footer .cf-left {
   min-width: 0;
   flex: 1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 .composer-footer .cf-right {
   flex: none;
@@ -561,24 +588,4 @@
   flex-direction: column;
   max-height: 300px;
   overflow-y: auto;
-}
-
-/* `SUB-UI-3`: a quiet count beside Stop while agents are out. Clicking it opens
-   the Agents tab — the pill is the way in, not just a number. */
-.fleet-pill {
-  align-self: center;
-  white-space: nowrap;
-  background: none;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-pill);
-  padding: 3px 10px;
-  margin-right: 6px;
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--fs-timeline);
-  color: var(--ink-muted);
-}
-.fleet-pill:hover {
-  color: var(--ink);
-  background: var(--fill-hover);
 }

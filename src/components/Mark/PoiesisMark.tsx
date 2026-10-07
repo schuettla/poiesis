@@ -17,6 +17,8 @@ const LABELS: Record<string, string> = {
   active: "working",
   reflecting: "reflecting on a past conversation",
   healing: "recovering",
+  tending: "tidying my head",
+  listening: "waiting for your answer",
 };
 
 /** How many durable entries exist, from the always-injected index. Counting the

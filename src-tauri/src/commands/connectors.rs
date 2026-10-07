@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::db::{Connector, Db};
-use crate::mcp::{McpClient, McpTool};
+use crate::mcp::{McpClient, McpPrompt, McpTool};
 use crate::runtime::RuntimeManager;
 use crate::secrets::{self, SERVICE_MCP};
 use crate::PoiesisError;
@@ -21,6 +21,10 @@ fn err<E: std::fmt::Display>(e: E) -> PoiesisError {
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct CachedConfig {
     pub tools: Vec<McpTool>,
+    /// What the server offers as prompts, which Poiesis shows as commands. A
+    /// connector cached before this existed has none until it is tested again.
+    #[serde(default)]
+    pub prompts: Vec<McpPrompt>,
     pub checked_at: Option<i64>,
 }
 
@@ -90,9 +94,11 @@ pub async fn add_connector_cmd(
         McpClient::new(mgr.client.clone(), url.clone(), token.clone())
     };
     let tools = client.discover().await.map_err(err)?;
+    let prompts = client.list_prompts().await;
 
     let config = CachedConfig {
         tools,
+        prompts,
         checked_at: Some(now_ms()),
     };
     let config_json = serde_json::to_string(&config).map_err(err)?;
@@ -132,6 +138,12 @@ pub async fn test_connector_cmd(
     mgr: State<'_, RuntimeManager>,
     id: String,
 ) -> Cmd<ConnectorStatus> {
+    probe_connector(&db, &mgr.client, &id).await
+}
+
+/// The probe behind `test_connector_cmd`, also what `/checkup` asks (`CHK-1`).
+pub async fn probe_connector(db: &Db, http: &reqwest::Client, id: &str) -> Cmd<ConnectorStatus> {
+    let id = id.to_string();
     let connector = db
         .get_connector(&id)
         .map_err(err)?
@@ -147,13 +159,15 @@ pub async fn test_connector_cmd(
         McpClient::new_stdio(url)
     } else {
         let token = secrets::get_secret(SERVICE_MCP, &id).ok().flatten();
-        McpClient::new(mgr.client.clone(), url, token)
+        McpClient::new(http.clone(), url, token)
     };
     match client.discover().await {
         Ok(tools) => {
             let count = tools.len();
+            let prompts = client.list_prompts().await;
             let config = CachedConfig {
                 tools,
+                prompts,
                 checked_at: Some(now_ms()),
             };
             if let Ok(json) = serde_json::to_string(&config) {
@@ -171,6 +185,85 @@ pub async fn test_connector_cmd(
             error: Some(e.to_string()),
         }),
     }
+}
+
+/// One prompt a connected server offers, for the command menu.
+#[derive(Debug, Serialize)]
+pub struct PromptView {
+    pub connector_id: String,
+    pub connector_name: String,
+    pub name: String,
+    pub title: Option<String>,
+    pub description: String,
+    pub arguments: Vec<crate::mcp::McpPromptArgument>,
+}
+
+/// The prompts of every enabled connector, as last cached.
+fn prompts_of(connectors: Vec<Connector>) -> Vec<PromptView> {
+    let mut out = Vec::new();
+    for c in connectors.into_iter().filter(|c| c.enabled) {
+        let prompts = c
+            .config_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<CachedConfig>(s).ok())
+            .map(|cc| cc.prompts)
+            .unwrap_or_default();
+        for p in prompts {
+            out.push(PromptView {
+                connector_id: c.id.clone(),
+                connector_name: c.name.clone(),
+                name: p.name,
+                title: p.title,
+                description: p.description,
+                arguments: p.arguments,
+            });
+        }
+    }
+    out
+}
+
+/// `UCM`: the prompts that connected servers offer, to list beside the skills.
+/// Read from what each connector last said, so the menu never waits on a network.
+#[tauri::command]
+pub fn list_mcp_prompts_cmd(db: State<'_, Db>) -> Cmd<Vec<PromptView>> {
+    Ok(prompts_of(db.list_connectors().map_err(err)?))
+}
+
+/// Ask a connector to build one of its prompts, with the arguments filled in, and
+/// return the text to send. The server does the substitution.
+#[tauri::command]
+pub async fn get_mcp_prompt_cmd(
+    db: State<'_, Db>,
+    mgr: State<'_, RuntimeManager>,
+    connector_id: String,
+    name: String,
+    arguments: std::collections::HashMap<String, String>,
+) -> Cmd<String> {
+    let connector = db
+        .get_connector(&connector_id)
+        .map_err(err)?
+        .ok_or_else(|| PoiesisError::Message("That connector is gone.".into()))?;
+    if !connector.enabled {
+        return Err(PoiesisError::Message(format!("{} is turned off.", connector.name)));
+    }
+    let Some(url) = connector.url.clone() else {
+        return Err(PoiesisError::Message("This connector has no URL.".into()));
+    };
+    let mut client = if connector.transport == "stdio" {
+        McpClient::new_stdio(url)
+    } else {
+        let token = secrets::get_secret(SERVICE_MCP, &connector_id).ok().flatten();
+        McpClient::new(mgr.client.clone(), url, token)
+    };
+    client.initialize().await.map_err(err)?;
+    let text = client
+        .get_prompt(&name, serde_json::to_value(&arguments).map_err(err)?)
+        .await
+        .map_err(err)?;
+    if text.trim().is_empty() {
+        return Err(PoiesisError::Message(format!("{} sent back an empty prompt.", connector.name)));
+    }
+    Ok(text)
 }
 
 /// Enable or disable a connector (its tools join/leave the agent dispatch table).

@@ -12,6 +12,8 @@ function leadFor(op: string, collection: string): string {
   // PRO-UI-5: no "profile"/"synthesis" word (SMP-5a) — this is the whole
   // message, not a lead needing a name/description appended after it.
   if (op === "profile") return "I updated how I picture you";
+  // `UCM-7`: `/always` — the user's own instruction, appended to the soul.
+  if (op === "always") return "I'll always do that now";
   const lesson = collection === "lessons";
   switch (op) {
     case "forget":
@@ -98,6 +100,10 @@ export default function MemoryToast() {
   const dismissGoldenReverted = useAppStore((s) => s.dismissGoldenRevertedToast);
   const mailSentMessage = useAppStore((s) => s.mailSentToast);
   const dismissMailSent = useAppStore((s) => s.dismissMailSentToast);
+  const rewindMessage = useAppStore((s) => s.rewindToast);
+  const dismissRewind = useAppStore((s) => s.dismissRewindToast);
+  const savedMessage = useAppStore((s) => s.savedToast);
+  const dismissSaved = useAppStore((s) => s.dismissSavedToast);
   const agentDoneMessage = useAppStore((s) => s.agentDoneToast);
   const dismissAgentDone = useAppStore((s) => s.dismissAgentDoneToast);
   // Latched per toast: marking the flag immediately would hide the explainer
@@ -138,6 +144,14 @@ export default function MemoryToast() {
     if (agentDoneMessage) {
       return <ReceiptToast message={agentDoneMessage} dismiss={dismissAgentDone} />;
     }
+    // `RWD-UI-2`: I went back, and the original is still in your list.
+    if (rewindMessage) {
+      return <ReceiptToast message={rewindMessage} dismiss={dismissRewind} />;
+    }
+    // `UCM-9`: I saved the conversation, and where.
+    if (savedMessage) {
+      return <ReceiptToast message={savedMessage} dismiss={dismissSaved} />;
+    }
     return <ExplainToast />;
   }
 
@@ -147,7 +161,8 @@ export default function MemoryToast() {
   // update has no retained prior text to revert to, so it's a receipt only.
   // A profile rebuild is undone by restoring its own pre-rebuild snapshot
   // (PRO-9) — clean the same way a save is.
-  const canUndo = toast.op === "save" || toast.op === "forget" || isProfile;
+  const canUndo =
+    toast.op === "save" || toast.op === "forget" || toast.op === "always" || isProfile;
 
   return (
     <div className="memory-toast" role="status">

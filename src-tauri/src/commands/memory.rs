@@ -446,6 +446,69 @@ pub fn update_memory_fact_cmd(
     Ok(())
 }
 
+/// What `/remember` saved, for the toast that offers to take it back.
+#[derive(Debug, Serialize)]
+pub struct RememberedFact {
+    pub name: String,
+    pub description: String,
+}
+
+/// `UCM-5`: `/remember <fact>`. The user is the author, so this is not behind
+/// the `facts` autonomy rung — that rung is about what *I* may write unasked.
+/// It is the same `MemoryStore` write the `memory` tool makes, so the toast and
+/// its undo fire exactly as they do for a fact I saved myself.
+///
+/// The text becomes the body whole; the name is its first few words, made
+/// unique, and the description is its first line. Scope is global: someone who
+/// types `/remember` means *always*, not *in this topic*.
+#[tauri::command]
+pub fn remember_fact_cmd(
+    mem: State<'_, MemoryStore>,
+    db: State<'_, Db>,
+    conversation_id: Option<String>,
+    text: String,
+) -> Cmd<RememberedFact> {
+    let body = text.trim();
+    if body.is_empty() {
+        return Err(PoiesisError::Message("Tell me what to remember.".into()));
+    }
+    let stem: String = body.split_whitespace().take(6).collect::<Vec<_>>().join(" ");
+    let first_line = body.lines().next().unwrap_or(body);
+    let description: String = first_line.chars().take(120).collect();
+    let project = conversation_id
+        .as_deref()
+        .and_then(|id| db.conversation_project(id).ok().flatten())
+        .map(|p| p.id);
+
+    let mut attempt = 0;
+    let saved = loop {
+        let name = if attempt == 0 { stem.clone() } else { format!("{stem} {}", attempt + 1) };
+        let fact = Fact {
+            name,
+            description: description.clone(),
+            kind: "fact".into(),
+            created: String::new(),
+            source_conversation: conversation_id.clone(),
+            body: body.to_string(),
+            scope: Some("global".into()),
+            recurrence: None,
+            last_seen: None,
+            expires_at: None,
+            origin: None,
+            project: project.clone(),
+        };
+        match mem.save(&db, &fact) {
+            Ok(name) => break name,
+            // A name already taken is the one error worth retrying; the rest
+            // (too long, refused as poisoned) are the user's to hear.
+            Err(e) if e.contains("exists") && attempt < 20 => attempt += 1,
+            Err(e) => return Err(PoiesisError::Message(e)),
+        }
+    };
+    let _ = db.log_activity(conversation_id.as_deref(), "memory", &format!("save {saved}"));
+    Ok(RememberedFact { name: saved, description })
+}
+
 /// The user overriding a fact's scope by hand (`SCP-UI-1`) — they are the
 /// final authority on their own standing instructions, classifier or not.
 #[tauri::command]
@@ -759,6 +822,14 @@ pub async fn resolve_change_proposal_cmd(
             let _ = db.log_activity(None, "memory", &format!("kept the skill {name}"));
             Ok(())
         }
+        "project_instructions" => {
+            // `SKC-4`: the frontend applies these with `setProjectInstructions`
+            // (the one place that also refreshes the project and its prompt)
+            // before answering, so all that is left here is to close the row.
+            db.resolve_change_proposal(&id, "applied").map_err(err)?;
+            let _ = db.log_activity(None, "memory", "accepted instructions for a project");
+            Ok(())
+        }
         "lesson" | "lesson-critic" => {
             // Reflection at rung `ask`, or a draft the critic demoted
             // (`CRT-2`). The body is the lesson and `description` is its own
@@ -786,6 +857,7 @@ pub async fn resolve_change_proposal_cmd(
                     recurrence: None,
                     last_seen: None,
                     expires_at: None,
+                    origin: None,
                     // A lesson the user accepted from the review queue is not
                     // fenced to a project: they were shown it out of context
                     // and said yes to it as a standing lesson.
@@ -1106,6 +1178,7 @@ mod tests {
             recurrence: None,
             last_seen: None,
             expires_at: None,
+            origin: None,
             project: None,
         }
     }

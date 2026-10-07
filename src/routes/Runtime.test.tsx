@@ -43,13 +43,13 @@ const tabs = () =>
   }));
 
 describe("the Runtime page", () => {
-  it("shows Chat, Images and Your servers to everyone, and Recall only in expert mode", async () => {
+  it("shows Chat, Images, Voice and Your servers to everyone, and Recall only in expert mode", async () => {
     useAppStore.setState({ expert: false, runtimeTab: null } as never);
     await act(async () => root.render(<Runtime />));
-    expect(tabs().map((t) => t.label)).toEqual(["Chat", "Images", "Your servers"]);
+    expect(tabs().map((t) => t.label)).toEqual(["Chat", "Images", "Voice", "Your servers"]);
 
     await act(async () => useAppStore.setState({ expert: true } as never));
-    expect(tabs().map((t) => t.label)).toEqual(["Chat", "Images", "Your servers", "Recall"]);
+    expect(tabs().map((t) => t.label)).toEqual(["Chat", "Images", "Voice", "Your servers", "Recall"]);
   });
 
   it("opens Your servers from the deep link", async () => {

@@ -98,6 +98,10 @@ pub fn run() {
             // GLD-1: seed the built-in golden cases on first run, merging by id
             // so a user's own additions are never overwritten.
             agent::golden::seed_builtin_cases(&base_dir);
+            // SKC-4: the skills that make `/init`, `/review`, `/verify`,
+            // `/skillify` and `/delegate` real, written once so they can be
+            // read, copied and changed like any other skill.
+            agent::skillpack::seed_bundled(&base_dir, &db);
             app.manage(db);
             app.manage(memory);
 
@@ -113,11 +117,19 @@ pub fn run() {
             runtime::embedserver::spawn_idle_stop(app.handle().clone());
             app.manage(RerankManager::new());
             runtime::rerankserver::spawn_idle_stop(app.handle().clone());
+            // VOC-1: speech engines load on first use and unload when idle.
+            #[cfg(feature = "voice")]
+            {
+                app.manage(runtime::voice::VoiceManager::new());
+                app.manage(runtime::voice_session::VoiceSessions::default());
+                runtime::voice::spawn_idle_unload(app.handle().clone());
+            }
             app.manage(PermissionManager::new());
             app.manage(agent::index::IndexManager::new());
             // `HRN-1`: every live run, addressable by id — what Stop and
             // mid-run steering aim at now that a turn can start other turns.
             app.manage(agent::fleet::Fleet::new());
+            app.manage(commands::agent::SideQuestion::default());
             app.manage(commands::scheduler::SchedulerState::new());
             commands::scheduler::spawn_ticker(app.handle().clone());
             // ART-6: artifacts are served from loopback so a preview has a real
@@ -169,6 +181,7 @@ pub fn run() {
             commands::memory::context_manifest_cmd,
             commands::memory::list_memory_facts_cmd,
             commands::memory::update_memory_fact_cmd,
+            commands::memory::remember_fact_cmd,
             commands::memory::set_fact_scope_cmd,
             commands::memory::forget_memory_fact_cmd,
             commands::memory::restore_memory_fact_cmd,
@@ -209,6 +222,7 @@ pub fn run() {
             commands::conversations::list_all_artifacts_cmd,
             commands::conversations::list_blocks_cmd,
             commands::conversations::update_block_state_cmd,
+            commands::conversations::export_conversation_cmd,
             commands::conversations::get_session_state_cmd,
             commands::conversations::set_session_state_cmd,
             commands::conversations::get_setting_cmd,
@@ -230,6 +244,13 @@ pub fn run() {
             commands::models::set_default_model_cmd,
             commands::agent::agent_chat_cmd,
             commands::agent::steer_run_cmd,
+            commands::agent::answer_question_cmd,
+            commands::agent::goal_check_cmd,
+            commands::agent::side_question_cmd,
+            commands::agent::cancel_side_question_cmd,
+            commands::organism::checkup_cmd,
+            commands::agent::rewind_cmd,
+            commands::agent::changes_since_cmd,
             commands::subagents::list_subagent_runs_cmd,
             commands::subagents::get_subagent_run_cmd,
             commands::subagents::stop_run_cmd,
@@ -239,6 +260,8 @@ pub fn run() {
             commands::agent::save_kept_result_cmd,
             commands::agent::resume_run_cmd,
             commands::agent::fork_conversation_cmd,
+            commands::agent::record_command_cmd,
+            commands::agent::conversation_commands_cmd,
             commands::agent::resolve_permission_cmd,
             commands::agent::list_toolsets_cmd,
             commands::agent::record_artifact_console_cmd,
@@ -265,6 +288,32 @@ pub fn run() {
             commands::embedgen::install_embed_engine_cmd,
             commands::embedgen::remove_embed_engine_cmd,
             commands::embedgen::embed_catalog_cmd,
+            #[cfg(feature = "voice")]
+            commands::voice::voice_catalog_cmd,
+            #[cfg(feature = "voice")]
+            commands::voice::voice_settings_cmd,
+            #[cfg(feature = "voice")]
+            commands::voice::voice_status_cmd,
+            #[cfg(feature = "voice")]
+            commands::voice::voice_download_cmd,
+            #[cfg(feature = "voice")]
+            commands::voice::voice_delete_cmd,
+            #[cfg(feature = "voice")]
+            commands::voice::voice_preview_cmd,
+            #[cfg(feature = "voice")]
+            commands::voice::voice_transcribe_cmd,
+            #[cfg(feature = "voice")]
+            commands::voice::voice_start_cmd,
+            #[cfg(feature = "voice")]
+            commands::voice::voice_stop_cmd,
+            #[cfg(feature = "voice")]
+            commands::voice::voice_push_audio_cmd,
+            #[cfg(feature = "voice")]
+            commands::voice::voice_assistant_cmd,
+            #[cfg(feature = "voice")]
+            commands::voice::voice_speak_cmd,
+            #[cfg(feature = "voice")]
+            commands::voice::voice_cancel_speech_cmd,
             commands::embedgen::list_embed_models_cmd,
             commands::embedgen::download_embed_model_cmd,
             commands::embedgen::set_default_embed_model_cmd,
@@ -299,6 +348,8 @@ pub fn run() {
             commands::connectors::set_connector_enabled_cmd,
             commands::connectors::delete_connector_cmd,
             commands::connectors::export_connectors_cmd,
+            commands::connectors::list_mcp_prompts_cmd,
+            commands::connectors::get_mcp_prompt_cmd,
             commands::connectors::import_connectors_cmd,
             commands::cloud::list_providers_cmd,
             commands::cloud::set_provider_key_cmd,

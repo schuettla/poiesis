@@ -1,6 +1,7 @@
 import { useAppStore } from "../../lib/store";
 import type { Message } from "../../lib/types";
 import ImageByPath from "./ImageByPath";
+import { SpokenGlyph } from "./SpokenMark";
 
 /** Split off a trailing ```poiesis-action …``` fence (Generative UI, Phase B) so
  * the transcript shows the human sentence plus a compact chip, never raw JSON. */
@@ -27,10 +28,29 @@ export default function UserTurn({ message }: { message: Message }) {
           </span>
         </div>
       )}
-      {human && <div className="body">{human}</div>}
+      {/* `SKC-2`: a skill command went out as `/name`, with that skill's
+          instructions loaded before I answered. Say so, and let the user see
+          exactly what they asked for rather than a message they never wrote. */}
+      {message.command && (
+        <details className="command-chip">
+          <summary>
+            <span className="command-chip-name">/{message.command.name}</span>
+            {message.command.args && <span className="command-chip-args"> {message.command.args}</span>}
+          </summary>
+          <p className="command-chip-note">
+            What I was asked: run my {message.command.name} skill
+            {message.command.args ? ` on “${message.command.args}”` : ""}. Its instructions were
+            loaded before I answered.
+          </p>
+        </details>
+      )}
+      {/* The chip already shows the words after the name, so the body would
+          only say them twice. */}
+      {human && !message.command && <div className="body">{human}</div>}
       {/* The same reading the Rail puts at the end of a chat row: when. */}
       {message.createdAt > 0 && (
         <span className="turn-stamp" aria-hidden="true">
+          {message.spoken && <SpokenGlyph />}
           {new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
         </span>
       )}

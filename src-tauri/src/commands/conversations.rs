@@ -95,19 +95,27 @@ pub fn append_message_cmd(
     model_provenance: Option<String>,
     steps_json: Option<String>,
     attachments: Option<Vec<NewAttachment>>,
+    // `VTN-7`: a turn the user spoke, or a reply that will be read out.
+    spoken: Option<bool>,
 ) -> Cmd<Message> {
-    db.append_message(
-        &conversation_id,
-        &NewMessage {
-            role,
-            content,
-            model_name,
-            model_provenance,
-            steps_json,
-            attachments: attachments.unwrap_or_default(),
-        },
-    )
-    .map_err(err)
+    let mut saved = db
+        .append_message(
+            &conversation_id,
+            &NewMessage {
+                role,
+                content,
+                model_name,
+                model_provenance,
+                steps_json,
+                attachments: attachments.unwrap_or_default(),
+            },
+        )
+        .map_err(err)?;
+    if spoken == Some(true) {
+        db.mark_spoken(&saved.id).map_err(err)?;
+        saved.spoken = true;
+    }
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -189,6 +197,18 @@ pub fn update_block_state_cmd(db: State<'_, Db>, id: String, state_json: String)
     db.update_block_state(&id, &state_json).map_err(err)
 }
 
+/// `UCM-9`: the conversation as Markdown, for the caller to save where the user
+/// chooses. Nothing is written here.
+#[tauri::command]
+pub fn export_conversation_cmd(db: State<'_, Db>, conversation_id: String) -> Cmd<String> {
+    let conversation = db
+        .get_conversation(&conversation_id)
+        .map_err(err)?
+        .ok_or_else(|| PoiesisError::Message("I can't find that conversation.".into()))?;
+    let messages = db.list_messages(&conversation_id).map_err(err)?;
+    Ok(crate::agent::export::markdown(&conversation, &messages))
+}
+
 #[tauri::command]
 pub fn get_session_state_cmd(db: State<'_, Db>, conversation_id: String) -> Cmd<Option<String>> {
     db.get_session_state(&conversation_id).map_err(err)
@@ -234,6 +254,8 @@ pub async fn compact_conversation_cmd(
     conversation_id: String,
     upto_message_id: String,
     target: Option<ChatTarget>,
+    // `UCM-3`: what `/compact <focus>` asked to be kept in particular.
+    focus: Option<String>,
 ) -> Cmd<String> {
     let target = target.unwrap_or_default();
     let endpoint = match build_remote_endpoint(&db, &target).map_err(PoiesisError::Message)? {
@@ -279,12 +301,19 @@ pub async fn compact_conversation_cmd(
         ""
     };
 
+    let focus_rule = focus
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(|f| format!("\nKeep in particular everything about: {f}."))
+        .unwrap_or_default();
+
     let prompt = format!(
         "Summarize this conversation so a colleague can continue it.\n\
          Use exactly these sections, plain text, max 300 words total:\n\
          FACTS: (stable facts, names, numbers)\n\
          DECISIONS: (settled choices)\n\
-         OPEN: (unresolved threads, next steps){workspace_rule}\n\
+         OPEN: (unresolved threads, next steps){workspace_rule}{focus_rule}\n\
          Existing summary to merge in:\n{existing}\n\
          Conversation:\n{transcript}"
     );

@@ -132,3 +132,8 @@
   line-height: 1.45;
   color: var(--ink-faint);
 }
+
+/* `DEF-1`: the value shown is for this message only; the dot says so. */
+.effort-once {
+  color: var(--ink-faint);
+}

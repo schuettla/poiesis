@@ -51,6 +51,46 @@ impl Steer {
     }
 }
 
+/// `AGC-3`: what the user answered to an `ask_user` question. Either may be
+/// empty but not both: a choice, a few choices, their own words, or a choice and
+/// something to add.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Answer {
+    #[serde(default)]
+    pub choices: Vec<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+impl Answer {
+    /// The tool result the model reads (`AGC-3`).
+    pub fn to_result(&self) -> String {
+        let chose = self.choices.join(", ");
+        let wrote = self.text.as_deref().map(str::trim).filter(|t| !t.is_empty());
+        match (self.choices.is_empty(), wrote) {
+            (false, None) => format!("The user chose: {chose}"),
+            (false, Some(t)) => format!("The user chose: {chose}, and added: {t}"),
+            (true, Some(t)) => format!("The user wrote: {t}"),
+            (true, None) => "The user gave no answer. Carry on with your best judgement.".to_string(),
+        }
+    }
+
+    /// What the step row says after the question: `— you chose A, C`.
+    pub fn to_note(&self) -> String {
+        let wrote = self.text.as_deref().map(str::trim).filter(|t| !t.is_empty());
+        match (self.choices.is_empty(), wrote) {
+            (false, _) => format!("\u{2014} you chose {}", self.choices.join(", ")),
+            (true, Some(t)) => {
+                let short: String = t.chars().take(48).collect();
+                let more = if t.chars().count() > 48 { "\u{2026}" } else { "" };
+                format!("\u{2014} you wrote: {short}{more}")
+            }
+            (true, None) => "\u{2014} no answer".to_string(),
+        }
+    }
+}
+
 /// Why a run stopped. Borrowed from DeepSeek Harness's extensible union: the
 /// caller always learns whether an answer is finished or merely what was in
 /// hand when the run ran out of room.
@@ -137,6 +177,15 @@ impl RunLimits {
         Self { max_iterations, ..Self::default() }
     }
 
+    /// `REG-5`: `/steps n` for one turn. Same clamp as the setting, so a chip
+    /// can never ask for more than a runaway guard allows.
+    pub fn with_max_steps(mut self, steps: Option<usize>) -> Self {
+        if let Some(n) = steps {
+            self.max_iterations = n.clamp(1, 50);
+        }
+        self
+    }
+
     /// A delegated child: less room than its parent, and always a clock,
     /// because nobody is watching it directly.
     pub fn subagent() -> Self {
@@ -173,9 +222,35 @@ pub struct RunHandle {
     /// False until some turn actually reported usage. Without it a local run
     /// against a server that says nothing would read as a free one.
     usage_known: std::sync::atomic::AtomicBool,
+    /// `AGC-3`: questions this run is waiting on, by question id. A sender is
+    /// removed the moment it is answered, so a second answer to the same
+    /// question finds nothing and reports it.
+    questions: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Answer>>>,
 }
 
 impl RunHandle {
+    /// Register a question and get the receiver the run waits on.
+    pub fn ask(&self, id: &str) -> tokio::sync::oneshot::Receiver<Answer> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if let Ok(mut questions) = self.questions.lock() {
+            questions.insert(id.to_string(), tx);
+        }
+        rx
+    }
+
+    /// Deliver an answer. `false` when nothing is waiting on `id` any more.
+    pub fn answer(&self, id: &str, answer: Answer) -> bool {
+        let sender = self.questions.lock().ok().and_then(|mut q| q.remove(id));
+        sender.is_some_and(|tx| tx.send(answer).is_ok())
+    }
+
+    /// Forget a question nobody will answer (the run was stopped).
+    pub fn drop_question(&self, id: &str) {
+        if let Ok(mut questions) = self.questions.lock() {
+            questions.remove(id);
+        }
+    }
+
     /// Queue an instruction for the next iteration. Cheap and non-blocking, so
     /// it is safe to call from a Tauri command while the run holds the loop.
     pub fn steer(&self, steer: Steer) {
@@ -255,6 +330,7 @@ impl Fleet {
             prompt_tokens: AtomicU64::new(0),
             output_tokens: AtomicU64::new(0),
             usage_known: std::sync::atomic::AtomicBool::new(false),
+            questions: Mutex::new(HashMap::new()),
         });
         if let Ok(mut runs) = self.runs.lock() {
             runs.insert(handle.id.clone(), handle.clone());
@@ -331,6 +407,33 @@ mod tests {
         let child = fleet.open("conv_b", CancelFlag::new(), Some(root.id.clone()), 1);
         let other = fleet.open("conv_c", CancelFlag::new(), None, 0);
         (fleet, root, child, other)
+    }
+
+    /// `AGC-T2`: an answer resolves the call that is waiting, once; a second
+    /// answer, or one for a run that moved on, finds nothing.
+    #[tokio::test]
+    async fn an_answer_reaches_the_waiting_question_once() {
+        let fleet = Fleet::new();
+        let run = fleet.open("conv", CancelFlag::new(), None, 0);
+        let rx = run.ask("q1");
+        assert!(run.answer("q1", Answer { choices: vec!["A".into(), "C".into()], text: None }));
+        assert!(!run.answer("q1", Answer::default()), "a question is answered once");
+        assert!(!run.answer("never-asked", Answer::default()));
+        let got = rx.await.unwrap();
+        assert_eq!(got.to_result(), "The user chose: A, C");
+        assert_eq!(got.to_note(), "\u{2014} you chose A, C");
+    }
+
+    #[test]
+    fn what_the_model_reads_says_what_the_user_chose_or_wrote() {
+        let a = |choices: &[&str], text: Option<&str>| Answer {
+            choices: choices.iter().map(|c| c.to_string()).collect(),
+            text: text.map(str::to_string),
+        };
+        assert_eq!(a(&["A"], None).to_result(), "The user chose: A");
+        assert_eq!(a(&["A"], Some("but small")).to_result(), "The user chose: A, and added: but small");
+        assert_eq!(a(&[], Some("something else")).to_result(), "The user wrote: something else");
+        assert!(a(&[], Some("  ")).to_result().contains("no answer"));
     }
 
     #[test]

@@ -139,6 +139,9 @@ pub struct SkillEntry {
     pub name: String,
     pub description: String,
     pub when_to_use: Option<String>,
+    /// `SKC-3`: `false` for a skill with `disable-model-invocation: true`. Only
+    /// the user runs it, so it is not advertised to the model at all.
+    pub model_invocable: bool,
 }
 
 /// One workspace block already visible to the user.
@@ -204,6 +207,8 @@ pub struct PromptInputs {
     /// `PLN-3`: whether — and how firmly — this turn is told to plan first.
     /// Defaults to *when it helps*, which is what an unset setting means.
     pub plan_mode: super::plan::PlanMode,
+    /// `VTN-2`: the user is talking by voice and will hear the reply spoken.
+    pub spoken: bool,
 }
 
 /// Per-entry cap (description plus when-to-use) and whole-block cap for the
@@ -263,8 +268,16 @@ pub fn compose_system_prompt(inputs: &PromptInputs) -> String {
         }
         push(tool_cautions(&inputs.tool_health));
     }
+    // `VTN-2`: last, so nothing above can talk the model back into markdown.
+    if inputs.spoken {
+        push(SPOKEN_GUIDANCE.to_string());
+    }
     out
 }
+
+/// `VTN-2`: what a spoken reply is. Must stay word for word what `store.ts`
+/// sends; `fixtures/voice/spoken-prompt.golden.txt` holds the two together.
+pub const SPOKEN_GUIDANCE: &str = "The user is talking to you by voice and will hear your reply spoken aloud. Answer in short spoken sentences. Do not use markdown, lists, tables or code in the reply; if something needs to be on screen, put it in an artifact and say so in one short sentence.";
 
 /// `PRO-6`/`PRO-7`: unlike SOUL.md this is a background inference, not something
 /// the user just decided, so a persona always wins.
@@ -375,6 +388,9 @@ fn memory_guidance_block(has_facts: bool) -> String {
 /// against that same list, so a filtered-out skill is not advertised as "one
 /// more" the model could ask for.
 fn skills_block(skills: &[SkillEntry]) -> String {
+    // `SKC-3`: a skill only the user can run is not part of the catalogue. It is
+    // dropped before counting, so it is not advertised as "one more" either.
+    let skills: Vec<&SkillEntry> = skills.iter().filter(|s| s.model_invocable).collect();
     if skills.is_empty() {
         return String::new();
     }
@@ -383,7 +399,7 @@ fn skills_block(skills: &[SkillEntry]) -> String {
     let mut lines = vec![header.to_string()];
     let mut used = char_len(header);
     let mut shown = 0usize;
-    for s in skills {
+    for s in &skills {
         let desc = match s.when_to_use.as_deref().filter(|w| !w.is_empty()) {
             Some(w) if !s.description.is_empty() => format!("{} — {w}", s.description),
             Some(w) => w.to_string(),
@@ -625,6 +641,7 @@ pub async fn gather(
                 name: p.name,
                 description: p.description,
                 when_to_use: p.when_to_use,
+                model_invocable: p.model_invocable,
             })
             .collect();
     }
@@ -800,7 +817,24 @@ mod tests {
             name: name.to_string(),
             description: description.to_string(),
             when_to_use: when.map(str::to_string),
+            model_invocable: true,
         }
+    }
+
+    /// `SKC-3`: a skill only the user can run is not in the model's catalogue,
+    /// and does not inflate its "(+N more)" line either.
+    #[test]
+    fn a_skill_only_the_user_can_run_is_not_advertised() {
+        let mut hidden = skill("review", "Review my changes", None);
+        hidden.model_invocable = false;
+        assert_eq!(skills_block(&[hidden]), "", "nothing left to list");
+
+        let mut hidden = skill("review", "Review my changes", None);
+        hidden.model_invocable = false;
+        let out = skills_block(&[skill("pdf", "Read PDFs", None), hidden]);
+        assert!(out.contains("- pdf:"));
+        assert!(!out.contains("review"), "{out}");
+        assert!(!out.contains("more)"), "{out}");
     }
 
     fn base() -> PromptInputs {

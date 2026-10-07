@@ -1,0 +1,23 @@
+/* `AGC-2`: one suggestion, muted, above the box. No colour for importance and no
+   motion: it is an offer, not an alert. */
+.suggestion-chip {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-bottom: 6px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+}
+.suggestion-chip-text {
+  min-width: 0;
+}
+.suggestion-chip-command {
+  color: var(--ink-faint);
+}
+.suggestion-chip-actions {
+  display: inline-flex;
+  gap: 12px;
+}

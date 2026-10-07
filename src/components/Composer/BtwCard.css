@@ -1,0 +1,36 @@
+/* `BTW-UI-1`: a side answer, in the permission-panel register: bordered and
+   calm. It floats above the box inside the composer column and takes no space
+   from the conversation. */
+.btw-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 10px 14px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+}
+.btw-card-question {
+  margin: 0;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.btw-card-answer {
+  margin: 0;
+  font-size: var(--fs-ui);
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+.btw-card-wait,
+.btw-card-error {
+  margin: 0;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.btw-card-actions {
+  display: flex;
+  gap: 12px;
+}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Message } from "../../lib/types";
 import type { StopReason } from "../../lib/api";
 import { isPersistedId, useAppStore } from "../../lib/store";
@@ -9,21 +9,25 @@ import FleetCard from "./FleetCard";
 import PlanCard from "./PlanCard";
 import BlockRenderer from "../Blocks/BlockRenderer";
 import ProposalCard from "./ProposalCard";
+import QuestionCard from "./QuestionCard";
+import HarnessProposal from "./HarnessProposal";
+import Orb from "../Orb/Orb";
+import { SpokenGlyph, StoppedHere } from "./SpokenMark";
+import { orbForStep } from "../Orb/orbState";
+import type { OrbState } from "thinking-orbs";
 import "../Context/Context.css";
 
-/** Three-dot pulse shown while the turn is live but nothing else on screen is
+/** The working orb, shown while the turn is live but nothing else on screen is
  * moving. Without this the turn looks stalled — the composer's stop button was
  * the only sign anything was happening.
  *
  * `label` names what it's waiting on once some steps have already run: after a
- * browse-click-read sequence, three bare dots don't distinguish "thinking
+ * browse-click-read sequence, a bare animation doesn't distinguish "thinking
  * about the next move" from "hung". */
 function Thinking({ label }: { label?: string }) {
   return (
     <div className="thinking" role="status" aria-label={label ?? "Agent is working"}>
-      <span className="thinking-dot" />
-      <span className="thinking-dot" />
-      <span className="thinking-dot" />
+      <Orb state="working" />
       {label && <span className="thinking-label">{label}</span>}
     </div>
   );
@@ -67,8 +71,13 @@ function NoAnswer() {
  * is doing now.
  *
  * Only rendered for the turn that is actually streaming — a finished turn's
- * meter would be a number about nothing. */
-function RunMeter({ steps }: { steps?: Message["steps"] }) {
+ * meter would be a number about nothing.
+ *
+ * `orb` is the animation for what the line says, or null when `Thinking`
+ * already shows one: two orbs in one turn would break the rule that only one
+ * slow animation is on screen at a time. The slot is kept either way so the
+ * text does not slide sideways when a step starts or ends. */
+function RunMeter({ steps, orb }: { steps?: Message["steps"]; orb: OrbState | null }) {
   const run = useAppStore((s) => s.activeRun);
   const [, tick] = useState(0);
   useEffect(() => {
@@ -108,10 +117,13 @@ function RunMeter({ steps }: { steps?: Message["steps"] }) {
   const doing = item ? `${trim(item.text)} · ${activity}` : activity;
   return (
     <>
-      <p className={`run-meter ${tight ? "tight" : ""}`}>
-        {doing} · {clock}
-        {context ? ` · ${context}` : ""}
-      </p>
+      <div className="run-meter-row">
+        <span className="run-meter-orb">{orb && <Orb state={orb} />}</span>
+        <p className={`run-meter ${tight ? "tight" : ""}`}>
+          {doing} · {clock}
+          {context ? ` · ${context}` : ""}
+        </p>
+      </div>
       <ThinkingTrace text={run.thinking} />
     </>
   );
@@ -153,6 +165,8 @@ function StoppedNote({ reason }: { reason: StopReason }) {
     timeout: "I ran out of time. This is what I had.",
     max_steps: "I stopped at my step limit. This is what I had.",
     error: "The model call failed partway. This is what I had.",
+    // `VTN-6`: a spoken reply the user cut off has its own mark (`SpokenMark`).
+    interrupted: "",
   };
   const text = said[reason];
   if (!text) return null;
@@ -261,6 +275,16 @@ function TurnActions({ message, last }: { message: Message; last: boolean }) {
   const forkFromMessage = useAppStore((s) => s.forkFromMessage);
   const resumeLastRun = useAppStore((s) => s.resumeLastRun);
   const busy = useAppStore((s) => s.busy);
+  const requestRewind = useAppStore((s) => s.requestRewind);
+  // `RWD-UI-1`: the message you wrote that this answer replied to. A primitive,
+  // so the selector stays stable.
+  const askedBy = useAppStore((s) => {
+    const conv = s.conversations.find((c) => c.id === s.activeConversationId);
+    const list = conv?.messages ?? [];
+    const at = list.findIndex((m) => m.id === message.id);
+    for (let i = at - 1; i >= 0; i--) if (list[i].role === "user" && isPersistedId(list[i].id)) return list[i].id;
+    return null;
+  });
   if (message.streaming) return null;
 
   const interrupted =
@@ -288,18 +312,34 @@ function TurnActions({ message, last }: { message: Message; last: boolean }) {
           Try again from here
         </button>
       )}
+      {canAct && askedBy && (
+        <button className="why-link" onClick={() => requestRewind(askedBy)}>
+          Rewind to before this
+        </button>
+      )}
       {canAct && last && interrupted && (
         <button className="why-link" onClick={() => void resumeLastRun()}>
           Continue where I stopped
         </button>
       )}
-      {when && <span className="turn-time">{when}</span>}
+      {when && (
+        <span className="turn-time">
+          {message.spoken && <SpokenGlyph />}
+          {when}
+        </span>
+      )}
     </div>
   );
 }
 
 export default function AgentRun({ message, last = false }: { message: Message; last?: boolean }) {
   const model = message.model;
+  // Selectors return stable references (zustand v5): the filter is a memo.
+  const pending = useAppStore((s) => s.pendingQuestion);
+  const proposals = useAppStore((s) => s.harnessProposals);
+  const question = pending && pending.messageId === message.id ? pending : null;
+  const asked = useMemo(() => proposals.filter((p) => p.messageId === message.id), [proposals, message.id]);
+  const busyNow = useAppStore((s) => s.busy);
   // Video counts as media here too — filtering to `"image"` used to drop a
   // generated clip on the floor, leaving the turn showing only its timeline
   // step while the MP4 sat in Library.
@@ -320,8 +360,16 @@ export default function AgentRun({ message, last = false }: { message: Message; 
   // the wall-clock time in a browsing run, and it used to look identical to a
   // hang — the old test keyed on *any* step existing, so the indicator
   // switched off permanently the moment the first one landed.
-  const anyStepRunning = message.steps?.some((s) => s.status === "running") ?? false;
+  const runningStep = message.steps?.find((s) => s.status === "running");
+  const anyStepRunning = !!runningStep;
   const isThinking = !!message.streaming && !anyStepRunning && !message.text;
+  // The orb that goes with the meter line. Where `Thinking` is showing its own
+  // there is none here; where prose is arriving the work is composing it.
+  const meterOrb: OrbState | null = runningStep
+    ? orbForStep(runningStep.verb)
+    : message.text
+      ? "composing"
+      : null;
   const thinkingLabel = message.steps?.length ? "still working" : undefined;
   // A run that stopped at a limit already says why it has nothing; the generic
   // "I said nothing" line under it would be the same news told worse.
@@ -347,7 +395,7 @@ export default function AgentRun({ message, last = false }: { message: Message; 
       )}
       {/* `PLN-UI-1`: above the timeline, because the plan is what the steps
           below it are for. */}
-      {message.plan && <PlanCard plan={message.plan} />}
+      {message.plan && <PlanCard plan={message.plan} actionable={last && !message.streaming && !busyNow} />}
       {message.steps && <Timeline steps={message.steps} live={!!message.streaming} />}
       {message.subRunIds && message.subRunIds.length > 0 && (
         <FleetCard runIds={message.subRunIds} />
@@ -372,8 +420,9 @@ export default function AgentRun({ message, last = false }: { message: Message; 
         />
       )}
       {isThinking && <Thinking label={thinkingLabel} />}
-      {message.streaming && <RunMeter steps={message.steps} />}
+      {message.streaming && <RunMeter steps={message.steps} orb={meterOrb} />}
       {!message.streaming && message.stopReason && <StoppedNote reason={message.stopReason} />}
+      {!message.streaming && <StoppedHere message={message} />}
       {saidNothing && <SaidNothing />}
       {noAnswer && <NoAnswer />}
       <TurnActions message={message} last={last} />
@@ -385,6 +434,11 @@ export default function AgentRun({ message, last = false }: { message: Message; 
       )}
       {message.proposalIds?.map((id) => (
         <ProposalCard key={id} id={id} />
+      ))}
+      {/* `AGC-3`/`AGC-4`: what the run is waiting on, and what it asked of you. */}
+      {question && <QuestionCard q={question} />}
+      {asked.map((p) => (
+        <HarnessProposal key={p.id} proposal={p} />
       ))}
     </div>
   );

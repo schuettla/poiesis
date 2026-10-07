@@ -7,15 +7,19 @@ pub mod artifacts;
 pub mod background;
 pub mod browser;
 pub mod changes;
+pub mod checkup;
 pub mod codeexec;
 pub mod coderun;
+pub mod commands;
 pub mod context;
 mod context_golden;
 pub mod diagnostics;
 pub mod diff;
 pub mod duplicates;
+pub mod export;
 pub mod filesystem;
 pub mod fleet;
+pub mod goal;
 pub mod golden;
 pub mod imagegen;
 pub mod index;
@@ -30,6 +34,7 @@ pub mod preview;
 pub mod project;
 pub mod recall;
 pub mod results;
+pub mod rewind;
 pub mod retrieval;
 pub mod run;
 pub mod sandbox;
@@ -43,9 +48,17 @@ pub mod trash;
 pub mod untrusted;
 pub mod websearch;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::permissions::PermissionRequest;
+
+/// One choice in an `ask_user` question.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
 
 /// Events streamed to the UI during an agent run. The frontend renders Step*
 /// events as the timeline and Token events as the prose conclusion.
@@ -264,6 +277,13 @@ pub enum AgentEvent {
         /// `context_window`. An estimate, and named as one — the exact number
         /// is the provider's tokenizer's business.
         context_tokens: usize,
+        /// `RUN-1`: what this run has used so far, summed over its turns. `None`
+        /// until a provider reports usage.
+        usage: Option<crate::runtime::proxy::Usage>,
+        /// `RUN-1`: `usage` priced for this run's model. `None` for a local run
+        /// and for a model with no price: unknown is not free, so the run bar
+        /// shows nothing rather than a zero.
+        cost_usd: Option<f64>,
     },
     /// The loop finished, however it finished. Always emitted, immediately
     /// before the matching `Done`/`Cancelled`/`Error`, so the UI can tell a
@@ -277,6 +297,9 @@ pub enum AgentEvent {
         /// `OBS-1`: what the run cost, when the provider said. Null means
         /// unknown, which is not the same as free.
         usage: Option<crate::runtime::proxy::Usage>,
+        /// `RUN-1a`: `usage` priced by the side that knows this run's model, so a
+        /// child on a different model than its lead still arrives priced.
+        cost_usd: Option<f64>,
         /// `PLN-5`: the plan as it stood when the run ended. A run that stopped
         /// at its step cap can then say which items it never reached, which is
         /// the honest version of "I stopped at my step limit". `None` for a run
@@ -294,6 +317,39 @@ pub enum AgentEvent {
     /// A mid-run instruction was picked up and is now part of the transcript
     /// (`HRN-2`). The UI settles its optimistic "sent mid-run" mark on this.
     Steered { run_id: String, text: String },
+    /// `AGC-4`: the agent did something to its own session — cleared old tool
+    /// output, say. The same shape as a user's traced command, so one
+    /// `CommandNote` speaks for either. The backend has already written the
+    /// `command` row; this is for the transcript and the Orb.
+    HarnessCommand {
+        run_id: String,
+        name: String,
+        outcome: String,
+        note: Option<String>,
+    },
+    /// `AGC-4`: the agent asks the user to let it change something that belongs
+    /// to the user's session (a mode, a schedule). The run does not wait: the
+    /// user answers when they like, and the effect happens on the frontend.
+    /// Named apart from `Proposal`, which is a self-change (soul, skill).
+    HarnessProposal {
+        run_id: String,
+        id: String,
+        /// `switch_mode` | `schedule` | `compact`.
+        name: String,
+        reason: String,
+        payload: serde_json::Value,
+    },
+    /// `AGC-2`: one of the user's slash commands would clearly help. The
+    /// frontend keeps one suggestion at a time.
+    Suggestion { run_id: String, command: String, reason: String },
+    /// `AGC-3`: the run is waiting for the user to decide something.
+    Question {
+        run_id: String,
+        id: String,
+        question: String,
+        options: Vec<QuestionOption>,
+        multi: bool,
+    },
     /// The run completed normally.
     Done,
     /// The run was cancelled by the user.

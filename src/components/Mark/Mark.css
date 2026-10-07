@@ -36,6 +36,14 @@
   .poiesis-mark.state-healing .mark-membrane {
     animation: mark-flicker 1.5s ease-in-out 2;
   }
+  /* `CPX-2`: tending to myself shapes the membrane once; waiting for an answer is
+     the slow breath, quieter than working, because nothing is being done. */
+  .poiesis-mark.state-tending .mark-membrane {
+    animation: mark-flicker 1.5s ease-in-out 1;
+  }
+  .poiesis-mark.state-listening .mark-nucleus {
+    animation: mark-breathe-slow 5s ease-in-out infinite;
+  }
   /* SCH-UI-2: an unread digest, while otherwise resting — the same breathe as
      "working", just slower and shallower, so it reads as quiet rather than
      busy. Clears itself the moment the Self view is opened. */

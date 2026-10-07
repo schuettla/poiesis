@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
 import { inTauri } from "../lib/api";
 import { useAppStore } from "../lib/store";
@@ -83,6 +83,12 @@ export default function Usage() {
   const [data, setData] = useState<api.PricedUsage | null>(null);
   const [failed, setFailed] = useState(false);
   const setActiveConversation = useAppStore((s) => s.setActiveConversation);
+  // `UCM-10`: `/usage` lands on this chat's own row.
+  const usageFocus = useAppStore((s) => s.usageFocus);
+  const focusRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    focusRef.current?.scrollIntoView?.({ block: "center" });
+  }, [data, usageFocus]);
 
   useEffect(() => {
     if (!inTauri()) return;
@@ -198,7 +204,8 @@ export default function Usage() {
                   {data!.by_conversation.map((row) => (
                     <button
                       key={row.key}
-                      className="usage-row link"
+                      ref={row.key === usageFocus ? focusRef : undefined}
+                      className={`usage-row link ${row.key === usageFocus ? "focused" : ""}`}
                       onClick={() =>
                         row.label && setActiveConversation(row.key)
                       }
@@ -214,6 +221,9 @@ export default function Usage() {
                       </span>
                       <span className="usage-runs">
                         {row.runs} {row.runs === 1 ? "run" : "runs"}
+                        {row.agents_runs
+                          ? `, including ${row.agents_runs} agent ${row.agents_runs === 1 ? "run" : "runs"}`
+                          : ""}
                       </span>
                       <span className="usage-tokens">{tokenLine(row)}</span>
                       <span

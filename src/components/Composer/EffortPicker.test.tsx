@@ -43,9 +43,9 @@ afterEach(() => {
   container.remove();
 });
 
-async function render() {
+async function render(props: { chip?: string; onPick?: () => void } = {}) {
   await act(async () => {
-    root.render(<EffortPicker />);
+    root.render(<EffortPicker {...props} />);
   });
 }
 
@@ -124,3 +124,36 @@ describe("the effort picker", () => {
     expect(trigger().querySelectorAll(".effort-meter i.on")).toHaveLength(2);
   });
 });
+
+describe("a /effort chip (DEF-1)", () => {
+  it("shows the chip's value, marked as just this message", async () => {
+    stored = "low";
+    await render({ chip: "high" });
+    expect(trigger().textContent).toContain("Think hard");
+    expect(trigger().querySelector(".effort-once")).not.toBeNull();
+    expect(trigger().title).toBe("Just this message. My default is think briefly.");
+  });
+
+  it("shows nothing special without a chip", async () => {
+    await render();
+    expect(trigger().querySelector(".effort-once")).toBeNull();
+  });
+
+  it("picking a value clears the chip and sets the default, so the two cannot disagree", async () => {
+    let cleared = 0;
+    await render({ chip: "high", onPick: () => cleared++ });
+    await open();
+    await act(async () => options()[0].click());
+    expect(cleared).toBe(1);
+    expect(saved).toEqual([["models.reasoning_effort", "off"]]);
+  });
+
+  it("follows a default made elsewhere (make default)", async () => {
+    await render();
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent("poiesis:effort-default", { detail: "high" }));
+    });
+    expect(trigger().textContent).toContain("Think hard");
+  });
+});
+

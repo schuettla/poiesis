@@ -3,6 +3,7 @@ import { useAppStore } from "../../lib/store";
 import { inTauri, searchMessages, type MessageHit } from "../../lib/api";
 import { HUB_SECTIONS } from "../../lib/types";
 import { shortTime } from "../../lib/time";
+import { ranked } from "../../lib/fuzzy";
 import {
   BookmarkIcon,
   FolderIcon,
@@ -12,7 +13,9 @@ import {
   SectionIcon,
   SettingsIcon,
   SparkleIcon,
+  WaveformIcon,
 } from "../Icons/Icons";
+import { openVoice, voiceSession } from "../../lib/voice/controller";
 import "./CommandPalette.css";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -58,28 +61,6 @@ export function splitSnippet(raw: string): { text: string; hit: boolean }[] {
   return pieces;
 }
 
-/** Every word must appear. Lower is better: a word at the start of the text
- * beats one at a word boundary, which beats one mid-word. */
-function score(text: string, words: string[]): number | null {
-  const t = text.toLowerCase();
-  let total = 0;
-  for (const w of words) {
-    const i = t.indexOf(w);
-    if (i < 0) return null;
-    total += i === 0 ? 0 : /[\s\-_/\\.:]/.test(t[i - 1]) ? 1 : 2;
-  }
-  return total;
-}
-
-function ranked<T>(items: T[], text: (item: T) => string, words: string[], limit: number): T[] {
-  return items
-    .map((item, order) => ({ item, order, s: score(text(item), words) }))
-    .filter((r): r is { item: T; order: number; s: number } => r.s !== null)
-    .sort((a, b) => a.s - b.s || a.order - b.order)
-    .slice(0, limit)
-    .map((r) => r.item);
-}
-
 export default function CommandPalette() {
   const open = useAppStore((s) => s.paletteOpen);
   const setOpen = useAppStore((s) => s.setPaletteOpen);
@@ -111,6 +92,7 @@ function Palette({ onClose }: { onClose: () => void }) {
   const newConversation = useAppStore((s) => s.newConversation);
   const newProject = useAppStore((s) => s.newProject);
   const setView = useAppStore((s) => s.setView);
+  const openRuntime = useAppStore((s) => s.openRuntime);
 
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<MessageHit[]>([]);
@@ -184,6 +166,10 @@ function Palette({ onClose }: { onClose: () => void }) {
       { key: "cmd:new-project", icon: <PlusIcon />, label: "New project", run: newProject },
       { key: "cmd:library", icon: <BookmarkIcon />, label: "Library", run: () => setView("library") },
       { key: "cmd:projects", icon: <FolderIcon />, label: "Projects", meta: "Overview", run: () => setView("projects") },
+      // `VOC-UI-8`
+      { key: "cmd:talk", icon: <WaveformIcon />, label: "Talk to Poiesis", meta: "Voice", run: () => { setView("chat"); void openVoice(); } },
+      { key: "cmd:voice-settings", icon: <WaveformIcon />, label: "Voice settings", meta: "Voice", run: () => openRuntime("voice") },
+      { key: "cmd:stop-talking", icon: <WaveformIcon />, label: "Stop talking", meta: "Voice", run: () => voiceSession().stopSpeaking() },
     ];
 
     if (words.length === 0) {

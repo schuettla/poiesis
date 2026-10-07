@@ -1,5 +1,6 @@
 import { useAppStore } from "../../lib/store";
 import { inTauri } from "../../lib/api";
+import Orb from "../Orb/Orb";
 import "./EngineStatus.css";
 
 /**
@@ -41,7 +42,16 @@ export default function EngineStatus({ dotOnly = false }: { dotOnly?: boolean })
       title="The local model runtime (llama-server) runs on your PC to power chats. It starts automatically when you use a model."
       aria-label={`Local runtime: ${full}`}
     >
-      <span className="engine-dot" aria-hidden="true" />
+      {/* Starting is the one state with something to watch: a model can take a
+          while to load. The collapsed rail has no room for 20px, so it keeps
+          the pulsing dot. */}
+      {state === "starting" && !dotOnly ? (
+        <span className="engine-orb">
+          <Orb state="connecting" />
+        </span>
+      ) : (
+        <span className="engine-dot" aria-hidden="true" />
+      )}
       {/* Dropped, not merely hidden, when there is no room for words — the
           collapsed rail. Nothing is lost: `title` and `aria-label` above
           already carry the whole sentence, so the dot keeps saying everything

@@ -15,6 +15,16 @@ pub mod manifest;
 pub mod process;
 pub mod proxy;
 pub mod rerankserver;
+#[cfg(feature = "voice")]
+pub mod voice;
+#[cfg(feature = "voice")]
+pub mod voice_catalog;
+#[cfg(feature = "voice")]
+pub mod voice_floor;
+#[cfg(feature = "voice")]
+pub mod voice_session;
+#[cfg(feature = "voice")]
+pub mod voice_speech;
 pub mod watchdog;
 
 pub use manager::RuntimeManager;

@@ -35,6 +35,11 @@ export default function SelfPanel() {
   const [tab, setTab] = useState<Tab>("memory");
   const activeConversationId = useAppStore((s) => s.activeConversationId);
   const openContextPanel = useAppStore((s) => s.openContextPanel);
+  // `/autonomy` and `/self` land on a tab, not just on the page.
+  const tabRequest = useAppStore((s) => s.selfTabRequest);
+  useEffect(() => {
+    if (tabRequest) setTab(tabRequest.tab);
+  }, [tabRequest]);
 
   return (
     <>
@@ -130,6 +135,11 @@ function LessonsTab() {
               <span className="memory-created">learned {l.recurrence}×</span>
             )}
           </div>
+          {/* `CPX-5`: where it came from, in one plain line: no badge, no colour.
+              A lesson I drew because you went back on my work says so. */}
+          {l.origin === "rewind" && (
+            <p className="memory-created">learned when you went back{l.created ? ` on ${l.created}` : ""}</p>
+          )}
           <p className="memory-desc">{l.description}</p>
           {expanded === l.name && <p className="memory-body">{l.body}</p>}
           <div className="memory-card-actions">
@@ -300,10 +310,16 @@ function HealthTab() {
   );
 }
 
-/** AUT-UI-1: the membrane, as five plain choices. */
+/** AUT-UI-1: the membrane, as plain choices, one per kind of change. */
 function AutonomyTab() {
   const autonomy = useAppStore((s) => s.autonomy);
   const setAutonomy = useAppStore((s) => s.setAutonomy);
+  // `CPX-6`: a `◆` in the command menu lands on the class it stands for.
+  const focus = useAppStore((s) => s.selfTabRequest?.focus);
+  const nonce = useAppStore((s) => s.selfTabRequest?.nonce);
+  useEffect(() => {
+    if (focus) document.getElementById(`autonomy-${focus}`)?.scrollIntoView?.({ block: "center" });
+  }, [focus, nonce]);
 
   return (
     <div className="self-list">
@@ -311,7 +327,7 @@ function AutonomyTab() {
         I maintain myself. You decide how much I may change without asking.
       </p>
       {AUTONOMY_CLASSES.map((c) => (
-        <div className="self-rung" key={c.id}>
+        <div className="self-rung" key={c.id} id={`autonomy-${c.id}`}>
           <div className="self-rung-text">
             <span className="self-rung-label">{c.label}</span>
             <span className="skill-desc">{c.blurb}</span>

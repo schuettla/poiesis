@@ -17,6 +17,12 @@
       "when_to_use": "when the user attaches a form"
     },
     {
+      "name": "init",
+      "description": "Study the project and propose its instructions",
+      "when_to_use": "when the user runs /init",
+      "model_invocable": false
+    },
+    {
       "name": "changelog",
       "description": "Write release notes",
       "when_to_use": null

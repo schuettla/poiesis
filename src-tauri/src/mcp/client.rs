@@ -11,7 +11,7 @@ use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 
-use super::McpTool;
+use super::{prompt_text, McpPrompt, McpTool};
 
 /// Protocol revision we advertise during `initialize`.
 const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -94,6 +94,31 @@ impl McpClient {
         let params = serde_json::json!({ "name": name, "arguments": arguments });
         let result = self.request("tools/call", params).await?;
         Ok(flatten_content(&result))
+    }
+
+    /// List the server's prompts (`prompts/list`). A server that has none, or
+    /// does not speak prompts at all, answers with an error; that is "no prompts",
+    /// not a broken connector, so it is an empty list here.
+    pub async fn list_prompts(&mut self) -> Vec<McpPrompt> {
+        let Ok(result) = self.request("prompts/list", serde_json::json!({})).await else {
+            return Vec::new();
+        };
+        result
+            .get("prompts")
+            .cloned()
+            .and_then(|p| serde_json::from_value(p).ok())
+            .unwrap_or_default()
+    }
+
+    /// Ask the server to build a prompt (`prompts/get`) and return its text.
+    pub async fn get_prompt(
+        &mut self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<String, McpError> {
+        let params = serde_json::json!({ "name": name, "arguments": arguments });
+        let result = self.request("prompts/get", params).await?;
+        Ok(prompt_text(&result))
     }
 
     /// Connect + list tools in one shot (used for "test"/refresh).

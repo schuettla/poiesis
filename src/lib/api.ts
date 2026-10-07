@@ -99,6 +99,8 @@ export interface DbMessage {
   /** `PLN-UI-5`: the plan the run behind this turn worked to, as stored JSON.
    * Null for a turn that never wrote one, which is most of them. */
   plan_json: string | null;
+  /** `VTN-7`: this turn was spoken. */
+  spoken?: boolean;
   created_at: number;
   attachments?: DbAttachment[];
 }
@@ -137,6 +139,8 @@ export const appendMessage = (args: {
   modelProvenance?: Provenance;
   stepsJson?: string;
   attachments?: { kind: string; name: string; path: string; artifact_id?: string }[];
+  /** `VTN-7`: a turn the user spoke, or a reply that will be read out. */
+  spoken?: boolean;
 }) =>
   invoke<DbMessage>("append_message_cmd", {
     conversationId: args.conversationId,
@@ -146,6 +150,7 @@ export const appendMessage = (args: {
     modelProvenance: args.modelProvenance,
     stepsJson: args.stepsJson,
     attachments: args.attachments,
+    spoken: args.spoken,
   });
 
 export const finalizeMessage = (
@@ -391,7 +396,9 @@ export const stopChat = () => invoke<void>("stop_chat_cmd");
 
 /** Why a run stopped (`HRN-3`). Anything but `completed` means the answer is
  * what the run had in hand, not what it set out to say. */
-export type StopReason = "completed" | "aborted" | "timeout" | "max_steps" | "error";
+/** `interrupted` (`VTN-6`) is a spoken reply the user cut off: what was saved is
+ * only what they heard. */
+export type StopReason = "completed" | "aborted" | "timeout" | "max_steps" | "error" | "interrupted";
 
 /** What a run cost, when the provider reported it (`OBS-1`). */
 export interface TurnUsage {
@@ -461,6 +468,11 @@ export type AgentEvent =
       ms: number;
       /** `OBS-3`: an estimate of what this turn is about to send. */
       context_tokens: number;
+      /** `RUN-1`: what the run has used so far. Absent until a provider says. */
+      usage?: TurnUsage | null;
+      /** `RUN-1`: `usage` priced. `null` is unknown (local, unreported or no
+       * price), which is never the same as free. */
+      cost_usd?: number | null;
     }
   | {
       type: "run_ended";
@@ -469,6 +481,8 @@ export type AgentEvent =
       steps: number;
       ms: number;
       usage: TurnUsage | null;
+      /** `RUN-1a`: priced by the side that knows the run's model. */
+      cost_usd?: number | null;
       /** `PLN-5`: the plan as it stood when the run ended, so a run that
        * stopped at its budget can say which items it never reached. */
       plan: PlanView | null;
@@ -478,6 +492,30 @@ export type AgentEvent =
    * current state cannot drift out of step with the model's copy. */
   | { type: "plan"; run_id: string; plan: PlanView }
   | { type: "steered"; run_id: string; text: string }
+  /** `AGC-4`: I did something to my own session (cleared old tool output). The
+   * backend has already written the `command` row; this is for the transcript
+   * and the Orb. */
+  | { type: "harness_command"; run_id: string; name: string; outcome: string; note: string | null }
+  /** `AGC-4`: I ask to change something that is yours. The run does not wait. */
+  | {
+      type: "harness_proposal";
+      run_id: string;
+      id: string;
+      name: "switch_mode" | "schedule" | "compact";
+      reason: string;
+      payload: { mode?: "workspace" | "plan_first"; auto?: boolean; when?: string; task?: string };
+    }
+  /** `AGC-2`: one of your slash commands would clearly help. */
+  | { type: "suggestion"; run_id: string; command: string; reason: string }
+  /** `AGC-3`: the run is waiting for you to decide something. */
+  | {
+      type: "question";
+      run_id: string;
+      id: string;
+      question: string;
+      options: { label: string; detail?: string }[];
+      multi: boolean;
+    }
   | {
       type: "sub_spawned";
       run_id: string;
@@ -637,6 +675,23 @@ export interface RunOptions {
   toolsEnabled?: boolean;
   target?: ChatTarget;
   assistantMessageId?: string;
+  /** `REG-5`: what the user decided about this turn only. */
+  turn?: TurnRunOptions;
+}
+
+/** `REG-5`: the composer's modifier chips, as the backend's `RunOptions`. */
+export interface TurnRunOptions {
+  /** `off | low | medium | high | provider`, for this turn only. */
+  effort?: string;
+  /** Step budget for this turn only (1-50). */
+  maxSteps?: number;
+  /** `SKC-2`: a skill the user named with `/name`, loaded before the first token. */
+  skill?: string;
+  skillArgs?: string;
+  /** `PLF`: may read, may not change; writes a plan and stops for approval. */
+  planFirst?: boolean;
+  /** `PLF-4`: the plan the user approved. The run starts from it, unrestricted. */
+  approvedPlan?: PlanView;
 }
 
 export function agentChat(
@@ -654,6 +709,7 @@ export function agentChat(
     temperature: opts?.temperature,
     toolsEnabled: opts?.toolsEnabled ?? false,
     target: opts?.target,
+    runOptions: opts?.turn,
     onEvent: ch,
   });
 }
@@ -679,9 +735,34 @@ export function resumeRun(
     temperature: opts?.temperature,
     toolsEnabled: opts?.toolsEnabled ?? false,
     target: opts?.target,
+    runOptions: opts?.turn,
     onEvent: ch,
   });
 }
+
+/** `REG-4`: one command that left a trace, as the log keeps it. */
+export interface CommandTrace {
+  name: string;
+  args: string;
+  by: "user" | "agent";
+  outcome: string;
+  note?: string | null;
+  /** The user message a skill command was sent as. */
+  messageId?: string | null;
+}
+
+export interface CommandRecord extends CommandTrace {
+  /** When it was written, epoch ms. */
+  at: number;
+}
+
+/** `REG-4`: write a command's trace. Never reaches the model. */
+export const recordCommandTrace = (conversationId: string, trace: CommandTrace) =>
+  invoke<void>("record_command_cmd", { conversationId, trace });
+
+/** `REG-4`: a conversation's traced commands, oldest first. */
+export const conversationCommands = (conversationId: string) =>
+  invoke<CommandRecord[]>("conversation_commands_cmd", { conversationId });
 
 /** `HRN-UI-5`: the new branch, and the question to ask it again. */
 export interface ForkedConversation {
@@ -697,9 +778,75 @@ export interface ForkedConversation {
  */
 export const forkConversation = (
   conversationId: string,
-  messageId: string
+  messageId: string,
+  /** `UCM-2`: keep the boundary message too — `/fork`, not "Try again". */
+  inclusive = false
 ): Promise<ForkedConversation> =>
-  invoke<ForkedConversation>("fork_conversation_cmd", { conversationId, messageId });
+  invoke<ForkedConversation>("fork_conversation_cmd", { conversationId, messageId, inclusive });
+
+/** `RWD-1`: what going back to before a turn did. */
+export interface Rewound {
+  /** The new branch, holding everything before the turn. */
+  conversation: DbConversation;
+  /** What the turn said, to put back in the box. */
+  prompt: string;
+  files_undone: number;
+  /** Files that could not be put back, by name. */
+  files_failed: string[];
+}
+
+/** `RWD-1`: go back to before one of your turns. A branch, plus (when asked) the
+ * files I changed since put back. The original is never edited. */
+export const rewindConversation = (conversationId: string, messageId: string, undoFiles: boolean) =>
+  invoke<Rewound>("rewind_cmd", { conversationId, messageId, undoFiles });
+
+/** `RWD-2`: how many files a rewind to before this turn would put back. */
+export const changesSince = (conversationId: string, messageId: string) =>
+  invoke<number>("changes_since_cmd", { conversationId, messageId });
+
+/** `BTW-1`: ask on the side. The answer streams as `token` events and nothing is
+ * kept anywhere unless the caller keeps it. */
+export function sideQuestion(
+  conversationId: string,
+  question: string,
+  onEvent: (e: AgentEvent) => void,
+  target?: ChatTarget
+): Promise<void> {
+  const ch = new Channel<AgentEvent>();
+  ch.onmessage = onEvent;
+  return invoke<void>("side_question_cmd", { conversationId, question, target, onEvent: ch });
+}
+
+/** `BTW-UI-1`: Dismiss. Stops the answer that is streaming. */
+export const cancelSideQuestion = () => invoke<void>("cancel_side_question_cmd");
+
+/** `GOL-2`: has the goal been reached. Judged from my last answer and what I
+ * changed; it never starts a turn. */
+export interface GoalCheck {
+  met: boolean;
+  /** What shows it. Empty unless `met`. */
+  evidence: string;
+  /** What is left. Empty when `met`. */
+  next: string;
+}
+
+export const goalCheck = (conversationId: string, objective: string, until: string, target?: ChatTarget) =>
+  invoke<GoalCheck>("goal_check_cmd", { conversationId, objective, until, target });
+
+/** `UCM-9`: the conversation as Markdown. Nothing is written until it is saved. */
+export const exportConversation = (conversationId: string) =>
+  invoke<string>("export_conversation_cmd", { conversationId });
+
+/** `CHK-1`: one line of the checkup, in my voice. */
+export interface CheckupLine {
+  area: "engine" | "provider" | "recall" | "connector" | "tools" | "behaviour";
+  state: "fine" | "needs_you" | "off";
+  text: string;
+  action: { label: string; target: "runtime" | "recall" | "providers" | "connectors" | "health" } | null;
+}
+
+export const checkup = (target?: ChatTarget) =>
+  invoke<{ lines: CheckupLine[] }>("checkup_cmd", { target });
 
 /**
  * Say something to a run that is already working (`HRN-2`). The text is picked
@@ -711,6 +858,16 @@ export const forkConversation = (
  */
 export const steerRun = (runId: string, text: string): Promise<boolean> =>
   invoke<boolean>("steer_run_cmd", { runId, text });
+
+/** `AGC-3`: what the user answered to a question a run is waiting on. */
+export interface QuestionAnswer {
+  choices: string[];
+  text?: string;
+}
+
+/** `false` when the run is gone or the question was already answered. */
+export const answerQuestion = (runId: string, questionId: string, answer: QuestionAnswer): Promise<boolean> =>
+  invoke<boolean>("answer_question_cmd", { runId, questionId, answer });
 
 // ---- delegation (`SUB-9`) ----
 
@@ -780,6 +937,8 @@ export interface UsageBucket {
   prompt_tokens: number;
   output_tokens: number;
   runs: number;
+  /** `RUN-1d`: how many of `runs` were an agent's, folded in from a child chat. */
+  agents_runs?: number;
   /** `null` means the price is unknown, which is never the same as free. */
   cost_usd: number | null;
 }
@@ -808,9 +967,11 @@ export const saveKeptResult = (conversationId: string, reference: string, text: 
 export const compactConversation = (
   conversationId: string,
   uptoMessageId: string,
-  target?: ChatTarget
+  target?: ChatTarget,
+  /** `UCM-3`: what to keep in particular — `/compact <focus>`. */
+  focus?: string
 ) =>
-  invoke<string>("compact_conversation_cmd", { conversationId, uptoMessageId, target });
+  invoke<string>("compact_conversation_cmd", { conversationId, uptoMessageId, target, focus });
 
 /** One compaction this conversation has been through (`CTX-5`). */
 export interface Compaction {
@@ -864,6 +1025,9 @@ export interface Fact {
   /** YYYY-MM-DD after which this fact is swept automatically (`TTL-1`).
    * `null` means it never expires. Lessons never set this. */
   expires_at?: string | null;
+  /** `CPX-5`: where a lesson came from. `rewind` means the user went back on
+   * work, and the Lessons tab says so. */
+  origin?: string | null;
 }
 
 /** What gets prepended to every conversation (MEM-3). */
@@ -980,6 +1144,17 @@ export const restoreMemoryFact = (file: string) =>
   invoke<void>("restore_memory_fact_cmd", { file });
 
 export const setSoul = (text: string) => invoke<void>("set_soul_cmd", { text });
+
+/** What `/remember` saved (`UCM-5`). */
+export interface RememberedFact {
+  name: string;
+  description: string;
+}
+
+/** `UCM-5`: the user writing a fact down themselves. Not behind the `facts`
+ * autonomy rung — that rung is about what I may write unasked. */
+export const rememberFact = (conversationId: string | null, text: string) =>
+  invoke<RememberedFact>("remember_fact_cmd", { conversationId, text });
 
 export const getProfile = () => invoke<Profile | null>("get_profile_cmd");
 
@@ -1834,6 +2009,20 @@ export const setConnectorEnabled = (id: string, enabled: boolean) =>
   invoke<void>("set_connector_enabled_cmd", { id, enabled });
 export const deleteConnector = (id: string) => invoke<void>("delete_connector_cmd", { id });
 
+/** A prompt a connected server offers. In the menu it is a command. */
+export interface McpPromptView {
+  connector_id: string;
+  connector_name: string;
+  name: string;
+  title: string | null;
+  description: string;
+  arguments: { name: string; description: string; required: boolean }[];
+}
+export const listMcpPrompts = () => invoke<McpPromptView[]>("list_mcp_prompts_cmd");
+/** The text the server builds for a prompt, with its arguments filled in. */
+export const getMcpPrompt = (connectorId: string, name: string, args: Record<string, string>) =>
+  invoke<string>("get_mcp_prompt_cmd", { connectorId, name, arguments: args });
+
 // ---- working folder + Workbench ----
 
 /** How much the agent may change inside the attached folder. */
@@ -2272,6 +2461,16 @@ export interface SkillView {
    * a block — a skill scoring 3 still installs. */
   risk: number;
   risk_flags: string[];
+  /** `SKC-1`: what the `/` menu shows after the name. */
+  argument_hint?: string | null;
+  /** `false` for `disable-model-invocation: true` — only the user runs it, and
+   * it is left out of the catalogue the model reads. */
+  model_invocable?: boolean;
+  /** `false` keeps it out of the `/` menu. Absent reads as true. */
+  user_invocable?: boolean;
+  /** `SKC-5`: `poiesis` for a skill I proposed, and the date it was written. */
+  origin?: string | null;
+  created?: string | null;
 }
 
 /** Where the user's own skills live (`~/.poiesis/skills/`), created if absent
@@ -2359,6 +2558,9 @@ export interface PlanView {
   items: PlanItem[];
   revisions: number;
   previous?: string[][];
+  /** `PLF-3`: written while planning first, so nothing has changed yet and it
+   * waits for your approval. */
+  awaiting_approval?: boolean;
 }
 
 /** Parse a stored `plan_json` back into the plan a run worked to (`PLN-UI-5`).
@@ -2378,8 +2580,168 @@ export function parsePlan(planJson: string | null): PlanView | undefined {
 export function parseSteps(stepsJson: string | null): AgentStep[] | undefined {
   if (!stepsJson) return undefined;
   try {
-    return JSON.parse(stepsJson) as AgentStep[];
+    const parsed = JSON.parse(stepsJson) as AgentStep[] | { steps?: AgentStep[] };
+    // A cut-off spoken reply stores `{ steps, unspoken }` (`VTN-6`).
+    return Array.isArray(parsed) ? parsed : parsed.steps;
   } catch {
     return undefined;
   }
 }
+
+/** `VTN-6`: the whole written reply of a spoken turn the user cut off, when
+ * only part of it was heard. */
+export function parseUnspoken(stepsJson: string | null): string | undefined {
+  if (!stepsJson) return undefined;
+  try {
+    const parsed = JSON.parse(stepsJson) as unknown;
+    if (Array.isArray(parsed) || typeof parsed !== "object" || parsed === null) return undefined;
+    const text = (parsed as { unspoken?: unknown }).unspoken;
+    return typeof text === "string" && text ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The `steps_json` of a turn: the timeline, plus the full reply when the user
+ * cut a spoken one off (`VTN-6`). */
+export function stepsJsonFor(steps: AgentStep[], unspoken?: string): string | undefined {
+  if (unspoken) return JSON.stringify({ steps, unspoken });
+  return steps.length ? JSON.stringify(steps) : undefined;
+}
+
+// ---- voice (VOC): everything runs on this machine ----
+
+export interface VoiceHearingEntry {
+  id: string;
+  family: "parakeet" | "moonshine";
+  name: string;
+  note: string;
+  size_label: string;
+  languages: string[];
+}
+export interface VoiceChoice {
+  id: string;
+  name: string;
+  sid: number;
+  language: string;
+  /** Language and region, such as `en_GB`. */
+  locale: string;
+}
+export interface VoiceModelEntry {
+  id: string;
+  note: string;
+  size_label: string;
+  /** Short license of the voice data, such as "CC0". */
+  license: string;
+  voices: VoiceChoice[];
+}
+export interface VoiceCatalog {
+  hearing: VoiceHearingEntry[];
+  voices: VoiceModelEntry[];
+}
+export interface VoiceStatus {
+  /** Id of an installed hearing, or null when Poiesis cannot listen yet. */
+  hearing: string | null;
+  /** Ids of every installed hearing. */
+  hearings: string[];
+  /** Ids of installed voice models. */
+  voices: string[];
+  loaded: boolean;
+}
+export interface VoiceSettings {
+  hearing_model: string;
+  voice_id: string;
+  speed: number;
+  language: string;
+  cut_in: boolean;
+  hotkey: string;
+  threads: number;
+}
+
+export const voiceCatalog = () => invoke<VoiceCatalog>("voice_catalog_cmd");
+export const voiceStatus = () => invoke<VoiceStatus>("voice_status_cmd");
+export const voiceSettings = (uiLanguage = navigator.language) =>
+  invoke<VoiceSettings>("voice_settings_cmd", { uiLanguage });
+
+export function voiceDownload(
+  kind: "hearing" | "voice",
+  id: string,
+  onProgress: (p: DownloadProgress) => void
+): Promise<VoiceStatus> {
+  const ch = new Channel<DownloadProgress>();
+  ch.onmessage = onProgress;
+  return invoke<VoiceStatus>("voice_download_cmd", { kind, id, onProgress: ch });
+}
+export const voiceDelete = (kind: "hearing" | "voice", id: string) =>
+  invoke<VoiceStatus>("voice_delete_cmd", { kind, id });
+
+/** A short sample in the given voice, as WAV bytes. */
+export const voicePreview = (voiceId: string, text: string) =>
+  invoke<ArrayBuffer>("voice_preview_cmd", { voiceId, text });
+
+/** One stretch of 16 kHz mono 16-bit speech in, the words out. Sent as a raw
+ * body so the audio is not turned into a JSON array. */
+export async function voiceTranscribe(pcm: Uint8Array): Promise<string> {
+  if (!inTauri()) throw new Error(`Tauri command "voice_transcribe_cmd" called outside the desktop app`);
+  return tauriInvoke<string>("voice_transcribe_cmd", pcm, { headers: { "x-ui-language": navigator.language } });
+}
+
+// ---- live voice session (TRN, VTN) ----
+
+/** What a live voice session tells the screen. Mirrors `VoiceEvent` in Rust. */
+export type VoiceEvent =
+  | { type: "floor"; state: "listening" | "user_speaking" | "thinking" | "speaking" }
+  | { type: "partial"; text: string }
+  | { type: "transcript"; text: string; language: string | null }
+  | { type: "duck" }
+  | { type: "unduck" }
+  | { type: "yield" }
+  | {
+      type: "audio";
+      generation: number;
+      seq: number;
+      sample_rate: number;
+      /** 16-bit little-endian mono samples, base64. */
+      pcm: string;
+      /** What this piece says, as it was spoken. */
+      text: string;
+      /** A short spoken notice, not part of the reply. */
+      notice: boolean;
+    }
+  | { type: "speech_done"; generation: number }
+  | { type: "hint"; text: string }
+  | { type: "error"; message: string };
+
+/** Opens a live session. Rejects with one plain sentence when hearing is not
+ * installed. Starting one closes any earlier one. */
+export function voiceStart(onEvent: (e: VoiceEvent) => void, uiLanguage = navigator.language): Promise<void> {
+  const ch = new Channel<VoiceEvent>();
+  ch.onmessage = onEvent;
+  return invoke<void>("voice_start_cmd", { uiLanguage, onEvent: ch });
+}
+export const voiceStop = () => invoke<void>("voice_stop_cmd");
+
+/** One batch of mic audio: an 8-byte little-endian counter, then 16 kHz mono
+ * 16-bit samples, as a raw body. */
+export async function voicePushAudio(counter: number, pcm: Uint8Array): Promise<void> {
+  if (!inTauri()) return;
+  const body = new Uint8Array(8 + pcm.length);
+  new DataView(body.buffer).setBigUint64(0, BigInt(counter), true);
+  body.set(pcm, 8);
+  await tauriInvoke<void>("voice_push_audio_cmd", body);
+}
+
+/** Poiesis began to make sound (`started`) or went silent (`finished`). */
+export const voiceAssistant = (state: "started" | "finished", generation: number) =>
+  invoke<void>("voice_assistant_cmd", { state, generation });
+
+/** Streamed reply text to speak. `done` says no more text follows. */
+export const voiceSpeak = (
+  generation: number,
+  text: string,
+  done: boolean,
+  opts: { notice?: boolean; language?: string } = {}
+) => invoke<void>("voice_speak_cmd", { generation, text, done, notice: opts.notice, language: opts.language });
+
+/** Stops speaking reply `generation` and anything older. */
+export const voiceCancelSpeech = (generation: number) => invoke<void>("voice_cancel_speech_cmd", { generation });

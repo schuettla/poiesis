@@ -63,6 +63,8 @@ fn build(f: &serde_json::Value) -> PromptInputs {
                 name: s["name"].as_str().unwrap_or_default().to_string(),
                 description: s["description"].as_str().unwrap_or_default().to_string(),
                 when_to_use: s["when_to_use"].as_str().map(str::to_string),
+                // `SKC-3`: absent means the model may invoke it.
+                model_invocable: s["model_invocable"].as_bool().unwrap_or(true),
             })
             .collect(),
         blocks: f["blocks"]
@@ -92,6 +94,7 @@ fn build(f: &serde_json::Value) -> PromptInputs {
                 total: t["total"].as_i64().unwrap_or(0),
             })
             .collect(),
+        spoken: false,
     }
 }
 
@@ -161,4 +164,35 @@ fn the_fixture_actually_exercises_the_budget() {
     );
     assert!(bt.needs_compaction, "the fixture must overflow its budget");
     assert!(bt.overflow > 0 && bt.overflow < prior.len(), "some turns drop, not all");
+}
+
+/// `VTN-2`: the spoken-reply sentence, held in step with `store.ts` by one
+/// shared file, same idea as the gate above but small. The main fixture is not
+/// touched, so this gate can move on its own.
+#[test]
+fn the_spoken_sentence_matches_the_shared_golden() {
+    let on = compose_system_prompt(&PromptInputs { base: "BASE".into(), spoken: true, ..Default::default() });
+    let off = compose_system_prompt(&PromptInputs { base: "BASE".into(), ..Default::default() });
+    assert_eq!(off, "BASE", "a typed turn must not change");
+
+    let path = fixture_dir().join("voice").join("spoken-prompt.golden.txt");
+    if std::env::var("UPDATE_PROMPT_GOLDEN").is_ok() {
+        std::fs::write(&path, &on).expect("write the golden");
+        return;
+    }
+    let want = std::fs::read_to_string(&path).unwrap_or_default();
+    assert_eq!(on, want, "SPOKEN_GUIDANCE changed: update the golden and `store.ts` together");
+}
+
+/// It goes last, after the tool guidance, so nothing above can undo it.
+#[test]
+fn the_spoken_sentence_comes_last() {
+    let out = compose_system_prompt(&PromptInputs {
+        base: "BASE".into(),
+        tools_enabled: true,
+        memory_enabled: true,
+        spoken: true,
+        ..Default::default()
+    });
+    assert!(out.ends_with(SPOKEN_GUIDANCE), "{out}");
 }

@@ -165,3 +165,65 @@ describe("whether a child still has work to come", () => {
     }
   });
 });
+
+/** `RUN-T1b`: what an agent spent reaches the webview wrapped in the lead's
+ * stream, and used to be dropped there. */
+describe("a child's spend (RUN-1b)", () => {
+  it("run_progress keeps the cost so far, priced by the side that knows its model", () => {
+    applySubEvent(set, RUN, {
+      type: "run_progress",
+      run_id: RUN,
+      step: 1,
+      max_steps: 8,
+      ms: 10,
+      context_tokens: 100,
+      usage: { prompt_tokens: 500, output_tokens: 50 },
+      cost_usd: 0.004,
+    });
+    const run = useAppStore.getState().subRuns[RUN];
+    expect(run.costUsd).toBe(0.004);
+    expect(run.usage).toEqual({ prompt_tokens: 500, output_tokens: 50 });
+  });
+
+  it("run_ended keeps the final figure", () => {
+    applySubEvent(set, RUN, {
+      type: "run_ended",
+      run_id: RUN,
+      stop_reason: "completed",
+      steps: 3,
+      ms: 100,
+      usage: { prompt_tokens: 900, output_tokens: 90 },
+      cost_usd: 0.01,
+      plan: null,
+    });
+    expect(useAppStore.getState().subRuns[RUN].costUsd).toBe(0.01);
+  });
+
+  it("an agent that cannot be priced stays null, never zero", () => {
+    applySubEvent(set, RUN, {
+      type: "run_ended",
+      run_id: RUN,
+      stop_reason: "completed",
+      steps: 3,
+      ms: 100,
+      usage: null,
+      cost_usd: null,
+      plan: null,
+    });
+    expect(useAppStore.getState().subRuns[RUN].costUsd).toBeNull();
+  });
+
+  it("does not change the child's status: that is told elsewhere", () => {
+    applySubEvent(set, RUN, {
+      type: "run_ended",
+      run_id: RUN,
+      stop_reason: "completed",
+      steps: 1,
+      ms: 1,
+      usage: null,
+      cost_usd: null,
+      plan: null,
+    });
+    expect(useAppStore.getState().subRuns[RUN].status).toBe("running");
+  });
+});

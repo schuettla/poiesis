@@ -127,6 +127,28 @@ export interface SubRun {
    * to their group, so its timeline bands them the same way the lead's does. */
   parallelPending?: Record<string, string>;
   steerPending?: boolean;
+  /** `RUN-1b`: what it used, and what that cost. `costUsd` is `undefined` while
+   * it has not said, and `null` once it has said it cannot be priced — the run
+   * bar tells those apart, and never sums over a `null`. */
+  usage?: import("./api").TurnUsage;
+  costUsd?: number | null;
+}
+
+/** `RUN-3`: what the run bar remembers about the latest run in a conversation.
+ * In memory only, per conversation; the next send replaces it. */
+export interface RunSummary {
+  runId: string;
+  startedAt: number;
+  /** True while the run is still working. */
+  live: boolean;
+  /** Paths the run changed so far, deduplicated. After the run the bar reads
+   * the Changes view instead, so the two always agree. */
+  files: string[];
+  /** The lead's own cost. `null` when unknown; local runs say so separately. */
+  costUsd: number | null;
+  localRun: boolean;
+  stopReason?: import("./api").StopReason;
+  plan?: import("./api").PlanView;
 }
 
 /** The typed workspace-block kinds the renderer understands (Generative UI).
@@ -191,6 +213,9 @@ export interface Message {
   /** Typed workspace blocks the assistant produced in this turn (Generative UI). */
   blocks?: BlockView[];
   attachments?: Attachment[];
+  /** `SKC-2`: the `/name` this user turn was sent as, so the bubble can show a
+   * chip instead of making the message read as if the user typed a prompt. */
+  command?: { name: string; args: string };
   /** Change proposals the agent raised during this turn (SOUL-UI-2). Ids only:
    *  the card reads the live proposal so it disappears once answered. */
   proposalIds?: string[];
@@ -221,6 +246,12 @@ export interface Message {
   /** `HRN-3`: why an assistant turn stopped. Absent or `completed` means the
    * model finished; anything else means the text is what the run had in hand. */
   stopReason?: import("./api").StopReason;
+  /** `VTN-7`: this turn was spoken: a user turn that was heard, or a reply that
+   * was read out. */
+  spoken?: boolean;
+  /** `VTN-6`: when the user cut a spoken reply off, `text` is only what they
+   * heard and this is the whole written reply. */
+  unspoken?: string;
   /** `SUB-UI-1`: run ids of the agents this turn handed work to, in the order
    * the lead asked for them. Drives the Fleet card. */
   subRunIds?: string[];
@@ -428,4 +459,107 @@ export type ModelFilter = "all" | "local" | "cloud";
 
 /** The Runtime page's tabs (`RTM-8`). `servers` is the deep link used by the
  * picker and the Models page's "Your server" groups. */
-export type RuntimeTab = "chat" | "images" | "servers" | "recall";
+export type RuntimeTab = "chat" | "images" | "servers" | "recall" | "voice";
+
+/** `CMP-6`: what the user decided about the next message only. Cleared after
+ * every send, so a chip never silently outlives the message it was for.
+ * `effort` is one of `off | low | medium | high | provider`. */
+export interface TurnModifiers {
+  effort?: string;
+  maxSteps?: number;
+  /** `PLF`: the next run may read but not change anything, writes a plan, and
+   * stops for approval. Not "plan mode": that is the setting for whether the
+   * plan tool is offered at all. */
+  planFirst?: boolean;
+  /** `DEF-5`: the chip is there because it is my default, not because it was
+   * asked for. Removing it means not this time and never changes the setting. */
+  planFirstIsDefault?: boolean;
+}
+
+/** `REG-4`: how a traced command ended. Only `done` and `failed` exist until the
+ * agent can propose commands (`AGC`). */
+export type CommandOutcome = "done" | "proposed" | "accepted" | "declined" | "failed";
+
+/** One traced command, as the transcript shows it (`CommandNote`). */
+export interface CommandNoteView {
+  id: string;
+  name: string;
+  args: string;
+  by: "user" | "agent";
+  outcome: CommandOutcome;
+  note?: string;
+  /** Milliseconds since the epoch; places the note among the turns by time. */
+  at: number;
+  /** The user message a skill command was sent as, so its bubble can carry a
+   * `/name` chip (`SKC-2`). */
+  messageId?: string;
+}
+
+/** `BTW-UI-1`: the one side question on screen. It is not in the conversation
+ * unless the user keeps it. */
+export interface SideAnswer {
+  convId: string;
+  question: string;
+  answer: string;
+  /** `waiting` until the first word; the card says it is waiting on my engine. */
+  status: "waiting" | "streaming" | "done" | "error";
+  error?: string;
+}
+
+/** `CHK-UI-1`: a checkup that is running, or the last one's result. */
+export type CheckupState = { convId: string; running: true } | null;
+
+/** `AGC-3`: a question a run is waiting on. One at a time. */
+export interface PendingQuestion {
+  runId: string;
+  id: string;
+  convId: string;
+  /** The assistant turn it belongs to, so its card sits in that turn. */
+  messageId: string;
+  question: string;
+  options: { label: string; detail?: string }[];
+  multi: boolean;
+}
+
+/** `AGC-2`: the one suggestion on screen. Replaced, never stacked. */
+export interface ActiveSuggestion {
+  convId: string;
+  runId: string;
+  /** The command's name as the manifest has it, without the slash. */
+  command: string;
+  reason: string;
+}
+
+/** `AGC-4`: something I asked to change that is yours, waiting for your answer. */
+export interface HarnessProposalView {
+  id: string;
+  runId: string;
+  convId: string;
+  /** The assistant turn it was asked in. */
+  messageId: string;
+  name: "switch_mode" | "schedule" | "compact";
+  reason: string;
+  payload: { mode?: "workspace" | "plan_first"; auto?: boolean; when?: string; task?: string };
+}
+
+/** `CMP-3`: something from elsewhere that the next message should be read
+ * against. The model gets a line naming it and reads it with its own tools. */
+export interface ContextRef {
+  kind: "conversation" | "artifact";
+  id: string;
+  label: string;
+}
+
+/** What `sendMessage` accepts beyond the text. */
+export interface SendOptions {
+  /** `SKC-2`: the skill the user named with `/name`. */
+  skill?: string;
+  skillArgs?: string;
+  refs?: ContextRef[];
+  /** `PLF-4`: Go ahead. The plan the user approved; the run starts from it with
+   * nothing restricted, and the Plan first chip is never sent with it. */
+  approvedPlan?: import("./api").PlanView;
+  /** `VTN-1`: the user spoke this turn and will hear the reply, so the prompt
+   * says so and the reply is read out. */
+  spoken?: boolean;
+}

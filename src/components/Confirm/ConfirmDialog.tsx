@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import "./Confirm.css";
 
 /**
@@ -13,6 +13,7 @@ export default function ConfirmDialog({
   cancelLabel = "Cancel",
   onConfirm,
   onCancel,
+  children,
 }: {
   title: string;
   body?: string;
@@ -20,6 +21,8 @@ export default function ConfirmDialog({
   cancelLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
+  /** Extra controls between the sentence and the buttons, such as a checkbox. */
+  children?: ReactNode;
 }) {
   const confirmRef = useRef<HTMLButtonElement>(null);
 
@@ -46,6 +49,7 @@ export default function ConfirmDialog({
       >
         <h2 className="confirm-title">{title}</h2>
         {body && <p className="confirm-body">{body}</p>}
+        {children}
         <div className="confirm-actions">
           <button className="confirm-cancel" onClick={onCancel}>
             {cancelLabel}

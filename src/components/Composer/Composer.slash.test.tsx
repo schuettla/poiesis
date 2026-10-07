@@ -113,10 +113,11 @@ describe("composer `/` skill drop-up", () => {
   });
 
   it("arrows move the highlight before Enter takes it", () => {
-    type("/");
+    // `/` now opens every command, so narrow to the two hyphenated skills to
+    // keep this about the arrows. Order follows the store's list.
+    type("/-");
     press("ArrowDown");
     press("Enter");
-    // Order follows the store's list; the second entry is the one taken.
     expect(input().value).toBe("/pdf-forms ");
   });
 

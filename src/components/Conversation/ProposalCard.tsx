@@ -166,6 +166,49 @@ function SkillProposal({
   );
 }
 
+/** `SKC-4`: what `/init` ends in. The instructions are shown whole, because
+ * these ride in every prompt of every session in the project — they are read
+ * before they are accepted, not summarised. Accepting writes them through
+ * `setProjectInstructions`, the one place that also keeps the project current. */
+function ProjectInstructionsProposal({
+  id,
+  projectId,
+  rationale,
+  proposedText,
+}: {
+  id: string;
+  projectId: string | null;
+  rationale: string;
+  proposedText: string;
+}) {
+  const resolve = useAppStore((s) => s.resolveChangeProposal);
+  const setProjectInstructions = useAppStore((s) => s.setProjectInstructions);
+  const projectName = useAppStore((s) => s.projects.find((p) => p.id === projectId)?.name);
+
+  async function accept() {
+    if (projectId) await setProjectInstructions(projectId, proposedText);
+    await resolve(id, true);
+  }
+
+  return (
+    <div className="proposal-card">
+      <p className="proposal-text">
+        I'd like to carry these instructions in every session{projectName ? ` of ${projectName}` : ""} —{" "}
+        {rationale}
+      </p>
+      <pre className="proposal-preview">{proposedText}</pre>
+      <div className="proposal-actions">
+        <button className="btn-text" onClick={() => void accept()}>
+          Use these
+        </button>
+        <button className="btn-text" onClick={() => resolve(id, false)}>
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** `OUT-2`: a skill that's been failing tool calls asks to revise its own
  * copy. Its own `skill-revision` target, not a variant of the install card —
  * accepting means "replace what you use", not "add something new". */
@@ -251,6 +294,16 @@ export default function ProposalCard({ id }: { id: string }) {
 
   if (proposal.target === "email") {
     return <EmailProposal id={id} proposedText={proposal.proposed_text} />;
+  }
+  if (proposal.target === "project_instructions") {
+    return (
+      <ProjectInstructionsProposal
+        id={id}
+        projectId={proposal.slug}
+        rationale={proposal.rationale}
+        proposedText={proposal.proposed_text}
+      />
+    );
   }
   if (proposal.target === "skill-revision") {
     return <SkillRevisionProposal id={id} slug={proposal.slug} rationale={proposal.rationale} />;

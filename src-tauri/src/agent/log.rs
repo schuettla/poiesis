@@ -98,6 +98,131 @@ pub fn last_plan(db: &Db, conversation_id: &str) -> Option<super::plan::Plan> {
         .and_then(|r| serde_json::from_str::<super::plan::Plan>(&r.payload_json).ok())
 }
 
+/// `REG-4`: the log's name for a command that changed something.
+pub const COMMAND_KIND: &str = "command";
+
+/// `REG-4`: the log's name for a rewind, written in the *original* conversation
+/// so it can say that the user went back and abandoned what followed.
+pub const REWOUND_KIND: &str = "rewound";
+
+/// One command that left a trace, as it goes into the log and comes back out.
+///
+/// The same shape whoever ran it: a user typing `/rename` and the agent calling
+/// `harness` both end up here, which is what lets one `CommandNote` in the
+/// transcript speak for either (`COMMANDS_PLAN` Part I §1).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandTrace {
+    pub name: String,
+    #[serde(default)]
+    pub args: String,
+    /// `user` or `agent`.
+    pub by: String,
+    /// `done | proposed | accepted | declined | failed`.
+    pub outcome: String,
+    #[serde(default)]
+    pub note: Option<String>,
+    /// The user message a skill command was sent as, so its bubble can carry a
+    /// `/name` chip after a reload.
+    #[serde(default)]
+    pub message_id: Option<String>,
+}
+
+/// A trace and when it was written.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandRecord {
+    pub at: i64,
+    #[serde(flatten)]
+    pub trace: CommandTrace,
+}
+
+/// Record a command. Best effort, like every other write here: a command that
+/// ran but failed to log still ran.
+pub fn record_command(db: &Db, conversation_id: &str, run_id: Option<&str>, trace: &CommandTrace) {
+    let Ok(payload) = serde_json::to_value(trace) else { return };
+    let _ = db.append_session_event(conversation_id, run_id, COMMAND_KIND, &payload);
+}
+
+/// Every traced command in a conversation, oldest first. A row that will not
+/// parse is skipped rather than failing the read.
+pub fn commands(db: &Db, conversation_id: &str) -> Vec<CommandRecord> {
+    let Ok(rows) = db.session_events(conversation_id) else {
+        return Vec::new();
+    };
+    rows.into_iter()
+        .filter(|r| r.kind == COMMAND_KIND)
+        .filter_map(|r| {
+            serde_json::from_str::<CommandTrace>(&r.payload_json)
+                .ok()
+                .map(|trace| CommandRecord { at: r.created_at, trace })
+        })
+        .collect()
+}
+
+/// `CPX-5`: what the user did to correct me in this conversation, as sentences
+/// reflection can read. Going back on a turn is the strongest of them: it is
+/// abandoned work, and until now it was invisible to everything that learns.
+///
+/// Oldest first. A row that will not parse is skipped, like everywhere here.
+pub fn user_signals(db: &Db, conversation_id: &str) -> Vec<String> {
+    let Ok(rows) = db.session_events(conversation_id) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for row in rows {
+        if row.kind == REWOUND_KIND {
+            let preview = serde_json::from_str::<serde_json::Value>(&row.payload_json)
+                .ok()
+                .and_then(|v| v.get("preview").and_then(|p| p.as_str()).map(str::to_string));
+            if let Some(preview) = preview {
+                out.push(format!(
+                    "The user went back to before \u{201c}{preview}\u{201d} and abandoned what followed."
+                ));
+            }
+        } else if row.kind == COMMAND_KIND {
+            let Ok(t) = serde_json::from_str::<CommandTrace>(&row.payload_json) else { continue };
+            if t.outcome == "declined" {
+                if t.name == "suggest" {
+                    out.push(format!("The user said not now to my suggestion of /{}.", t.args));
+                } else if let Some(rest) = t.note.as_deref().and_then(|n| n.strip_prefix("you said not now to ")) {
+                    out.push(format!("The user said not now to {rest}."));
+                } else {
+                    out.push(format!("The user declined /{}.", t.name));
+                }
+            } else if t.name == "forget" && t.by == "user" {
+                let what = t.note.as_deref().unwrap_or(&t.args);
+                out.push(format!("The user told me to {what}."));
+            }
+        }
+    }
+    out
+}
+
+/// Has this conversation been gone back on? Used to decide whether a lesson may
+/// say it came from a rewind.
+pub fn was_rewound(db: &Db, conversation_id: &str) -> bool {
+    db.session_events(conversation_id)
+        .map(|rows| rows.iter().any(|r| r.kind == REWOUND_KIND))
+        .unwrap_or(false)
+}
+
+/// `CPX-5`: how many times the user has said not now to suggesting this command,
+/// across every conversation, among the last 20 such answers. Two is enough to
+/// stop: I learn what this user does not want suggested.
+pub fn declined_suggestions(db: &Db, command: &str) -> usize {
+    const LOOKBACK: i64 = 400;
+    const LAST: usize = 20;
+    let Ok(rows) = db.recent_session_events_of_kind(COMMAND_KIND, LOOKBACK) else {
+        return 0;
+    };
+    rows.into_iter()
+        .filter_map(|r| serde_json::from_str::<CommandTrace>(&r.payload_json).ok())
+        .filter(|t| t.name == "suggest" && t.args == command && t.outcome == "declined")
+        .take(LAST)
+        .count()
+}
+
 /// One compaction, as it goes into the log and comes back out.
 ///
 /// The point of the row is that a summary can say **what it replaced**.
@@ -173,7 +298,7 @@ fn kind_of(message: &serde_json::Value) -> &'static str {
 /// `CTX-T2`: rebuild the exact message array a run sent, from its rows.
 ///
 /// Rows that describe the run rather than what it sent — `steer`, `stop`,
-/// `summary` and `plan` — are skipped. A `plan` row is state *about* the run,
+/// `summary`, `plan`, `command` and `rewound` — are skipped. A `plan` row is state *about* the run,
 /// not a turn in it: the resumed run is handed the plan itself (`RunContext`),
 /// which then renders it into the transcript exactly as the original did, so
 /// replaying the row as well would put the plan in twice and pin the older copy
@@ -190,7 +315,12 @@ pub fn replay(db: &Db, run_id: &str) -> Vec<serde_json::Value> {
     };
     let mut out = Vec::new();
     for row in rows {
-        if matches!(row.kind.as_str(), "steer" | "stop" | COMPACTION_KIND | PLAN_KIND) {
+        // `command` and `rewound` are records *about* the conversation, like
+        // `summary`: the model must never see its own command trace.
+        if matches!(
+            row.kind.as_str(),
+            "steer" | "stop" | COMPACTION_KIND | PLAN_KIND | COMMAND_KIND | REWOUND_KIND
+        ) {
             continue;
         }
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&row.payload_json) else {
@@ -290,6 +420,149 @@ mod tests {
             db.last_logged_run(&conversation_id).unwrap(),
             Some(("run-1".to_string(), Some("timeout".to_string())))
         );
+    }
+
+    fn msg(db: &Db, conversation_id: &str, role: &str, text: &str) -> crate::db::Message {
+        db.append_message(
+            conversation_id,
+            &crate::db::NewMessage {
+                role: role.into(),
+                content: text.into(),
+                model_name: None,
+                model_provenance: None,
+                steps_json: None,
+                attachments: Vec::new(),
+            },
+        )
+        .unwrap()
+    }
+
+    fn trace(name: &str, by: &str) -> CommandTrace {
+        CommandTrace {
+            name: name.into(),
+            args: String::new(),
+            by: by.into(),
+            outcome: "done".into(),
+            note: None,
+            message_id: None,
+        }
+    }
+
+    /// `REG-T3`: the model never sees its own command trace, whichever run wrote it.
+    #[test]
+    fn replay_skips_command_and_rewound_rows() {
+        let db = db();
+        let conversation_id = conv(&db);
+        let log = SessionLog::new(&db, &conversation_id, "run-1");
+        log.prompt(&[serde_json::json!({ "role": "user", "content": "go" })]);
+        record_command(&db, &conversation_id, Some("run-1"), &trace("compact", "agent"));
+        let _ = db.append_session_event(
+            &conversation_id,
+            Some("run-1"),
+            REWOUND_KIND,
+            &serde_json::json!({ "messageId": "m1" }),
+        );
+        log.appended(&serde_json::json!({ "role": "assistant", "content": "done" }));
+
+        let replayed = replay(&db, "run-1");
+        assert_eq!(replayed.len(), 2, "only the prompt and the answer: {replayed:?}");
+    }
+
+    fn answered(name: &str, args: &str, outcome: &str, note: Option<&str>) -> CommandTrace {
+        CommandTrace {
+            name: name.into(),
+            args: args.into(),
+            by: "user".into(),
+            outcome: outcome.into(),
+            note: note.map(str::to_string),
+            message_id: None,
+        }
+    }
+
+    /// `CPX-T`: a rewind, a declined suggestion and a `/forget` all reach
+    /// reflection as plain sentences, oldest first.
+    #[test]
+    fn what_the_user_corrected_reads_as_sentences_for_reflection() {
+        let db = db();
+        let c = conv(&db);
+        assert!(user_signals(&db, &c).is_empty());
+        assert!(!was_rewound(&db, &c));
+
+        let _ = db.append_session_event(
+            &c,
+            None,
+            REWOUND_KIND,
+            &serde_json::json!({ "messageId": "m1", "preview": "refactor the parser", "branchId": "b", "filesUndone": 2 }),
+        );
+        record_command(&db, &c, None, &answered("suggest", "skillify", "declined", Some("you said not now to /skillify")));
+        record_command(&db, &c, None, &answered("switch_mode", "workspace", "declined", Some("you said not now to switching to Workspace")));
+        record_command(&db, &c, None, &answered("forget", "x", "done", Some("I'll forget it")));
+        record_command(&db, &c, None, &answered("rename", "x", "done", None));
+
+        let said = user_signals(&db, &c);
+        assert_eq!(said.len(), 4, "a rename is not a correction: {said:?}");
+        assert!(said[0].contains("went back to before \u{201c}refactor the parser\u{201d} and abandoned what followed"));
+        assert_eq!(said[1], "The user said not now to my suggestion of /skillify.");
+        assert_eq!(said[2], "The user said not now to switching to Workspace.");
+        assert!(said[3].starts_with("The user told me to"));
+        assert!(was_rewound(&db, &c));
+    }
+
+    /// `CPX-5`: two no's, in any conversations, and it stops being suggested.
+    #[test]
+    fn two_declines_in_any_conversation_stop_a_suggestion() {
+        let db = db();
+        let (a, b, c) = (conv(&db), conv(&db), conv(&db));
+        let no = |db: &Db, conv: &str, command: &str| {
+            record_command(db, conv, None, &answered("suggest", command, "declined", None));
+        };
+        no(&db, &a, "skillify");
+        assert_eq!(declined_suggestions(&db, "skillify"), 1);
+        no(&db, &b, "skillify");
+        no(&db, &c, "reflect");
+        assert_eq!(declined_suggestions(&db, "skillify"), 2, "across conversations");
+        assert_eq!(declined_suggestions(&db, "reflect"), 1, "per command");
+        // An accepted one is not a no.
+        record_command(&db, &a, None, &answered("suggest", "reflect", "accepted", None));
+        assert_eq!(declined_suggestions(&db, "reflect"), 1);
+    }
+
+    #[test]
+    fn commands_come_back_in_order_with_who_ran_them() {
+        let db = db();
+        let conversation_id = conv(&db);
+        record_command(&db, &conversation_id, None, &trace("rename", "user"));
+        record_command(&db, &conversation_id, Some("run-1"), &trace("compact", "agent"));
+        // A row that is not a command, and one that will not parse.
+        record_compaction(&db, &conversation_id, &compaction("x", "m1", 1, false));
+        let _ = db.append_session_event(&conversation_id, None, COMMAND_KIND, &serde_json::json!("garbage"));
+
+        let found = commands(&db, &conversation_id);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].trace.name, "rename");
+        assert_eq!(found[0].trace.by, "user");
+        assert_eq!(found[1].trace.by, "agent");
+    }
+
+    /// `REG-T3`: a branch carries the commands up to its boundary and none after.
+    #[test]
+    fn a_fork_copies_command_rows_up_to_its_boundary() {
+        let db = db();
+        let source = conv(&db);
+        let m1 = msg(&db, &source, "user", "first");
+        record_command(&db, &source, None, &trace("rename", "user"));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let a1 = msg(&db, &source, "assistant", "answer");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        record_command(&db, &source, None, &trace("fork", "user"));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        msg(&db, &source, "user", "second");
+        record_command(&db, &source, None, &trace("late", "user"));
+        let _ = m1;
+
+        let (branch, _) = db.fork_conversation_at(&source, &a1.id, true).unwrap();
+        let names: Vec<String> = commands(&db, &branch.id).into_iter().map(|r| r.trace.name).collect();
+        assert_eq!(names, vec!["rename".to_string(), "fork".to_string()]);
     }
 
     fn compaction(text: &str, upto: &str, replaced: usize, merged: bool) -> Compaction {

@@ -1,0 +1,86 @@
+/* `RUN-4`: one line, 28px, muted. Segments are text buttons, not chips. A hairline
+   under it and no background of its own. Numbers change in place — the orb in
+   the turn already carries the motion, and one motion at a time is enough. */
+.run-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--hairline);
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+}
+.run-bar-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.run-bar-segment {
+  display: inline-flex;
+  align-items: center;
+}
+.run-bar-sep {
+  color: var(--ink-faint);
+  white-space: pre;
+}
+.run-bar-link {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.run-bar-link:hover {
+  color: var(--ink);
+}
+.run-bar-act {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.run-bar-x {
+  flex: none;
+  background: none;
+  border: none;
+  padding: 0 4px;
+  cursor: pointer;
+  color: var(--ink-faint);
+  font-size: var(--fs-callout);
+  line-height: 1;
+}
+.run-bar-x:hover {
+  color: var(--ink);
+}
+.run-bar-more {
+  position: relative;
+  display: inline-flex;
+}
+.run-bar-popover {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-float);
+}
+.run-bar-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

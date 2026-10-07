@@ -34,7 +34,12 @@ interface Fixture {
   tools_enabled: boolean;
   memory_enabled: boolean;
   plan_mode: PlanMode;
-  skills: { name: string; description: string; when_to_use: string | null }[];
+  skills: {
+    name: string;
+    description: string;
+    when_to_use: string | null;
+    model_invocable?: boolean;
+  }[];
   blocks: FixtureBlock[];
   surface: { data_json: string; state_json: string | null };
   session_state_json: string;

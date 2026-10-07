@@ -1,0 +1,29 @@
+/* The only rules that are not the app's own: hiding what the scripted run has
+   not shown yet, and the orb canvas as a block box. */
+.pre {
+  display: none !important;
+}
+canvas.orb {
+  display: block;
+}
+/* The app places its toast with a transform, so its arrival has to carry that
+   transform too. */
+.memory-toast.arrive {
+  animation: toast-in var(--dur-slow) var(--ease-pop);
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+}
+/* A preview, not a form: the box still shows its caret colour but takes no
+   typing. */
+.composer input[readonly],
+.wb-filter[readonly] {
+  cursor: default;
+}

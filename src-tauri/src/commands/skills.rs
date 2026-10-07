@@ -32,6 +32,15 @@ pub struct SkillView {
     /// skill contains before the user enables it.
     pub risk: u8,
     pub risk_flags: Vec<String>,
+    /// `SKC-1`: what the `/` menu shows after the name.
+    pub argument_hint: Option<String>,
+    /// `false` for `disable-model-invocation: true` — only the user runs it.
+    pub model_invocable: bool,
+    /// `false` keeps it out of the `/` menu.
+    pub user_invocable: bool,
+    /// `SKC-5`: `poiesis` for a skill I proposed, with the date it was written.
+    pub origin: Option<String>,
+    pub created: Option<String>,
 }
 
 fn to_view(db: &Db, pack: SkillPack) -> SkillView {
@@ -49,6 +58,11 @@ fn to_view(db: &Db, pack: SkillPack) -> SkillView {
         rough,
         risk: pack.risk,
         risk_flags: pack.risk_flags,
+        argument_hint: pack.argument_hint,
+        model_invocable: pack.model_invocable,
+        user_invocable: pack.user_invocable,
+        origin: pack.origin,
+        created: pack.created,
     }
 }
 

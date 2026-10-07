@@ -185,7 +185,7 @@ fn stalled(secs: u64, what: &str) -> ProxyError {
 ///
 /// Dropping `fut` on cancellation is what actually stops the work: dropping a
 /// `reqwest` future closes the connection.
-async fn until_cancelled<T>(cancel: &CancelFlag, fut: impl std::future::Future<Output = T>) -> Option<T> {
+pub(crate) async fn until_cancelled<T>(cancel: &CancelFlag, fut: impl std::future::Future<Output = T>) -> Option<T> {
     if cancel.is_cancelled() {
         return None;
     }

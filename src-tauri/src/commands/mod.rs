@@ -27,6 +27,8 @@ pub mod scheduler;
 pub mod skills;
 pub mod subagents;
 pub mod usage;
+#[cfg(feature = "voice")]
+pub mod voice;
 
 /// Returns the running application version. Smoke-test of the IPC bridge and a
 /// real datum for Settings/About.

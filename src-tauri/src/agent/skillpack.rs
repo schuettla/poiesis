@@ -51,14 +51,15 @@ impl SkillSource {
 
 /// Frontmatter keys we recognize but cannot honor (Claude Code extensions, not
 /// part of the base standard) — named in the UI rather than silently ignored.
+///
+/// `argument-hint`, `disable-model-invocation` and `user-invocable` used to be
+/// here. A skill is now also a `/` command (`SKC-1`), and those three are what
+/// makes one a proper command, so they are honored and no longer show `◇ partial`.
 const UNSUPPORTED_KEYS: &[&str] = &[
     "context",
     "agent",
     "hooks",
-    "argument-hint",
     "arguments",
-    "disable-model-invocation",
-    "user-invocable",
     "model",
     "effort",
     "shell",
@@ -83,6 +84,18 @@ pub struct SkillPack {
     pub risk: u8,
     /// `TRU-1`'s stable flag names, naming what matched for the chip's title.
     pub risk_flags: Vec<String>,
+    /// `SKC-1`: what the `/` menu shows after the name, from `argument-hint`.
+    pub argument_hint: Option<String>,
+    /// `SKC-1`: `!disable-model-invocation`. A skill that is not model-invocable
+    /// is left out of the catalogue the model reads, so only the user runs it.
+    pub model_invocable: bool,
+    /// `SKC-1`: `user-invocable`, default true. `false` keeps it out of the menu.
+    pub user_invocable: bool,
+    /// `SKC-5`: `poiesis` for a skill I proposed and the user accepted. The `/`
+    /// menu says so, once, as `I learned this on {date}`.
+    pub origin: Option<String>,
+    /// `SKC-5`: when it was written, as `YYYY-MM-DD`.
+    pub created: Option<String>,
 }
 
 /// Split a `SKILL.md`'s leading `---\n...\n---` YAML frontmatter from its body.
@@ -165,6 +178,28 @@ pub fn parse_pack(dir: &Path, source: SkillSource) -> Option<SkillPack> {
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
+    // `SKC-1`. YAML booleans, but a hand-written file may well say `"true"`.
+    let flag = |key: &str| -> Option<bool> {
+        let v = map.as_ref()?.get(serde_yaml_ng::Value::String(key.to_string()))?;
+        v.as_bool().or_else(|| match v.as_str()?.trim().to_ascii_lowercase().as_str() {
+            "true" | "yes" => Some(true),
+            "false" | "no" => Some(false),
+            _ => None,
+        })
+    };
+    let model_invocable = !flag("disable-model-invocation").unwrap_or(false);
+    let user_invocable = flag("user-invocable").unwrap_or(true);
+    let text_key = |key: &str| {
+        map.as_ref()
+            .and_then(|m| yaml_str(m, key))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let argument_hint = text_key("argument-hint");
+    let origin = text_key("origin");
+    let created = text_key("created");
+
     let mut unsupported: Vec<String> = Vec::new();
     if let Some(m) = &map {
         for key in UNSUPPORTED_KEYS {
@@ -192,6 +227,11 @@ pub fn parse_pack(dir: &Path, source: SkillSource) -> Option<SkillPack> {
         unsupported,
         risk: scan.risk,
         risk_flags: scan.flags,
+        argument_hint,
+        model_invocable,
+        user_invocable,
+        origin,
+        created,
     })
 }
 
@@ -366,6 +406,44 @@ pub fn substitute_skill_dir(body: &str, dir: &Path) -> String {
     body.replace("${POIESIS_SKILL_DIR}", &real).replace("${CLAUDE_SKILL_DIR}", &real)
 }
 
+/// `SKC-4`: the skills that ship with the app. Each is `disable-model-invocation:
+/// true`, so only the user runs it — through `/init`, `/review`, `/verify`,
+/// `/skillify` and `/delegate`, which the command menu knows by name.
+const BUNDLED: &[(&str, &str)] = &[
+    ("init", include_str!("../../bundled_skills/init/SKILL.md")),
+    ("review", include_str!("../../bundled_skills/review/SKILL.md")),
+    ("verify", include_str!("../../bundled_skills/verify/SKILL.md")),
+    ("skillify", include_str!("../../bundled_skills/skillify/SKILL.md")),
+    ("delegate", include_str!("../../bundled_skills/delegate/SKILL.md")),
+];
+
+/// Write each bundled skill into `<app-data>/skills/` the first time, and never
+/// again.
+///
+/// "Never again" is the point. They are ordinary App skills the user may edit,
+/// and one the user deleted must stay deleted; re-seeding on every launch would
+/// undo both. The cost is that an improved body in a later release does not
+/// reach an existing install — a fair price for the user's copy staying theirs.
+pub fn seed_bundled(app_data: &Path, db: &Db) {
+    for (name, text) in BUNDLED {
+        let key = format!("skill.bundled.{name}.seeded");
+        if db.get_setting(&key).ok().flatten().is_some() {
+            continue;
+        }
+        let dir = app_data.join("skills").join(name);
+        // One that is already there (the user wrote their own `review`) is left
+        // exactly as it is.
+        if !dir.join("SKILL.md").exists()
+            && std::fs::create_dir_all(&dir).is_ok()
+            && std::fs::write(dir.join("SKILL.md"), text).is_err()
+        {
+            // Try again next launch rather than record a seed that did not happen.
+            continue;
+        }
+        let _ = db.set_setting(&key, "1");
+    }
+}
+
 /// Settings key for a skill's enabled state (`SKL-4`) — `skill.<source>.<name>.enabled`.
 /// The `skill.` prefix was freed for exactly this by `TSET-3`'s rename of the
 /// built-in toolsets' settings keys off it.
@@ -429,6 +507,21 @@ pub fn tool_specs() -> serde_json::Value {
         {
             "type": "function",
             "function": {
+                "name": "propose_project_instructions",
+                "description": "Propose the instructions every session in this project should carry (how to build and check it, where things live, rules to follow). The user must approve them; continue without assuming they exist.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": { "type": "string", "description": "the instructions, short and imperative, under 4000 chars" },
+                        "rationale": { "type": "string", "description": "one line: what you read to write them" }
+                    },
+                    "required": ["text", "rationale"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "propose_skill",
                 "description": "Propose saving a reusable SKILL after completing a multi-step task the user is likely to repeat. The user must approve it; continue without assuming it exists.",
                 "parameters": {
@@ -447,7 +540,7 @@ pub fn tool_specs() -> serde_json::Value {
 }
 
 pub fn handles(name: &str) -> bool {
-    matches!(name, "skill" | "propose_skill")
+    matches!(name, "skill" | "propose_skill" | "propose_project_instructions")
 }
 
 /// Human-readable (verb, target) for the timeline (`SKL-UI-2`): renders as
@@ -457,6 +550,7 @@ pub fn describe(name: &str, args: &serde_json::Value) -> (String, String) {
     match name {
         "skill" => ("\u{25a6} used my".into(), format!("{entry} skill")),
         "propose_skill" => ("proposed a skill".into(), entry),
+        "propose_project_instructions" => ("proposed project instructions".into(), String::new()),
         other => (other.into(), entry),
     }
 }
@@ -477,6 +571,7 @@ pub async fn execute(
     match name {
         "skill" => use_skill(ctx, args).await,
         "propose_skill" => propose_skill(ctx, args),
+        "propose_project_instructions" => propose_project_instructions(ctx, args),
         other => Err(format!("Skills doesn't handle '{other}'.")),
     }
 }
@@ -561,6 +656,13 @@ async fn use_skill(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<St
     // `POIESIS_SKILL_DIR` env var is the companion substitution for a script
     // process's own environment, not the markdown a model reads.
     let body = substitute_skill_dir(&load_body(pack)?, &pack.dir);
+    // `SKC-2`: only a preload from `/name args` carries `arguments`. A model
+    // calling `skill` itself never does, so a body that mentions `$ARGUMENTS`
+    // as plain text is left exactly as written.
+    let body = match args.get("arguments").and_then(|a| a.as_str()) {
+        Some(given) => apply_arguments(&body, given),
+        None => body,
+    };
 
     // `SKL-3`: the skill's own directory becomes readable for the rest of
     // this run, so `read_file`/`search_files` can reach its bundled
@@ -592,6 +694,63 @@ async fn use_skill(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<St
     Ok(format!("Skill \"{}\" — use when: {when}\n{text}", pack.name))
 }
 
+/// Longest set of project instructions a proposal may carry. They ride in every
+/// prompt of every session in the project, so they are kept short on purpose.
+const PROJECT_INSTRUCTIONS_CAP: usize = 4000;
+
+/// `SKC-4`: what `/init` ends in. A `change_proposals` row, never a write: the
+/// user reads the instructions and accepts them, and only then do they exist.
+fn propose_project_instructions(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
+    let text = required(args, "text")?;
+    let rationale = required(args, "rationale")?;
+    if text.chars().count() > PROJECT_INSTRUCTIONS_CAP {
+        return Err(format!("keep the instructions under {PROJECT_INSTRUCTIONS_CAP} characters"));
+    }
+    let project = ctx
+        .db
+        .conversation_project(ctx.conversation_id)
+        .ok()
+        .flatten()
+        .ok_or("this chat is not in a project yet — ask the user to attach a working folder first")?;
+    let proposal = ctx
+        .db
+        .add_change_proposal(
+            "project_instructions",
+            Some(&project.id),
+            text,
+            rationale,
+            Some(rationale),
+        )
+        .map_err(|e| e.to_string())?;
+    ctx.sink.emit(AgentEvent::Proposal {
+        id: proposal.id,
+        target: "project_instructions".to_string(),
+        rationale: rationale.to_string(),
+    });
+    let _ = ctx.db.log_activity(
+        Some(ctx.conversation_id),
+        "memory",
+        &format!("proposed instructions for {}", project.name),
+    );
+    Ok("Proposed project instructions. The user will review them; continue normally.".to_string())
+}
+
+/// `SKC-2`: put what the user typed after `/name` into the skill's body.
+///
+/// `$ARGUMENTS` is replaced where the author put it. A body with no such
+/// placeholder still has to receive them, so they are appended instead — the
+/// alternative is a `/review the parser` that quietly drops "the parser".
+pub fn apply_arguments(body: &str, given: &str) -> String {
+    let given = given.trim();
+    if body.contains("$ARGUMENTS") {
+        return body.replace("$ARGUMENTS", given);
+    }
+    if given.is_empty() {
+        return body.to_string();
+    }
+    format!("{}\n\nARGUMENTS: {given}", body.trim_end())
+}
+
 fn propose_skill(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
     if autonomy_gate(ctx.db, "skills") == Rung::Off {
         return Err("keeping skills is turned off — carry on without saving one".into());
@@ -605,7 +764,9 @@ fn propose_skill(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Stri
         return Err(format!("keep the body under {SKILL_BODY_CAP} characters"));
     }
 
-    let file = render_skill_md(&name, description, when_to_use, body);
+    // `SKC-5`: a skill I wrote remembers that, and when, so the `/` menu can
+    // say `I learned this on …` once the user has accepted it.
+    let file = render_skill_md_with(&name, description, when_to_use, body, Some("poiesis"));
 
     let proposal = ctx
         .db
@@ -629,8 +790,24 @@ fn propose_skill(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Stri
 /// Render a complete `SKILL.md` — used by `propose_skill` (for the proposal
 /// preview) and reused verbatim by `create_skill_cmd`.
 pub fn render_skill_md(name: &str, description: &str, when_to_use: &str, body: &str) -> String {
+    render_skill_md_with(name, description, when_to_use, body, None)
+}
+
+/// `SKC-5`: the same file, with the provenance of a skill I proposed. `origin`
+/// and `created` are informational — nothing is gated on them.
+pub fn render_skill_md_with(
+    name: &str,
+    description: &str,
+    when_to_use: &str,
+    body: &str,
+    origin: Option<&str>,
+) -> String {
+    let provenance = match origin {
+        Some(o) => format!("origin: {o}\ncreated: {}\n", crate::memory::today()),
+        None => String::new(),
+    };
     format!(
-        "---\nname: {name}\ndescription: {}\nwhen_to_use: {}\n---\n\n{}\n",
+        "---\nname: {name}\ndescription: {}\nwhen_to_use: {}\n{provenance}---\n\n{}\n",
         yaml_escape(description),
         yaml_escape(when_to_use),
         body.trim()
@@ -655,6 +832,99 @@ mod tests {
     fn write_skill(dir: &Path, frontmatter: &str, body: &str) {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("SKILL.md"), format!("---\n{frontmatter}\n---\n{body}")).unwrap();
+    }
+
+    /// `SKC-T1`: the three Claude Code keys are read, and no longer called partial.
+    #[test]
+    fn the_three_command_keys_are_honoured() {
+        let tmp = std::env::temp_dir().join(format!("poiesis-skc-{}", std::process::id()));
+        let dir = tmp.join("review");
+        write_skill(
+            &dir,
+            "name: review
+description: d
+argument-hint: focus (optional)
+disable-model-invocation: true
+user-invocable: false",
+            "Body.",
+        );
+        let pack = parse_pack(&dir, SkillSource::App).unwrap();
+        assert_eq!(pack.argument_hint.as_deref(), Some("focus (optional)"));
+        assert!(!pack.model_invocable);
+        assert!(!pack.user_invocable);
+        assert!(pack.unsupported.is_empty(), "no longer partial: {:?}", pack.unsupported);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_plain_skill_is_invocable_both_ways() {
+        let tmp = std::env::temp_dir().join(format!("poiesis-skc-plain-{}", std::process::id()));
+        let dir = tmp.join("plain");
+        write_skill(&dir, "name: plain
+description: d", "Body.");
+        let pack = parse_pack(&dir, SkillSource::App).unwrap();
+        assert!(pack.model_invocable && pack.user_invocable);
+        assert!(pack.argument_hint.is_none() && pack.origin.is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `SKC-2`: `$ARGUMENTS` is filled where the author put it, and arguments
+    /// given to a body with no placeholder are appended rather than dropped.
+    #[test]
+    fn arguments_fill_the_placeholder_or_are_appended() {
+        assert_eq!(apply_arguments("Review $ARGUMENTS now.", "the parser"), "Review the parser now.");
+        assert_eq!(apply_arguments("Twice $ARGUMENTS and $ARGUMENTS", "x"), "Twice x and x");
+        assert_eq!(apply_arguments("Do it.
+", "the parser"), "Do it.
+
+ARGUMENTS: the parser");
+        assert_eq!(apply_arguments("Do it.", ""), "Do it.", "nothing given, nothing added");
+        assert_eq!(apply_arguments("Focus: $ARGUMENTS", ""), "Focus: ");
+    }
+
+    /// `SKC-5`: a skill I proposed says so, and when, and still parses back.
+    #[test]
+    fn a_proposed_skill_remembers_where_it_came_from() {
+        let text = render_skill_md_with("weekly", "Weekly report", "on Fridays", "Steps.", Some("poiesis"));
+        assert!(text.contains("origin: poiesis
+"));
+        assert!(text.contains("created: "));
+        let tmp = std::env::temp_dir().join(format!("poiesis-skc-origin-{}", std::process::id()));
+        let dir = tmp.join("weekly");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), &text).unwrap();
+        let pack = parse_pack(&dir, SkillSource::App).unwrap();
+        assert_eq!(pack.origin.as_deref(), Some("poiesis"));
+        assert!(pack.created.as_deref().is_some_and(|d| d.len() == 10), "{:?}", pack.created);
+        // One written by hand carries neither.
+        let plain = render_skill_md("weekly", "Weekly report", "on Fridays", "Steps.");
+        assert!(!plain.contains("origin:"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `SKC-4`: every bundled skill parses, is named for its command, and is
+    /// invisible to the model.
+    #[test]
+    fn the_bundled_skills_are_user_only_and_named_for_their_commands() {
+        let tmp = std::env::temp_dir().join(format!("poiesis-skc-bundled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let db = Db::open_in_memory().unwrap();
+        seed_bundled(&tmp, &db);
+        let packs = discover(&tmp, None);
+        let mut names: Vec<&str> = packs.iter().map(|p| p.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, ["delegate", "init", "review", "skillify", "verify"]);
+        for p in &packs {
+            assert!(!p.model_invocable, "{} must be user-only", p.name);
+            assert!(p.unsupported.is_empty(), "{}: {:?}", p.name, p.unsupported);
+            assert_eq!(p.source, SkillSource::App);
+        }
+
+        // Written once: a skill the user deleted stays deleted.
+        std::fs::remove_dir_all(tmp.join("skills").join("review")).unwrap();
+        seed_bundled(&tmp, &db);
+        assert!(!tmp.join("skills").join("review").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// The run that prompted this loaded one 534-line skill twice, spending its
@@ -933,6 +1203,11 @@ mod tests {
             unsupported: Vec::new(),
             risk: 0,
             risk_flags: Vec::new(),
+            argument_hint: None,
+            model_invocable: true,
+            user_invocable: true,
+            origin: None,
+            created: None,
         };
         let app = SkillPack { source: SkillSource::App, name: "a".into(), ..personal.clone() };
         assert!(!is_enabled(&db, &personal), "third-party skills need an explicit enable");
@@ -954,6 +1229,11 @@ mod tests {
             unsupported: Vec::new(),
             risk: 0,
             risk_flags: Vec::new(),
+            argument_hint: None,
+            model_invocable: true,
+            user_invocable: true,
+            origin: None,
+            created: None,
         };
         let b = SkillPack { name: "b".into(), ..a.clone() };
         // `a` on (App default), `b` explicitly off.
@@ -977,6 +1257,11 @@ mod tests {
             unsupported: Vec::new(),
             risk: 0,
             risk_flags: Vec::new(),
+            argument_hint: None,
+            model_invocable: true,
+            user_invocable: true,
+            origin: None,
+            created: None,
         };
         let packs = vec![a];
         assert_eq!(enabled_names_for_persona(&db, &packs, None), enabled_names(&db, &packs));

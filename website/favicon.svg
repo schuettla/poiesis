@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <style>
+    .m { color: #17201c; }
+    @media (prefers-color-scheme: dark) { .m { color: #e3e9e0; } }
+  </style>
+  <g class="m">
+    <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.6" />
+    <circle cx="12" cy="4" r="1.6" fill="currentColor" opacity="0.8" />
+    <circle cx="18.93" cy="16" r="1.6" fill="currentColor" opacity="0.8" />
+    <circle cx="5.07" cy="16" r="1.6" fill="currentColor" opacity="0.8" />
+    <circle cx="12" cy="12" r="3" fill="currentColor" />
+  </g>
+</svg>
