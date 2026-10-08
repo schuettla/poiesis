@@ -19,7 +19,7 @@ pub mod index_roots;
 pub mod phash;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 30;
+pub const SCHEMA_VERSION: i64 = 30;
 
 /// The rationale a skill-revision proposal is written with (`OUT-2`). Only
 /// display text — the proposal is *identified* by its `skill-revision` target,
@@ -30,7 +30,16 @@ pub const SKILL_REVISION_RATIONALE: &str = "This skill has been rough the last f
 pub enum DbError {
     #[error("database error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    /// PUB-1: the file was written by a newer build than this one, so this
+    /// build doesn't know its schema. Worded for the person reading it.
+    #[error("This data was written by a newer version of me — please install the latest version.")]
+    NewerThanThisBuild { found: i64, supported: i64 },
+    #[error("I couldn't back up my data before updating it ({0}), so I left it alone.")]
+    Backup(String),
 }
+
+/// How many pre-migration backups to keep beside the database (PUB-1).
+const KEPT_BACKUPS: usize = 2;
 
 pub struct Db {
     conn: Mutex<Connection>,
@@ -634,15 +643,78 @@ pub fn project_name_for(root_path: &str) -> String {
         .to_string()
 }
 
+/// `<db file name>.v{version}.bak` beside the database.
+fn backup_path(db_path: &Path, version: i64) -> std::path::PathBuf {
+    let mut name = db_path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".v{version}.bak"));
+    db_path.with_file_name(name)
+}
+
+/// Copy the database to `<name>.v{old}.bak` before it is migrated past `old`,
+/// then keep only the newest [`KEPT_BACKUPS`]. `VACUUM INTO` rather than a file
+/// copy: the database runs in WAL mode, so the main file alone can be missing
+/// the most recent writes.
+///
+/// An existing backup for the same version is kept as it is — it was taken
+/// before any migration touched the file, which a retry's copy can't promise.
+fn backup_before_migrating(conn: &Connection, db_path: &Path, old: i64) -> Result<(), DbError> {
+    let target = backup_path(db_path, old);
+    if !target.exists() {
+        conn.execute("VACUUM INTO ?1", [target.to_string_lossy().as_ref()])
+            .map_err(|e| DbError::Backup(e.to_string()))?;
+    }
+    prune_backups(db_path);
+    Ok(())
+}
+
+/// Delete all but the newest [`KEPT_BACKUPS`] backups. Best effort: a backup
+/// that won't delete is clutter, not a reason to refuse to start.
+fn prune_backups(db_path: &Path) {
+    let (Some(dir), Some(stem)) = (db_path.parent(), db_path.file_name()) else {
+        return;
+    };
+    let prefix = format!("{}.v", stem.to_string_lossy());
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut found: Vec<(i64, std::path::PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let version = name.strip_prefix(&prefix)?.strip_suffix(".bak")?.parse::<i64>().ok()?;
+            Some((version, e.path()))
+        })
+        .collect();
+    found.sort_by_key(|(version, _)| std::cmp::Reverse(*version));
+    for (_, path) in found.into_iter().skip(KEPT_BACKUPS) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 impl Db {
     /// Open (creating if needed) the database at `path` and run migrations.
     pub fn open(path: &Path) -> Result<Self, DbError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
+        let existed = path.metadata().map(|m| m.len() > 0).unwrap_or(false);
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        if existed {
+            // PUB-1: every update runs new migrations on real user data, and
+            // there is no rollback — so settle what is on disk before touching it.
+            let on_disk: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+            if on_disk > SCHEMA_VERSION {
+                return Err(DbError::NewerThanThisBuild {
+                    found: on_disk,
+                    supported: SCHEMA_VERSION,
+                });
+            }
+            if on_disk > 0 && on_disk < SCHEMA_VERSION {
+                backup_before_migrating(&conn, path, on_disk)?;
+            }
+        }
         let db = Db {
             conn: Mutex::new(conn),
         };
@@ -4346,6 +4418,150 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The database of the last published release, frozen (PUB-1). It is what
+    /// real users have on disk when they update, so it is the starting point the
+    /// migrations must be able to carry forward. Refresh it after each release
+    /// with `regenerate_release_fixture` (see RELEASING.md).
+    const RELEASE_FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/release-last.db");
+
+    fn seed_user_data(db: &Db) -> String {
+        let conv = db.create_conversation("kept across updates", None, false).unwrap();
+        db.append_message(
+            &conv.id,
+            &NewMessage {
+                role: "user".into(),
+                content: "does this survive an update?".into(),
+                model_name: None,
+                model_provenance: None,
+                steps_json: None,
+                attachments: vec![],
+            },
+        )
+        .unwrap();
+        db.set_setting("updates.fixture_marker", "kept").unwrap();
+        conv.id
+    }
+
+    /// Run with `cargo test regenerate_release_fixture -- --ignored` at the
+    /// commit of a just-published release.
+    #[test]
+    #[ignore = "writes tests/fixtures/release-last.db; run by hand after a release"]
+    fn regenerate_release_fixture() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Db::open(&tmp.path().join("poiesis.db")).unwrap();
+        seed_user_data(&db);
+        let out = std::path::Path::new(RELEASE_FIXTURE);
+        std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+        let _ = std::fs::remove_file(out);
+        db.conn
+            .lock()
+            .unwrap()
+            .execute("VACUUM INTO ?1", [RELEASE_FIXTURE])
+            .unwrap();
+    }
+
+    /// `PUB-1` release gate: a populated database from the last published
+    /// release opens under the current code with everything still in it.
+    #[test]
+    fn the_last_release_database_migrates_to_current_without_losing_anything() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("poiesis.db");
+        std::fs::copy(RELEASE_FIXTURE, &path).expect("release fixture is committed");
+        let before: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert!(before <= SCHEMA_VERSION, "the fixture is from a release, never from the future");
+
+        let db = Db::open(&path).unwrap();
+        let conn = db.conn.lock().unwrap();
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        drop(conn);
+
+        let convs = db.list_conversations().unwrap();
+        assert!(convs.iter().any(|c| c.title == "kept across updates"));
+        let conv = convs.iter().find(|c| c.title == "kept across updates").unwrap();
+        assert_eq!(db.list_messages(&conv.id).unwrap().len(), 1);
+        assert_eq!(db.get_setting("updates.fixture_marker").unwrap().as_deref(), Some("kept"));
+        assert_eq!(
+            backup_path(&path, before).exists(),
+            before < SCHEMA_VERSION,
+            "a backup exists exactly when a migration had work to do"
+        );
+    }
+
+    /// `PUB-1`: an older database is copied aside before it is migrated, the
+    /// copy holds the data as it was, and only the newest two are kept.
+    #[test]
+    fn an_older_database_is_backed_up_before_migrating_and_old_backups_pruned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("poiesis.db");
+        {
+            let db = Db::open(&path).unwrap();
+            seed_user_data(&db);
+        }
+
+        for old in [SCHEMA_VERSION - 3, SCHEMA_VERSION - 2, SCHEMA_VERSION - 1] {
+            Connection::open(&path)
+                .unwrap()
+                .pragma_update(None, "user_version", old)
+                .unwrap();
+            drop(Db::open(&path).unwrap());
+            assert!(backup_path(&path, old).exists(), "v{old} backup written");
+        }
+
+        assert!(!backup_path(&path, SCHEMA_VERSION - 3).exists(), "oldest of three is pruned");
+        assert!(backup_path(&path, SCHEMA_VERSION - 2).exists());
+        assert!(backup_path(&path, SCHEMA_VERSION - 1).exists());
+
+        // The backup is a usable database with the user's data in it.
+        let bak = Connection::open(backup_path(&path, SCHEMA_VERSION - 1)).unwrap();
+        let n: i64 = bak
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    /// `PUB-1`: an up-to-date or brand-new database makes no backup at all.
+    #[test]
+    fn a_current_or_fresh_database_is_not_backed_up() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("poiesis.db");
+        drop(Db::open(&path).unwrap());
+        drop(Db::open(&path).unwrap());
+        let baks = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".bak"))
+            .count();
+        assert_eq!(baks, 0);
+    }
+
+    /// `PUB-1`: someone hand-installs an older build over a newer one. The old
+    /// code must refuse rather than run against a schema it doesn't know, and
+    /// must leave the file exactly as it found it.
+    #[test]
+    fn a_database_from_a_newer_build_is_refused_and_left_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("poiesis.db");
+        drop(Db::open(&path).unwrap());
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .unwrap();
+
+        let err = Db::open(&path).err().expect("must refuse");
+        assert!(matches!(err, DbError::NewerThanThisBuild { .. }));
+        assert!(err.to_string().contains("newer version of me"));
+
+        let after: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, SCHEMA_VERSION + 1);
+    }
 
     /// `RPT-2`: the escalation is offered once per lesson, whatever the user
     /// answered. Re-asking after a "Not now" on every later recurrence would

@@ -68,6 +68,49 @@ function ReceiptToast({ message, dismiss }: { message: string | null; dismiss: (
   );
 }
 
+/** `UPD-UI-2`/`UPD-UI-4`: Poiesis telling you it can become — or has become —
+ * a newer version of itself. Same shell as the rest; one action that goes to
+ * where the release notes are. Fires once per version (the latch is in the
+ * store), so the badge is what stays. */
+function UpdateToast({
+  message,
+  action,
+  dismiss,
+}: {
+  message: string | null;
+  action: string;
+  dismiss: () => void;
+}) {
+  const setView = useAppStore((s) => s.setView);
+
+  useEffect(() => {
+    if (!message) return;
+    const t = setTimeout(dismiss, DWELL_MS);
+    return () => clearTimeout(t);
+  }, [message, dismiss]);
+
+  if (!message) return null;
+  return (
+    <div className="memory-toast" role="status">
+      <div className="memory-toast-line">
+        <span className="memory-toast-mark" aria-hidden="true">
+          ◆
+        </span>
+        <span className="memory-toast-text">{message}</span>
+        <button
+          className="memory-toast-undo"
+          onClick={() => {
+            dismiss();
+            setView("about");
+          }}
+        >
+          {action}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** SMP-7: an ability explaining itself once, the first time it actually
  * happens — same quiet shell, no undo (there's nothing to undo). */
 function ExplainToast() {
@@ -106,6 +149,11 @@ export default function MemoryToast() {
   const dismissSaved = useAppStore((s) => s.dismissSavedToast);
   const agentDoneMessage = useAppStore((s) => s.agentDoneToast);
   const dismissAgentDone = useAppStore((s) => s.dismissAgentDoneToast);
+  const explainMessage = useAppStore((s) => s.explainToast);
+  const updateToast = useAppStore((s) => s.updateToast);
+  const dismissUpdateToast = useAppStore((s) => s.dismissUpdateToast);
+  const updateReceipt = useAppStore((s) => s.updateReceiptToast);
+  const dismissUpdateReceipt = useAppStore((s) => s.dismissUpdateReceiptToast);
   // Latched per toast: marking the flag immediately would hide the explainer
   // on the very toast that's supposed to carry it.
   const [explain, setExplain] = useState(false);
@@ -152,7 +200,28 @@ export default function MemoryToast() {
     if (savedMessage) {
       return <ReceiptToast message={savedMessage} dismiss={dismissSaved} />;
     }
-    return <ExplainToast />;
+    // A version notice is about the app, not this conversation, so it waits
+    // behind everything above — and behind an ability explaining itself.
+    if (explainMessage) return <ExplainToast />;
+    if (updateReceipt) {
+      return (
+        <UpdateToast
+          message={`I'm now version ${updateReceipt}.`}
+          action="What changed"
+          dismiss={dismissUpdateReceipt}
+        />
+      );
+    }
+    if (updateToast) {
+      return (
+        <UpdateToast
+          message={`There's a newer version of me — ${updateToast.version}.`}
+          action="See what's new"
+          dismiss={dismissUpdateToast}
+        />
+      );
+    }
+    return null;
   }
 
   const isProfile = toast.op === "profile";

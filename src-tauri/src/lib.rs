@@ -10,6 +10,8 @@ pub mod agent;
 pub mod autonomy;
 pub mod cloud;
 mod commands;
+#[cfg(windows)]
+mod mic_permission;
 pub mod db;
 mod marketplace;
 mod mcp;
@@ -50,6 +52,21 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // UPD-1: the updater plugin supplies the check/download/verify
+            // machinery; `commands::updater` drives it (and stops the engines
+            // before the installer runs — UPD-3). The process plugin is for the
+            // relaunch on platforms where the install doesn't restart the app.
+            #[cfg(desktop)]
+            {
+                app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+                app.handle().plugin(tauri_plugin_process::init())?;
+                commands::updater::manage(app.handle());
+            }
+
+            // No WebView2 microphone box: the user already asked to talk.
+            #[cfg(windows)]
+            mic_permission::allow_for_app(app.handle());
+
             // All local state (runtimes, models, db) lives under the app-data dir.
             let base_dir = app
                 .path()
@@ -58,7 +75,21 @@ pub fn run() {
             std::fs::create_dir_all(&base_dir).ok();
 
             // Open the SQLite database (conversations, settings, library, …).
-            let db = Db::open(&base_dir.join("poiesis.db")).expect("failed to open database");
+            let db = match Db::open(&base_dir.join("poiesis.db")) {
+                Ok(db) => db,
+                Err(e) => {
+                    // PUB-1: a database from a newer build (or one that couldn't
+                    // be backed up) must be refused in words, not a panic with
+                    // no window. Nothing has been written to it at this point.
+                    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+                    app.dialog()
+                        .message(e.to_string())
+                        .title("Poiesis Agent")
+                        .kind(MessageDialogKind::Error)
+                        .blocking_show();
+                    return Err(e.into());
+                }
+            };
             // Content-free, opt-in only (no-ops unless the user enabled it).
             telemetry::record(&db, "app_open");
 
@@ -161,6 +192,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
+            commands::problem_facts_cmd,
+            commands::updater::update_check_cmd,
+            commands::updater::update_install_cmd,
             commands::runtime::detect_hardware_cmd,
             commands::runtime::recommend_runtime_cmd,
             commands::runtime::runtime_status_cmd,
@@ -435,15 +469,23 @@ pub fn run() {
             // Lifecycle safety (§7.4): terminate the engine on exit so no orphan
             // process holds VRAM.
             if let tauri::RunEvent::ExitRequested { .. } = event {
-                if let Some(mgr) = app_handle.try_state::<RuntimeManager>() {
-                    tauri::async_runtime::block_on(mgr.stop());
-                }
-                if let Some(mgr) = app_handle.try_state::<EmbedManager>() {
-                    tauri::async_runtime::block_on(mgr.stop());
-                }
-                if let Some(mgr) = app_handle.try_state::<RerankManager>() {
-                    tauri::async_runtime::block_on(mgr.stop());
-                }
+                shutdown_engines(app_handle);
             }
         });
+}
+
+/// Stop every supervised child process. Called on normal exit and before the
+/// updater hands over to the installer, so a new engine added here is covered
+/// by both. Voice runs in-process and the image engine spawns no child, so
+/// neither has anything to stop.
+pub(crate) fn shutdown_engines(app: &tauri::AppHandle) {
+    if let Some(mgr) = app.try_state::<RuntimeManager>() {
+        tauri::async_runtime::block_on(mgr.stop());
+    }
+    if let Some(mgr) = app.try_state::<EmbedManager>() {
+        tauri::async_runtime::block_on(mgr.stop());
+    }
+    if let Some(mgr) = app.try_state::<RerankManager>() {
+        tauri::async_runtime::block_on(mgr.stop());
+    }
 }

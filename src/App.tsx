@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useAppStore, useLiveItems } from "./lib/store";
 import { inTauri, voiceSettings } from "./lib/api";
-import { leaveVoice, openVoice } from "./lib/voice/controller";
+import { hideVoiceSurface, openVoice } from "./lib/voice/controller";
 import { getVoiceHotkey, matchesHotkey, setVoiceHotkey } from "./lib/voice/hotkey";
 import { useVoiceStore } from "./lib/voice/voiceStore";
 import TopBar from "./components/TopBar/TopBar";
@@ -36,6 +36,15 @@ export default function App() {
     bootstrap();
   }, [bootstrap]);
 
+  // `UPD-6`: the arrival receipt and the startup update check. Waits for
+  // bootstrap, and the check itself waits a few seconds more, so neither
+  // competes with the first paint.
+  const bootstrapped = useAppStore((s) => s.bootstrapped);
+  const initUpdates = useAppStore((s) => s.initUpdates);
+  useEffect(() => {
+    if (bootstrapped) void initUpdates();
+  }, [bootstrapped, initUpdates]);
+
   // Ctrl+\ mirrors the header toggle, matching the rail's place in the shell.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -58,7 +67,9 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if (!matchesHotkey(e, getVoiceHotkey())) return;
       e.preventDefault();
-      if (useVoiceStore.getState().shown) void leaveVoice();
+      // Switches between voice and chat; the conversation stays live, and the
+      // top bar and composer say so while the mic is open. End is in the surface.
+      if (useVoiceStore.getState().shown) hideVoiceSurface();
       else if (useAppStore.getState().view === "chat") void openVoice();
     };
     window.addEventListener("keydown", onKey);

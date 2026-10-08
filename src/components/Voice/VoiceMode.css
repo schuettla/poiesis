@@ -88,6 +88,70 @@
   color: var(--ink-faint);
 }
 
+/* What Poiesis did for this answer (tools, agents). Quiet: the orb stays the face. */
+.voice-activity {
+  width: min(420px, 100%);
+  margin-top: 6px;
+  text-align: left;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.voice-activity ul {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.voice-activity-more {
+  margin: 0 0 4px 16px;
+  color: var(--ink-faint);
+}
+.voice-activity-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.voice-activity-mark {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  margin: 0 3px;
+  align-self: center;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+.voice-activity-row.is-running .voice-activity-mark {
+  background: var(--ink);
+  animation: voice-activity-pulse 1.2s var(--ease-in-out) infinite;
+}
+.voice-activity-row.is-error {
+  color: var(--danger);
+}
+.voice-activity-row.is-error .voice-activity-mark {
+  background: var(--danger);
+}
+.voice-activity-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voice-activity-detail {
+  flex-shrink: 0;
+  color: var(--ink-faint);
+}
+.voice-activity-row.is-error .voice-activity-detail {
+  color: inherit;
+}
+@keyframes voice-activity-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
 .voice-artifact {
   align-self: center;
   max-width: min(360px, 80%);
@@ -191,6 +255,9 @@
   }
   .voice-user {
     transition: none;
+  }
+  .voice-activity-row.is-running .voice-activity-mark {
+    animation: none;
   }
 }
 

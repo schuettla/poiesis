@@ -88,7 +88,7 @@ export async function openVoice(): Promise<OpenResult> {
   // cannot be seen would break VXP-3, so it does not open there.
   const app = useAppStore.getState();
   if (app.view !== "chat" || app.workspaceMode) return "error";
-  setVoiceUi({ shown: true, error: null });
+  setVoiceUi({ shown: true, error: null, used: true });
   const s = voiceSession();
   if (s.live) return "live";
   if (!api.inTauri()) {

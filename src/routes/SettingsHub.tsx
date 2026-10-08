@@ -17,6 +17,7 @@ import Mail from "./Mail";
 import Tools from "./Tools";
 import Usage from "./Usage";
 import About from "./About";
+import { updateIsWaiting } from "../lib/updates";
 import "./SettingsHub.css";
 
 /** The hub's own sections, and whether a view is one of them. Both now live in
@@ -46,10 +47,13 @@ export default function SettingsHub() {
   );
   const skillPending = useAppStore((s) => s.changeProposals.some((p) => isSkill(p.target)));
   const consolidationPending = useAppStore((s) => s.consolidationPending);
+  // `UPD-UI-3`: a newer version of me is waiting (or already staged).
+  const updateWaiting = useAppStore((s) => updateIsWaiting(s.updateState));
   const badgeFor = (v: View) =>
     (v === "settings" && soulPending) ||
     (v === "self" && (selfPending || consolidationPending)) ||
-    (v === "skills" && skillPending);
+    (v === "skills" && skillPending) ||
+    (v === "about" && updateWaiting);
 
   // `SHL-16` is withdrawn: the hub owns its own section navigation, always,
   // whatever the Rail is doing. Moving it into the Rail made the sections read
@@ -73,8 +77,8 @@ export default function SettingsHub() {
               <span
                 className="sht-badge"
                 role="img"
-                aria-label="Changes waiting for review"
-                title="Changes waiting for review"
+                aria-label={t.view === "about" ? "An update is waiting" : "Changes waiting for review"}
+                title={t.view === "about" ? "An update is waiting" : "Changes waiting for review"}
               />
             )}
           </button>

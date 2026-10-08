@@ -146,11 +146,12 @@
   font-size: var(--fs-footnote);
 }
 
-/* `SHL-27`: the session tab. Serif and a step larger, because it names a
-   conversation and every other place a chat's title appears in this shell —
-   the Rail's rows, the location label this replaces — sets it in serif. It is
-   also the one tab with no ×, so it keeps the close button's 22px as padding
-   and doesn't sit tighter than its neighbours. */
+/* `SHL-27`: the session tab. It is the same label as the header's lone
+   `.topbar-where-label` (TopBar.css) once the strip appears, so it takes that
+   label's voice — sans, 13px, medium, tight — and the chat's name doesn't
+   change character when a tab opens beside it. It is also the one tab with no
+   ×, so it keeps the close button's 22px as padding and doesn't sit tighter
+   than its neighbours. */
 .ts-session {
   max-width: 260px;
   /* A firmer edge than the hairline between two item tabs: everything right of
@@ -159,8 +160,10 @@
   margin-right: 3px;
 }
 .ts-session .ts-tab-main {
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: var(--fs-ui);
+  font-weight: 500;
+  letter-spacing: var(--tracking-tight);
   padding-right: 12px;
 }
 

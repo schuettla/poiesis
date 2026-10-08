@@ -16,6 +16,8 @@ const FRAMES_PER_PUSH = 5;
 const DUCK_GAIN = 0.18;
 /** How long a spoken turn waits for the last reply to wind down. */
 const BUSY_WAIT_MS = 5000;
+/** Lost mic batches in a row before the user is told (each is 100 ms). */
+const PUSH_FAILURES_BEFORE_WARNING = 10;
 
 export interface VoiceApi {
   start(onEvent: (e: VoiceEvent) => void): Promise<void>;
@@ -66,6 +68,12 @@ export function decodePcm16(base64: string): Float32Array {
   return out;
 }
 
+function plainReason(e: unknown): string {
+  if (typeof e === "string" && e) return e;
+  if (e instanceof Error && e.message) return e.message;
+  return "something went wrong.";
+}
+
 function plain(e: unknown): string {
   if (typeof e === "string") return e;
   if (e instanceof Error && e.message) return e.message;
@@ -87,6 +95,9 @@ export class VoiceSession implements SpeechBridge {
   private readonly done = new Set<number>();
   private readonly finished = new Set<number>();
   private readonly waiters = new Map<number, ((o: SpeechOutcome) => void)[]>();
+  /** Replies whose speech already failed once: say so once, not per token. */
+  private readonly spokeBadly = new Set<number>();
+  private pushFailures = 0;
 
   constructor(private readonly deps: SessionDeps) {
     this.turns = deps.turns ?? new SpokenTurns();
@@ -108,7 +119,7 @@ export class VoiceSession implements SpeechBridge {
   }
 
   private async open(): Promise<void> {
-    setVoiceUi({ floor: "starting", error: null, hint: null, user: "", reply: "", muted: false });
+    setVoiceUi({ floor: "starting", error: null, problem: null, hint: null, user: "", reply: "", muted: false });
     try {
       await this.deps.api.start((e) => this.onEvent(e));
       const audio = this.deps.makeAudio({
@@ -126,7 +137,8 @@ export class VoiceSession implements SpeechBridge {
       throw e;
     }
     this.running = true;
-    setVoiceUi({ floor: "listening", floorSince: this.now() });
+    this.pushFailures = 0;
+    setVoiceUi({ floor: "listening", floorSince: this.now(), startedAt: this.now() });
   }
 
   /** Closes the mic and the session. Whatever was being said stops (VXP-3). */
@@ -138,7 +150,7 @@ export class VoiceSession implements SpeechBridge {
     this.audio = null;
     this.frames = [];
     await this.deps.api.stop().catch(() => undefined);
-    setVoiceUi({ floor: "off", input: 0, output: 0, muted: false });
+    setVoiceUi({ floor: "off", input: 0, output: 0, muted: false, problem: null });
   }
 
   setMuted(muted: boolean): void {
@@ -161,7 +173,11 @@ export class VoiceSession implements SpeechBridge {
   token(generation: number, text: string): void {
     if (!this.isLive(generation) || !text) return;
     this.lastSpeechAt = this.now();
-    void this.deps.api.speak(generation, text, false).catch(() => undefined);
+    void this.deps.api.speak(generation, text, false).catch((e) => this.speechFailed(generation, e));
+  }
+
+  fail(message: string): void {
+    this.trouble(message);
   }
 
   step(generation: number, verb: string): void {
@@ -188,11 +204,28 @@ export class VoiceSession implements SpeechBridge {
       const list = this.waiters.get(generation) ?? [];
       list.push(resolve);
       this.waiters.set(generation, list);
-      void this.deps.api.speak(generation, "", true).catch(() => this.cutOff(generation, false));
+      void this.deps.api.speak(generation, "", true).catch((e) => {
+        this.speechFailed(generation, e);
+        this.cutOff(generation, false);
+      });
     });
   }
 
   // ---- internals ----
+
+  /** Something went wrong in a live conversation: say it in a line the user can
+   * dismiss. Before the session is live the surface's own error is used. */
+  private trouble(message: string): void {
+    if (this.running) setVoiceUi({ problem: message });
+    else setVoiceUi({ error: message });
+  }
+
+  private speechFailed(generation: number, e: unknown): void {
+    if (this.spokeBadly.has(generation)) return;
+    this.spokeBadly.add(generation);
+    const why = typeof e === "string" && e ? ` ${e}` : "";
+    this.trouble(`I could not speak that reply.${why} The answer is in the chat.`);
+  }
 
   private isLive(generation: number): boolean {
     return this.running && generation === this.turns.current && !this.turns.wasInterrupted(generation);
@@ -241,7 +274,17 @@ export class VoiceSession implements SpeechBridge {
       bytes.set(new Uint8Array(f.buffer, f.byteOffset, f.byteLength), at);
       at += f.byteLength;
     }
-    void this.deps.api.push(this.counter++, bytes).catch(() => undefined);
+    void this.deps.api
+      .push(this.counter++, bytes)
+      .then(() => {
+        this.pushFailures = 0;
+      })
+      .catch(() => {
+        // One lost batch is nothing; a run of them means nothing is being heard.
+        if (++this.pushFailures === PUSH_FAILURES_BEFORE_WARNING) {
+          this.trouble("Your voice is not reaching Poiesis. Try ending the voice conversation and starting it again.");
+        }
+      });
   }
 
   private onPlayed(generation: number, seq: number): void {
@@ -296,7 +339,7 @@ export class VoiceSession implements SpeechBridge {
         setVoiceUi({ hint: e.text });
         break;
       case "error":
-        setVoiceUi({ error: e.message });
+        this.trouble(e.message);
         break;
     }
   }
@@ -304,15 +347,23 @@ export class VoiceSession implements SpeechBridge {
   /** The user finished a turn: send it, and stay with it until it is over. */
   private async beginTurn(text: string): Promise<void> {
     const generation = this.turns.begin();
+    setVoiceUi({ problem: null });
     const deadline = this.now() + (this.deps.busyWaitMs ?? BUSY_WAIT_MS);
     // A reply the user just cut in on needs a moment to wind down.
     while (this.deps.host.busy() && this.now() < deadline) {
       await new Promise((r) => setTimeout(r, 50));
     }
-    try {
-      await this.deps.host.sendSpoken(text);
-    } catch {
-      /* the store already tells the user what went wrong */
+    if (this.deps.host.busy()) {
+      // The store would drop the message without a word; the user must not
+      // believe they were heard.
+      this.trouble("Poiesis is still busy with the last answer, so I did not catch that. Say it again in a moment.");
+    } else {
+      try {
+        await this.deps.host.sendSpoken(text);
+      } catch (e) {
+        // The chat shows its own error as the reply; the voice surface has no chat.
+        this.trouble(`That did not work: ${plainReason(e)}`);
+      }
     }
     // If the turn never reached speech (an error, no model), give the floor back.
     if (!this.finished.has(generation)) {

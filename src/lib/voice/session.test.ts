@@ -324,6 +324,78 @@ describe("VoiceSession", () => {
   });
 });
 
+describe("VoiceSession problems", () => {
+  it("shows a dismissable problem for a Rust error while live, and keeps going", async () => {
+    const r = rig();
+    await r.session.start();
+    r.emit({ type: "error", message: "The voice stopped unexpectedly: out of memory" });
+    expect(useVoiceStore.getState().problem).toContain("out of memory");
+    expect(useVoiceStore.getState().error).toBeNull();
+    expect(r.session.live).toBe(true);
+  });
+
+  it("tells the user when the reply cannot be spoken, once per reply", async () => {
+    const r = rig();
+    const g = await startAndHear(r);
+    r.api.speak.mockRejectedValue("No voice is installed.");
+    r.session.token(g, "Hello ");
+    r.session.token(g, "there. ");
+    await vi.waitFor(() => expect(useVoiceStore.getState().problem).toContain("could not speak"));
+    useVoiceStore.setState({ problem: null });
+    r.session.token(g, "More.");
+    await new Promise((res) => setTimeout(res, 10));
+    expect(useVoiceStore.getState().problem).toBeNull();
+  });
+
+  it("takes a failed turn from the chat store (no model, engine down)", async () => {
+    const r = rig();
+    await r.session.start();
+    r.session.fail("No model is loaded yet. Open Models and choose a model to start the engine.");
+    expect(useVoiceStore.getState().problem).toContain("No model is loaded");
+  });
+
+  it("warns when the mic stops reaching Rust, not for one lost batch", async () => {
+    const r = rig();
+    await r.session.start();
+    r.api.push.mockRejectedValue("closed");
+    const frame = new Int16Array(320);
+    const batches = (n: number) => {
+      for (let i = 0; i < n * 5; i++) r.audioEvents().onFrame?.(frame, 0);
+    };
+    batches(2);
+    await new Promise((res) => setTimeout(res, 5));
+    expect(useVoiceStore.getState().problem).toBeNull();
+    batches(10);
+    await vi.waitFor(() => expect(useVoiceStore.getState().problem).toContain("not reaching"));
+  });
+
+  it("says so when the user spoke but the last answer was still running", async () => {
+    const r = rig({ busy: () => true });
+    await r.session.start();
+    r.emit({ type: "transcript", text: "Hello?", language: "en" });
+    r.tick(200); // past the wait for the last answer to wind down
+    await vi.waitFor(() => expect(useVoiceStore.getState().problem ?? "").toContain("still busy"));
+    expect(r.host.sendSpoken).not.toHaveBeenCalled();
+  });
+
+  it("shows a thrown send as a problem and clears it on the next turn", async () => {
+    const r = rig();
+    await r.session.start();
+    r.host.sendSpoken.mockImplementationOnce(() => Promise.reject(new Error("boom")));
+    r.emit({ type: "transcript", text: "One", language: "en" });
+    await vi.waitFor(() => expect(useVoiceStore.getState().problem).toContain("boom"));
+    r.emit({ type: "transcript", text: "Two", language: "en" });
+    await vi.waitFor(() => expect(r.host.sendSpoken).toHaveBeenCalledWith("Two"));
+    expect(useVoiceStore.getState().problem).toBeNull();
+  });
+
+  it("remembers when the live session began, for the activity list", async () => {
+    const r = rig();
+    await r.session.start();
+    expect(useVoiceStore.getState().startedAt).toBe(100_000);
+  });
+});
+
 describe("voice ui state", () => {
   it("starts off", () => {
     expect(useVoiceStore.getState()).toMatchObject({ floor: initialVoiceUi.floor, shown: false });

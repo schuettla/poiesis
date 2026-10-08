@@ -8,11 +8,69 @@ changed — without ever nagging, and without the user hunting for a download
 page.
 
 > ID prefixes — **REL** release pipeline (GitHub side, no app code) ·
-> **UPD** app wiring (Rust + config) · **UPD-UI** frontend.
+> **UPD** app wiring (Rust + config) · **UPD-UI** frontend ·
+> **PUB** public-release readiness (added 2026-10-08).
 >
-> **Build order: REL → UPD → UPD-UI.** REL-1..REL-6 must be done *first* and
-> in order — you cannot configure the app until the signing key exists, and
-> you cannot test the app until one real release is published.
+> **Build order: REL → UPD → UPD-UI → PUB.** REL-1..REL-6 must be done *first*
+> and in order — you cannot configure the app until the signing key exists,
+> and you cannot test the app until one real release is published. PUB-1
+> (data survives updates) must be done before the first *public* release, not
+> before the first dry run.
+>
+> **Status review (2026-10-08).** Nothing in this plan is built yet: no
+> `.github/`, no updater plugin, `"plugins": {}` in `tauri.conf.json`, version
+> still `0.1.0`. The design still holds. Changes from the review:
+> - UPD-3 rewritten — the teardown it named never existed; shutdown now lives
+>   in `RunEvent::ExitRequested` and covers three managers.
+> - File/line anchors in UPD-UI refreshed.
+> - REL-5/REL-6 gained a voice (`sherpa-onnx`) bundling check — voice is a
+>   default Cargo feature now and ships native code.
+> - New Part VI-b (**PUB**) for what a *public* release needs beyond OTA:
+>   data-migration safety, SmartScreen, a problem-report path. Settled:
+>   repo is public (REL-0 / PUB-0); ship unsigned for now (PUB-2).
+>
+> **Build status (2026-10-08).** Everything that needs no secret is built and
+> tested; what remains is the signing key and the first real release.
+>
+> | Built | Where |
+> | --- | --- |
+> | REL-4 version check, REL-5 workflow | `scripts/check-version.mjs`, `.github/workflows/release.yml` |
+> | UPD-1 deps + capability, UPD-3 `shutdown_engines` | `Cargo.toml`, `lib.rs`, `commands/updater.rs` |
+> | UPD-4 API, UPD-5 store, UPD-6 startup check | `lib/updates.ts`, `lib/api.ts`, `lib/store.ts`, `App.tsx` |
+> | UPD-UI-1..4 | `components/Updates/UpdatesBlock.tsx`, `MemoryToast.tsx`, `SettingsHub.tsx`, `Rail.tsx` |
+> | PUB-1 backup + newer-DB guard + release-fixture test | `db/mod.rs`, `tests/fixtures/release-last.db` |
+> | PUB-3 Report a problem, PUB-4 checklist | `routes/About.tsx`, `RELEASING.md` |
+>
+> **Not done — needs Erich:** REL-1 (generate the key), REL-2 (GitHub secrets),
+> UPD-2 (paste the public key into `tauri.conf.json`; the app will not start
+> with the updater plugin registered until that is in), REL-6 (cut the
+> release), PUB-2 stays unsigned. Not yet exercised on a real install: the live
+> smoke and the negative signature test in Part VI.
+>
+> **Where the build departs from the text above, and why:**
+> - **The check/install commands are ours, in Rust** (`update_check_cmd`,
+>   `update_install_cmd`), not the plugin's JS bindings. `on_before_exit` is a
+>   method of `UpdaterBuilder`, not of the plugin `Builder` UPD-3 assumed, and
+>   the JS bindings build their own `UpdaterBuilder` with no way to set it.
+>   Consequences: no `@tauri-apps/plugin-updater` npm package and no
+>   `updater:default` capability (the webview can't call the updater directly);
+>   only `plugin-process` is used from JS, for the relaunch. The hook replaces
+>   the plugin's own (`cleanup_before_exit`), so ours calls that as well.
+> - **Windows never reaches `ready`.** `download_and_install` launches the
+>   installer and exits the process (`std::process::exit`), and the passive NSIS
+>   installer relaunches the app. So there is an extra phase, `installing`
+>   ("Installing version X… I'll restart in a moment."), set when the download
+>   finishes; `ready` / `Restart now` / `Later` exist for other platforms only.
+> - **`app_version` now reads `tauri.conf.json`** (it read `Cargo.toml`, which
+>   would have disagreed with the version the updater compares). `REL-4` now
+>   bumps all three files, and `check-version.mjs` enforces it.
+> - **`UpdateInfo` is `AppUpdateInfo`** (`api.ts` already had a runtime one) and
+>   has no `date` — nothing shows it. The download channel sends `progress`
+>   (with `contentLength`) and `finished`, not three event shapes.
+> - **Adding the updater moved the dependency tree:** it requires `tauri >= 2.12`,
+>   so `Cargo.lock` took tauri 2.11→2.12, wry, tao and `webview2-com` 0.38→0.39
+>   (`webview2-com` in `Cargo.toml`, used by `mic_permission.rs`, followed).
+> - **Byte sizes are decimal MB**, as GitHub lists the asset.
 >
 > **PRES-0 (first-person copy) from `POIESIS_PLAN.md` binds every `-UI-` task
 > here.** §5 is the authoritative copy table; build each UI task with its copy
@@ -82,11 +140,15 @@ Authenticode / EV certificate. Out of scope here; noted so it isn't a surprise.
 
 This part is all GitHub and shell. No app code changes. Do it in order.
 
-Current state: remote `poiesis` → `https://github.com/schuettla/poiesis.git`,
-no `.github/` directory, `tauri.conf.json` version `0.1.0`, `package.json`
-version `0.1.0`.
+Current state (re-verified 2026-10-08): remote `poiesis` →
+`https://github.com/schuettla/poiesis.git`, no `.github/` directory,
+`tauri.conf.json` version `0.1.0`, `package.json` version `0.1.0`, bundle
+`targets: "all"`, `rust-version = "1.90"`, default Cargo features
+`["voice"]`.
 
 ### REL-0 — Confirm the repo is public and reachable
+
+> **Done (2026-10-08):** Erich confirmed the repo is public.
 
 The updater fetches `latest.json` and the installer over plain HTTPS with no
 credentials. If the repo is private, every asset URL 404s for users and the
@@ -170,9 +232,12 @@ update only when the manifest's version is **greater than** the running app's.
 | **minor** — `0.1.x → 0.2.0` | a **major new release** — a capability that changes what Poiesis is, or a batch of work you'd write an announcement for. Deliberate, not incidental. | rare |
 | **major** — `0.x → 1.0.0` | reserved. Not on the roadmap yet. | — |
 
-So the **first release is `v0.1.1`**, not `v0.2.0`, and the second is
-`v0.1.2`. `0.2.0` is a decision you make, never something a release script
-reaches by counting.
+So the **first release is `v0.1.0`** (decided 2026-10-08: the version files
+already say `0.1.0`, so there is no bump; earlier demo builds called `0.1.0`
+had no updater and are not distinguishable by number), the second is
+`v0.1.1`. `0.2.0` is a decision you make, never something a release script
+reaches by counting. The `0.1.1`/`0.1.2` examples below are the live-smoke
+sequence, which needs a second release regardless.
 
 - Patch numbers do not roll over at 9 — `0.1.9 → 0.1.10` is correct semver and
   the updater compares it correctly (it parses numerically, not as a string).
@@ -268,6 +333,15 @@ Notes on the non-obvious lines:
 - **Verify the action's major tag at implementation time.** `@v0` is the
   long-standing tag; check the [tauri-action README](https://github.com/tauri-apps/tauri-action)
   for the current one and pin to it rather than to a moving branch.
+- **Voice is in the default build.** `sherpa-onnx` is a default Cargo feature
+  (`voice`) and links native ONNX runtime code. The CI runner must build it
+  with no local toolchain state to lean on, and the installer must carry any
+  DLLs it needs. A build that works on your machine because a DLL happens to
+  sit on your `PATH` will install fine and then fail at the first mic press
+  for users. REL-6 checks this explicitly. If the CI build of `sherpa-onnx`
+  turns out slow or fragile, the fallback is to cache it aggressively
+  (`rust-cache` already covers `target/`), not to drop the feature from
+  releases.
 
 - **Acceptance:** the file is committed and appears under the repo's
   **Actions** tab as a workflow named `release`.
@@ -278,14 +352,14 @@ Do this *after* UPD-1..UPD-3, so the first published release already contains
 a real updater manifest.
 
 ```powershell
-# 1. bump both version fields to 0.1.1 (REL-4), commit
+# 1. version files already say 0.1.0 (first release: no bump), commit
 git add -A
-git commit -m "release: v0.1.1"
+git commit -m "release: v0.1.0"
 
 # 2. tag and push — this is the trigger
-git tag v0.1.1
+git tag v0.1.0
 git push poiesis master
-git push poiesis v0.1.1
+git push poiesis v0.1.0
 ```
 
 Then on github.com:
@@ -306,8 +380,15 @@ Then on github.com:
    `https://github.com/schuettla/poiesis/releases/latest/download/latest.json`
    should return JSON in a logged-out browser.
 
+7. **Clean-machine check** (once, on the first release, and again whenever
+   native dependencies change): install the CI-built `-setup.exe` on a
+   Windows machine or VM that has never had the dev toolchain. Start the app,
+   load a model, and use voice once. A missing DLL shows up here and nowhere
+   else.
+
 - **Acceptance:** that URL returns a JSON body whose `version` is `0.1.1` and
-  whose `platforms."windows-x86_64".url` points at the `-setup.exe`.
+  whose `platforms."windows-x86_64".url` points at the `-setup.exe`; the
+  clean-machine install starts, runs a model and transcribes one voice input.
 
 ---
 
@@ -342,6 +423,9 @@ alongside the other plugin registrations:
     app.handle().plugin(tauri_plugin_process::init())?;
 }
 ```
+
+(UPD-3 replaces this with a builder that carries the engine-shutdown hook;
+write the final form directly if doing both in one pass.)
 
 **`src-tauri/capabilities/default.json`** — add to `permissions`:
 
@@ -395,25 +479,66 @@ files under the install directory and then relaunches; if `llama-server` is
 still holding a model file or a port, the install can fail or the new process
 can come up onto an occupied port.
 
-In `src-tauri/src/lib.rs`, build the updater with an exit hook that performs
-the same shutdown the app already does on window close:
+**Where teardown lives today (2026-10-08).** There is no standalone shutdown
+function. The teardown is inline in the `.run(|app_handle, event| …)` closure
+at the end of `src-tauri/src/lib.rs`, on `RunEvent::ExitRequested`, and it
+stops three managers in turn: `RuntimeManager` (`runtime/manager.rs`),
+`EmbedManager` (`runtime/embedserver.rs`) and `RerankManager`
+(`runtime/rerankserver.rs`), each via `block_on(mgr.stop())`.
+
+**Step 1 — extract it.** Move that block into one function both call sites
+share, so the next engine added is stopped in both paths automatically:
 
 ```rust
-tauri_plugin_updater::Builder::new()
-    .on_before_exit(|| {
-        // Same teardown as normal shutdown: stop llama-server and any
-        // image-engine child before the installer touches the install dir.
-        crate::runtime::manager::shutdown_blocking();
-    })
-    .build()
+/// Stop every supervised child process. Called on normal exit and before
+/// the updater hands over to the installer.
+pub(crate) fn shutdown_engines(app: &tauri::AppHandle) {
+    if let Some(mgr) = app.try_state::<RuntimeManager>() {
+        tauri::async_runtime::block_on(mgr.stop());
+    }
+    if let Some(mgr) = app.try_state::<EmbedManager>() {
+        tauri::async_runtime::block_on(mgr.stop());
+    }
+    if let Some(mgr) = app.try_state::<RerankManager>() {
+        tauri::async_runtime::block_on(mgr.stop());
+    }
+}
 ```
 
-- Reuse the existing shutdown path in `src-tauri/src/runtime/manager.rs`
-  rather than writing a second one; if the current teardown is only wired to a
-  window event, extract it into a callable function first.
-- **Acceptance:** with a model loaded, running an update leaves no orphaned
-  `llama-server.exe` in Task Manager, and the relaunched app starts its engine
-  normally.
+`ExitRequested` then calls `shutdown_engines(app_handle)`. While extracting,
+check whether the image engine (`runtime/imageengine.rs`) spawns a child of
+its own; if it does, it belongs in this function too. Voice runs in-process
+(`sherpa-onnx`), so it has no child to stop. Its open mic stream dies with
+the process.
+
+**Step 2 — hook the updater.** `on_before_exit` takes a plain closure with no
+app handle, so capture a clone when building the plugin inside `.setup`:
+
+```rust
+#[cfg(desktop)]
+{
+    let handle = app.handle().clone();
+    app.handle().plugin(
+        tauri_plugin_updater::Builder::new()
+            .on_before_exit(move || shutdown_engines(&handle))
+            .build(),
+    )?;
+    app.handle().plugin(tauri_plugin_process::init())?;
+}
+```
+
+(This replaces the plain `Builder::new().build()` registration in UPD-1.)
+
+- **Backstop, not a substitute.** `runtime/jobobject.rs` binds engine children
+  to a Win32 Job Object with `KILL_ON_JOB_CLOSE`, so if the app dies without
+  running the hook, the OS kills the children anyway. That limits the damage
+  from a missed engine, but a graceful stop is still needed: the installer
+  can start replacing files *before* the old process has fully exited and
+  closed the job.
+- **Acceptance:** with a chat model, the embedder and the reranker all
+  running, an update leaves no orphaned `llama-server.exe` in Task Manager,
+  and the relaunched app starts its engines normally. Normal window-close
+  shutdown behaves exactly as before.
 
 ### UPD-4 — Frontend API surface
 
@@ -504,8 +629,8 @@ interrupt work.
 ### UPD-UI-1 — The Updates block in About
 
 **File:** `src/routes/About.tsx`, a new `<section className="setting-block">`
-inserted **between** the "Poiesis Agent" block (line ~35) and "Third-party
-licenses" (line ~45). This is the home of the feature — everything else points
+inserted **between** the "Poiesis Agent" block (line ~40) and "Third-party
+licenses" (line ~50) — anchors as of 2026-10-08; find them by heading text. This is the home of the feature — everything else points
 here.
 
 Reuses the existing class vocabulary from `src/routes/Settings.css`:
@@ -556,7 +681,7 @@ The state region by phase — this is the exact spec:
 ### UPD-UI-2 — The discovery toast
 
 **File:** `src/components/Memory/MemoryToast.tsx` — add an `UpdateToast`
-branch to the existing priority chain in the `if (!toast)` block (line ~123),
+branch to the existing priority chain in the `if (!toast)` block (line ~121),
 below `HealToast`. That file is already the single toast host; do not add a
 second toast system.
 
@@ -583,14 +708,14 @@ learned something. Get this line right and the rest is plumbing.
 
 Two edits, both following patterns already in place:
 
-1. **`src/routes/SettingsHub.tsx:52`** — extend `badgeFor`:
+1. **`src/routes/SettingsHub.tsx:49`** — extend `badgeFor`:
    ```ts
    (v === "about" && updateAvailable)
    ```
    with `const updateAvailable = useAppStore((s) =>
    s.updateState.phase === "available" || s.updateState.phase === "ready");`
 
-2. **`src/components/Rail/Rail.tsx:214`** — fold into the existing cog badge:
+2. **`src/components/Rail/Rail.tsx:374`** — fold into the existing cog badge:
    ```ts
    const settingsPending = soulPending || selfPending || consolidationPending || updateAvailable;
    ```
@@ -611,7 +736,7 @@ invisible-by-design in the bad way — the app just silently mutates.
 
 On boot, compare `getAppVersion()` against the persisted setting
 `updates.last_seen_version`. If the running version is higher, raise a
-`ReceiptToast` (the existing no-undo shell at `MemoryToast.tsx:52`) and write
+`ReceiptToast` (the existing no-undo shell at `MemoryToast.tsx:54`) and write
 the new value:
 
 ```
@@ -686,6 +811,110 @@ pubkey is wrong and every user is unprotected.
 
 ---
 
+# Part VI-b — PUB: public-release readiness
+
+Parts II–VI make the app *able* to update. This part is what a **public**
+release needs before strangers depend on it. Every update is a one-way
+change to a user's machine and their data. There is no rollback (REL-4 never
+moves a tag), so mistakes have to be caught before the tag, not after.
+
+### PUB-0 — Repo visibility is a hard gate
+
+> **Settled (2026-10-08):** the repo is public, so the private-source split
+> in §7 is not needed. Releases publish to the same repo.
+
+- **Acceptance (checked at REL-6):** `…/releases/latest/download/latest.json`
+  loads in a logged-out browser.
+
+### PUB-1 — User data survives every update
+
+The app stores everything in one SQLite database, migrated in place by
+`Db::migrate()` (`src-tauri/src/db/mod.rs`, `SCHEMA_VERSION = 30` as of
+2026-10-08). Each update runs whatever migrations are new on real user data.
+Two gaps:
+
+1. **No backup before migrating.** In `Db::open`, when the on-disk
+   `user_version` is below `SCHEMA_VERSION`, copy the file to
+   `<name>.v{old}.bak` next to it *before* calling `migrate()`. Keep the last
+   two backups and delete older ones. This is the only undo a user will
+   have if a migration goes wrong.
+2. **No guard against a newer database.** If a user hand-installs an older
+   installer over a newer one, `user_version > SCHEMA_VERSION`, and the old
+   code would run against a schema it doesn't know. Refuse to open in that
+   case and show a plain-language error ("This data was written by a newer
+   version of me — please install the latest version.") instead of risking
+   corruption.
+
+Plus a **release gate**: the existing pinned-version migration tests (the
+`user_version` 19/26/27 fixtures in `db/mod.rs`) prove each step. Add one
+test that starts from the schema of the **last published release** and
+migrates to current. Bump that fixture as part of each release (REL-4's
+checklist).
+
+- **Acceptance:** upgrading a populated `v0.1.1` database to the next
+  release keeps every conversation, memory and setting. The `.bak` file
+  exists. Opening a newer database with an older build refuses cleanly.
+
+### PUB-2 — SmartScreen (Windows code signing)
+
+Parked in the original plan; for a public launch it decides whether a new
+user gets past the first screen. Without an Authenticode signature, every
+first install shows "Windows protected your PC — unknown publisher," and
+many users stop there. Updates are unaffected (UPD-2's minisign check is
+separate).
+
+Options, cheapest first:
+- **Azure Trusted Signing** — monthly subscription, no hardware token, signs
+  in CI. Requires identity validation (individual or org) that can take
+  days, so start it early. Wire it into REL-5 via Tauri's
+  `bundle.windows.signCommand`.
+- **OV/EV certificate** from a CA — yearly, usually tied to a hardware token
+  or cloud HSM; EV used to buy instant SmartScreen reputation but no longer
+  reliably does.
+- **Ship unsigned** and say so on the download page. Viable for an early,
+  technical audience; reputation then builds slowly with installs.
+
+> **Settled (2026-10-08): ship unsigned for now.** Code signing may be added
+> later; when it is, it is a REL-5 change (`signCommand` + one more secret)
+> and needs no app code. Until then, the download page / README should tell
+> users to expect the SmartScreen prompt and how to get past it
+> ("More info → Run anyway").
+
+### PUB-3 — A way to hear that something broke
+
+After launch, a broken update shows up as silence. Minimum viable channel,
+no telemetry:
+
+- A **"Report a problem"** button in About (below the Updates block) that
+  opens a pre-filled GitHub issue (`…/issues/new?title=…&body=…`) with the
+  app version, Windows version and schema version — nothing from the user's
+  conversations.
+- Copy, first person: `Something not working? Tell me about it.` / button
+  `Report a problem`.
+- Crash reporting or opt-in telemetry is a separate decision; not in this
+  plan.
+
+- **Acceptance:** the button opens the browser with a new issue whose body
+  already contains the three version facts.
+
+### PUB-4 — The per-release checklist
+
+Once the above exists, every release is the same routine. Put this in the
+repo as `RELEASING.md` (documentation, not a plan):
+
+1. `master` is green: `tsc`, vitest, `cargo test` (includes PUB-1's
+   last-release migration test).
+2. Bump `tauri.conf.json` + `package.json` (REL-4); update the PUB-1
+   fixture if the schema changed.
+3. Commit, tag `v0.1.n`, push both.
+4. Wait for the `release` workflow; open the draft.
+5. Write the notes **for users** (UPD-UI-1 shows them verbatim).
+6. Install the draft's installer over the previous release on your own
+   machine; smoke the update path once.
+7. Publish.
+
+---
+
 # Part VII — Parked, and known limits
 
 - **A nightly / `master` channel.** Run the same workflow on push to a
@@ -699,8 +928,8 @@ pubkey is wrong and every user is unprotected.
   `.app` is quarantined and won't launch. Don't enable until that's bought.
 - **Linux.** AppImage, `.deb` and `.rpm` all self-update in Tauri 2, but each
   needs its own smoke test and the AppImage path has its own caveats.
-- **Windows code signing (SmartScreen).** Separate from update signing; costs
-  money; doesn't block this plan.
+- **Windows code signing (SmartScreen).** PUB-2: decided to ship unsigned
+  for now (2026-10-08); options listed there for when it's revisited.
 - **Cancelling a download.** No cancel button in v1. The plugin's install is a
   single await; adding cancellation means restructuring around an abort
   handle. Fine to skip for a ~50 MB download; revisit if the bundle grows.

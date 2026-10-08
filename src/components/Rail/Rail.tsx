@@ -16,6 +16,7 @@ import {
   SearchIcon,
   SettingsIcon,
 } from "../Icons/Icons";
+import { updateIsWaiting } from "../../lib/updates";
 import "./Rail.css";
 
 /** The ⋯ and its menu, shared by chat and project rows. It sits in the row's
@@ -371,7 +372,11 @@ export default function Rail() {
   // able to see that it's happening, and end it.
   const runningJob = useAppStore((s) => s.runningJob);
   const stopScheduledJob = useAppStore((s) => s.stopScheduledJob);
-  const settingsPending = soulPending || selfPending || consolidationPending;
+  // `UPD-UI-3`: one badge covers whatever is waiting in any of Settings'
+  // sections — a proposal to review, or a newer version of me to install.
+  const updateWaiting = useAppStore((s) => updateIsWaiting(s.updateState));
+  const reviewPending = soulPending || selfPending || consolidationPending;
+  const settingsPending = reviewPending || updateWaiting;
   const inSettingsHub = [
     "models",
     "providers",
@@ -554,8 +559,8 @@ export default function Rail() {
             <span
               className="nav-badge"
               role="img"
-              aria-label="Changes waiting for review"
-              title="Changes waiting for review"
+              aria-label={reviewPending ? "Changes waiting for review" : "An update is waiting"}
+              title={reviewPending ? "Changes waiting for review" : "An update is waiting"}
             />
           )}
           {/* The local engine's state, beside the cog: the row you press when

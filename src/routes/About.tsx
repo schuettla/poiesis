@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
-import { getAppVersion, inTauri } from "../lib/api";
+import { getAppVersion, getProblemFacts, inTauri } from "../lib/api";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppStore } from "../lib/store";
 import PoiesisMark from "../components/Mark/PoiesisMark";
+import UpdatesBlock from "../components/Updates/UpdatesBlock";
+import { problemReportUrl } from "../lib/updates";
 import "./Surface.css";
 import "./Settings.css";
 
@@ -46,6 +49,29 @@ export default function About() {
             See what's in my working folder, and how big it is →
           </button>
         </section>
+
+        <UpdatesBlock version={version} />
+
+        {inTauri() && (
+          <section className="setting-block">
+            <h2 className="setting-title">Problems</h2>
+            <p className="setting-help">Something not working? Tell me about it.</p>
+            <p className="setting-help">
+              This opens a new issue on GitHub with my version and your Windows version filled in.
+              Nothing from your conversations or files is included.
+            </p>
+            <button
+              className="btn-secondary"
+              onClick={() => {
+                getProblemFacts()
+                  .then((f) => openUrl(problemReportUrl(f)))
+                  .catch(() => {});
+              }}
+            >
+              Report a problem
+            </button>
+          </section>
+        )}
 
         <section className="setting-block">
           <h2 className="setting-title">Third-party licenses</h2>

@@ -114,6 +114,15 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_Threading",
   "Win32_Security",
 ] }
+# Answers WebView2's microphone question for the app's own pages (mic_permission.rs).
+# Same version tauri's own webview uses, so it adds no second copy.
+webview2-com = "0.39"
+
+# Self-update (UPD-1): fetch a newer signed installer from GitHub Releases, and
+# relaunch afterwards. Desktop only, matching what `tauri add updater` writes.
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [features]
 default = ["voice"]

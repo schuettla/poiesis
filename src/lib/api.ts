@@ -4,7 +4,9 @@
 
 import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { relaunch } from "@tauri-apps/plugin-process";
 import type { AgentStep, Provenance } from "./types";
+import { trackDownload, type AppUpdateInfo, type DownloadEvent } from "./updates";
 
 export function inTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -108,6 +110,34 @@ export interface DbMessage {
 // ---- meta ----
 
 export const getAppVersion = () => invoke<string>("app_version");
+
+/** The version facts a problem report carries — nothing from the user's data. */
+export type ProblemFacts = { app_version: string; windows: string; schema_version: number };
+export const getProblemFacts = () => invoke<ProblemFacts>("problem_facts_cmd");
+
+// ---- self-update (AUTOUPDATE_PLAN UPD-4) ----
+
+/** Resolves null when already current. Rejects with `"network"`,
+ * `"signature"` or `"other"` — see `describeUpdateError`. No-op in the browser. */
+export async function checkForUpdate(): Promise<AppUpdateInfo | null> {
+  if (!inTauri()) return null;
+  return invoke<AppUpdateInfo | null>("update_check_cmd");
+}
+
+/** Downloads, verifies and installs the update `checkForUpdate` found. On
+ * Windows the installer takes over and the app exits before this resolves;
+ * `onFinished` is the last thing the UI hears. */
+export async function installUpdate(
+  onProgress: (downloaded: number, total: number | null) => void,
+  onFinished: () => void
+): Promise<void> {
+  if (!inTauri()) return;
+  const ch = new Channel<DownloadEvent>();
+  ch.onmessage = trackDownload(onProgress, onFinished);
+  await invoke<void>("update_install_cmd", { onEvent: ch });
+}
+
+export const restartApp = () => (inTauri() ? relaunch() : Promise.resolve());
 
 // ---- conversations & messages (Phase 2) ----
 

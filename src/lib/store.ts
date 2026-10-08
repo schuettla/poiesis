@@ -31,6 +31,15 @@ import type {
 import { NEW_PROJECT_NAME } from "./types";
 import { mockConversations, mockModels } from "./mockData";
 import * as api from "./api";
+import {
+  UPDATE_AUTOCHECK_KEY,
+  UPDATE_LAST_SEEN_KEY,
+  UPDATE_NOTIFIED_KEY,
+  compareVersions,
+  describeUpdateError,
+  type AppUpdateInfo,
+  type UpdateState,
+} from "./updates";
 import { save } from "@tauri-apps/plugin-dialog";
 import { proposedDraft, type TaskDraft } from "./when";
 import { afterRun as afterGoalRun, newGoal, openingTurn, type Goal, type GoalHost } from "./goal";
@@ -627,6 +636,26 @@ export interface AppState {
   /** A one-line notice from the watchdog (HEAL-1), or null. */
   healToast: string | null;
   dismissHealToast: () => void;
+  /** Self-update (AUTOUPDATE_PLAN UPD-5). The live handle to the found update
+   * stays in Rust; this is what the UI renders. */
+  updateState: UpdateState;
+  /** "Check when I start" — persisted as `updates.autocheck`, on by default. */
+  updateAutoCheck: boolean;
+  /** The one-time "there's a newer version of me" notice (UPD-UI-2). */
+  updateToast: AppUpdateInfo | null;
+  /** "I'm now version X" after an update has installed (UPD-UI-4). */
+  updateReceiptToast: string | null;
+  /** `manual` false is the quiet startup check: a failure there is not news. */
+  checkForUpdates: (manual: boolean) => Promise<void>;
+  startUpdateInstall: () => Promise<void>;
+  /** "Not now": forget the offer until the next check. */
+  declineUpdate: () => void;
+  setUpdateAutoCheck: (on: boolean) => Promise<void>;
+  dismissUpdateToast: () => void;
+  dismissUpdateReceiptToast: () => void;
+  /** Boot-time work: the arrival receipt, then (after `delayMs`, so it never
+   * competes with first paint) the startup check and its once-per-version toast. */
+  initUpdates: (delayMs?: number) => Promise<void>;
   /** `TTL-2`: a one-line notice that short-lived facts were let go. */
   expirySweptToast: string | null;
   dismissExpirySweptToast: () => void;
@@ -2617,6 +2646,89 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   healToast: null,
   dismissHealToast: () => set({ healToast: null }),
+  updateState: { phase: "idle" },
+  updateAutoCheck: true,
+  updateToast: null,
+  updateReceiptToast: null,
+  dismissUpdateToast: () => set({ updateToast: null }),
+  dismissUpdateReceiptToast: () => set({ updateReceiptToast: null }),
+  checkForUpdates: async (manual) => {
+    if (!api.inTauri()) return;
+    const phase = get().updateState.phase;
+    // A check mid-download, or mid-check, would only trample the state.
+    if (phase === "checking" || phase === "downloading" || phase === "installing") return;
+    set({ updateState: { phase: "checking" } });
+    try {
+      const info = await api.checkForUpdate();
+      set({
+        updateState: info
+          ? { phase: "available", info }
+          : { phase: "current", checkedAt: Date.now() },
+      });
+    } catch (e) {
+      // Offline at startup is not an event worth showing; a button press is.
+      set({
+        updateState: manual
+          ? { phase: "error", message: describeUpdateError(e) }
+          : { phase: "idle" },
+      });
+    }
+  },
+  startUpdateInstall: async () => {
+    const s = get().updateState;
+    if (s.phase !== "available") return;
+    const info = s.info;
+    set({ updateState: { phase: "downloading", info, downloaded: 0, total: null } });
+    try {
+      await api.installUpdate(
+        (downloaded, total) => set({ updateState: { phase: "downloading", info, downloaded, total } }),
+        () => set({ updateState: { phase: "installing", info } })
+      );
+      // Only reached where the install doesn't end the process (not Windows).
+      set({ updateState: { phase: "ready", info } });
+    } catch (e) {
+      // The user asked for this, so a failure is always said out loud.
+      set({ updateState: { phase: "error", message: describeUpdateError(e) } });
+    }
+  },
+  declineUpdate: () => set({ updateState: { phase: "idle" } }),
+  setUpdateAutoCheck: async (on) => {
+    set({ updateAutoCheck: on });
+    if (api.inTauri()) await api.setSetting(UPDATE_AUTOCHECK_KEY, on ? "true" : "false");
+  },
+  initUpdates: async (delayMs = 3000) => {
+    if (!api.inTauri()) return;
+    let auto = true;
+    let notified: string | null = null;
+    try {
+      const [autoRaw, notifiedRaw, lastSeen, running] = await Promise.all([
+        api.getSetting(UPDATE_AUTOCHECK_KEY),
+        api.getSetting(UPDATE_NOTIFIED_KEY),
+        api.getSetting(UPDATE_LAST_SEEN_KEY),
+        api.getAppVersion(),
+      ]);
+      auto = autoRaw !== "false";
+      notified = notifiedRaw;
+      set({ updateAutoCheck: auto });
+      // The arrival receipt: a higher version than last time means an update
+      // installed. A first-ever run has nothing to compare, and says nothing.
+      if (lastSeen && compareVersions(running, lastSeen) > 0) {
+        set({ updateReceiptToast: running });
+      }
+      if (lastSeen !== running) await api.setSetting(UPDATE_LAST_SEEN_KEY, running);
+    } catch {
+      /* the receipt is a courtesy; carry on to the check */
+    }
+    if (!auto) return;
+    if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+    await get().checkForUpdates(false);
+    const s = get().updateState;
+    // One mention per version, ever; the badge is the only trace after that.
+    if (s.phase === "available" && s.info.version !== notified) {
+      set({ updateToast: s.info });
+      api.setSetting(UPDATE_NOTIFIED_KEY, s.info.version).catch(() => {});
+    }
+  },
   expirySweptToast: null,
   dismissExpirySweptToast: () => set({ expirySweptToast: null }),
   agentDoneToast: null,
@@ -3326,6 +3438,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     const convId = state.activeConversationId;
     if (!convId || state.busy) return;
     const model = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
+    if (!model && sendOpts?.spoken) {
+      // The voice surface has no chat to show an error in.
+      getSpeechBridge()?.fail("There is no model to answer with yet. Open Models and choose one.");
+      return;
+    }
 
     // `GOL-UI-1`: what a goal ended with stays on the bar until the next send.
     const ended = state.goals[convId];
@@ -3447,6 +3564,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // *this* model. Start it on demand (visible via the engine-status indicator)
     // rather than letting the request fail with "No model is loaded yet".
     const failTurn = async (msg: string) => {
+      if (spoken) getSpeechBridge()?.fail(msg);
       patchAssistant(set, convId, assistantId, { text: msg, streaming: false });
       set({ busy: false });
       try {
@@ -6185,6 +6303,7 @@ async function streamAssistantTurn(
             break;
           case "error":
             failed = true;
+            speech?.fail(`That didn't work: ${e.message}`);
             acc = acc || `That didn't work: ${e.message}`;
             patchAssistant(set, convId, assistantId, { text: acc, streaming: false });
             break;
@@ -6206,6 +6325,7 @@ async function streamAssistantTurn(
     }
   } catch (err) {
     failed = true;
+    speech?.fail(`That didn't work: ${String(err)}`);
     acc = acc || `That didn't work: ${String(err)}`;
     patchAssistant(set, convId, assistantId, { text: acc, streaming: false });
   } finally {

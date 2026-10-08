@@ -1,6 +1,6 @@
 import { useActiveConversation, useAppStore, useLiveItems } from "../../lib/store";
 import { HUB_SECTIONS } from "../../lib/types";
-import { SidebarIcon } from "../Icons/Icons";
+import { MessageIcon, SidebarIcon } from "../Icons/Icons";
 import PoiesisMark from "../Mark/PoiesisMark";
 import MicIndicator from "../Voice/MicIndicator";
 import TabStrip from "./TabStrip";
@@ -84,6 +84,11 @@ function Location() {
 
   return (
     <div className={`topbar-where ${chat ? "is-chat" : "is-route"}`} title={label}>
+      {chat && (
+        <span className="topbar-where-icon" aria-hidden="true">
+          <MessageIcon size={12} />
+        </span>
+      )}
       <span className="topbar-where-label">{label}</span>
     </div>
   );

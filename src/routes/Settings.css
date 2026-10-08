@@ -499,3 +499,31 @@
   margin: 2px 0 0;
   max-width: 52ch;
 }
+
+/* Self-update (UPD-UI-1). The progress bar reuses `.imggen-progress`. */
+.update-state {
+  margin: 4px 0 14px;
+}
+.update-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+/* Release notes as written on the GitHub release: plain text, line breaks kept.
+   Capped so a long changelog never pushes the buttons off-screen. */
+.update-notes {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  max-height: 12rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.5;
+  color: var(--ink);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+}
+.update-progress {
+  margin-top: 0;
+}

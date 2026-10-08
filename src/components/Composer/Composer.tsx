@@ -18,6 +18,7 @@ import SuggestionChip from "./SuggestionChip";
 import BtwCard from "./BtwCard";
 import { useCommandInput } from "./useCommandInput";
 import MicButton from "../Voice/MicButton";
+import VoiceButton from "../Voice/VoiceButton";
 import { joinSpoken } from "../../lib/voice/dictation";
 import "./Composer.css";
 
@@ -679,6 +680,7 @@ export default function Composer({
               }}
             />
           </div>
+          <VoiceButton />
           <MicButton
             onText={(t) => setValue((v) => joinSpoken(v, t))}
             onSendText={(t) => sendWithExtras(joinSpoken(value, t))}

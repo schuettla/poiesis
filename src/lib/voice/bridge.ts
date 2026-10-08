@@ -22,6 +22,9 @@ export interface SpeechBridge {
   end(generation: number): Promise<SpeechOutcome>;
   /** The user pressed Stop: Poiesis stops talking at once. */
   stopSpeaking(): void;
+  /** The spoken turn failed before it could be answered. The chat shows it as
+   * the reply; the voice surface has no chat, so it needs to be told. */
+  fail(message: string): void;
 }
 
 let bridge: SpeechBridge | null = null;

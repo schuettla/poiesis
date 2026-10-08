@@ -17,7 +17,7 @@ any step.
 > **TRN** turn-taking - **VTN** a voice turn through the agent - **VXP**
 > experience rules - **-UI** frontend - **-T** tests.
 >
-> **Status: built, waiting for a hand check (2026-10-07).** Built: all of
+> **Status: built, first hand check done on a laptop (2026-10-08), waiting for the full pass.** Built: all of
 > Phase 0 except `VOC-0.4` (needs the real app); Phase 1 with its settings
 > tab; Phase 2; Phase 3 (`TRN-1` to `TRN-5`); Phase 4 (`VTN-1` to `VTN-7`);
 > Phase 5, all of `VOC-UI-1` to `VOC-UI-10`; `VOC-11` credits; the light
@@ -39,7 +39,7 @@ Legend: **done** = built and tested. **partial** = built, part missing (noted).
 | `VOC-0.1` | done | Floor 1.90, toolchain 1.96.0. `tauri build --bundles nsis` works: installer 15.9 MB, program 43.4 MB, no extra DLL. |
 | `VOC-0.2` | done | Static link works, also release with LTO. |
 | `VOC-0.3` | done | Spike test and an end-to-end speak and hear test. Pocket dropped. |
-| `VOC-0.4` | manual | Mic permission in real WebView2 not checked. |
+| `VOC-0.4` | done | Checked by Erich in the real app (2026-10-08): WebView2 showed its own microphone box. Now answered by `mic_permission.rs` for the app's own pages, so the box is gone (needs one run to confirm). |
 | `VOC-0.5` | done | Numbers in Build notes. |
 | `VOC-1` | done | Hearing and voice engines, idle unload, one decode at a time, a live session keeps them loaded. |
 | `VOC-2` | done | Catalog done: two hearings (standard, light English) and 41 voices in 18 languages, each with its license. Pocket is not in it (see Build notes). |
@@ -76,6 +76,9 @@ Legend: **done** = built and tested. **partial** = built, part missing (noted).
 | `VOC-UI-8` | manual | "Talk to Poiesis", "Stop talking", "Voice settings" in the palette. |
 | `VOC-UI-9` | manual | Hotkey (works while Poiesis has focus), changed in the Voice tab and live at once. Escape stops speech first, a second Escape leaves. |
 | `VOC-UI-10` | manual | Red mic in the top bar while the mic is open. |
+| `VOC-UI-11` | manual | Problems are shown, not swallowed (2026-10-08). A failed reply, a voice that cannot speak, a mic that stops reaching the app, a send dropped because the last answer was still running, no model: each puts one dismissable line on the voice surface (`voiceStore.problem`). Startup failures keep the blocking note with "Try again". |
+| `VOC-UI-12` | manual | "What I did" list under the orb (2026-10-08): the tools and agents of the current answer, running, done or failed, from `activity.ts`. |
+| `VOC-UI-13` | manual | Way back to a live conversation (2026-10-08): a wave button left of the mic in the composer, only while a voice conversation is live and its surface is hidden ("Show chat"). Not there otherwise; starting voice stays `/talk`, the shortcut and the palette. The shortcut now switches between voice and chat instead of ending the conversation. |
 | `VOC-T1` | done | `voice_floor.rs` tests. |
 | `VOC-T2` | done | `voice_speech.rs` tests. |
 | `VOC-T3` | done | Catalog and copy test, now with both hearings. |
@@ -828,6 +831,30 @@ ich gehe spazieren.", and Parakeet hears the same sentence back. Run:
 - `shared/commands.json` and `src/lib/commands.ts`: the `/talk` command (`VOC-UI-2`).
 - `src/components/Conversation/SpokenMark.tsx`: the wave glyph and "Stopped here".
 
+### First hand check, 2026-10-08
+
+Erich tried it on a laptop with a mic and no GPU. Overall experience good, and a
+laptop without a GPU gives a proper experience. Two flaws, both fixed the same day:
+
+- **No feedback in voice mode.** Errors only reached the chat, which voice mode
+  covers: the agent's error was written as the reply and never spoken, the
+  `speak` and `push` calls swallowed their failures, and a spoken turn sent while
+  the last answer was still running was dropped without a word. Tool calls and
+  agents were also invisible. Now `SpeechBridge.fail` carries a failed turn to
+  the surface, the session reports speech and mic failures, and `activity.ts`
+  lists what the answer did (`VOC-UI-11`, `VOC-UI-12`).
+- **Hard to get back to voice.** After "Show chat" the only way back was typing
+  `/talk`. `VOC-UI-13` adds a button that exists only while a voice conversation
+  is live behind the chat. It is never a way to start one, so `CMP-4` and the
+  decision that voice opens from `/` still hold.
+
+- **No WebView2 microphone box.** `getUserMedia` made WebView2 ask "allow the
+  microphone?". `src-tauri/src/mic_permission.rs` registers a `PermissionRequested`
+  handler on the main window that allows the microphone, and only the microphone,
+  for the app's own origins (`tauri.localhost`, the dev server). Artifact frames and
+  every other permission keep WebView2's default. Windows' own privacy switch for
+  desktop apps is separate and still applies.
+
 ### Manual pass (`VOC-T7`)
 
 (Not done yet. Dictation first: tap, hold, Escape, leave the window, no model
@@ -857,6 +884,13 @@ Then voice mode, in the real app, on speakers without headphones:
     one message, and a cough in that gap must not lose the first part.
 14. Type `/talk` (and `/voice`): voice mode opens. Press "Show chat", then `/talk`
     again: the same conversation comes back, without a second start.
+15. Make something fail (stop the chat model, or pick none) and speak: the voice
+    surface shows one line saying so, and Dismiss clears it.
+16. Ask something with tools or an agent: the list under the orb shows each step
+    running, then done; a failing step shows in red.
+17. Press "Show chat": the wave button appears in the composer and brings voice
+    back. End the conversation: the button is gone. The shortcut switches between
+    chat and voice while it is live.
 
 ## Sources
 

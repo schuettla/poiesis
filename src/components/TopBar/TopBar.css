@@ -173,9 +173,9 @@
 
 /* `SHL-24`: where you are, stated once, in the space the session tabs used to
    fill. A label and not a control — no hover, no cursor, nothing to press —
-   because everything it can name is reached from the Rail. Serif for a chat
-   (its title is prose, and the Rail sets it in serif too), sans for a route,
-   the same distinction the strip used to draw with two tab faces.
+   because everything it can name is reached from the Rail. A chat carries the
+   same message glyph its session tab does once the strip appears; a route has
+   no glyph of its own to borrow.
 
    `SHL-27`: shown only while the strip is not, so the two never name the same
    chat twice in one row. */
@@ -184,11 +184,23 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  padding: 0 16px;
+  /* The session tab's own metrics (TabStrip.css `.ts-tab-main`, `.ts-session`):
+     10px in, 6px between glyph and label, 12px out — so the title doesn't
+     shift or change size when the strip appears around it. */
+  gap: 6px;
+  padding: 0 12px 0 10px;
   border-bottom: 1px solid var(--paper-edge-2);
 }
+.topbar-where-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  color: var(--ink);
+}
 /* One voice for "where you are", whatever it names: the window-title
-   treatment — sans, semibold, a touch tight. It used to be serif for a chat
+   treatment — sans, medium weight, a touch tight. It used to be serif for a chat
    and tiny tracked capitals for a route, so the same slot changed character
    every time you moved. */
 .topbar-where-label {
@@ -198,7 +210,7 @@
   text-overflow: ellipsis;
   font-family: var(--font-sans);
   font-size: var(--fs-ui);
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: var(--tracking-tight);
   color: var(--ink);
   animation: fade-in var(--dur) var(--ease-out);

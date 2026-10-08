@@ -56,24 +56,24 @@
   animation: fade-in var(--dur) var(--ease-out);
 }
 
+/* A dialog, so it takes the dialog family's parts: the same card as Confirm
+   (paper, hairline, --radius-xl, modal shadow), a head divided from its body
+   like the palette's, and the Timeline's frame for the list inside it. */
 .context-panel {
   position: fixed;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
   z-index: 50;
-  width: 480px;
-  max-width: 90vw;
+  width: min(480px, calc(100vw - 48px));
   max-height: 76vh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   background: var(--paper);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-xl);
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
   box-shadow: var(--shadow-modal);
+  overflow: hidden;
   animation: context-in var(--dur) var(--ease-out);
 }
 /* Centred with a transform, so the arrival has to carry that transform. */
@@ -85,43 +85,115 @@
 }
 
 .context-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-family: var(--font-sans);
-  font-size: var(--fs-ui);
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.context-layer {
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  padding: 6px 10px;
-}
-.context-layer summary {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding: 12px 12px 12px 20px;
+  border-bottom: 1px solid var(--paper-edge);
+}
+.context-panel-title {
+  margin: 0;
   font-family: var(--font-sans);
-  font-size: var(--fs-footnote);
+  font-size: var(--fs-ui-lg);
   font-weight: 600;
+  color: var(--ink);
+}
+.context-panel-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.context-panel-close:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.context-panel-close:active {
+  background: var(--fill-press);
+}
+
+.context-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px 20px 20px;
+}
+.context-panel-empty {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+
+/* One framed list, rows divided by the inner hairline — not a card per layer. */
+.context-layers {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.context-layer + .context-layer {
+  border-top: 1px solid var(--paper-edge);
+}
+.context-layer summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 12px 0 10px;
+  list-style: none;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: 500;
   color: var(--ink-muted);
   cursor: pointer;
 }
+.context-layer summary::-webkit-details-marker {
+  display: none;
+}
+.context-layer summary:hover {
+  color: var(--ink);
+  background: var(--fill-quiet);
+}
 .context-layer[open] summary {
   color: var(--ink);
-  margin-bottom: 6px;
+}
+.context-layer-twisty {
+  flex: none;
+  display: inline-flex;
+  color: var(--ink-faint);
+}
+.context-layer-twisty svg {
+  transition: transform var(--dur) var(--ease-out);
+}
+.context-layer[open] .context-layer-twisty svg {
+  transform: rotate(90deg);
+}
+.context-layer summary:hover .context-layer-twisty {
+  color: var(--ink);
 }
 .context-layer-label {
   flex: 1;
+  min-width: 0;
 }
 .context-layer-badge {
-  font-weight: 500;
-  font-size: var(--fs-caption);
+  font-weight: 400;
+  font-size: var(--fs-footnote);
   color: var(--ink-faint);
   white-space: nowrap;
+}
+.context-layer-body {
+  padding: 0 12px 12px;
+  animation: fade-in var(--dur) var(--ease-out);
 }
 .context-layer-sources {
   margin: 0 0 6px;
@@ -129,11 +201,18 @@
   font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
+/* The layer's literal text: the same inset well the permission diff and the
+   Self lesson text sit in. */
 .context-layer-text {
   margin: 0;
+  padding: 10px 12px;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--paper-edge);
+  border-radius: var(--radius);
   font-family: var(--font-mono);
   font-size: var(--fs-footnote);
-  line-height: 1.5;
+  line-height: 1.55;
   color: var(--ink-muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -147,16 +226,6 @@
 }
 .context-layer-edit {
   margin-top: 6px;
-  background: none;
-  border: none;
-  padding: 0;
-  font-family: var(--font-sans);
-  font-size: var(--fs-caption);
-  color: var(--ink-faint);
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.context-layer-edit:hover {
-  color: var(--ink-muted);
+  padding: 4px 0;
+  font-size: var(--fs-footnote);
 }

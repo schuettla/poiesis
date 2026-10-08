@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { voiceDownload } from "../../lib/api";
+import { activityFor, activitySummary, ACTIVITY_SHOWN, type ActivityRow } from "../../lib/voice/activity";
 import { hideVoiceSurface, leaveVoice, openVoice, voiceNeeds, voiceSession, type VoiceNeeds } from "../../lib/voice/controller";
 import { useVoiceStore } from "../../lib/voice/voiceStore";
 import { useAppStore } from "../../lib/store";
@@ -24,6 +25,30 @@ function stateLine(floor: string, step: string | null, muted: boolean): string {
     default:
       return "";
   }
+}
+
+/** What Poiesis did for this answer: tools it used and agents it started. The
+ * chat's timeline is hidden behind the voice surface, so this is where the
+ * user sees that work happened, and that some of it failed. */
+function VoiceActivity({ rows }: { rows: ActivityRow[] }) {
+  const hidden = Math.max(0, rows.length - ACTIVITY_SHOWN);
+  const shown = rows.slice(hidden);
+  return (
+    <div className="voice-activity" role="status" aria-label={activitySummary(rows)}>
+      {hidden > 0 && <p className="voice-activity-more">{hidden} earlier</p>}
+      <ul>
+        {shown.map((r) => (
+          <li key={r.id} className={`voice-activity-row is-${r.state}`}>
+            <span className="voice-activity-mark" aria-hidden="true" />
+            <span className="voice-activity-label">{r.label}</span>
+            {r.state === "error" && <span className="voice-activity-detail">{r.detail ?? "did not work"}</span>}
+            {r.state === "stopped" && <span className="voice-activity-detail">stopped</span>}
+            {r.state === "done" && r.detail && <span className="voice-activity-detail">{r.detail}</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 /**
@@ -61,6 +86,15 @@ export default function VoiceMode() {
       ? s.artifacts[s.activeConversationId]?.find((a) => a.id === artifactId)?.title ?? null
       : null
   );
+  const problem = useVoiceStore((s) => s.problem);
+  const startedAt = useVoiceStore((s) => s.startedAt);
+  // What Poiesis did this turn: the last answer, if it came after voice began.
+  const lastMessage = useAppStore((s) => {
+    const conv = s.conversations.find((c) => c.id === s.activeConversationId);
+    return conv?.messages[conv.messages.length - 1];
+  });
+  const subRuns = useAppStore((s) => s.subRuns);
+  const activity = useMemo(() => activityFor(lastMessage, subRuns, startedAt), [lastMessage, subRuns, startedAt]);
   const openArtifact = useAppStore((s) => s.openArtifact);
   const local = useAppStore((s) => s.models.find((m) => m.id === s.selectedModelId)?.provenance !== "cloud");
 
@@ -161,7 +195,16 @@ export default function VoiceMode() {
             <p className="voice-reply">{speaking ? reply : ""}</p>
           </div>
         )}
+        {problem && !setup && !error && (
+          <div className="voice-note voice-note-error" role="alert">
+            <span>{problem}</span>
+            <button className="voice-btn" onClick={() => useVoiceStore.setState({ problem: null })}>
+              Dismiss
+            </button>
+          </div>
+        )}
         {hint && !setup && !error && <p className="voice-hint">{hint}</p>}
+        {activity.length > 0 && !setup && !error && <VoiceActivity rows={activity} />}
       </div>
 
       {artifactId && artifactTitle && (

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import * as api from "../../lib/api";
 import { useAppStore } from "../../lib/store";
+import { ChevronIcon, CloseIcon } from "../Icons/Icons";
 import "./Context.css";
 
 /** Which route a layer's content is edited from (WHY-6) — the panel explains,
@@ -72,63 +73,70 @@ export default function ContextPanel() {
       <div className="context-panel-backdrop" onClick={close} />
       <div className="context-panel" role="dialog" aria-modal="true" aria-label="What I'm working from">
         <div className="context-panel-head">
-          <span>What I'm working from</span>
-          <button className="btn-text" onClick={close}>
-            Close
+          <h2 className="context-panel-title">What I'm working from</h2>
+          <button className="context-panel-close" aria-label="Close" onClick={close}>
+            <CloseIcon size={14} strokeWidth={1.4} />
           </button>
         </div>
 
-        {!manifest ? (
-          <p className="empty-hint">Loading…</p>
-        ) : !manifest.recorded ? (
-          <p className="empty-hint">I didn't record this one.</p>
-        ) : (
-          <div role="list" aria-label="What shaped this answer">
-            {layers.map((l, i) => {
-              const isOpen = expanded[l.label] ?? i === 0;
-              const editRoute = editRouteFor(l.label);
-              return (
-                <details
-                  className="context-layer"
-                  key={l.label}
-                  open={isOpen}
-                  onToggle={(e) => {
-                    const nowOpen = e.currentTarget.open;
-                    setExpanded((prev) => ({ ...prev, [l.label]: nowOpen }));
-                  }}
-                >
-                  <summary role="listitem" aria-expanded={isOpen}>
-                    <span className="context-layer-label">{l.label}</span>
-                    <span className="context-layer-badge">
-                      {l.always_on ? "in every answer" : "brought in for this question"}
-                    </span>
-                  </summary>
-                  {l.text.trim() ? (
-                    <>
-                      {expert && l.sources.length > 0 && (
-                        <p className="context-layer-sources">{l.sources.join(", ")}</p>
+        <div className="context-panel-body">
+          {!manifest ? (
+            <p className="context-panel-empty">Loading…</p>
+          ) : !manifest.recorded ? (
+            <p className="context-panel-empty">I didn't record this one.</p>
+          ) : (
+            <div className="context-layers" role="list" aria-label="What shaped this answer">
+              {layers.map((l, i) => {
+                const isOpen = expanded[l.label] ?? i === 0;
+                const editRoute = editRouteFor(l.label);
+                return (
+                  <details
+                    className="context-layer"
+                    key={l.label}
+                    open={isOpen}
+                    onToggle={(e) => {
+                      const nowOpen = e.currentTarget.open;
+                      setExpanded((prev) => ({ ...prev, [l.label]: nowOpen }));
+                    }}
+                  >
+                    <summary role="listitem" aria-expanded={isOpen}>
+                      <span className="context-layer-twisty">
+                        <ChevronIcon dir="right" size={11} strokeWidth={1.6} />
+                      </span>
+                      <span className="context-layer-label">{l.label}</span>
+                      <span className="context-layer-badge">
+                        {l.always_on ? "in every answer" : "brought in for this question"}
+                      </span>
+                    </summary>
+                    <div className="context-layer-body">
+                      {l.text.trim() ? (
+                        <>
+                          {expert && l.sources.length > 0 && (
+                            <p className="context-layer-sources">{l.sources.join(", ")}</p>
+                          )}
+                          <pre className="context-layer-text">{l.text}</pre>
+                        </>
+                      ) : (
+                        <p className="context-layer-empty">nothing from here</p>
                       )}
-                      <pre className="context-layer-text">{l.text}</pre>
-                    </>
-                  ) : (
-                    <p className="context-layer-empty">nothing from here</p>
-                  )}
-                  {editRoute && (
-                    <button
-                      className="context-layer-edit"
-                      onClick={() => {
-                        close();
-                        setView(editRoute);
-                      }}
-                    >
-                      {EDIT_LABEL[editRoute]}
-                    </button>
-                  )}
-                </details>
-              );
-            })}
-          </div>
-        )}
+                      {editRoute && (
+                        <button
+                          className="btn-text context-layer-edit"
+                          onClick={() => {
+                            close();
+                            setView(editRoute);
+                          }}
+                        >
+                          {EDIT_LABEL[editRoute]}
+                        </button>
+                      )}
+                    </div>
+                  </details>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
     </>
   );
