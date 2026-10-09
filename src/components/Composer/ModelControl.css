@@ -1,0 +1,169 @@
+/* The combined model / thinking / context control under the composer. The
+   trigger keeps the compact model picker's measurements — 11.5px, muted ink,
+   a border only on hover or while open — so it reads as the same family. */
+.model-control {
+  position: relative;
+}
+
+.mc-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 280px;
+  padding: 3px 7px 3px 6px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.mc-trigger:hover,
+.mc-trigger[aria-expanded="true"] {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.mc-trigger .provenance-dot {
+  width: 6px;
+  height: 6px;
+}
+.mc-trigger .caret {
+  display: inline-flex;
+  color: var(--ink-faint);
+  margin-left: 1px;
+}
+/* The model is the decision, in ink; the effort qualifies it, a step quieter. */
+.mc-model {
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.mc-effort {
+  flex: none;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.mc-ring {
+  --mc-ring-ink: var(--ink-muted);
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--mc-ring-ink) calc(var(--mc-fill, 0) * 1turn),
+    var(--paper-edge-2) 0
+  );
+  -webkit-mask: radial-gradient(circle, transparent 3.5px, #000 4px);
+  mask: radial-gradient(circle, transparent 3.5px, #000 4px);
+}
+.mc-ring.high {
+  --mc-ring-ink: var(--danger);
+}
+
+/* Drop-up, right-aligned under the box's right edge. */
+.mc-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  width: 320px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  padding: 6px;
+  z-index: 20;
+  transform-origin: bottom right;
+  animation: pop-up var(--dur) var(--ease-out);
+}
+.mc-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.mc-section {
+  flex: none;
+  border-top: 1px solid var(--paper-edge-2);
+  margin-top: 6px;
+  padding: 8px 4px 2px;
+}
+.mc-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 4px 6px;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  color: var(--ink-faint);
+}
+.mc-section-hint {
+  font-weight: 400;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Five levels in one row: a segmented control, not a second list. */
+.mc-efforts {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 2px;
+  padding: 2px;
+  background: var(--fill-quiet);
+  border-radius: var(--radius);
+}
+.mc-effort-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 2px 5px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--fs-caption);
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.mc-effort-opt:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.mc-effort-opt.selected {
+  background: var(--paper);
+  color: var(--ink);
+  font-weight: 500;
+  box-shadow: var(--shadow-xs);
+}
+.mc-effort-opt.selected .effort-meter i.on,
+.mc-effort-opt:hover .effort-meter i.on {
+  background: var(--ink);
+}
+
+.mc-bar {
+  height: 4px;
+  margin: 0 4px 4px;
+  border-radius: var(--radius-xs);
+  background: var(--paper-edge-2);
+  overflow: hidden;
+}
+.mc-bar-fill {
+  height: 100%;
+  background: var(--ink-muted);
+  transition: width 240ms ease;
+}
+.mc-bar-fill.high {
+  background: var(--danger);
+}

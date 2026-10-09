@@ -3,10 +3,8 @@ import { inTauri, pickFiles, stillWorking } from "../../lib/api";
 import { useAppStore, useExpert, useSelectedModel } from "../../lib/store";
 import { detectIntent } from "../../lib/mediaIntent";
 import type { Attachment, ContextRef, Model, SendOptions } from "../../lib/types";
-import ContextMeter from "./ContextMeter";
-import EffortPicker from "./EffortPicker";
+import ModelControl from "./ModelControl";
 import ContextChip from "../Context/ContextChip";
-import ModelPicker from "../ModelPicker/ModelPicker";
 import ImageByPath from "../Conversation/ImageByPath";
 import ConfirmDialog from "../Confirm/ConfirmDialog";
 import CommandMenu from "./CommandMenu";
@@ -17,8 +15,7 @@ import RunBar from "./RunBar";
 import SuggestionChip from "./SuggestionChip";
 import BtwCard from "./BtwCard";
 import { useCommandInput } from "./useCommandInput";
-import MicButton from "../Voice/MicButton";
-import VoiceButton from "../Voice/VoiceButton";
+import VoiceControl from "../Voice/VoiceControl";
 import { joinSpoken } from "../../lib/voice/dictation";
 import "./Composer.css";
 
@@ -609,24 +606,10 @@ export default function Composer({
           </div>
         )}
 
+        {/* The box holds only what is being written and the button that
+            sends it; everything that adds to, does something with, or decides
+            how to answer it sits on the row underneath. */}
         <div className="composer">
-          <PlusMenu
-            onAttachFiles={attach}
-            onAddAttachment={addAttachment}
-            onAddRef={(r) => setRefs((list) => (list.some((x) => x.id === r.id) ? list : [...list, r]))}
-            pending={attachments.length > 0 || refs.length > 0}
-          />
-          {/* `CMP-4`: `+` adds to the message, `/` does something. */}
-          <button
-            className={`icon-btn slash-btn ${cmd.model.open ? "on" : ""}`}
-            aria-label="Commands"
-            aria-haspopup="listbox"
-            aria-expanded={cmd.model.open}
-            title="Commands  ( / )"
-            onClick={cmd.openFromButton}
-          >
-            /
-          </button>
           <div className="composer-input-wrap">
             {cmd.model.popover && <div className="composer-menu-backdrop" onClick={cmd.closePopover} />}
             <CommandMenu
@@ -680,12 +663,6 @@ export default function Composer({
               }}
             />
           </div>
-          <VoiceButton />
-          <MicButton
-            onText={(t) => setValue((v) => joinSpoken(v, t))}
-            onSendText={(t) => sendWithExtras(joinSpoken(value, t))}
-            canSend={!busy}
-          />
           {busy && canSteer && value.trim() ? (
             // Typing during a run means you have something to say to it, not
             // that you want it stopped — so the same key sends, and Stop is
@@ -717,24 +694,48 @@ export default function Composer({
             </button>
           )}
         </div>
-        {/* Under the box: what I'm working from on the left, which model will
-            answer on the right — both about the message, not the window.
-            Everything here stays mounted in media mode too (`PIK-2`): making
-            a picture is not leaving the conversation. */}
+        {/* Under the box. Left: add to it (`+`), do something (`/`), say
+            it (mic, and voice mode behind its chevron), then what I'm working
+            from. Right: which model answers, how hard it thinks, and how full
+            its window is — one control (`ModelControl`). Everything here stays
+            mounted in media mode too (`PIK-2`): making a picture is not
+            leaving the conversation. */}
         <div className="composer-footer">
           <div className="cf-left">
+            <div className="cf-tools">
+              <PlusMenu
+                onAttachFiles={attach}
+                onAddAttachment={addAttachment}
+                onAddRef={(r) => setRefs((list) => (list.some((x) => x.id === r.id) ? list : [...list, r]))}
+                pending={attachments.length > 0 || refs.length > 0}
+              />
+              {/* `CMP-4`: `+` adds to the message, `/` does something. The
+                  list it opens is anchored to the text field, in the box. */}
+              <button
+                className={`icon-btn slash-btn ${cmd.model.open ? "on" : ""}`}
+                aria-label="Commands"
+                aria-haspopup="listbox"
+                aria-expanded={cmd.model.open}
+                title="Commands  ( / )"
+                onClick={cmd.openFromButton}
+              >
+                /
+              </button>
+              <VoiceControl
+                onText={(t) => setValue((v) => joinSpoken(v, t))}
+                onSendText={(t) => sendWithExtras(joinSpoken(value, t))}
+                canSend={!busy}
+              />
+            </div>
             <ContextChip />
             <ModeChips />
           </div>
           <div className="cf-right">
-            <ContextMeter draft={value} />
-            {/* Beside the model, because it is a property of the answer that
-                model is about to give. Hidden for an image or video model,
-                where there is nothing to think about. */}
-            {!mediaTarget && (
-              <EffortPicker chip={turnEffort} onPick={() => clearTurnModifier("effort")} />
-            )}
-            <ModelPicker compact dropUp />
+            <ModelControl
+              draft={value}
+              effortChip={turnEffort}
+              onEffortPick={() => clearTurnModifier("effort")}
+            />
           </div>
         </div>
       </div>

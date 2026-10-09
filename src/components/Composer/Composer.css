@@ -62,7 +62,7 @@
   border: 1px solid var(--hairline);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-sm);
-  padding: 8px 8px 8px 10px;
+  padding: 8px 8px 8px 16px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -338,7 +338,7 @@
   color: var(--ink-faint);
 }
 
-.composer .icon-btn {
+.composer-wrap .icon-btn {
   background: none;
   border: 1px solid transparent;
   color: var(--ink-muted);
@@ -357,38 +357,38 @@
     transform var(--dur) var(--ease-pop),
     opacity var(--dur-fast) var(--ease-out);
 }
-.composer .icon-btn:hover {
+.composer-wrap .icon-btn:hover {
   background: var(--fill-hover);
   color: var(--ink);
 }
-.composer .icon-btn:active:not(:disabled) {
+.composer-wrap .icon-btn:active:not(:disabled) {
   transform: scale(0.92);
   transition-duration: 60ms;
 }
-.composer .plus-btn {
+.composer-wrap .plus-btn {
   font-size: 18px;
   font-weight: 300;
   line-height: 1;
 }
 /* The + turns into a × while its menu is open: one control, two states. */
-.composer .plus-btn.on {
+.composer-wrap .plus-btn.on {
   background: var(--fill-press);
   color: var(--ink);
   transform: rotate(45deg);
 }
 
 /* Lit, not turned: something is waiting to go out with the message. */
-.composer .plus-btn.lit {
+.composer-wrap .plus-btn.lit {
   background: var(--fill-press);
   color: var(--ink);
 }
 
 /* `CMP-4`: `/` does, where `+` adds. Same size and weight as its neighbour. */
-.composer .slash-btn {
+.composer-wrap .slash-btn {
   font-family: var(--font-mono);
   font-size: var(--fs-ui);
 }
-.composer .slash-btn.on {
+.composer-wrap .slash-btn.on {
   background: var(--fill-press);
   color: var(--ink);
 }
@@ -400,14 +400,29 @@
   color: var(--ink-faint);
 }
 
-/* The row under the box: context chip left, model chooser right. */
+/* The row under the box: tools and context left, model control right. */
 .composer-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding-top: 2px;
-  min-height: 26px;
+  padding-top: 4px;
+  min-height: 28px;
+}
+/* `+`, `/` and voice: smaller than the send button in the box, because they
+   sit outside it and should read as secondary to writing. */
+.cf-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+}
+.cf-tools .icon-btn {
+  width: 28px;
+  height: 28px;
+}
+.cf-tools .plus-btn {
+  font-size: 17px;
 }
 .composer-footer .cf-left {
   min-width: 0;

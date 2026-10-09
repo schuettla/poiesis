@@ -24,17 +24,8 @@ export default function ModelPicker({
   compact?: boolean;
   dropUp?: boolean;
 } = {}) {
-  const models = useAppStore((s) => s.models);
   const selected = useSelectedModel();
-  const selectModel = useAppStore((s) => s.selectModel);
-  const filter = useAppStore((s) => s.modelFilter);
-  const setFilter = useAppStore((s) => s.setModelFilter);
-  const openProviders = useAppStore((s) => s.openProviders);
-  const openRuntime = useAppStore((s) => s.openRuntime);
-  const prefs = useAppStore((s) => s.modelPrefs);
-
   const [open, setOpen] = useState(false);
-  const [cloudQuery, setCloudQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -52,6 +43,48 @@ export default function ModelPicker({
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
+
+  return (
+    <div
+      className={`model-picker ${compact ? "compact" : ""} ${dropUp ? "up" : ""}`}
+      ref={ref}
+    >
+      <button
+        className="model-picker-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`Model: ${selected.name}`}
+        title={`Model: ${selected.name}`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Dot provenance={selected.provenance} />
+        <span className="model-picker-name">{selected.name}</span>
+        <span className="caret" aria-hidden="true">
+          <ChevronIcon dir={dropUp ? "up" : "down"} size={10} strokeWidth={1.8} />
+        </span>
+      </button>
+
+      {open && (
+        <div className="model-dropdown open" role="listbox" aria-label="Choose a model">
+          <ModelList onDone={() => setOpen(false)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The filter, favorites and grouped rows — shared by this picker and the
+ * composer's combined model control. `onDone` runs after a choice. */
+export function ModelList({ onDone }: { onDone: () => void }) {
+  const models = useAppStore((s) => s.models);
+  const selected = useSelectedModel();
+  const selectModel = useAppStore((s) => s.selectModel);
+  const filter = useAppStore((s) => s.modelFilter);
+  const setFilter = useAppStore((s) => s.setModelFilter);
+  const openProviders = useAppStore((s) => s.openProviders);
+  const openRuntime = useAppStore((s) => s.openRuntime);
+  const prefs = useAppStore((s) => s.modelPrefs);
+  const [cloudQuery, setCloudQuery] = useState("");
 
   const isMedia = isMediaModel;
   const localOnly = filter === "local";
@@ -90,143 +123,121 @@ export default function ModelPicker({
 
   function choose(m: Model) {
     selectModel(m.id);
-    setOpen(false);
+    onDone();
   }
 
   // `PRV-6`: keys live on Providers, own servers on Runtime → Your servers.
   function goToProviders() {
     openProviders();
-    setOpen(false);
+    onDone();
   }
   function goToServers() {
     openRuntime("servers");
-    setOpen(false);
+    onDone();
   }
 
   return (
-    <div
-      className={`model-picker ${compact ? "compact" : ""} ${dropUp ? "up" : ""}`}
-      ref={ref}
-    >
-      <button
-        className="model-picker-trigger"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label={`Model: ${selected.name}`}
-        title={`Model: ${selected.name}`}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Dot provenance={selected.provenance} />
-        <span className="model-picker-name">{selected.name}</span>
-        <span className="caret" aria-hidden="true">
-          <ChevronIcon dir={dropUp ? "up" : "down"} size={10} strokeWidth={1.8} />
-        </span>
-      </button>
-
-      {open && (
-        <div className="model-dropdown open" role="listbox" aria-label="Choose a model">
-          <div className="filter-row">
-            {(
-              [
-                ["all", "All"],
-                ["local", "On this PC"],
-                ["cloud", "Cloud"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                className={`filter-chip ${filter === id ? "active" : ""}`}
-                aria-pressed={filter === id}
-                onClick={() => setFilter(id)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {favorites.length > 0 && (
-            <>
-              <div className="model-group-label">Favorites</div>
-              {favorites.map((m) => (
-                <ModelRow key={m.id} model={m} selected={m.id === selected.id} onClick={() => choose(m)} />
-              ))}
-            </>
-          )}
-
-          {!cloudOnly && localModels.length > 0 && (
-            <>
-              <div className="model-group-label">On this PC</div>
-              {localModels.map((m) => (
-                <ModelRow key={m.id} model={m} selected={m.id === selected.id} onClick={() => choose(m)} />
-              ))}
-            </>
-          )}
-
-          {/* A user's own connected server — shown under both filters, since
-              it runs on their machine like the row above. Omitted entirely
-              when nothing is connected, so a fresh install looks unchanged. */}
-          {!cloudOnly && endpointModels.length > 0 && (
-            <>
-              <div className="model-group-label">Your servers</div>
-              {endpointModels.map((m) => (
-                <ModelRow key={m.id} model={m} selected={m.id === selected.id} onClick={() => choose(m)} />
-              ))}
-            </>
-          )}
-
-          {!localOnly && (
-            <>
-              <div className="model-group-label">Cloud · your accounts</div>
-              {allCloud.length > 8 && (
-                <input
-                  className="cloud-search"
-                  placeholder="Filter cloud models…"
-                  value={cloudQuery}
-                  onChange={(e) => setCloudQuery(e.target.value)}
-                />
-              )}
-              {!anyCloud ? (
-                <div className="add-key-row">
-                  <a href="#" onClick={(e) => (e.preventDefault(), goToProviders())}>
-                    + Connect an account
-                  </a>{" "}
-                  to use cloud models with your own key, or{" "}
-                  <a href="#" onClick={(e) => (e.preventDefault(), goToServers())}>
-                    + connect a local server
-                  </a>{" "}
-                  like Ollama or LM Studio
-                </div>
-              ) : (
-                <>
-                  {cloudModels.map((m) => (
-                    <ModelRow
-                      key={m.id}
-                      model={m}
-                      selected={m.id === selected.id}
-                      onClick={() => choose(m)}
-                    />
-                  ))}
-                  {cloudHidden > 0 && (
-                    <div className="model-group-label">+{cloudHidden} more — refine the filter</div>
-                  )}
-                </>
-              )}
-            </>
-          )}
-
-          {/* `PIK-1`: omitted entirely when empty, so a fresh install with no
-              engine and no key sees today's picker unchanged. */}
-          {visibleMedia.length > 0 && (
-            <>
-              <div className="model-group-label">Images &amp; video</div>
-              {visibleMedia.map((m) => (
-                <ModelRow key={m.id} model={m} selected={m.id === selected.id} onClick={() => choose(m)} />
-              ))}
-            </>
-          )}
-        </div>
-      )}
+    <>
+    <div className="filter-row">
+      {(
+        [
+          ["all", "All"],
+          ["local", "On this PC"],
+          ["cloud", "Cloud"],
+        ] as const
+      ).map(([id, label]) => (
+        <button
+          key={id}
+          className={`filter-chip ${filter === id ? "active" : ""}`}
+          aria-pressed={filter === id}
+          onClick={() => setFilter(id)}
+        >
+          {label}
+        </button>
+      ))}
     </div>
+
+    {favorites.length > 0 && (
+      <>
+        <div className="model-group-label">Favorites</div>
+        {favorites.map((m) => (
+          <ModelRow key={m.id} model={m} selected={m.id === selected.id} onClick={() => choose(m)} />
+        ))}
+      </>
+    )}
+
+    {!cloudOnly && localModels.length > 0 && (
+      <>
+        <div className="model-group-label">On this PC</div>
+        {localModels.map((m) => (
+          <ModelRow key={m.id} model={m} selected={m.id === selected.id} onClick={() => choose(m)} />
+        ))}
+      </>
+    )}
+
+    {/* A user's own connected server — shown under both filters, since
+        it runs on their machine like the row above. Omitted entirely
+        when nothing is connected, so a fresh install looks unchanged. */}
+    {!cloudOnly && endpointModels.length > 0 && (
+      <>
+        <div className="model-group-label">Your servers</div>
+        {endpointModels.map((m) => (
+          <ModelRow key={m.id} model={m} selected={m.id === selected.id} onClick={() => choose(m)} />
+        ))}
+      </>
+    )}
+
+    {!localOnly && (
+      <>
+        <div className="model-group-label">Cloud · your accounts</div>
+        {allCloud.length > 8 && (
+          <input
+            className="cloud-search"
+            placeholder="Filter cloud models…"
+            value={cloudQuery}
+            onChange={(e) => setCloudQuery(e.target.value)}
+          />
+        )}
+        {!anyCloud ? (
+          <div className="add-key-row">
+            <a href="#" onClick={(e) => (e.preventDefault(), goToProviders())}>
+              + Connect an account
+            </a>{" "}
+            to use cloud models with your own key, or{" "}
+            <a href="#" onClick={(e) => (e.preventDefault(), goToServers())}>
+              + connect a local server
+            </a>{" "}
+            like Ollama or LM Studio
+          </div>
+        ) : (
+          <>
+            {cloudModels.map((m) => (
+              <ModelRow
+                key={m.id}
+                model={m}
+                selected={m.id === selected.id}
+                onClick={() => choose(m)}
+              />
+            ))}
+            {cloudHidden > 0 && (
+              <div className="model-group-label">+{cloudHidden} more — refine the filter</div>
+            )}
+          </>
+        )}
+      </>
+    )}
+
+    {/* `PIK-1`: omitted entirely when empty, so a fresh install with no
+        engine and no key sees today's picker unchanged. */}
+    {visibleMedia.length > 0 && (
+      <>
+        <div className="model-group-label">Images &amp; video</div>
+        {visibleMedia.map((m) => (
+          <ModelRow key={m.id} model={m} selected={m.id === selected.id} onClick={() => choose(m)} />
+        ))}
+      </>
+    )}
+    </>
   );
 }
 

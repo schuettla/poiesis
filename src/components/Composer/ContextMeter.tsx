@@ -2,12 +2,11 @@ import { useAppStore } from "../../lib/store";
 import { estimateTokens } from "../../lib/context";
 import "./ContextMeter.css";
 
-/**
- * How full the model's context window is (CTX-UI-1). Silent until it matters:
- * nothing renders below half. Estimated locally each render — no backend call
- * per keystroke.
- */
-export default function ContextMeter({ draft = "" }: { draft?: string }) {
+export type ContextUsage = { used: number; budget: number; fill: number; label: string };
+
+/** How much of the model's context window the conversation (and the draft)
+ * would take. Estimated locally each render — no backend call per keystroke. */
+export function useContextUsage(draft = ""): ContextUsage | null {
   const budget = useAppStore((s) => s.contextBudget);
   const conv = useAppStore((s) => s.conversations.find((c) => c.id === s.activeConversationId));
   const systemPrompt = useAppStore((s) => s.systemPrompt);
@@ -25,16 +24,23 @@ export default function ContextMeter({ draft = "" }: { draft?: string }) {
     estimateTokens(draft) +
     sent.reduce((n, m) => n + estimateTokens(m.text), 0);
 
-  const fill = Math.min(1, used / budget);
-  if (fill < 0.5) return null;
-
   const label = `~${used.toLocaleString()} / ${budget.toLocaleString()} tokens${
     conv.summary ? " · older turns summarized" : ""
   }`;
+  return { used, budget, fill: Math.min(1, used / budget), label };
+}
+
+/**
+ * How full the model's context window is (CTX-UI-1). Silent until it matters:
+ * nothing renders below half.
+ */
+export default function ContextMeter({ draft = "" }: { draft?: string }) {
+  const usage = useContextUsage(draft);
+  if (!usage || usage.fill < 0.5) return null;
 
   return (
-    <div className="context-meter" title={label} role="img" aria-label={label}>
-      <div className="context-meter-fill" style={{ width: `${Math.round(fill * 100)}%` }} />
+    <div className="context-meter" title={usage.label} role="img" aria-label={usage.label}>
+      <div className="context-meter-fill" style={{ width: `${Math.round(usage.fill * 100)}%` }} />
     </div>
   );
 }

@@ -7,28 +7,60 @@
   flex-shrink: 0;
 }
 
-.composer .mic-btn {
+.composer-wrap .mic-btn {
   position: relative;
   --mic-level: 0;
 }
-.composer .mic-btn.on {
+.composer-wrap .mic-btn.on {
   color: var(--danger);
   background: var(--fill-press);
   box-shadow: 0 0 0 calc(var(--mic-level) * 5px) color-mix(in srgb, var(--danger) 22%, transparent);
   transition: box-shadow 60ms linear;
 }
-.composer .mic-btn.busy {
+.composer-wrap .mic-btn.busy {
   color: var(--ink-faint);
   cursor: progress;
   animation: mic-breathe 1.4s var(--ease-in-out) infinite;
 }
 /* The way back to voice mode (VOC-UI-2); its dot is the same "mic is open" dot. */
-.composer .voice-return {
+.composer-wrap .voice-return {
   position: relative;
 }
-.composer .voice-return.on {
+.composer-wrap .voice-return.on {
   color: var(--danger);
 }
+/* Mic and its chevron sit together as one control under the composer. */
+.voice-control {
+  display: flex;
+  align-items: center;
+}
+.cf-tools .icon-btn.voice-more {
+  width: 16px;
+  margin-left: -2px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-faint);
+}
+.cf-tools .icon-btn.voice-more.on {
+  background: var(--fill-press);
+  color: var(--ink);
+}
+.voice-menu {
+  min-width: 280px;
+}
+.voice-menu-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 5px;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.voice-menu-note .mi-icon {
+  display: inline-flex;
+  justify-content: center;
+  width: 18px;
+}
+
 .mic-dot {
   position: absolute;
   top: 5px;
@@ -42,7 +74,7 @@
 .mic-pop {
   position: absolute;
   bottom: calc(100% + 8px);
-  right: 0;
+  left: 0;
   width: max-content;
   max-width: 280px;
   display: flex;
@@ -87,10 +119,10 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .composer .mic-btn.busy {
+  .composer-wrap .mic-btn.busy {
     animation: none;
   }
-  .composer .mic-btn.on {
+  .composer-wrap .mic-btn.on {
     transition: none;
   }
 }

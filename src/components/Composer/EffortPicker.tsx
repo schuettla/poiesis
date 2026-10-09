@@ -23,7 +23,7 @@ const EFFORT_KEY = "models.reasoning_effort";
 /** Matches `cloud::Effort`. `provider` sends no parameter at all, which is the
  * only honest option for a server we know nothing about — so it is last, and
  * its meter reads as unknown rather than as a level. */
-const EFFORTS = [
+export const EFFORTS = [
   { value: "off", label: "No thinking", bars: 0, hint: "Answer straight away. Fastest and cheapest." },
   { value: "low", label: "Think briefly", bars: 1, hint: "A moment's thought first." },
   { value: "medium", label: "Think", bars: 2, hint: "For questions with a few moving parts." },
@@ -31,13 +31,13 @@ const EFFORTS = [
   { value: "provider", label: "Model's default", bars: -1, hint: "Send nothing and take the provider's own setting." },
 ] as const;
 
-type Effort = (typeof EFFORTS)[number];
+export type Effort = (typeof EFFORTS)[number];
 
 const DEFAULT = EFFORTS[1];
 
 /** Three rising bars, filled to the level. `-1` is "not our choice" and shows
  * as an outline throughout, so it never reads as a quantity on the scale. */
-function Meter({ bars }: { bars: number }) {
+export function Meter({ bars }: { bars: number }) {
   return (
     <span className="effort-meter" aria-hidden="true">
       {[1, 2, 3].map((n) => (
@@ -47,20 +47,10 @@ function Meter({ bars }: { bars: number }) {
   );
 }
 
-export default function EffortPicker({
-  chip,
-  onPick,
-}: {
-  /** `DEF-1`: a `/effort` chip for the next message only. While one is set the
-   * picker shows *its* value, marked, and the default stays what it was. */
-  chip?: string;
-  /** Called when a value is picked in the list, so the chip can go: the two
-   * must never disagree on screen. */
-  onPick?: () => void;
-} = {}) {
+/** The stored default, a `/effort` chip over it, and the way to change it —
+ * shared by this picker and the composer's combined model control. */
+export function useEffort(chip?: string, onPick?: () => void) {
   const [value, setValue] = useState<string>(DEFAULT.value);
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     getSetting(EFFORT_KEY)
@@ -77,6 +67,35 @@ export default function EffortPicker({
     window.addEventListener("poiesis:effort-default", onDefault);
     return () => window.removeEventListener("poiesis:effort-default", onDefault);
   }, []);
+
+  const standing: Effort = EFFORTS.find((e) => e.value === value) ?? DEFAULT;
+  const chipped = chip ? EFFORTS.find((e) => e.value === chip) : undefined;
+  const current: Effort = chipped ?? standing;
+
+  function choose(e: Effort) {
+    setValue(e.value);
+    setSetting(EFFORT_KEY, e.value).catch(() => {});
+    onPick?.();
+  }
+
+  return { standing, chipped, current, choose };
+}
+
+export default function EffortPicker({
+  chip,
+  onPick,
+}: {
+  /** `DEF-1`: a `/effort` chip for the next message only. While one is set the
+   * picker shows *its* value, marked, and the default stays what it was. */
+  chip?: string;
+  /** Called when a value is picked in the list, so the chip can go: the two
+   * must never disagree on screen. */
+  onPick?: () => void;
+} = {}) {
+  const effort = useEffort(chip, onPick);
+  const { standing, chipped, current } = effort;
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
 
   // Same dismissal contract as the model picker beside it: a click anywhere
   // else, or Escape. Two neighbouring controls that close differently is the
@@ -97,15 +116,9 @@ export default function EffortPicker({
     };
   }, [open]);
 
-  const standing: Effort = EFFORTS.find((e) => e.value === value) ?? DEFAULT;
-  const chipped = chip ? EFFORTS.find((e) => e.value === chip) : undefined;
-  const current: Effort = chipped ?? standing;
-
   function choose(e: Effort) {
-    setValue(e.value);
     setOpen(false);
-    setSetting(EFFORT_KEY, e.value).catch(() => {});
-    onPick?.();
+    effort.choose(e);
   }
 
   return (
