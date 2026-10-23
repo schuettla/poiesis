@@ -333,6 +333,13 @@ pre {
   height: 30px;
   padding: 0 12px;
 }
+.btn-icon {
+  width: 36px;
+  padding: 0;
+}
+.btn-icon.btn-sm {
+  width: 30px;
+}
 .btn-text {
   background: none;
   border: none;
@@ -1748,6 +1755,14 @@ kbd {
 }
 .foot a:hover {
   color: var(--ink);
+}
+.foot nav a {
+  display: inline-flex;
+  align-items: center;
+}
+.foot nav svg {
+  width: 16px;
+  height: 16px;
 }
 .closing {
   text-align: left;

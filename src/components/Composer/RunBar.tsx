@@ -162,8 +162,10 @@ export default function RunBar() {
           text:
             goal.status === "exhausted"
               ? `◎ ${said} · not reached in ${goal.maxRounds} rounds`
-              : `◎ ${said} · stopped`,
-          title: goal.lastCheck?.next || said,
+              : goal.status === "stalled"
+                ? `◎ ${said} · stalled`
+                : `◎ ${said} · stopped`,
+          title: goal.stalled || goal.lastCheck?.next || said,
           onClick: toLatest,
         });
       }

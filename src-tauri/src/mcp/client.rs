@@ -42,6 +42,31 @@ impl McpClient {
                 http,
                 url: url.into(),
                 token,
+                header: None,
+                timeout: None,
+                session_id: None,
+            }),
+            next_id: 1,
+        }
+    }
+
+    /// Streamable HTTP with a named header instead of a bearer token (`CAP-3`):
+    /// Composio takes its key as `x-api-key` on every request. One tool call may
+    /// run for ten minutes (a long search or export), so this client waits that
+    /// long where the plain one uses the shared client's own limits.
+    pub fn new_with_header(
+        http: reqwest::Client,
+        url: impl Into<String>,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self {
+            transport: Transport::Http(HttpTransport {
+                http,
+                url: url.into(),
+                token: None,
+                header: Some((name.into(), value.into())),
+                timeout: Some(std::time::Duration::from_secs(600)),
                 session_id: None,
             }),
             next_id: 1,
@@ -196,8 +221,15 @@ struct HttpTransport {
     http: reqwest::Client,
     url: String,
     token: Option<String>,
+    /// `CAP-3`: a header carrying the credential, for servers that don't take a bearer.
+    header: Option<(String, String)>,
+    timeout: Option<std::time::Duration>,
     session_id: Option<String>,
 }
+
+/// The most one MCP response may weigh (`CAP-2`). A server that sends more is
+/// refused rather than read into memory.
+const MAX_RESPONSE_BYTES: u64 = 20 * 1024 * 1024;
 
 impl HttpTransport {
     fn build_post(&self, body: &serde_json::Value) -> reqwest::RequestBuilder {
@@ -210,6 +242,12 @@ impl HttpTransport {
             .json(body);
         if let Some(token) = &self.token {
             req = req.bearer_auth(token);
+        }
+        if let Some((name, value)) = &self.header {
+            req = req.header(name.as_str(), value.as_str());
+        }
+        if let Some(t) = self.timeout {
+            req = req.timeout(t);
         }
         if let Some(sid) = &self.session_id {
             req = req.header("Mcp-Session-Id", sid);
@@ -238,7 +276,13 @@ impl HttpTransport {
             .map(|c| c.contains("text/event-stream"))
             .unwrap_or(false);
 
+        if resp.content_length().is_some_and(|n| n > MAX_RESPONSE_BYTES) {
+            return Err(McpError::Protocol("the server's answer was too large to read".into()));
+        }
         let text = resp.text().await?;
+        if text.len() as u64 > MAX_RESPONSE_BYTES {
+            return Err(McpError::Protocol("the server's answer was too large to read".into()));
+        }
         if is_sse {
             extract_sse_json(&text, id)
                 .ok_or_else(|| McpError::Protocol("no JSON-RPC message in SSE stream".into()))
@@ -289,6 +333,13 @@ impl StdioTransport {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
+        // `LRN-3`: a server inherits the user's environment, minus Poiesis's own
+        // variables and the model providers' keys it was never handed.
+        for (key, _) in std::env::vars_os() {
+            if crate::engines::process::withheld_from_children(&key.to_string_lossy()) {
+                cmd.env_remove(key);
+            }
+        }
         let mut child = cmd
             .spawn()
             .map_err(|e| McpError::Protocol(format!("couldn't start the MCP server: {e}")))?;

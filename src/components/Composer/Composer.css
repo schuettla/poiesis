@@ -308,12 +308,38 @@
   color: var(--ink);
 }
 
-/* SKL-UI-2: the `/` skill list anchors to the text field, not to a button, so
-   it opens directly above what's being typed. */
+/* The `/` menu opens straight above what is being typed, as wide as the box:
+   `.composer` is its positioned parent, not this wrapper. */
+.composer {
+  position: relative;
+}
 .composer-input-wrap {
+  flex: 1;
+  display: flex;
+}
+.composer-field {
   position: relative;
   flex: 1;
   display: flex;
+  min-width: 0;
+}
+/* The completion drawn after what is typed: the typed part is there only to
+   push the rest into place, so it takes the input's own font and padding. */
+.composer-ghost {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 2px;
+  overflow: hidden;
+  white-space: pre;
+  pointer-events: none;
+  font-family: var(--font-sans);
+  font-size: var(--fs-callout);
+  color: var(--ink-faint);
+}
+.composer-ghost-typed {
+  visibility: hidden;
 }
 .composer-slash-menu {
   right: 0;

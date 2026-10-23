@@ -1,17 +1,18 @@
-/* The dynamic Workspace surface — agent-composed primitives drawn in the
- * paper/ink language: hairline rules, mono machinery labels, sans data,
- * no fills or shadows. */
+/* The dynamic Workspace surface: agent-composed primitives drawn in the same
+ * language as the message stream. Sans for everything operated, serif only for
+ * a title; cards are `--paper` with a `--hairline` edge and the faintest lift
+ * (`--shadow-xs`); rows answer the pointer with an ink fill; buttons, fields,
+ * checkboxes and radios are the shell's own (global.css), not redrawn here. The
+ * width is the canvas column's, not this file's. */
 
 /* `sf-surface`, not `surface` — the route shells in `routes/Surface.css` own the
    global `.surface` class (grid placement + the scroll container). Sharing the
-   name meant this file's `display: flex` / `max-width: 960px` silently landed on
-   Library, Settings and every other route surface, depending on stylesheet
-   order. */
+   name meant this file's `display: flex` silently landed on Library, Settings
+   and every other route surface, depending on stylesheet order. */
 .sf-surface {
   display: flex;
   flex-direction: column;
   gap: 20px;
-  max-width: 960px;
 }
 
 /* ---- layout ---- */
@@ -36,18 +37,19 @@
 }
 
 .sf-section {
-  border: 1px solid var(--paper-edge);
-  border-radius: var(--radius);
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
   min-width: 0;
 }
 .sf-section-title {
-  font-family: var(--font-sans);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--fs-caption);
-  color: var(--ink-muted);
   padding: 10px 16px;
   border-bottom: 1px solid var(--paper-edge);
+  font-family: var(--font-sans);
+  font-size: var(--fs-caption);
   font-weight: 600;
+  color: var(--ink-muted);
 }
 .sf-section-body {
   display: flex;
@@ -66,29 +68,29 @@
 
 .sf-text {
   margin: 0;
-  color: var(--ink);
+  font-family: var(--font-sans);
   font-size: var(--fs-ui);
+  line-height: 1.55;
+  color: var(--ink);
 }
 .sf-text.title {
   font-family: var(--font-serif);
   font-size: var(--fs-display);
-  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: var(--tracking-display);
+  line-height: 1.25;
 }
 .sf-text.heading {
-  font-family: var(--font-serif);
-  font-size: var(--fs-ui-lg);
+  font-size: var(--fs-callout);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
 }
 .sf-text.caption {
-  font-family: var(--font-sans);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--fs-caption);
-  letter-spacing: 0.05em;
-  color: var(--ink-faint);
-  text-transform: uppercase;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
 }
 .sf-text.code {
   font-family: var(--font-mono);
-  font-size: var(--fs-ui);
   color: var(--ink-muted);
   white-space: pre-wrap;
 }
@@ -97,28 +99,37 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 12px 16px;
-  border: 1px solid var(--paper-edge);
-  border-radius: var(--radius);
   min-width: 0;
+  padding: 12px 16px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+}
+.sf-section .sf-metric {
+  border-radius: var(--radius);
+  box-shadow: none;
 }
 .sf-metric-label {
   font-family: var(--font-sans);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--fs-caption);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .sf-metric-value {
-  font-family: var(--font-serif);
-  font-size: 26px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-display);
+  font-weight: 500;
+  letter-spacing: var(--tracking-display);
+  line-height: 1.2;
   color: var(--ink);
 }
 .sf-metric-value.ok { color: var(--ok); }
 .sf-metric-value.danger { color: var(--danger); }
 .sf-metric-unit {
   font-size: var(--fs-callout);
+  font-weight: 400;
+  letter-spacing: 0;
   color: var(--ink-muted);
 }
 .sf-metric-delta {
@@ -131,17 +142,23 @@
 .sf-badge {
   display: inline-block;
   align-self: flex-start;
+  padding: 2px 10px;
+  background: var(--fill-quiet);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
   font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
-  font-size: var(--fs-caption);
-  letter-spacing: 0.05em;
-  padding: 2px 8px;
-  border: 1px solid var(--paper-edge);
-  border-radius: var(--radius);
+  font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
-.sf-badge.ok { color: var(--ok); border-color: var(--ok); }
-.sf-badge.danger { color: var(--danger); border-color: var(--danger); }
+.sf-badge.ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--hairline));
+}
+.sf-badge.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--hairline));
+}
 
 .sf-progress {
   display: flex;
@@ -155,31 +172,70 @@
 .sf-progress-track {
   flex: 1;
   height: 6px;
-  border: 1px solid var(--paper-edge);
-  border-radius: var(--radius);
+  background: var(--fill-press);
+  border-radius: var(--radius-xs);
   overflow: hidden;
 }
 .sf-progress-fill {
   display: block;
   height: 100%;
   background: var(--ink);
-  transition: width var(--t-fast);
+  /* Scaled, not resized: the value moves without a layout pass. */
+  transform-origin: left;
+  transition: transform var(--dur) var(--ease-out);
 }
 .sf-progress-nums {
   color: var(--ink-faint);
   white-space: nowrap;
 }
 
-.sf-link {
-  color: var(--ink);
+/* A table: hairline rows under quiet column heads, like the stream's tables. */
+.sf-table-scroll {
+  overflow-x: auto;
+  min-width: 0;
+}
+.sf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-sans);
   font-size: var(--fs-ui);
+}
+.sf-table th {
+  padding: 4px 16px 8px 0;
+  font-size: var(--fs-footnote);
+  font-weight: 600;
+  text-align: left;
+  color: var(--ink-muted);
+}
+.sf-table td {
+  padding: 8px 16px 8px 0;
+  border-top: 1px solid var(--paper-edge);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.sf-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
   text-decoration: underline;
   text-decoration-color: var(--ink-faint);
   text-underline-offset: 3px;
 }
+.sf-link:hover {
+  text-decoration-color: var(--ink);
+}
+.sf-link svg {
+  color: var(--ink-faint);
+}
 
 /* ---- interactive ---- */
 
+/* A row in a list. Rows are separated by a hairline; an actionable one fills
+   under the pointer and presses in, like a row in the rail. */
 .sf-item {
   display: flex;
   align-items: baseline;
@@ -187,23 +243,45 @@
   gap: 16px;
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid transparent;
+  background: none;
+  border: none;
   border-bottom: 1px solid var(--paper-edge);
   border-radius: 0;
-  background: none;
-  text-align: left;
+  font-family: var(--font-sans);
   font-size: var(--fs-ui);
+  text-align: left;
   color: var(--ink);
 }
-.sf-item:last-child { border-bottom-color: transparent; }
-.sf-item.actionable { cursor: pointer; }
+.sf-item:last-child {
+  border-bottom-color: transparent;
+}
+.sf-item.actionable {
+  cursor: pointer;
+}
 .sf-item.actionable:hover:not(:disabled) {
-  border-color: var(--paper-edge);
+  background: var(--fill-hover);
   border-radius: var(--radius);
 }
+.sf-item.actionable:active:not(:disabled) {
+  background: var(--fill-press);
+}
+.sf-item:disabled {
+  cursor: default;
+}
+.sf-item.selected {
+  background: var(--fill-selected);
+  border-radius: var(--radius);
+}
+/* Chosen, said by a dot in ink: never a colour of its own. */
 .sf-item.selected .sf-item-title::before {
-  content: "● ";
-  color: var(--ok);
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 8px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: var(--ink);
 }
 .sf-item-main {
   display: flex;
@@ -211,13 +289,13 @@
   gap: 2px;
   min-width: 0;
 }
-.sf-item-title { font-weight: 500; }
+.sf-item-title {
+  font-weight: 500;
+}
 .sf-item-subtitle {
-  font-size: var(--fs-ui);
   color: var(--ink-muted);
 }
 .sf-item-meta {
-  font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
   font-size: var(--fs-footnote);
   color: var(--ink-faint);
@@ -233,20 +311,22 @@
   align-items: baseline;
   gap: 10px;
   padding: 8px 12px;
-  border: none;
-  border-bottom: 1px solid var(--paper-edge);
-  background: none;
-  text-align: left;
-  cursor: pointer;
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
   font-size: var(--fs-ui);
   color: var(--ink);
+  cursor: pointer;
 }
-.sf-choice-option:last-child { border-bottom: none; }
-.sf-choice-dot { color: var(--ink-faint); }
-.sf-choice-option.on .sf-choice-dot { color: var(--ink); }
-.sf-choice-label { font-weight: 500; }
+.sf-choice-option:hover {
+  background: var(--fill-hover);
+}
+.sf-choice-option input {
+  align-self: center;
+}
+.sf-choice-label {
+  font-weight: 500;
+}
 .sf-choice-detail {
-  font-size: var(--fs-ui);
   color: var(--ink-muted);
 }
 
@@ -263,27 +343,17 @@
 .sf-input {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 .sf-input-label {
   font-family: var(--font-sans);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--fs-caption);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: var(--fs-footnote);
+  font-weight: 600;
   color: var(--ink-muted);
 }
 .sf-input input {
-  padding: 8px 10px;
-  border: 1px solid var(--paper-edge);
-  border-radius: var(--radius);
-  background: var(--paper);
-  color: var(--ink);
-  font-size: var(--fs-ui);
-}
-.sf-input input:focus {
-  outline: none;
-  border-color: var(--ink-muted);
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .sf-toggle {
@@ -291,50 +361,15 @@
   align-items: center;
   gap: 10px;
   padding: 6px 0;
-  border: none;
-  background: none;
-  cursor: pointer;
+  font-family: var(--font-sans);
   font-size: var(--fs-ui);
   color: var(--ink);
-  text-align: left;
+  cursor: pointer;
 }
-.sf-toggle-box {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border: 1px solid var(--paper-edge);
-  border-radius: var(--radius);
-  font-size: var(--fs-footnote);
-  color: var(--ink);
-}
-.sf-toggle.on .sf-toggle-box { border-color: var(--ink); }
 
+/* Colour, size and the press come from `.btn-primary` / `.btn-secondary`. */
 .sf-button {
   align-self: flex-start;
-  padding: 8px 16px;
-  border: 1px solid var(--paper-edge);
-  border-radius: var(--radius);
-  background: none;
-  color: var(--ink);
-  font-size: var(--fs-ui);
-  cursor: pointer;
-}
-.sf-button:hover:not(:disabled) { border-color: var(--ink-muted); }
-.sf-button.primary {
-  background: var(--ink);
-  color: var(--paper);
-  border-color: var(--ink);
-}
-.sf-button:disabled {
-  color: var(--ink-faint);
-  cursor: default;
-}
-.sf-button.primary:disabled {
-  background: var(--ink-faint);
-  border-color: var(--ink-faint);
-  color: var(--paper);
 }
 
 .sf-raw {
@@ -345,7 +380,8 @@
 .sf-raw pre {
   overflow-x: auto;
   padding: 8px;
-  border: 1px solid var(--paper-edge);
+  background: var(--fill-quiet);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius);
 }
 

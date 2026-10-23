@@ -1,21 +1,33 @@
-/* The `/` menu. It borrows the `composer-menu` drop-up (position, paper, shadow)
-   and adds only what a command list needs: sections, a mono name, a reason on
-   rows that can't run. No motion of its own, no colour for state. */
+/* The `/` menu: a dialog as wide as the box it opens from. It borrows the
+   `composer-menu` drop-up (paper, shadow, motion) and adds what a settings list
+   needs: groups that open in place, and switches and choices on the row.
+   The palette stays ink on paper — a setting that is on is dark, not coloured. */
 
 .composer-slash-menu.command-menu {
-  min-width: 340px;
-  max-width: min(520px, 100%);
-  max-height: 360px;
-  overflow-y: auto;
+  /* Anchored to the box (`.composer` is the positioned parent), not to the text
+     field inside it, so the dialog spans the whole box. */
   left: 0;
-  right: auto;
+  right: 0;
+  min-width: 0;
+  max-width: none;
+  max-height: min(440px, 70vh);
+  padding: 6px;
+  overflow: hidden;
+}
+/* Back and the footer stay put; only the list between them scrolls. */
+.command-menu-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .command-menu-filter {
   margin: 2px 4px 6px;
-  padding: 6px 8px;
+  padding: 7px 10px;
   border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: none;
   color: var(--ink);
   font-family: var(--font-sans);
@@ -26,46 +38,98 @@
   border-color: var(--ink-faint);
 }
 
-.command-menu-header {
-  padding: 8px 10px 3px;
+/* The way back out of a group, headed with the group's name. */
+.command-menu-back {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  margin-bottom: 2px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--paper-edge);
+  border-radius: 0;
+  cursor: pointer;
+  text-align: left;
   font-family: var(--font-sans);
-  font-size: var(--fs-footnote);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+.command-menu-back:hover {
+  color: var(--ink);
 }
 
+.command-menu-header {
+  padding: 8px 12px 4px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+
+/* ---- rows ---- */
+.command-menu-row {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 8px 12px;
+}
 .command-menu-row .mi-body {
+  flex: 1 1 200px;
   gap: 1px;
   min-width: 0;
 }
-.command-menu-line {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-.command-menu-name {
-  font-family: var(--font-mono);
+.command-menu-title {
+  font-family: var(--font-sans);
   font-size: var(--fs-ui);
   color: var(--ink);
 }
-/* The slash is drawn, not typed: the row's text is the name itself. */
-.command-menu-name::before {
-  content: "/";
-  color: var(--ink-faint);
-}
-.command-menu-arg {
+/* The command to type, shown while typing, with what matched marked. */
+.command-menu-cmd {
+  flex: none;
   font-family: var(--font-mono);
   font-size: var(--fs-footnote);
   color: var(--ink-faint);
-  white-space: nowrap;
+}
+.command-menu-match {
+  background: color-mix(in srgb, var(--ink) 13%, transparent);
+  color: var(--ink);
+  border-radius: var(--radius-xs);
+}
+
+/* Where a search result lives, or what a group holds: quiet, and the first
+   thing to give way when the row is short of room. */
+.command-menu-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
 }
-.command-menu-choice {
-  font-size: var(--fs-ui);
+.command-menu-chev {
+  flex: none;
+  color: var(--ink-faint);
+  font-size: var(--fs-callout);
+  line-height: 1;
+}
+.command-menu-check {
+  flex: none;
   color: var(--ink);
+  font-size: var(--fs-ui);
+}
+
+/* A group: its name, what is inside it, and a chevron. */
+.command-menu-category .mi-body {
+  flex: 0 0 170px;
+}
+.command-menu-category .command-menu-hint {
+  flex: 1 1 0;
+  max-width: none;
 }
 
 /* A row that can't run says why, in place of what it does. */
@@ -80,9 +144,16 @@
   background: var(--fill-hover);
 }
 
-/* `CPX-6`: "I can do this myself too". A fixed glyph, never a count or a state. */
+.command-menu-name-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* `CPX-6`: "I can do this myself too". A fixed glyph, never a count or a state;
+   it follows the name directly. */
 .command-menu-glyph {
-  align-self: center;
   flex: none;
   color: var(--ink-faint);
   font-size: var(--fs-footnote);
@@ -93,26 +164,134 @@
   color: var(--ink);
 }
 
+/* ---- the setting on a row ---- */
+.command-menu-switch {
+  position: relative;
+  flex: none;
+  width: 32px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--paper-edge-2);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+.command-menu-switch.on {
+  background: var(--ink);
+}
+.command-menu-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--paper);
+  box-shadow: var(--shadow-xs);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.command-menu-switch.on .command-menu-knob {
+  transform: translateX(14px);
+}
+
+.command-menu-segments {
+  flex: none;
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+.command-menu-seg {
+  padding: 3px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.command-menu-seg:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.command-menu-seg.on {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* A choice with too many options for the row: what is picked now, then a list. */
+.command-menu-value {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- recents, on the first page ---- */
+.command-menu-recents {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--paper-edge);
+  margin-bottom: 4px;
+}
+.command-menu-recents-label {
+  margin-right: 4px;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.command-menu-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink);
+}
+.command-menu-chip:hover,
+.command-menu-chip.active {
+  background: var(--fill-hover);
+}
+.command-menu-chip.disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.command-menu-chip-state {
+  color: var(--ink-faint);
+}
+
 .command-menu-note {
-  padding: 7px 10px;
-  font-family: var(--font-mono);
+  padding: 8px 12px;
   font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 
 .command-menu-foot {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
   margin-top: 4px;
-  padding: 6px 10px 3px;
+  padding: 6px 12px 3px;
   border-top: 1px solid var(--paper-edge);
   font-family: var(--font-sans);
   font-size: var(--fs-footnote);
   color: var(--ink-faint);
-}
-.command-menu-foot-key {
-  font-family: var(--font-mono);
 }
 
 /* Said to a screen reader, never drawn. */

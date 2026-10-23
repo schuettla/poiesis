@@ -234,6 +234,7 @@ export default function Tools() {
                         {s.sensitive && <span className="toolset-flag">leaves device / runs code</span>}
                       </span>
                       <span className="toolset-desc">{s.description}</span>
+                      {s.needs && <span className="toolset-needs">{s.needs}</span>}
                       {rel && (
                         <span className="toolset-reliability">
                           {rel.ok_percent}% ok over {rel.calls} call{rel.calls === 1 ? "" : "s"} this

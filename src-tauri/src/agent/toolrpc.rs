@@ -77,9 +77,53 @@ pub struct Call {
 /// batch of calls; cloned into the token map while a `run_code` call runs.
 pub type Gate = mpsc::UnboundedSender<Call>;
 
+/// `MCPS-1`: one `tools/call` an agent app made on the MCP endpoint, on its way
+/// to the run that handed it the token.
+pub struct McpCall {
+    pub tool: String,
+    pub args: serde_json::Value,
+    /// Set when the app closes the connection before it has its answer, which is
+    /// what Claude Code does when the user stops it mid-question. The run drops
+    /// the question it put on the panel.
+    pub gone: crate::runtime::proxy::CancelFlag,
+    /// The text of the answer: for `approve`, the JSON verdict.
+    pub reply: oneshot::Sender<String>,
+}
+
+/// Where an MCP call is posted. Held by the engine run that armed the token.
+pub type McpGate = mpsc::UnboundedSender<McpCall>;
+
+/// What a token opens. A script token cannot reach the MCP endpoint and the
+/// other way round: the MCP token goes to an agent app, which must never be
+/// able to call the run's own tools through the script path.
+enum Target {
+    Script(Gate),
+    /// The kit, and the specs of any further tools this token was armed with
+    /// (`CAP-14`: the connected-apps meta-tools). The specs are the whole list: a
+    /// name on it is callable, nothing else is.
+    Mcp(McpGate, McpKit, std::sync::Arc<Vec<serde_json::Value>>),
+}
+
+/// What an agent app's token opens on the MCP endpoint (`MCPS-1`, `MCPS-2`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct McpKit {
+    /// Claude Code's permission-prompt tool.
+    pub approve: bool,
+    /// `recall`, `present`, `ask_user` and `remember`: only when the user has
+    /// switched on *Let it use my memory* for this agent.
+    pub memory: bool,
+}
+
 struct Live {
-    gate: Gate,
+    target: Target,
     parent: String,
+}
+
+/// The two paths a token can be used on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Endpoint {
+    Tool,
+    Mcp,
 }
 
 static BASE: OnceLock<String> = OnceLock::new();
@@ -122,33 +166,74 @@ impl Drop for Ticket {
 pub fn arm(gate: Gate, parent: &str) -> Option<Ticket> {
     base_url()?;
     let token = uuid::Uuid::new_v4().simple().to_string();
-    let live = Live { gate, parent: parent.to_string() };
+    let live = Live { target: Target::Script(gate), parent: parent.to_string() };
     tokens().lock().ok()?.insert(token.clone(), live);
     Some(Ticket { token })
 }
 
+/// `MCPS-1`: mint a token for one agent-app run. Armed by `run_external`,
+/// independent of `tools.script_rpc`: that switch is about code the model wrote,
+/// while this endpoint is reachable only by a process Poiesis started and handed
+/// the token to. The token dies with the run.
+pub fn arm_mcp(gate: McpGate, run_id: &str, kit: McpKit) -> Option<Ticket> {
+    arm_mcp_with(gate, run_id, kit, Vec::new())
+}
+
+/// [`arm_mcp`] for a run that also offers `apps`: MCP tool specs served beside
+/// the kit's own (`CAP-14`). Poiesis answers each call itself, so the Composio key
+/// and session never reach the agent app.
+pub fn arm_mcp_with(gate: McpGate, run_id: &str, kit: McpKit, apps: Vec<serde_json::Value>) -> Option<Ticket> {
+    base_url()?;
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    let live = Live { target: Target::Mcp(gate, kit, std::sync::Arc::new(apps)), parent: run_id.to_string() };
+    tokens().lock().ok()?.insert(token.clone(), live);
+    Some(Ticket { token })
+}
+
+/// The URL an agent app is told to connect to for a ticket from [`arm_mcp`].
+pub fn mcp_url(ticket: &Ticket) -> Option<String> {
+    Some(format!("{}/{}/mcp", base_url()?, ticket.token()))
+}
+
 // ---- the socket ----
 
-/// `/<token>/tool` → the token. Anything else is not one of ours.
-fn route(target: &str) -> Option<&str> {
+/// `/<token>/tool` or `/<token>/mcp` → the token and which one. Anything else is
+/// not one of ours.
+fn route(target: &str) -> Option<(&str, Endpoint)> {
     let path = target.split(['?', '#']).next()?;
     let mut parts = path.trim_start_matches('/').split('/');
     let token = parts.next()?;
-    if parts.next()? != "tool" || parts.next().is_some() || token.is_empty() {
+    let endpoint = match parts.next()? {
+        "tool" => Endpoint::Tool,
+        "mcp" => Endpoint::Mcp,
+        _ => return None,
+    };
+    if parts.next().is_some() || token.is_empty() {
         return None;
     }
-    Some(token)
+    Some((token, endpoint))
 }
 
-/// `(token, body length)` from a request head. `None` means the request was not
-/// a tool call at all — wrong method, wrong path, or a length we can't read.
-fn parse_head(head: &str) -> Option<(&str, usize)> {
+/// What a request head asked for.
+#[derive(Debug, PartialEq, Eq)]
+enum Head<'a> {
+    /// A POST to one of our paths, with the body length it announced.
+    Call { token: &'a str, endpoint: Endpoint, len: usize },
+    /// A GET or DELETE on the MCP path. Answered 405, which tells an MCP client
+    /// this server offers no event stream, so it does not wait for one.
+    NotAllowed,
+}
+
+/// Read a request head. `None` means the request was not ours at all: wrong
+/// method, wrong path, or a length we can't read.
+fn parse_head(head: &str) -> Option<Head<'_>> {
     let mut lines = head.lines();
     let mut parts = lines.next()?.split_whitespace();
-    if parts.next()? != "POST" {
-        return None;
+    let method = parts.next()?;
+    let (token, endpoint) = route(parts.next()?)?;
+    if method != "POST" {
+        return (endpoint == Endpoint::Mcp && matches!(method, "GET" | "DELETE")).then_some(Head::NotAllowed);
     }
-    let token = route(parts.next()?)?;
     let mut len = 0usize;
     for line in lines {
         let Some((key, value)) = line.split_once(':') else { continue };
@@ -156,7 +241,7 @@ fn parse_head(head: &str) -> Option<(&str, usize)> {
             len = value.trim().parse().ok()?;
         }
     }
-    Some((token, len))
+    Some(Head::Call { token, endpoint, len })
 }
 
 /// The two fields a call carries. Arguments default to `{}` so `tool("x")` with
@@ -212,10 +297,11 @@ async fn forward(token: &str, name: String, args: serde_json::Value) -> Vec<u8> 
     // holding the token map across it would stall every other script.
     let posted = match tokens().lock() {
         Ok(map) => match map.get(token) {
-            Some(live) => live
-                .gate
-                .send(Call { parent: live.parent.clone(), name, args, reply: tx })
+            Some(Live { target: Target::Script(gate), parent }) => gate
+                .send(Call { parent: parent.clone(), name, args, reply: tx })
                 .is_ok(),
+            // An agent app's token opens the MCP endpoint and nothing else.
+            Some(_) => return refused("403 Forbidden", "this token is not for tool calls"),
             None => return refused("403 Forbidden", "this token is not live any more"),
         },
         Err(_) => false,
@@ -252,10 +338,23 @@ async fn serve(mut stream: tokio::net::TcpStream) {
     };
 
     let parsed = std::str::from_utf8(&buf[..at]).ok().and_then(parse_head);
-    let Some((token, len)) = parsed.map(|(t, l)| (t.to_string(), l)) else {
-        let _ = stream.write_all(&refused("404 Not Found", "not a tool call")).await;
-        return;
+    let (token, endpoint, len) = match parsed {
+        Some(Head::Call { token, endpoint, len }) => (token.to_string(), endpoint, len),
+        Some(Head::NotAllowed) => {
+            let _ = stream.write_all(&refused("405 Method Not Allowed", "this server answers POST only")).await;
+            return;
+        }
+        None => {
+            let _ = stream.write_all(&refused("404 Not Found", "not a tool call")).await;
+            return;
+        }
     };
+    // `MCPS-1`: a token that is not live, or belongs to the other path, gets a
+    // 404 before a byte of the body is read or parsed.
+    if endpoint == Endpoint::Mcp && !mcp_token_live(&token) {
+        let _ = stream.write_all(&refused("404 Not Found", "not found")).await;
+        return;
+    }
     if len > MAX_BODY {
         let _ = stream
             .write_all(&refused("413 Payload Too Large", "the arguments were too big to send"))
@@ -274,12 +373,201 @@ async fn serve(mut stream: tokio::net::TcpStream) {
     // part of this call and is not ours to interpret.
     let body = String::from_utf8_lossy(&buf[at..at + len]).into_owned();
 
+    if endpoint == Endpoint::Mcp {
+        serve_mcp(&mut stream, &token, &body).await;
+        return;
+    }
     let out = match parse_body(&body) {
         Ok((name, args)) => forward(&token, name, args).await,
         Err(e) => refused("400 Bad Request", &e),
     };
     let _ = stream.write_all(&out).await;
     let _ = stream.flush().await;
+}
+
+// ---- `MCPS-1`: the MCP endpoint ----
+
+/// The longest an agent app's question may sit unanswered before the endpoint
+/// gives up on it. The run itself decides sooner (a person has a few minutes);
+/// this only keeps a lost run from holding a connection open forever.
+const MCP_CALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+fn mcp_token_live(token: &str) -> bool {
+    tokens().lock().is_ok_and(|m| matches!(m.get(token), Some(Live { target: Target::Mcp(..), .. })))
+}
+
+/// A JSON-RPC answer, as an HTTP response.
+fn rpc_result(id: &serde_json::Value, result: serde_json::Value) -> Vec<u8> {
+    reply("200 OK", &serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+fn rpc_error(id: &serde_json::Value, code: i64, message: &str) -> Vec<u8> {
+    reply("200 OK", &serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }))
+}
+
+/// `202 Accepted`, no body: the answer to a notification.
+fn accepted() -> Vec<u8> {
+    b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".to_vec()
+}
+
+/// What `tools/list` says for this token: `approve` (Claude Code's
+/// permission-prompt tool, which it calls before it uses a tool that needs
+/// permission) and, when the user allowed it, the four memory tools.
+fn mcp_tools(kit: McpKit, apps: &[serde_json::Value]) -> serde_json::Value {
+    let mut tools: Vec<serde_json::Value> = Vec::new();
+    if kit.approve {
+        tools.push(serde_json::json!({
+            "name": "approve",
+            "description": "Ask the user to approve one tool call.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tool_name": { "type": "string" },
+                    "input": { "type": "object" },
+                    "tool_use_id": { "type": "string" }
+                },
+                "required": ["tool_name", "input"]
+            }
+        }));
+    }
+    if kit.memory {
+        if let Some(list) = crate::engines::tools::specs().as_array() {
+            tools.extend(list.iter().cloned());
+        }
+    }
+    tools.extend(apps.iter().cloned());
+    serde_json::json!({ "tools": tools })
+}
+
+fn kit_of(token: &str) -> Option<(McpKit, std::sync::Arc<Vec<serde_json::Value>>)> {
+    match tokens().lock().ok()?.get(token) {
+        Some(Live { target: Target::Mcp(_, kit, apps), .. }) => Some((*kit, apps.clone())),
+        _ => None,
+    }
+}
+
+/// Is this tool one the token may call?
+fn kit_allows(kit: McpKit, apps: &[serde_json::Value], tool: &str) -> bool {
+    (tool == "approve" && kit.approve)
+        || (kit.memory && crate::engines::tools::NAMES.contains(&tool))
+        || apps.iter().any(|t| t.get("name").and_then(|n| n.as_str()) == Some(tool))
+}
+
+/// The protocol version to answer with. Claude Code first asks with a newer one
+/// we do not know and falls back; whatever it offers is echoed, so the two never
+/// disagree. A value that is not a short plain string is replaced.
+fn echo_version(params: &serde_json::Value) -> String {
+    params
+        .get("protocolVersion")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty() && v.len() <= 32 && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .unwrap_or("2025-06-18")
+        .to_string()
+}
+
+/// Answer one JSON-RPC message from an agent app. Replies as `application/json`
+/// only; one-shot calls need no event stream.
+async fn serve_mcp(stream: &mut tokio::net::TcpStream, token: &str, body: &str) {
+    let Ok(msg) = serde_json::from_str::<serde_json::Value>(body) else {
+        let _ = stream.write_all(&refused("400 Bad Request", "the body was not JSON")).await;
+        return;
+    };
+    let id = msg.get("id").cloned();
+    let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
+    let params = msg.get("params").cloned().unwrap_or(serde_json::Value::Null);
+
+    // A message with no id is a notification (`notifications/initialized`,
+    // `notifications/cancelled`): nothing to answer.
+    let Some(id) = id else {
+        let _ = stream.write_all(&accepted()).await;
+        return;
+    };
+
+    let out = match method {
+        "initialize" => rpc_result(
+            &id,
+            serde_json::json!({
+                "protocolVersion": echo_version(&params),
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "poiesis", "version": env!("CARGO_PKG_VERSION") }
+            }),
+        ),
+        "ping" => rpc_result(&id, serde_json::json!({})),
+        "tools/list" => {
+            let (kit, apps) = kit_of(token).unwrap_or((McpKit { approve: false, memory: false }, Default::default()));
+            rpc_result(&id, mcp_tools(kit, &apps))
+        }
+        "tools/call" => {
+            let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            if !kit_of(token).is_some_and(|(kit, apps)| kit_allows(kit, &apps, name)) {
+                rpc_error(&id, -32602, "there is no such tool")
+            } else {
+                let args = params.get("arguments").cloned().unwrap_or_else(|| serde_json::json!({}));
+                match forward_mcp(stream, token, name, args).await {
+                    // The app closed the connection: nobody is left to read an answer.
+                    Forwarded::Gone => return,
+                    Forwarded::Text(text) => rpc_result(&id, serde_json::json!({ "content": [{ "type": "text", "text": text }] })),
+                    Forwarded::Refused(why) => rpc_error(&id, -32000, why),
+                }
+            }
+        }
+        // `server/discover` (a newer protocol's first question) and anything else:
+        // "method not found" makes the client fall back to `initialize`.
+        _ => rpc_error(&id, -32601, "method not found"),
+    };
+    let _ = stream.write_all(&out).await;
+    let _ = stream.flush().await;
+}
+
+enum Forwarded {
+    Text(String),
+    Refused(&'static str),
+    Gone,
+}
+
+/// Hand a `tools/call` to the run that armed the token and wait for its answer
+/// while watching the socket: if the app hangs up first, the call is marked gone
+/// so the run withdraws what it put in front of the user.
+async fn forward_mcp(stream: &mut tokio::net::TcpStream, token: &str, tool: &str, args: serde_json::Value) -> Forwarded {
+    let (tx, mut rx) = oneshot::channel();
+    let gone = crate::runtime::proxy::CancelFlag::new();
+    let posted = match tokens().lock() {
+        Ok(map) => match map.get(token) {
+            Some(Live { target: Target::Mcp(gate, _, _), .. }) => {
+                gate.send(McpCall { tool: tool.to_string(), args, gone: gone.clone(), reply: tx }).is_ok()
+            }
+            _ => return Forwarded::Refused("this token is not live any more"),
+        },
+        Err(_) => false,
+    };
+    if !posted {
+        return Forwarded::Refused("the run that could answer this has ended");
+    }
+    let deadline = tokio::time::sleep(MCP_CALL_TIMEOUT);
+    tokio::pin!(deadline);
+    let mut scratch = [0u8; 256];
+    loop {
+        tokio::select! {
+            answer = &mut rx => {
+                return match answer {
+                    Ok(text) => Forwarded::Text(text),
+                    Err(_) => Forwarded::Refused("the run that could answer this has ended"),
+                };
+            }
+            // A client that sent exactly one request has nothing more to say, so
+            // any end of the stream means it hung up.
+            read = stream.read(&mut scratch) => {
+                if matches!(read, Ok(0) | Err(_)) {
+                    gone.cancel();
+                    return Forwarded::Gone;
+                }
+            }
+            _ = &mut deadline => {
+                gone.cancel();
+                return Forwarded::Refused("nobody answered in time");
+            }
+        }
+    }
 }
 
 /// Start the tool RPC server. Bound at startup so the port is known, but it can
@@ -298,6 +586,31 @@ pub fn start() {
             let Ok((stream, _)) = listener.accept().await else { continue };
             tauri::async_runtime::spawn(serve(stream));
         }
+    });
+}
+
+/// For tests that need a live endpoint (the agent-app end-to-end tests): a real
+/// listener on its own thread and runtime, started once per test process. The
+/// unit tests here use it too, so none of them leaves a dead address in `BASE`.
+#[cfg(test)]
+pub fn serve_for_tests() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+            rt.block_on(async move {
+                let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+                let port = listener.local_addr().unwrap().port();
+                let _ = BASE.set(format!("http://127.0.0.1:{port}"));
+                tx.send(()).unwrap();
+                loop {
+                    let Ok((stream, _)) = listener.accept().await else { continue };
+                    tokio::spawn(serve(stream));
+                }
+            });
+        });
+        rx.recv().unwrap();
     });
 }
 
@@ -410,7 +723,10 @@ mod tests {
     #[test]
     fn only_a_post_to_the_tool_path_is_a_call() {
         let head = |line: &str| format!("{line}\r\nContent-Length: 2\r\n\r\n");
-        assert_eq!(parse_head(&head("POST /tok/tool HTTP/1.1")), Some(("tok", 2)));
+        assert_eq!(
+            parse_head(&head("POST /tok/tool HTTP/1.1")),
+            Some(Head::Call { token: "tok", endpoint: Endpoint::Tool, len: 2 })
+        );
         assert_eq!(parse_head(&head("GET /tok/tool HTTP/1.1")), None, "reads are not calls");
         assert_eq!(parse_head(&head("POST /tok HTTP/1.1")), None);
         assert_eq!(parse_head(&head("POST /tok/tool/extra HTTP/1.1")), None);
@@ -422,13 +738,221 @@ mod tests {
     #[test]
     fn an_artifact_request_is_not_a_tool_call() {
         assert_eq!(route("/tok/art-1"), None);
-        assert_eq!(route("/tok/tool"), Some("tok"));
-        assert_eq!(route("/tok/tool?x=1"), Some("tok"));
+        assert_eq!(route("/tok/tool"), Some(("tok", Endpoint::Tool)));
+        assert_eq!(route("/tok/tool?x=1"), Some(("tok", Endpoint::Tool)));
+        assert_eq!(route("/tok/mcp"), Some(("tok", Endpoint::Mcp)));
+        assert_eq!(route("/tok/mcp/extra"), None);
     }
 
     #[test]
     fn a_missing_content_length_reads_as_an_empty_body() {
-        assert_eq!(parse_head("POST /tok/tool HTTP/1.1\r\nHost: x\r\n\r\n"), Some(("tok", 0)));
+        assert_eq!(
+            parse_head("POST /tok/tool HTTP/1.1\r\nHost: x\r\n\r\n"),
+            Some(Head::Call { token: "tok", endpoint: Endpoint::Tool, len: 0 })
+        );
+    }
+
+    #[test]
+    fn only_the_mcp_path_answers_a_get_and_it_says_no() {
+        assert_eq!(parse_head("GET /tok/mcp HTTP/1.1\r\n\r\n"), Some(Head::NotAllowed));
+        assert_eq!(parse_head("DELETE /tok/mcp HTTP/1.1\r\n\r\n"), Some(Head::NotAllowed));
+        assert_eq!(parse_head("GET /tok/tool HTTP/1.1\r\n\r\n"), None);
+    }
+
+    // ---- `MCPS-1`, over a real loopback connection ----
+
+    /// One HTTP exchange against a live `serve`: send a POST, read to the end.
+    async fn exchange(path: &str, body: &str) -> String {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (s, _) = listener.accept().await.unwrap();
+            serve(s).await;
+        });
+        let mut c = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let req = format!("POST {path} HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        c.write_all(req.as_bytes()).await.unwrap();
+        let mut out = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), c.read_to_end(&mut out)).await;
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    fn json_body(http: &str) -> serde_json::Value {
+        serde_json::from_str(http.split("\r\n\r\n").nth(1).unwrap_or("null")).unwrap_or(serde_json::Value::Null)
+    }
+
+    fn armed() -> (Ticket, mpsc::UnboundedReceiver<McpCall>) {
+        serve_for_tests();
+        let (tx, rx) = mpsc::unbounded_channel();
+        (arm_mcp(tx, "run-1", McpKit { approve: true, memory: false }).expect("a bound server arms"), rx)
+    }
+
+    #[tokio::test]
+    async fn a_revoked_or_unknown_mcp_token_gets_a_404_before_anything_is_parsed() {
+        let out = exchange("/nosuchtoken/mcp", "this is not even json").await;
+        assert!(out.starts_with("HTTP/1.1 404"), "{out}");
+        let (ticket, _rx) = armed();
+        let path = format!("/{}/mcp", ticket.token());
+        let live = exchange(&path, r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#).await;
+        assert!(live.starts_with("HTTP/1.1 200"), "{live}");
+        drop(ticket);
+        let after = exchange(&path, r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#).await;
+        assert!(after.starts_with("HTTP/1.1 404"), "a returned run leaves no usable token: {after}");
+    }
+
+    #[tokio::test]
+    async fn the_two_kinds_of_token_do_not_open_each_others_path() {
+        let (mcp, _rx) = armed();
+        let (tx, _srx) = mpsc::unbounded_channel();
+        let script = arm(tx, "call-1").unwrap();
+        // An agent app's token cannot call the run's tools.
+        let tool = exchange(&format!("/{}/tool", mcp.token()), r#"{"name":"read_file"}"#).await;
+        assert!(tool.starts_with("HTTP/1.1 403") && tool.contains("not for tool calls"), "{tool}");
+        // A script's token does not open the MCP endpoint.
+        let other = exchange(&format!("/{}/mcp", script.token()), r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#).await;
+        assert!(other.starts_with("HTTP/1.1 404"), "{other}");
+    }
+
+    /// The handshake Claude Code does: a newer `server/discover` is refused so it
+    /// falls back, `initialize` echoes its version, `initialized` is a 202, and
+    /// `tools/list` offers `approve`.
+    #[tokio::test]
+    async fn the_handshake_claude_code_does_works() {
+        let (ticket, _rx) = armed();
+        let path = format!("/{}/mcp", ticket.token());
+
+        let discover = exchange(&path, r#"{"jsonrpc":"2.0","id":"d","method":"server/discover","params":{}}"#).await;
+        assert_eq!(json_body(&discover)["error"]["code"], -32601);
+
+        let init = exchange(&path, r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}"#).await;
+        let init = json_body(&init);
+        assert_eq!(init["result"]["protocolVersion"], "2025-11-25", "the client's version is echoed");
+        assert_eq!(init["result"]["serverInfo"]["name"], "poiesis");
+        let odd = exchange(&path, r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"<script>"}}"#).await;
+        assert_eq!(json_body(&odd)["result"]["protocolVersion"], "2025-06-18", "nothing odd is echoed");
+
+        let note = exchange(&path, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).await;
+        assert!(note.starts_with("HTTP/1.1 202") && note.ends_with("\r\n\r\n"), "{note}");
+
+        let list = json_body(&exchange(&path, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await);
+        assert_eq!(list["result"]["tools"][0]["name"], "approve");
+    }
+
+    /// `MCPS-T`: an allow and a deny each come back as the JSON Claude Code
+    /// reads, as one text content.
+    #[tokio::test]
+    async fn an_approval_goes_to_the_run_and_its_answer_comes_back_as_text() {
+        let (ticket, mut rx) = armed();
+        let path = format!("/{}/mcp", ticket.token());
+        let run = tokio::spawn(async move {
+            for verdict in [r#"{"behavior":"allow","updatedInput":{"command":"ls"}}"#, r#"{"behavior":"deny","message":"Not allowed: the user declined."}"#] {
+                let call = rx.recv().await.expect("the call reaches the run that armed the token");
+                assert_eq!(call.tool, "approve");
+                assert_eq!(call.args["tool_name"], "Bash");
+                let _ = call.reply.send(verdict.to_string());
+            }
+        });
+        let body = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"approve","arguments":{"tool_name":"Bash","input":{"command":"ls"},"tool_use_id":"t1"}}}"#;
+        let first = json_body(&exchange(&path, body).await);
+        let text = first["result"]["content"][0]["text"].as_str().unwrap().to_string();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["behavior"], "allow");
+        let second = json_body(&exchange(&path, body).await);
+        let text = second["result"]["content"][0]["text"].as_str().unwrap().to_string();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["message"], "Not allowed: the user declined.");
+        run.await.unwrap();
+
+        // Only `approve` exists.
+        let other = exchange(&path, r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{}}}"#).await;
+        assert_eq!(json_body(&other)["error"]["code"], -32602);
+    }
+
+    /// `MCPS-2`: which tools a token opens is decided when it is armed. The memory
+    /// tools need the user's switch; `approve` is for agents that ask through it.
+    #[tokio::test]
+    async fn the_memory_tools_are_listed_and_callable_only_for_a_token_armed_with_them() {
+        serve_for_tests();
+        let names = |list: &serde_json::Value| -> Vec<String> {
+            list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()
+        };
+        let (tx, _plain_rx) = mpsc::unbounded_channel();
+        let plain = arm_mcp(tx, "r1", McpKit { approve: true, memory: false }).unwrap();
+        let (tx, mut rich_rx) = mpsc::unbounded_channel();
+        let rich = arm_mcp(tx, "r2", McpKit { approve: false, memory: true }).unwrap();
+        let plain_path = format!("/{}/mcp", plain.token());
+        let rich_path = format!("/{}/mcp", rich.token());
+
+        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        assert_eq!(names(&json_body(&exchange(&plain_path, list).await)), ["approve"]);
+        assert_eq!(names(&json_body(&exchange(&rich_path, list).await)), ["recall", "present", "ask_user", "remember"]);
+
+        let call = |name: &str| format!(r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"{name}","arguments":{{"query":"x"}}}}}}"#);
+        // A token without the switch cannot call them, and one with it cannot call `approve`.
+        assert_eq!(json_body(&exchange(&plain_path, &call("recall")).await)["error"]["code"], -32602);
+        assert_eq!(json_body(&exchange(&rich_path, &call("approve")).await)["error"]["code"], -32602);
+
+        // With the switch the call reaches the run that armed the token.
+        let run = tokio::spawn(async move {
+            let c = rich_rx.recv().await.expect("the call reaches the run");
+            assert_eq!((c.tool.as_str(), c.args["query"].as_str()), ("recall", Some("x")));
+            let _ = c.reply.send("found it".to_string());
+        });
+        let answer = json_body(&exchange(&rich_path, &call("recall")).await);
+        assert_eq!(answer["result"]["content"][0]["text"], "found it");
+        run.await.unwrap();
+    }
+
+    /// `CAP-14`: the connected-apps tools are on a token only when it was armed with
+    /// them, and a name that is not on its list is not callable.
+    #[tokio::test]
+    async fn a_token_armed_with_app_tools_lists_and_allows_only_those() {
+        serve_for_tests();
+        let spec = |name: &str| serde_json::json!({ "name": name, "description": "d", "inputSchema": { "type": "object" } });
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let kit = McpKit { approve: false, memory: false };
+        let armed = arm_mcp_with(tx, "r1", kit, vec![spec("COMPOSIO_SEARCH_TOOLS")]).unwrap();
+        let path = format!("/{}/mcp", armed.token());
+        let list = json_body(&exchange(&path, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await);
+        let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["COMPOSIO_SEARCH_TOOLS"]);
+
+        let call = |name: &str| format!(r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"{name}","arguments":{{}}}}}}"#);
+        assert_eq!(json_body(&exchange(&path, &call("COMPOSIO_MULTI_EXECUTE_TOOL")).await)["error"]["code"], -32602);
+        assert_eq!(json_body(&exchange(&path, &call("recall")).await)["error"]["code"], -32602);
+        let run = tokio::spawn(async move {
+            let c = rx.recv().await.expect("the call reaches the run");
+            assert_eq!(c.tool, "COMPOSIO_SEARCH_TOOLS");
+            let _ = c.reply.send("found".to_string());
+        });
+        let answer = json_body(&exchange(&path, &call("COMPOSIO_SEARCH_TOOLS")).await);
+        assert_eq!(answer["result"]["content"][0]["text"], "found");
+        run.await.unwrap();
+    }
+
+    /// Finding 11: Claude Code closes the connection when the user stops it
+    /// mid-question. The run is told, so it can take the question off the panel.
+    #[tokio::test]
+    async fn a_hung_up_connection_marks_the_call_gone() {
+        let (ticket, mut rx) = armed();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (s, _) = listener.accept().await.unwrap();
+            serve(s).await;
+        });
+        let mut c = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let body = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"approve","arguments":{"tool_name":"Bash","input":{}}}}"#;
+        let req = format!("POST /{}/mcp HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", ticket.token(), body.len());
+        c.write_all(req.as_bytes()).await.unwrap();
+        let call = rx.recv().await.unwrap();
+        assert!(!call.gone.is_cancelled());
+        drop(c);
+        for _ in 0..50 {
+            if call.gone.is_cancelled() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the endpoint never noticed the connection was closed");
     }
 
     #[test]
@@ -460,7 +984,7 @@ mod tests {
     /// exit path, including the ones that run no code.
     #[tokio::test]
     async fn dropping_the_ticket_revokes_the_token() {
-        let _ = BASE.set("http://127.0.0.1:1".to_string());
+        serve_for_tests();
         let (tx, mut rx) = mpsc::unbounded_channel();
         let ticket = arm(tx, "call-1").expect("a bound server arms");
         let token = ticket.token().to_string();

@@ -40,7 +40,7 @@ interface Fixture {
     when_to_use: string | null;
     model_invocable?: boolean;
   }[];
-  blocks: FixtureBlock[];
+  workspace: boolean;
   surface: { data_json: string; state_json: string | null };
   session_state_json: string;
   tool_health: { tool_name: string; ok: number; total: number }[];
@@ -55,32 +55,15 @@ interface Fixture {
 // still needs no Node type definitions to type-check.
 const fixture = fixtureJson as unknown as Fixture;
 
-interface FixtureBlock {
-  id: string;
-  title: string;
-  kind: string;
-  data_json: string;
-  state_json: string | null;
-}
-
 /** Stored JSON becomes an object here, because that is the shape `store.ts`
  * takes. Parsing and re-stringifying preserves key order in JavaScript, which is
  * exactly the property the Rust side protects by never re-serializing at all. */
 const parse = (text: string | null | undefined) => (text ? JSON.parse(text) : undefined);
 
 function budgeted() {
-  const blocks = (fixture.blocks as FixtureBlock[]).map((b) => ({
-    id: b.id,
-    title: b.title,
-    kind: b.kind,
-    data: parse(b.data_json),
-    state: parse(b.state_json),
-  }));
-
   let system = composeSystemPrompt(fixture.base, {
-    // Only `messages[].blocks` is read off the conversation, and only for the
-    // block registry.
-    conv: { messages: [{ blocks }] } as never,
+    // Only the mode is read off the conversation.
+    conv: { workspace: fixture.workspace } as never,
     sessionState: parse(fixture.session_state_json),
     toolsEnabled: fixture.tools_enabled,
     surface: {

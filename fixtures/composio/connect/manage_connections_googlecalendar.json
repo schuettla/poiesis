@@ -1,0 +1,11 @@
+{
+  "answer": {
+    "text": "{\"successful\":true,\"data\":{\"message\":\"All connection attempts failed\",\"results\":{\"googlecalendar\":{\"toolkit\":\"googlecalendar\",\"status\":\"failed\",\"error_message\":\"Maximum of 10 accounts per toolkit reached. Remove an existing account before adding a new one.\",\"accounts\":[{\"id\":\"googlecalendar_vole-negate\",\"status\":\"initializing\",\"is_default\":false,\"account_type\":\"PRIVATE\"},{\"id\":\"googlecalendar_carlet-engaze\",\"status\":\"initializing\",\"is_default\":false,\"account_type\":\"PRIVATE\"},{\"id\":\"googlecalendar_thill-sixth\",\"status\":\"initializing\",\"is_default\":false,\"account_type\":\"PRIVATE\"},{\"id\":\"googlecalendar_garth-bais\",\"status\":\"initializing\",\"is_default\":false,\"account_type\":\"PRIVATE\"},{\"id\":\"googlecalendar_mongol-resuit\",\"status\":\"initializing\",\"is_default\":false,\"account_type\":\"PRIVATE\"},{\"id\":\"googlecalendar_hop-buran\",\"status\":\"initializing\",\"is_default\":false,\"account_type\":\"PRIVATE\"},{\"id\":\"googlecalendar_didie-bundy\",\"status\":\"initializing\",\"is_default\":false,\"account_type\":\"PRIVATE\"},{\"id\":\"googlecalendar_caul-lasi\",\"status\":\"initializing\",\"is_default\":false,\"account_type\":\"PRIVATE\"},{\"id\":\"googlecalendar_across-milla\",\"status\":\"initializing\",\"is_default\":false,\"account_type\":\"PRIVATE\"},{\"id\":\"googlecalendar_livor-fultz\",\"status\":\"active\",\"is_default\":true,\"account_type\":\"PRIVATE\"}]}},\"summary\":{\"total_toolkits\":1,\"active_connections\":0,\"initiated_connections\":0,\"failed_connections\":1}},\"error\":null,\"log_id\":\"log_vgcKeQ835dgE\"}"
+  },
+  "arguments": {
+    "toolkits": [
+      "googlecalendar"
+    ]
+  },
+  "tool": "COMPOSIO_MANAGE_CONNECTIONS"
+}

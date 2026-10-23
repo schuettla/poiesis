@@ -91,6 +91,61 @@ describe("a child's events", () => {
     expect(s.permissionAgents.p1).toBe("researcher");
   });
 
+  /// An agent app that was stopped, or hung up, with a question open: the panel
+  /// must not keep asking about something that no longer matters.
+  it("take a withdrawn question off the panel and leave the others", () => {
+    const request = (id: string) => ({ id, summary: "Run it?", path: "C:\\work", mode: "read-only", in_folder: false });
+    applySubEvent(set, RUN, { type: "permission", request: request("p1") as never });
+    applySubEvent(set, RUN, { type: "permission", request: request("p2") as never });
+    applySubEvent(set, RUN, { type: "permission_gone", id: "p1" });
+    expect(useAppStore.getState().pendingPermissions.map((p) => p.id)).toEqual(["p2"]);
+  });
+
+  /// `MCPS-2`: an agent app asks you something. The card sits in the turn that
+  /// started it, names the agent, a second question waits, and the job ending takes
+  /// its question away.
+  it("put an agent app's question in the turn that started it, and queue a second", () => {
+    useAppStore.setState({
+      conversations: [{ ...lead(), messages: [{ ...lead().messages[0], subRunIds: [RUN] }] }],
+      subRuns: { [RUN]: child({ agent: "Claude Code" }) },
+      pendingQuestion: null,
+      queuedQuestions: [],
+    });
+    const ask = (id: string) =>
+      applySubEvent(set, RUN, { type: "question", run_id: RUN, id, question: `Which ${id}?`, options: [{ label: "a" }, { label: "b" }], multi: false });
+    ask("q1");
+    ask("q2");
+    const s = useAppStore.getState();
+    expect(s.pendingQuestion).toMatchObject({ id: "q1", runId: RUN, messageId: "a-1", agent: "Claude Code", convId: CONV });
+    expect(s.queuedQuestions.map((q) => q.id)).toEqual(["q2"]);
+
+    // Withdrawn: the one waiting behind it comes up.
+    applySubEvent(set, RUN, { type: "question_gone", id: "q1" });
+    expect(useAppStore.getState().pendingQuestion?.id).toBe("q2");
+    expect(useAppStore.getState().queuedQuestions).toEqual([]);
+
+    // The job ends with one still open: it goes with it.
+    applySubEvent(set, RUN, { type: "run_ended", run_id: RUN, stop_reason: "aborted", steps: 0, ms: 1, usage: null, cost_usd: null } as never);
+    expect(useAppStore.getState().pendingQuestion).toBeNull();
+  });
+
+  it("ignore a question from a job that no turn of this chat started", () => {
+    useAppStore.setState({ pendingQuestion: null, queuedQuestions: [] });
+    applySubEvent(set, RUN, { type: "question", run_id: RUN, id: "q1", question: "?", options: [], multi: false });
+    expect(useAppStore.getState().pendingQuestion).toBeNull();
+  });
+
+  it("keep what an agent app put on its card, and update it by id", () => {
+    applySubEvent(set, RUN, { type: "block", id: "b1", message_id: null, kind: "progress", title: "Tests", data: { current: 1, total: 4 } });
+    applySubEvent(set, RUN, { type: "block_update", id: "b1", title: "Tests", data: { current: 3, total: 4 } });
+    const blocks = useAppStore.getState().subRuns[RUN].blocks!;
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ kind: "progress", data: { current: 3, total: 4 } });
+    // A workspace surface is a chat's, never a job card's.
+    applySubEvent(set, RUN, { type: "block", id: "s1", message_id: null, kind: "surface", title: "Workspace", data: {} });
+    expect(useAppStore.getState().subRuns[RUN].blocks).toHaveLength(1);
+  });
+
   it("are dropped for a run this session never saw, rather than inventing one", () => {
     applySubEvent(set, "run-unknown", { type: "token", text: "hi" });
     expect(Object.keys(useAppStore.getState().subRuns)).toEqual([RUN]);

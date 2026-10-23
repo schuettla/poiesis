@@ -299,8 +299,8 @@
 }
 .chat-workspace {
   flex: none;
+  display: inline-flex;
   color: var(--ink-faint);
-  font-size: var(--fs-caption);
 }
 
 /* The trailing slot: a reading at rest (when, or how many), the ⋯ on hover or
@@ -424,12 +424,6 @@
 .rail-nav li:hover .nav-icon {
   color: var(--ink);
 }
-/* Settings is the foot of the rail and its one standing destination, so it
-   rests on the same quiet fill as New chat at the top. */
-.rail-nav-footer li {
-  background: var(--fill-quiet);
-}
-
 /* Something about the agent's self is waiting on the user (SOUL-UI-3). A dot,
    not a count — this is an invitation to look, not an alarm. */
 .nav-badge {

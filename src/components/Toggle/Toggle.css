@@ -1,0 +1,56 @@
+/* The on/off switch (`Toggle.tsx`). The same drawing as the command menu's
+   switch: an ink track with a paper knob. The checkbox is stretched over the
+   whole thing, invisible, so it takes the click and the focus. */
+.toggle {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  width: 36px;
+  height: 20px;
+}
+.toggle-input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.toggle-input:disabled {
+  cursor: not-allowed;
+}
+.toggle-track {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-pill);
+  background: var(--paper-edge-2);
+  transition: background-color var(--t-fast), box-shadow var(--t-fast), opacity var(--t-fast);
+}
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--paper);
+  box-shadow: var(--shadow-xs);
+  transition: transform var(--t-fast);
+}
+.toggle:hover .toggle-input:not(:disabled):not(:checked) + .toggle-track {
+  background: var(--ink-faint);
+}
+.toggle-input:checked + .toggle-track {
+  background: var(--ink);
+}
+.toggle-input:checked + .toggle-track .toggle-knob {
+  transform: translateX(16px);
+}
+.toggle-input:focus-visible + .toggle-track {
+  box-shadow: var(--ring);
+}
+.toggle-input:disabled + .toggle-track {
+  opacity: 0.45;
+}

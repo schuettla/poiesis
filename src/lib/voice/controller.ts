@@ -87,7 +87,10 @@ export async function openVoice(): Promise<OpenResult> {
   // The voice surface lives in the chat view. Opening the mic anywhere it
   // cannot be seen would break VXP-3, so it does not open there.
   const app = useAppStore.getState();
-  if (app.view !== "chat" || app.workspaceMode) return "error";
+  if (app.view !== "chat") return "error";
+  // A workspace chat keeps its mode: only the canvas steps aside, and the chat
+  // switch in the top bar is the way back to it.
+  if (app.workspaceMode && app.workspaceShown) app.setWorkspaceShown(false);
   setVoiceUi({ shown: true, error: null, used: true });
   const s = voiceSession();
   if (s.live) return "live";

@@ -830,7 +830,9 @@ pub async fn resolve_change_proposal_cmd(
             let _ = db.log_activity(None, "memory", "accepted instructions for a project");
             Ok(())
         }
-        "lesson" | "lesson-critic" => {
+        // `MCPS-2`: a memory an agent app suggested with its `remember` tool. It
+        // lands exactly as a lesson does, after the user has read it and said yes.
+        "lesson" | "lesson-critic" | "engine-memory" => {
             // Reflection at rung `ask`, or a draft the critic demoted
             // (`CRT-2`). The body is the lesson and `description` is its own
             // one-line summary — deliberately *not* the rationale, which for a
@@ -869,6 +871,13 @@ pub async fn resolve_change_proposal_cmd(
             let _ = db.log_activity(None, "reflect", &format!("learned {slug}"));
             Ok(())
         }
+        // `RTE-6`: a change to the rules for when to hand work to an agent app.
+        "engine-rule" => {
+            let what = crate::engines::learn::apply(&db, &proposal).map_err(PoiesisError::Message)?;
+            db.resolve_change_proposal(&id, "applied").map_err(err)?;
+            let _ = db.log_activity(None, "engines", &format!("accepted a suggestion: {what}"));
+            Ok(())
+        }
         "email" => {
             // `MAIL-3`: the proposal holds the complete rendered message
             // (account + headers + body, `render_email_proposal`) — accepting
@@ -888,6 +897,18 @@ pub async fn resolve_change_proposal_cmd(
             .map_err(PoiesisError::Message)?;
             db.resolve_change_proposal(&id, "applied").map_err(err)?;
             let _ = db.log_activity(None, "mail", &format!("sent mail to {}", fields.to));
+            Ok(())
+        }
+        "app" => {
+            // `MCG-3`: a connector call a headless run could not ask about. The
+            // proposal holds the exact arguments the person reviewed, and
+            // accepting runs those, nothing recomputed.
+            let call = crate::agent::connector_gate::parse_app_proposal(&proposal.proposed_text)
+                .ok_or_else(|| PoiesisError::Message("That request couldn't be read back.".into()))?;
+            crate::agent::connector_gate::run_approved(&db, &mgr.client, &call)
+                .await
+                .map_err(PoiesisError::Message)?;
+            db.resolve_change_proposal(&id, "applied").map_err(err)?;
             Ok(())
         }
         // `SKL-5` (install) and `OUT-2` (revision) land the same way: the

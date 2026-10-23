@@ -144,6 +144,56 @@
 .permission-btn.deny {
   color: var(--danger);
 }
+/* MCG-UI-1: what a connected app's call would run with, as key/value rows. */
+.permission-args {
+  margin: 0 0 22px;
+  padding: 8px 12px;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--paper-edge);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+}
+.permission-arg {
+  display: grid;
+  grid-template-columns: minmax(64px, 28%) 1fr;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: var(--fs-footnote);
+}
+.permission-arg + .permission-arg {
+  border-top: 1px solid var(--hairline);
+}
+.permission-arg dt {
+  font-family: var(--font-mono);
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+.permission-arg dd {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.permission-fold {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--ink-muted);
+  text-decoration: underline;
+  cursor: pointer;
+}
+/* Something leaving this machine on the person's behalf: the cloud colour,
+   the same one that marks a cloud model, tints the eyebrow and the button. */
+.side-panel.outbound .permission-eyebrow {
+  color: var(--cloud);
+}
+.side-panel.outbound .permission-btn.primary {
+  background: var(--cloud);
+  border-color: var(--cloud);
+}
 .permission-queue {
   font-family: var(--font-sans);
   font-size: var(--fs-footnote);
@@ -156,4 +206,18 @@
     width: 100%;
     top: 42px;
   }
+}
+
+/* MCG-7: what each app tool in the request is taken to do, correctable here. */
+.permission-kinds {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: -12px 0 20px;
+}
+.permission-kinds-note {
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+  margin: 0;
 }

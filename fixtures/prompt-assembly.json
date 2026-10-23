@@ -33,29 +33,7 @@
       "when_to_use": "when the user asks for less"
     }
   ],
-  "blocks": [
-    {
-      "id": "blk_plan",
-      "title": "Ship it",
-      "kind": "plan",
-      "data_json": "{\"steps\":[{\"id\":\"1\",\"status\":\"done\"},{\"id\":\"2\",\"status\":\"todo\"},{\"id\":\"3\",\"status\":\"todo\"}]}",
-      "state_json": "{\"checked\":{\"2\":\"done\"}}"
-    },
-    {
-      "id": "blk_cmp",
-      "title": "Which laptop",
-      "kind": "comparison",
-      "data_json": "{\"options\":[{\"name\":\"a\"},{\"name\":\"b\"}]}",
-      "state_json": null
-    },
-    {
-      "id": "blk_doc",
-      "title": "Notes",
-      "kind": "document",
-      "data_json": "{\"body\":\"hello\"}",
-      "state_json": null
-    }
-  ],
+  "workspace": true,
   "surface": {
     "data_json": "{\"type\":\"stack\",\"children\":[{\"type\":\"text\",\"value\":\"hi\"}]}",
     "state_json": "{\"zebra\":true,\"apple\":\"picked\"}"

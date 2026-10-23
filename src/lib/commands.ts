@@ -8,9 +8,12 @@
  * run — the two never share an item.
  */
 import manifest from "../../shared/commands.json";
+import apps from "../../shared/apps.json";
+import { watchSignIn } from "./signin";
 import { cloudTarget, useAppStore, type AppState } from "./store";
 import * as api from "./api";
 import { ranked } from "./fuzzy";
+import { EFFORTS } from "./effort";
 import { scheduleDraft } from "./when";
 import { parseGoalArgs } from "./goal";
 import { openVoice } from "./voice/controller";
@@ -27,18 +30,23 @@ export type CommandSection =
   | "work"
   | "inspect"
   | "skills";
-export type ArgSource = "effort" | "personas" | "models" | "turns" | "facts" | "skills" | "onoff";
-export type Need = "conv" | "run" | "norun" | "folder" | "changes" | "interrupted" | "turn";
+export type ArgSource = "effort" | "personas" | "models" | "turns" | "facts" | "skills" | "onoff" | "apps" | "agents";
+export type Need = "conv" | "run" | "norun" | "folder" | "changes" | "interrupted" | "turn" | "engines";
 
 export interface CommandArgs {
   type: "none" | "text" | "choice" | "number";
   hint?: string;
   required?: boolean;
   source?: ArgSource;
+  /** An optional first word chosen from a source, then free text: `/delegate
+   * [agent] task` (`CLI-UI-6`). */
+  lead?: ArgSource;
 }
 
 export interface CommandSpec {
   name: string;
+  /** What the menu calls it. The name is for typing; this is for reading. */
+  title: string;
   aliases: string[];
   section: CommandSection;
   kind: CommandKind;
@@ -74,10 +82,12 @@ export type CommandResult =
   /** A chip for the next message; the input is cleared. With `send`, the words
    * after the argument go out as the message at once (`/plan add dark mode`). */
   | { kind: "modifier"; send?: string }
-  /** A skill command: send this as the user's message. */
-  | { kind: "send"; text: string; skill?: string; skillArgs?: string }
-  /** The command needs an argument the user has not given: back to the argument phase. */
-  | { kind: "needsArg"; message?: string }
+  /** A skill command: send this as the user's message. `delegateTo` is the agent
+   * `/delegate` named. */
+  | { kind: "send"; text: string; skill?: string; skillArgs?: string; delegateTo?: string }
+  /** The command needs an argument the user has not given: back to the argument
+   * phase, with `keep` (an agent already named) left in the box. */
+  | { kind: "needsArg"; message?: string; keep?: string }
   /** Ask first, then run. */
   | { kind: "confirm"; title: string; body?: string; confirmLabel: string; run: () => Promise<CommandResult | void> }
   /** `/help`: open the whole menu. */
@@ -97,19 +107,20 @@ export const SECTION_ORDER: CommandSection[] = [
 ];
 
 export const SECTION_LABEL: Record<CommandSection, string> = {
-  turn: "This turn",
-  conversation: "Conversation",
-  me: "Me",
-  modes: "Modes and persona",
-  agents: "Agents and time",
-  create: "Create",
-  work: "Work",
-  inspect: "Inspect",
+  turn: "This message",
+  conversation: "This chat",
+  me: "What I know",
+  modes: "How I work",
+  agents: "Helpers and later",
+  create: "Make something",
+  work: "Your project",
+  inspect: "Look inside",
   skills: "My skills",
 };
 
 export const SPECS: CommandSpec[] = (manifest as unknown as CommandSpec[]).map((c) => ({
   ...c,
+  title: c.title ?? c.name,
   aliases: c.aliases ?? [],
   needs: c.needs ?? [],
 }));
@@ -163,6 +174,11 @@ function unmet(need: Need, s: AppState): { reason: string; hide: boolean } | nul
     }
     case "turn":
       return answers(s).length > 0 ? null : { reason: "nothing to go on yet", hide: false };
+    case "engines":
+      // Only worth a line in the menu once an agent app can take a job.
+      return s.engines.some((e) => e.enabled && e.delegate_ready)
+        ? null
+        : { reason: "No external agents are set up. See Settings → External agents.", hide: true };
   }
 }
 
@@ -197,6 +213,7 @@ export function commandViews(s: AppState): CommandView[] {
   for (const sk of skills) {
     views.push({
       name: sk.name,
+      title: sk.name,
       aliases: [],
       section: "skills",
       kind: "skill",
@@ -224,6 +241,7 @@ export function commandViews(s: AppState): CommandView[] {
     taken.add(name.toLowerCase());
     views.push({
       name,
+      title: name,
       aliases: [],
       section: "skills",
       kind: "skill",
@@ -302,7 +320,7 @@ export const visibleViews = (views: CommandView[]) => views.filter((v) => !v.hid
 export function rankCommands(views: CommandView[], query: string): CommandView[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return views;
-  const byName = ranked(views, (v) => v.name, words, 100);
+  const byName = ranked(views, (v) => `${v.name} ${v.title}`, words, 100);
   const rest = views.filter((v) => !byName.includes(v));
   const byAlias = ranked(rest, (v) => v.aliases.join(" "), words, 100);
   const rest2 = rest.filter((v) => !byAlias.includes(v));
@@ -330,14 +348,18 @@ export interface ArgChoice {
   value: string;
   label: string;
   hint?: string;
+  /** Why it cannot be chosen right now. Shown in place of the hint. */
+  disabledReason?: string;
+  /** For an agent app: choosing it when it is off opens its settings. */
+  engineId?: string;
 }
 
-export const EFFORT_CHOICES: ArgChoice[] = [
-  { value: "off", label: "Off", hint: "answer straight away" },
-  { value: "low", label: "Low", hint: "a moment's thought" },
-  { value: "medium", label: "Medium", hint: "a few moving parts" },
-  { value: "high", label: "High", hint: "slow and costly" },
-];
+/** The same levels, labels and hints as the model picker's thinking control. */
+export const EFFORT_CHOICES: ArgChoice[] = EFFORTS.map(({ value, label, hint }) => ({
+  value,
+  label,
+  hint,
+}));
 
 export function isChatModel(m: Model): boolean {
   return !m.modality || m.modality === "chat";
@@ -372,6 +394,22 @@ export function argChoices(
       const sorted = [...chat].sort((a, b) => Number(favourites.has(b.id)) - Number(favourites.has(a.id)));
       return filter(sorted.map((m) => ({ value: m.name, label: m.name, hint: m.provenance })));
     }
+    case "apps":
+      return filter(appChoices(s));
+    case "agents": {
+      // Only what the typed first word is the start of, or is inside: a task's
+      // first word must not turn into an agent by fuzzy luck.
+      const t = typed.trim().toLowerCase();
+      return s.delegateTargets
+        .map((a) => ({
+          value: a.slug,
+          label: a.name,
+          hint: a.hint,
+          disabledReason: a.disabled_reason ?? undefined,
+          engineId: a.engine_id ?? undefined,
+        }))
+        .filter((c) => !t || c.value.includes(t) || c.label.toLowerCase().includes(t));
+    }
     case "skills":
       return filter(
         s.skills
@@ -397,6 +435,41 @@ export function argChoices(
   }
 }
 
+/** `/connect`'s choices: the common apps, with a note on the ones already in.
+ * Any other app Composio has can still be typed by its name. */
+function appChoices(s: AppState): ArgChoice[] {
+  const connected = new Map<string, number>();
+  for (const a of s.appAccounts) if (a.status === "ACTIVE") connected.set(a.app, (connected.get(a.app) ?? 0) + 1);
+  const all = (apps.apps as { slug: string; label: string; category: string }[]).map((a) => ({
+    value: a.slug,
+    label: a.label,
+    hint: connected.has(a.slug) ? `connected · ${connected.get(a.slug)}` : a.category,
+  }));
+  // An app connected but not on the common list (learned from use, or signed in
+  // elsewhere) is offered too (`CAP-C-F5`).
+  const known = new Set(all.map((a) => a.value));
+  const extra = s.appAccounts
+    .filter((a) => a.status === "ACTIVE" && !known.has(a.app))
+    .filter((a, i, list) => list.findIndex((b) => b.app === a.app) === i)
+    .map((a) => ({
+      value: a.app,
+      label: a.app_name,
+      hint: `connected · ${connected.get(a.app) ?? 1}`,
+    }));
+  // The ones already in come first: adding a second account is the common case.
+  return [...extra, ...all.filter((a) => connected.has(a.value)), ...all.filter((a) => !connected.has(a.value))];
+}
+
+/** The slug an app was typed as: a slug itself, or a name from the common list. */
+function appSlug(typed: string): { slug: string; name: string } | null {
+  const t = typed.trim().toLowerCase();
+  if (!t) return null;
+  const list = apps.apps as { slug: string; label: string }[];
+  const known = list.find((a) => a.slug === t || a.label.toLowerCase() === t);
+  if (known) return { slug: known.slug, name: known.label };
+  return /^[a-z0-9_-]+$/.test(t) ? { slug: t, name: t } : null;
+}
+
 /** The persisted messages you wrote in the active chat, newest first. */
 export function userTurns(s: AppState) {
   const conv = s.conversations.find((c) => c.id === s.activeConversationId);
@@ -410,9 +483,98 @@ function preview(text: string): string {
   return first.length > 48 ? `${first.slice(0, 47).trimEnd()}…` : first;
 }
 
+// ---- live controls ----
+//
+// A few commands are a setting more than an action: a switch, or one choice out
+// of a short list. The menu shows their current state on the row and changes it
+// in place, without closing. Each one still goes through the command's own
+// handler, so the typed `/tools off` and the click do exactly the same thing.
+
+export type LiveControl =
+  /** On or off. */
+  | { kind: "switch"; on: boolean }
+  /** A few choices that fit on the row. `value` is the one in force, if any. */
+  | { kind: "segments"; options: ArgChoice[]; value: string | null }
+  /** Too many to fit: the row names the current one and opens a list. */
+  | { kind: "pick"; options: ArgChoice[]; value: string | null; current: string };
+
+const STEP_CHOICES: ArgChoice[] = ["5", "10", "25", "50"].map((n) => ({ value: n, label: n }));
+
+/** The state behind a command's control, or `null` when it has none.
+ *
+ * `effort` is the level in force: the chip for this message, else the stored
+ * default, which lives in settings rather than the store. The model dialog shows
+ * that same level, so the row must too. */
+export function controlFor(name: string, s: AppState, now?: { effort?: string }): LiveControl | null {
+  switch (name) {
+    case "workspace":
+      return { kind: "switch", on: s.workspaceMode };
+    case "tools":
+      return { kind: "switch", on: s.toolsEnabled };
+    case "external":
+      return { kind: "switch", on: !s.conversations.find((c) => c.id === s.activeConversationId)?.enginesOff };
+    case "plan":
+      return { kind: "switch", on: !!s.turnModifiers.planFirst };
+    case "effort":
+      return {
+        kind: "segments",
+        options: EFFORT_CHOICES,
+        value: s.turnModifiers.effort ?? now?.effort ?? null,
+      };
+    case "steps":
+      return {
+        kind: "segments",
+        options: STEP_CHOICES,
+        value: s.turnModifiers.maxSteps ? String(s.turnModifiers.maxSteps) : null,
+      };
+    case "persona": {
+      const options = argChoices("personas", "", s);
+      const id = s.conversations.find((c) => c.id === s.activeConversationId)?.personaId;
+      const name = s.personas.find((p) => p.id === id)?.name ?? null;
+      return { kind: "pick", options, value: name ?? "none", current: name ?? "No persona" };
+    }
+    case "model": {
+      const options = argChoices("models", "", s);
+      const model = s.models.find((m) => m.id === s.selectedModelId);
+      return { kind: "pick", options, value: model?.name ?? null, current: model?.name ?? "Not chosen" };
+    }
+    default:
+      return null;
+  }
+}
+
+/** Change a control's setting. A switch takes `on` or `off`; a choice takes one of
+ * its values, and the one already in force takes the chip off again. */
+export async function applyControl(name: string, value: string, s: AppState): Promise<CommandResult> {
+  const control = controlFor(name, s);
+  if (!control) return fail(`I can't change ${name} from here.`);
+  try {
+    if (name === "plan") {
+      if (value === "off") {
+        s.clearTurnModifier("planFirst");
+        return done();
+      }
+      return await HANDLERS.plan("", s);
+    }
+    // Tapping the chip that is already set takes it off. The stored default is
+    // not a chip: tapping it sets one, like any other level.
+    if (name === "effort" && s.turnModifiers.effort === value) {
+      s.clearTurnModifier("effort");
+      return done();
+    }
+    if (name === "steps" && String(s.turnModifiers.maxSteps) === value) {
+      s.clearTurnModifier("maxSteps");
+      return done();
+    }
+    return await HANDLERS[name](value, s);
+  } catch (e) {
+    return fail(String(e));
+  }
+}
+
 // ---- handlers ----
 
-type Handler = (args: string, s: AppState) => Promise<CommandResult> | CommandResult;
+type Handler =(args: string, s: AppState) => Promise<CommandResult> | CommandResult;
 
 const done = (note?: string): CommandResult => ({ kind: "done", note });
 const fail = (message: string): CommandResult => ({ kind: "error", message });
@@ -458,7 +620,7 @@ export const HANDLERS: Record<string, Handler> = {
     const { head, tail } = splitFirst(args);
     const v = head.toLowerCase();
     if (!v) return { kind: "needsArg" };
-    if (!EFFORT_CHOICES.some((c) => c.value === v)) return fail("Say off, low, medium or high.");
+    if (!EFFORT_CHOICES.some((c) => c.value === v)) return fail("Say off, low, medium, high or provider.");
     s.setTurnModifier({ effort: v });
     return { kind: "modifier", send: tail || undefined };
   },
@@ -568,9 +730,9 @@ export const HANDLERS: Record<string, Handler> = {
     s.openContextPanel({ conversationId: id, messageId: last.id });
     return done();
   },
-  talk: (_args, s) => {
-    // `VOC-UI-2`: voice mode lives over the chat, so the mic is always seen (VXP-3).
-    if (s.workspaceMode) return fail("Voice opens in the chat view. Leave workspace mode first.");
+  talk: () => {
+    // `VOC-UI-2`: voice mode lives over the chat, so the mic is always seen
+    // (VXP-3). In a workspace chat `openVoice` steps out to the chat view first.
     // The voice surface says itself what is missing or went wrong.
     void openVoice();
     return done();
@@ -686,10 +848,15 @@ export const HANDLERS: Record<string, Handler> = {
   workspace: (args, s) => {
     const want = onOff(args);
     if (want === "bad") return fail("Say on or off.");
+    // The mode can be on with the message stream showing. Asking for the
+    // workspace then brings the canvas back rather than switching the mode off.
+    if (s.workspaceMode && !s.workspaceShown && want !== false) {
+      s.setWorkspaceShown(true);
+      return done("opened the Workspace");
+    }
     const next = want === null ? !s.workspaceMode : want;
+    // Turning it on turns tools on too: Workspace needs `render_ui`.
     s.setWorkspaceMode(next);
-    // Workspace needs `render_ui`, so turning it on turns tools on too.
-    if (next) s.setToolsEnabled(true);
     return done(next ? "turned Workspace mode on" : "turned Workspace mode off");
   },
   tools: (args, s) => {
@@ -699,6 +866,17 @@ export const HANDLERS: Record<string, Handler> = {
     if (!want && s.workspaceMode) return fail("Workspace mode needs my tools. Turn it off first.");
     s.setToolsEnabled(want);
     return done(want ? "let me use my tools" : "took my tools away");
+  },
+  external: async (args, s) => {
+    // `CLI-UI-6`: this chat only. The agent apps stay set up; this chat stops
+    // handing work to them.
+    const id = activeId(s);
+    if (!id) return fail("Start a conversation first.");
+    const want = onOff(args);
+    if (want === null) return { kind: "needsArg" };
+    if (want === "bad") return fail("Say on or off.");
+    await s.setEnginesOff(id, !want);
+    return done(want ? "let me hand work to external agents again" : "stopped handing work to external agents in this chat");
   },
   persona: async (args, s) => {
     const id = activeId(s);
@@ -821,15 +999,64 @@ export const HANDLERS: Record<string, Handler> = {
     s.setView("activity");
     return done();
   },
+  apps: (_args, s) => {
+    s.setView("apps");
+    return done();
+  },
+  // `CA-UI-7`: sign in to an app from the menu. The sign-in opens in the browser;
+  // the toast says when it is done. Asking me to connect one in a message does the
+  // same thing through a card in the chat.
+  connect: async (args, s) => {
+    const { head, tail } = splitFirst(args);
+    const app = appSlug(head);
+    if (!head) return { kind: "needsArg" };
+    if (!app) return fail(`I don't know an app called ${head}. Browse the apps under Apps.`);
+    try {
+      const status = await api.composioStatus();
+      if (!status.configured) {
+        s.setView("apps");
+        return fail("Add your Composio key under Apps first, then I can connect apps.");
+      }
+      // A Connect key has no labels: anything typed after the app is ignored.
+      const account = await api.composioConnect(app.slug, status.mode === "connect" ? undefined : tail || undefined);
+      void s.refreshApps();
+      if (account.status === "ACTIVE") return done(`${account.app_name || app.name} is connected already`);
+      watchSignIn(account);
+      return done(`opened ${account.app_name || app.name}'s sign-in in your browser`);
+    } catch (e) {
+      return fail(String(e).replace(/^Error:\s*/, ""));
+    }
+  },
   help: () => ({ kind: "help" }),
 };
+
+/** `claude-code fix the tests` → the agent named first, and the task after it.
+ * A first word that is no agent's name is part of the task. */
+export function splitLead(
+  args: string,
+  targets: api.DelegateTarget[]
+): { agent: api.DelegateTarget | null; task: string } {
+  const text = args.trim();
+  const m = /^(\S+)(?:\s+([\s\S]*))?$/.exec(text);
+  const agent = m ? targets.find((t) => t.slug === m[1].toLowerCase()) : undefined;
+  return agent && m ? { agent, task: (m[2] ?? "").trim() } : { agent: null, task: text };
+}
 
 /** The message a skill command goes out as: just the words after it, or
  * `Run /name` when there are none. The skill body itself is loaded by the
  * backend before the first token, from `skill` and `skillArgs`. */
-function skillSend(cmd: ParsedCommand): CommandResult {
+async function skillSend(cmd: ParsedCommand, s: AppState): Promise<CommandResult> {
   const args = cmd.args.trim();
   if (cmd.spec.args.required && !args) return { kind: "needsArg" };
+  // `/delegate [agent] task`: a first word that names an agent here chooses it.
+  if (cmd.spec.args.lead === "agents") {
+    const { agent, task } = splitLead(args, await s.loadDelegateTargets());
+    if (agent) {
+      if (agent.disabled_reason) return fail(`${agent.name} can't take this: ${agent.disabled_reason.toLowerCase()}.`);
+      if (!task) return { kind: "needsArg", message: `What should ${agent.name} do?`, keep: agent.slug };
+      return { kind: "send", text: task, skill: cmd.name, skillArgs: task, delegateTo: agent.slug };
+    }
+  }
   return {
     kind: "send",
     text: args || `Run /${cmd.name}`,
@@ -877,7 +1104,7 @@ export async function runCommand(cmd: ParsedCommand, s: AppState): Promise<Comma
   // `SKC-2`: a skill command sends a message with that skill preloaded, so the
   // model is not trusted to call `skill` itself.
   if (cmd.spec.source === "mcp") return mcpSend(cmd);
-  if (cmd.spec.kind === "skill") return skillSend(cmd);
+  if (cmd.spec.kind === "skill") return skillSend(cmd, s);
   const handler = HANDLERS[cmd.name];
   if (!handler) return fail(`I don't know how to run /${cmd.name} yet.`);
   try {

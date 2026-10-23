@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import * as api from "../lib/api";
 import { inTauri } from "../lib/api";
+import { paidByLabel } from "../lib/engines";
 import { useAppStore } from "../lib/store";
 import "./Usage.css";
 
@@ -42,10 +44,34 @@ function priceLine(row: api.UsageBucket): string {
 /** Not every provider reports what a turn used — several free tiers report
  * nothing at all. The run still happened and is still counted; saying
  * "0 in · 0 out" would claim a measurement we never got. */
-function tokenLine(row: api.UsageBucket): string {
+function tokenLine(row: { prompt_tokens: number; output_tokens: number }): string {
   if (row.prompt_tokens === 0 && row.output_tokens === 0)
     return "tokens not reported";
   return `${tokens(row.prompt_tokens)} in · ${tokens(row.output_tokens)} out`;
+}
+
+function duration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m} min ${s % 60} s` : `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+/** An agent app's money column: who paid, then what it says the jobs would have
+ * cost at list prices. That figure is grey on purpose: on a plan nothing is
+ * charged per job, and it is in none of the totals. */
+function appCost(row: api.AgentAppUsage): { paid: string; list: string | null; tip: string } {
+  const paid = row.paid_by === "mixed" ? "plan and key" : (paidByLabel(row.paid_by) ?? "payer unknown");
+  const list = row.notional_usd === null ? null : `≈ ${money(row.notional_usd)} at list prices`;
+  const tip =
+    row.paid_by === "plan"
+      ? `Reported by ${row.name}. On your plan this isn't charged per job.`
+      : row.paid_by === "api-key"
+        ? `Reported by ${row.name}. This is billed to the API key you gave it, not through me.`
+        : row.paid_by === "mixed"
+          ? `Reported by ${row.name}. Some jobs ran on your plan and some on a key.`
+          : `Reported by ${row.name}. It is not billed through me.`;
+  return { paid, list, tip: list === null ? `${row.name} doesn't report a price.` : tip };
 }
 
 function Rows({
@@ -103,8 +129,26 @@ export default function Usage() {
     };
   }, [days]);
 
+  // `CA-UI-8`: calls that connected apps ran. A count only: Composio bills per call
+  // against the person's own plan, and I don't know their rate.
+  const [appCalls, setAppCalls] = useState<api.AppUsage[]>([]);
+  useEffect(() => {
+    if (!inTauri()) return;
+    let live = true;
+    api
+      .composioUsage(days)
+      .then((rows) => live && setAppCalls(rows))
+      .catch(() => live && setAppCalls([]));
+    return () => {
+      live = false;
+    };
+  }, [days]);
+  const appCallTotal = appCalls.reduce((n, r) => n + r.calls, 0);
+
   const total = data?.total;
   const hasAnything = (total?.runs ?? 0) > 0;
+  const agentApps = data?.agent_apps ?? [];
+  const hasApps = agentApps.length > 0;
 
   return (
     // The same shell every other tab in the hub uses (`.surface` /
@@ -138,7 +182,7 @@ export default function Usage() {
         {/* Three ledgers each saying "nothing yet" is not an empty state, it is
           three empty tables. When there is genuinely nothing, say what this
           page is for and why it might be blank. */}
-        {!failed && data && !hasAnything && (
+        {!failed && data && !hasAnything && !hasApps && (
           <div className="usage-blank">
             <p>
               Nothing to show for this range. Once you have used the agent, this
@@ -237,6 +281,57 @@ export default function Usage() {
               )}
             </section>
           </>
+        )}
+
+        {hasApps && (
+          <section className="usage-section" aria-label="Agent apps">
+            <h3>Agent apps</h3>
+            <p className="usage-empty">
+              Jobs I handed to apps on your computer. They are paid for by the app's own plan or key,
+              so they are not in the totals above.
+            </p>
+            <div className="usage-rows">
+              {agentApps.map((row) => {
+                const cost = appCost(row);
+                return (
+                  <div className="usage-row usage-app" key={row.name}>
+                    <span className="usage-name">{row.name}</span>
+                    <span className="usage-runs">
+                      {row.runs} {row.runs === 1 ? "job" : "jobs"} · {duration(row.duration_ms)}
+                    </span>
+                    <span className="usage-tokens">{tokenLine(row)}</span>
+                    <span className="usage-cost" title={cost.tip}>
+                      {cost.paid}
+                      {cost.list && <span className="usage-notional"> · {cost.list}</span>}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {appCallTotal > 0 && (
+          <section className="usage-section">
+            <h3>Connected apps</h3>
+            <p className="usage-empty">
+              {appCallTotal} {appCallTotal === 1 ? "call" : "calls"} in this range. Composio counts these against your
+              own plan.{" "}
+              <button className="link-button inline" onClick={() => void openUrl("https://platform.composio.dev")}>
+                See Composio's own count →
+              </button>
+            </p>
+            <div className="usage-rows">
+              {appCalls.map((r) => (
+                <div className="usage-row" key={r.app}>
+                  <span className="usage-name">{r.app_name}</span>
+                  <span className="usage-runs">
+                    {r.calls} {r.calls === 1 ? "call" : "calls"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
         )}
 
         <p className="usage-note">

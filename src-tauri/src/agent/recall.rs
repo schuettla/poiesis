@@ -121,6 +121,48 @@ pub async fn execute(
     }
 }
 
+/// The search itself, apart from the run that asked: the matches, and the text a
+/// model reads for them. An agent app's `recall` (`MCPS-2`) runs the same query.
+pub fn search_text(db: &crate::db::Db, query: &str, limit: usize) -> Result<(Vec<crate::db::SearchHit>, String), String> {
+    let limit = limit.clamp(1, MAX_LIMIT);
+    let mut hits = db.search_messages_fts(query, limit).map_err(|e| e.to_string())?;
+    hits.extend(db.search_memory_fts(query, limit).map_err(|e| e.to_string())?);
+    hits.truncate(limit);
+
+    if hits.is_empty() {
+        return Ok((hits, format!("No matches for '{query}' in past conversations or saved memories.")));
+    }
+    let mut out = String::new();
+    for (i, h) in hits.iter().enumerate() {
+        out.push_str(&format!(
+            "{}. [{} · {} · \"{}\"] {}
+",
+            i + 1,
+            h.source,
+            as_date(h.created_at),
+            h.title,
+            clip(&h.snippet, 200)
+        ));
+    }
+    out.push_str("Use read_conversation(conversation_id) for more.");
+    Ok((hits, truncate(out, SEARCH_OUTPUT_CAP)))
+}
+
+/// A short window of one past conversation, as text.
+pub fn window_text(db: &crate::db::Db, id: &str) -> Result<String, String> {
+    let messages = db.list_messages_window(id, WINDOW_TURNS).map_err(|e| e.to_string())?;
+    if messages.is_empty() {
+        return Err("No conversation with that id, or it has no messages.".into());
+    }
+    let body = messages
+        .iter()
+        .map(|m| format!("{}: {}", m.role, clip(&m.content, WINDOW_MESSAGE_CAP)))
+        .collect::<Vec<_>>()
+        .join("
+");
+    Ok(truncate(body, READ_OUTPUT_CAP))
+}
+
 fn search_history(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
     let query = args
         .get("query")
@@ -132,39 +174,19 @@ fn search_history(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
         .get("limit")
         .and_then(|l| l.as_u64())
         .map(|l| l as usize)
-        .unwrap_or(DEFAULT_LIMIT)
-        .clamp(1, MAX_LIMIT);
+        .unwrap_or(DEFAULT_LIMIT);
 
-    let mut hits = ctx.db.search_messages_fts(query, limit).map_err(|e| e.to_string())?;
-    hits.extend(ctx.db.search_memory_fts(query, limit).map_err(|e| e.to_string())?);
-    hits.truncate(limit);
+    let (hits, text) = search_text(ctx.db, query, limit)?;
 
     // The user sees what was searched and what came back, with provenance.
     ctx.sink.emit(AgentEvent::Recall {
         id: ctx.call_id.to_string(),
-        matches: hits.clone(),
+        matches: hits,
     });
     let _ = ctx
         .db
         .log_activity(Some(ctx.conversation_id), "recall", &format!("searched history: {query}"));
-
-    if hits.is_empty() {
-        return Ok(format!("No matches for '{query}' in past conversations or saved memories."));
-    }
-
-    let mut out = String::new();
-    for (i, h) in hits.iter().enumerate() {
-        out.push_str(&format!(
-            "{}. [{} · {} · \"{}\"] {}\n",
-            i + 1,
-            h.source,
-            as_date(h.created_at),
-            h.title,
-            clip(&h.snippet, 200)
-        ));
-    }
-    out.push_str("Use read_conversation(conversation_id) for more.");
-    Ok(truncate(out, SEARCH_OUTPUT_CAP))
+    Ok(text)
 }
 
 fn read_conversation(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
@@ -174,18 +196,7 @@ fn read_conversation(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .ok_or("missing 'conversation_id' argument")?;
-
-    let messages = ctx.db.list_messages_window(id, WINDOW_TURNS).map_err(|e| e.to_string())?;
-    if messages.is_empty() {
-        return Err("No conversation with that id, or it has no messages.".into());
-    }
-
-    let body = messages
-        .iter()
-        .map(|m| format!("{}: {}", m.role, clip(&m.content, WINDOW_MESSAGE_CAP)))
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok(truncate(body, READ_OUTPUT_CAP))
+    window_text(ctx.db, id)
 }
 
 #[cfg(test)]

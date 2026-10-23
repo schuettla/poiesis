@@ -36,8 +36,8 @@ pub struct ChatTarget {
 /// Everything a turn needs to know about *where* it runs, resolved once. Shared
 /// by the ordinary turn and by resume, so a resumed run cannot quietly land on
 /// a different model than the run it is continuing.
-struct TurnSetup {
-    endpoint: ChatEndpoint,
+pub(crate) struct TurnSetup {
+    pub(crate) endpoint: ChatEndpoint,
     local_endpoint: Option<ChatEndpoint>,
     model_name: String,
     context_window: Option<usize>,
@@ -45,7 +45,7 @@ struct TurnSetup {
 
 /// Resolve where this turn runs: the local engine, a cloud provider (CLD-3), or
 /// a user's own connected server. `Err` carries a message meant for the user.
-async fn resolve_turn(
+pub(crate) async fn resolve_turn(
     mgr: &RuntimeManager,
     db: &Db,
     target: &ChatTarget,
@@ -270,6 +270,14 @@ pub async fn resume_run_cmd(
     };
     let mut msgs = crate::agent::log::replay(&db, &run_id);
     if msgs.is_empty() {
+        return Ok(false);
+    }
+    // `LRN-2`: never do again what has already left the machine. The model would
+    // be told not to repeat its work, but "not to" is a request; this is a refusal.
+    if let Some(what) = crate::agent::log::outward_done(&db, &run_id) {
+        // Said as the reply, not as an error: nothing failed, and the store would
+        // put "That didn't work:" in front of an `Error`.
+        let _ = on_event.send(AgentEvent::Token { text: crate::agent::log::cut_off_after(&what) });
         return Ok(false);
     }
     msgs.push(serde_json::json!({

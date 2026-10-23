@@ -152,6 +152,17 @@ describe("after it ends", () => {
     expect(container.querySelector<HTMLButtonElement>(".run-bar-link")?.title).toBe("2 tests still fail");
   });
 
+  it("stalled (LRN-1): says so, and the reason is the title", () => {
+    put({
+      runSummaries: { [CONV]: summary({ live: false, stopReason: "completed" }) },
+      goals: { [CONV]: goal({ status: "stalled", stalled: "I stopped after three identical errors: boom" }) },
+    });
+    expect(line()).toContain("stalled");
+    expect(container.querySelector<HTMLButtonElement>(".run-bar-link")?.title).toBe(
+      "I stopped after three identical errors: boom"
+    );
+  });
+
   it("stopped: says so, plainly", () => {
     put({
       runSummaries: { [CONV]: summary({ live: false, stopReason: "aborted" }) },

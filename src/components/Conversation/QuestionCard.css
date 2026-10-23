@@ -71,11 +71,4 @@
 .question-card-input {
   flex: 1;
   min-width: 0;
-  padding: 6px 8px;
-  font: inherit;
-  font-size: var(--fs-ui);
-  color: var(--ink);
-  background: none;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
 }

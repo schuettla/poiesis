@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::cloud::pricing;
-use crate::db::{Db, UsageBucket, UsageSummary};
+use crate::db::{AgentAppBucket, Db, UsageBucket, UsageSummary};
 use crate::PoiesisError;
 
 /// A bucket with money attached where we know the price.
@@ -27,6 +27,9 @@ pub struct PricedUsage {
     pub by_day: Vec<PricedBucket>,
     pub by_model: Vec<PricedBucket>,
     pub by_conversation: Vec<PricedBucket>,
+    /// `CLI-UI-7`: jobs done by agent apps. Their cost, where they report one, is
+    /// notional and is in none of the totals above.
+    pub agent_apps: Vec<AgentAppBucket>,
     /// True when at least one bucket has no price, so the UI can say why the
     /// total is a floor rather than a figure.
     pub some_prices_unknown: bool,
@@ -48,7 +51,7 @@ fn price(bucket: UsageBucket, by_model: bool) -> PricedBucket {
 pub fn usage_summary_cmd(db: State<'_, Db>, days: Option<i64>) -> Result<PricedUsage, PoiesisError> {
     let days = days.unwrap_or(30).clamp(1, 365);
     let since = crate::db::now_ms() - days * 86_400_000;
-    let UsageSummary { total, by_day, by_model, by_conversation } = db
+    let UsageSummary { total, by_day, by_model, by_conversation, agent_apps } = db
         .usage_summary(since)
         .map_err(|e| PoiesisError::Message(e.to_string()))?;
 
@@ -69,6 +72,7 @@ pub fn usage_summary_cmd(db: State<'_, Db>, days: Option<i64>) -> Result<PricedU
         by_day: by_day.into_iter().map(|b| price(b, false)).collect(),
         by_model,
         by_conversation: by_conversation.into_iter().map(|b| price(b, false)).collect(),
+        agent_apps,
         some_prices_unknown,
     })
 }

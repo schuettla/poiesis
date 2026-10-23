@@ -34,12 +34,6 @@ pub struct McpToolAnnotations {
 }
 
 impl McpTool {
-    /// `PLF-1`: only a tool whose server said it changes nothing may run while
-    /// the agent is planning first.
-    pub fn is_read_only(&self) -> bool {
-        self.annotations.as_ref().and_then(|a| a.read_only_hint) == Some(true)
-    }
-
     /// Convert to the OpenAI-compatible function-tool schema the engine expects.
     pub fn to_openai_spec(&self) -> serde_json::Value {
         let params = if self.input_schema.is_object() {

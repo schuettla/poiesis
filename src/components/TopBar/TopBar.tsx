@@ -3,6 +3,7 @@ import { HUB_SECTIONS } from "../../lib/types";
 import { MessageIcon, SidebarIcon } from "../Icons/Icons";
 import PoiesisMark from "../Mark/PoiesisMark";
 import MicIndicator from "../Voice/MicIndicator";
+import WorkspaceSwitch from "../Workspace/WorkspaceSwitch";
 import TabStrip from "./TabStrip";
 import WindowControls, { framelessWindow, onTitleBarMouseDown } from "./WindowControls";
 import "./TopBar.css";
@@ -128,6 +129,7 @@ export default function TopBar() {
       </div>
       {strip ? <TabStrip /> : <Location />}
       <div className="topbar-right">
+        <WorkspaceSwitch />
         <MicIndicator />
         <WorkbenchToggle />
       </div>

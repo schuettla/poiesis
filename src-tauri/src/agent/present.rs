@@ -1,20 +1,20 @@
-//! Built-in Present toolset (Generative UI). The model calls `present` to render a
-//! typed, interactive workspace block — a comparison table, checklist, form,
-//! progress meter, collection, or document reference — inline in the assistant
-//! turn instead of describing data in prose. It calls `remember` to update the
-//! conversation's durable session state (entities/constraints/decisions).
+//! Built-in Present toolset (Generative UI). The model calls `render_ui` to compose
+//! the live interface of a Workspace chat as a tree of primitive nodes, and
+//! `remember` to update the conversation's durable session state
+//! (entities/constraints/decisions).
+//!
+//! There used to be a second tool, `present`, that drew one of seven fixed block
+//! kinds into the message stream. It overlapped `render_ui` and is gone: the
+//! blocks other tools still leave (a build's diagnostics) and the ones already
+//! stored are drawn by the frontend as before, but the model can no longer make
+//! new ones.
 //!
 //! Both tools return only a short receipt to the model so a large payload doesn't
-//! bloat the context window; the block/state itself streams to the UI via the
+//! bloat the context window; the surface/state itself streams to the UI via the
 //! event sink.
 
 use super::toolsets::ToolContext;
 use crate::db::Db;
-
-/// The block kinds the renderer understands. `diagnostics` is `COD-UI-3`: a
-/// compiler's or test runner's findings, shown as rows grouped by file rather
-/// than described in prose.
-const KINDS: [&str; 7] = ["comparison", "collection", "plan", "form", "progress", "document", "diagnostics"];
 
 /// Cap on the serialized session state, so it can't grow unbounded in context.
 const STATE_CAP_BYTES: usize = 4096;
@@ -34,25 +34,8 @@ pub fn tool_specs() -> serde_json::Value {
         {
             "type": "function",
             "function": {
-                "name": "present",
-                "description": "Show a structured, interactive block inline in the chat instead of describing data in prose. Kinds and their data shapes: comparison {columns:[{id,label}],options:[{id,label,values:{colId:val},pros?,cons?}],recommended_id?} for ranked options; collection {items:[{id,title,subtitle?,tags?,url?,meta?}],facets?:[{id,label}]} for browsable lists; plan {steps:[{id,label,detail?,status:todo|doing|done|blocked}]} for checklists; form {fields:[{id,label,type:text|number|select|multiselect|toggle,options?,required?}],submit_label?} to request structured input from the user; progress {label,current,total,unit?,status:running|done|error,note?} for long tasks; document {artifact_id} or {markdown} for a full document; diagnostics {items:[{file,line?,col?,severity:error|warning|failed,message,code?}]} for errors from a build, type check or test run, instead of listing them in prose. Pass block_id to UPDATE an existing block in place (e.g. mark plan steps done, refresh progress). Prefer a block whenever the user is deciding, choosing, filling in, or tracking something.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "kind": { "type": "string", "enum": ["comparison", "collection", "plan", "form", "progress", "document", "diagnostics"] },
-                        "title": { "type": "string", "description": "Short heading shown above the block" },
-                        "data": { "type": "object", "description": "Block payload per the kind's shape" },
-                        "block_id": { "type": "string", "description": "Omit to create; pass an existing block id to update it in place" }
-                    },
-                    "required": ["kind", "title", "data"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
                 "name": "render_ui",
-                "description": "Compose the live Workspace interface for this conversation. Do not pick from prebuilt widgets — build ANY interface (dashboard, board, wizard, picker, table, tracker) as a tree of primitive nodes. Every node is {type, id?, children?} plus type-specific fields. LAYOUT: stack {direction?:'column'|'row', children}; grid {columns:N, children}; section {title?, children}; divider {}. CONTENT: text {value, variant?:'title'|'heading'|'body'|'caption'|'code'}; metric {label, value, unit?, delta?, intent?:'ok'|'warn'|'danger'}; badge {value, intent?}; progress {label?, value, max?}; link {value, url}. INTERACTIVE: item {title, subtitle?, meta?, selected?, action?, payload?} — a selectable row; choice {bind, options:[{id,label,detail?}], multi?}; input {bind, label?, type?:'text'|'number', placeholder?}; toggle {bind, label}; button {label, action, payload?, style?:'primary'}; form {fields:[{id,label,type:'text'|'number'|'select'|'multiselect'|'toggle',options?,required?,placeholder?}], submit_label?, action?} — a group of labeled fields, each bound by its own id; add a button (or submit_label) to submit them. Fields named 'bind' store the user's edits locally in the surface state (no turn is spent); a node with 'action' sends you a message carrying that action name, its payload, and all bound state. Give an id to any node you may want to revise, then call render_ui with node_id to replace only that subtree (keep the same id on the replacement so it stays addressable); omit node_id to replace the whole surface. The surface is persistent and current — keep it updated as the task evolves instead of narrating in prose.",
+                "description": "Compose the live Workspace interface for this conversation. Do not pick from prebuilt widgets — build ANY interface (dashboard, board, wizard, picker, table, tracker) as a tree of primitive nodes. Every node is {type, id?, children?} plus type-specific fields. LAYOUT: stack {direction?:'column'|'row', children}; grid {columns:N, children}; section {title?, children}; divider {}. CONTENT: text {value, variant?:'title'|'heading'|'body'|'caption'|'code'}; metric {label, value, unit?, delta?, intent?:'ok'|'warn'|'danger'}; badge {value, intent?}; progress {label?, value, max?}; link {value, url}; table {columns:[string], rows:[[string|number]]} for anything compared or listed in columns. INTERACTIVE: item {title, subtitle?, meta?, selected?, action?, payload?} — a selectable row; choice {bind, options:[{id,label,detail?}], multi?}; input {bind, label?, type?:'text'|'number', placeholder?}; toggle {bind, label}; button {label, action, payload?, style?:'primary'}; form {fields:[{id,label,type:'text'|'number'|'select'|'multiselect'|'toggle',options?,required?,placeholder?}], submit_label?, action?} — a group of labeled fields, each bound by its own id; add a button (or submit_label) to submit them. Fields named 'bind' store the user's edits locally in the surface state (no turn is spent); a node with 'action' sends you a message carrying that action name, its payload, and all bound state. A checklist is a stack of toggle nodes, a comparison is a table, a list to choose from is a choice or a set of item rows. Give an id to any node you may want to revise, then call render_ui with node_id to replace only that subtree (keep the same id on the replacement so it stays addressable); omit node_id to replace the whole surface. The surface is persistent and current — keep it updated as the task evolves instead of narrating in prose.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -80,23 +63,24 @@ pub fn tool_specs() -> serde_json::Value {
     ])
 }
 
+/// A chat outside Workspace mode has nowhere to show an interface, so it is not
+/// offered the tool that composes one. `ToolRegistry::build` calls this with the
+/// chat's own flag; the prompt makes the same cut (`PromptInputs::workspace`).
+pub fn withdraw_for_mode(specs: &mut Vec<serde_json::Value>, workspace: bool) {
+    if workspace {
+        return;
+    }
+    specs.retain(|s| s.pointer("/function/name").and_then(|n| n.as_str()) != Some("render_ui"));
+}
+
 /// Is this a Present tool name?
 pub fn handles(name: &str) -> bool {
-    matches!(name, "present" | "remember" | "render_ui")
+    matches!(name, "remember" | "render_ui")
 }
 
 /// Human-readable (verb, target) for the timeline (§5.6 plain past-tense).
 pub fn describe(name: &str, args: &serde_json::Value) -> (String, String) {
     match name {
-        "present" => {
-            let title = args.get("title").and_then(|t| t.as_str()).unwrap_or("block");
-            let verb = if args.get("block_id").and_then(|b| b.as_str()).is_some() {
-                "updated"
-            } else {
-                "presented"
-            };
-            (verb.into(), title.to_string())
-        }
         "render_ui" => {
             let verb = if args.get("node_id").and_then(|n| n.as_str()).is_some() {
                 "revised"
@@ -125,7 +109,6 @@ pub async fn execute(
     args: &serde_json::Value,
 ) -> Result<String, String> {
     match name {
-        "present" => present(ctx, args),
         "remember" => remember(ctx, args),
         "render_ui" => render_ui(ctx, args),
         other => Err(format!("Present toolset can't handle '{other}'.")),
@@ -136,6 +119,19 @@ pub async fn execute(
 /// interface expressed as a tree of primitive nodes, rendered by one recursive
 /// renderer in the Workspace view. Stored as a single reserved blocks row.
 fn render_ui(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
+    // `withdraw_for_mode` keeps the tool off the menu, but a model copying an
+    // older call from history can still name it. Nothing would show what it
+    // wrote, so the call is refused here, where every dispatch passes.
+    let in_mode = ctx
+        .db
+        .get_conversation(ctx.conversation_id)
+        .ok()
+        .flatten()
+        .is_some_and(|c| c.workspace);
+    if !in_mode {
+        return Err("This chat is not in Workspace mode, so there is no interface to compose. Answer in the chat instead.".into());
+    }
+
     let ui = args
         .get("ui")
         .filter(|u| u.is_object())
@@ -162,6 +158,13 @@ fn render_ui(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, 
                 ));
             }
             current
+        }
+        // A patch needs something to patch. Taking the fragment as the whole
+        // surface would wipe out the page the model believes it is revising.
+        (Some(node_id), None) => {
+            return Err(format!(
+                "there is no surface yet, so '{node_id}' cannot be replaced. Call render_ui without node_id to compose the whole interface first."
+            ));
         }
         _ => ui,
     };
@@ -258,7 +261,30 @@ fn count_nodes(tree: &serde_json::Value) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{count_nodes, replace_node};
+    use super::{count_nodes, handles, replace_node, tool_specs, withdraw_for_mode};
+
+    #[test]
+    fn render_ui_is_offered_only_to_a_chat_in_workspace_mode() {
+        let names = |specs: &[serde_json::Value]| -> Vec<String> {
+            specs
+                .iter()
+                .filter_map(|s| s.pointer("/function/name").and_then(|n| n.as_str()))
+                .map(str::to_string)
+                .collect()
+        };
+        let mut specs = tool_specs().as_array().unwrap().clone();
+        withdraw_for_mode(&mut specs, true);
+        assert_eq!(names(&specs), ["render_ui", "remember"]);
+        withdraw_for_mode(&mut specs, false);
+        assert_eq!(names(&specs), ["remember"]);
+    }
+
+    #[test]
+    fn the_model_can_no_longer_make_the_old_block_kinds() {
+        assert!(!handles("present"));
+        let specs = tool_specs();
+        assert!(specs.as_array().unwrap().iter().all(|s| s["function"]["name"] != "present"));
+    }
 
     #[test]
     fn replaces_a_nested_node_by_id_and_counts() {
@@ -286,95 +312,6 @@ mod tests {
         // Unknown id leaves the tree untouched.
         assert!(!replace_node(&mut tree, "nope", &new_node));
     }
-}
-
-/// Create or update a workspace block.
-fn present(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
-    let kind = args
-        .get("kind")
-        .and_then(|k| k.as_str())
-        .filter(|k| KINDS.contains(k))
-        .ok_or_else(|| {
-            format!("missing or unknown 'kind'; use one of: {}", KINDS.join(", "))
-        })?;
-    let title = args
-        .get("title")
-        .and_then(|t| t.as_str())
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .unwrap_or("Untitled");
-    let mut data = args
-        .get("data")
-        .filter(|d| d.is_object())
-        .cloned()
-        .ok_or("missing 'data' object argument")?;
-
-    // A document given as inline markdown becomes an artifact; the block just
-    // references it so the full text never bloats the block payload.
-    if kind == "document" {
-        if let Some(md) = data.get("markdown").and_then(|m| m.as_str()) {
-            let artifact = ctx
-                .db
-                .add_artifact(Some(ctx.conversation_id), title, "markdown", md, ctx.assistant_message_id)
-                .map_err(|e| format!("couldn't save the document: {e}"))?;
-            ctx.sink.artifact(&artifact.id, title, "markdown", md);
-            data = serde_json::json!({ "artifact_id": artifact.id });
-        }
-    }
-
-    let data_json = serde_json::to_string(&data).map_err(|e| e.to_string())?;
-
-    // Update in place when a valid block_id for this conversation is given.
-    if let Some(block_id) = args.get("block_id").and_then(|b| b.as_str()) {
-        if let Ok(Some(existing)) = ctx.db.get_block(block_id) {
-            if existing.conversation_id == ctx.conversation_id {
-                return update_existing(ctx, &existing.id, title, &data, &data_json);
-            }
-        }
-        // Fall through to create if the id was unknown or from another chat.
-    }
-
-    // W3 safety net: a model that ignores the block registry and re-presents the
-    // same kind+title (common with weak local models) should update in place
-    // rather than spawn a duplicate on the user's workspace.
-    if let Ok(Some(existing)) = ctx.db.find_block_by_title(ctx.conversation_id, kind, title) {
-        return update_existing(ctx, &existing.id, title, &data, &data_json);
-    }
-
-    let block = ctx
-        .db
-        .add_block(ctx.conversation_id, ctx.assistant_message_id, kind, title, &data_json)
-        .map_err(|e| format!("couldn't save the block: {e}"))?;
-    ctx.sink.block(&block.id, ctx.assistant_message_id, kind, title, &data);
-    let _ = ctx
-        .db
-        .log_activity(Some(ctx.conversation_id), "block", &format!("presented {title}"));
-
-    // W4: the receipt keeps the model from narrating the block back in prose.
-    Ok(format!(
-        "Presented the {kind} block \"{title}\" (block_id: {}). The user can now see it in full — do not repeat its contents in prose; conclude briefly. Pass this block_id to `present` to update it later.",
-        block.id
-    ))
-}
-
-/// Update an existing block's data and emit the in-place update event.
-fn update_existing(
-    ctx: &ToolContext<'_>,
-    block_id: &str,
-    title: &str,
-    data: &serde_json::Value,
-    data_json: &str,
-) -> Result<String, String> {
-    ctx.db
-        .update_block_data(block_id, title, data_json)
-        .map_err(|e| format!("couldn't update the block: {e}"))?;
-    ctx.sink.block_update(block_id, title, data);
-    let _ = ctx
-        .db
-        .log_activity(Some(ctx.conversation_id), "block", &format!("updated {title}"));
-    Ok(format!(
-        "Updated block \"{title}\" ({block_id}) in place. The user sees the change — do not restate its contents."
-    ))
 }
 
 /// Apply a JSON merge patch to the conversation's durable session state.

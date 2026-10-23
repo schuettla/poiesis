@@ -1,0 +1,11 @@
+{"dir":"in","t":0,"ch":"spawn","msg":{"argv":["<home>\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe","app-server"]}}
+{"dir":"in","t":1428,"msg":{"id":1,"method":"initialize","params":{"clientInfo":{"name":"poiesis","title":null,"version":"0.0.0"},"capabilities":{"experimentalApi":false}}}}
+{"dir":"out","t":1961,"msg":{"id":1,"result":{"userAgent":"poiesis/0.163.0 (Windows 10.0.22621; x86_64) unknown (poiesis; 0.0.0)","codexHome":"<home>\\.codex","platformFamily":"windows","platformOs":"windows"}}}
+{"dir":"in","t":1962,"msg":{"method":"initialized"}}
+{"dir":"in","t":1962,"msg":{"id":2,"method":"windowsSandbox/readiness"}}
+{"dir":"out","t":1962,"msg":{"method":"remoteControl/status/changed","params":{"status":"disabled","serverName":"<host>","installationId":"<install-id>","environmentId":null},"emittedAtMs":1792486064037}}
+{"dir":"out","t":1963,"msg":{"id":2,"result":{"status":"ready"}}}
+{"dir":"in","t":1963,"msg":{"id":3,"method":"thread/resume","params":{"threadId":"00000000-0000-7000-8000-000000000000","cwd":"<cwd>","approvalPolicy":"untrusted","sandbox":"workspace-write","approvalsReviewer":"user"}}}
+{"dir":"out","t":2003,"msg":{"error":{"code":-32600,"message":"no rollout found for thread id 00000000-0000-7000-8000-000000000000"},"id":3}}
+{"dir":"err","t":2003,"msg":{"line":"recorder: no thread id, see the thread reply"}}
+{"dir":"err","t":2123,"msg":{"line":"recorder: exit code 0"}}

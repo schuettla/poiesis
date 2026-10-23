@@ -1,0 +1,13 @@
+{
+  "_note": "Output of `claude auth status` (exit 0), version 2.1.301. Ids and email replaced by hand. The probe (CLI-2) reads only loggedIn, authMethod, apiProvider and subscriptionType.",
+  "loggedIn": true,
+  "authMethod": "claude.ai",
+  "apiProvider": "firstParty",
+  "analyticsDisabled": false,
+  "projectsDirectory": "<home>\\.claude\\projects",
+  "configDirectory": "<home>\\.claude",
+  "email": "<email>",
+  "orgId": "<org-id>",
+  "orgName": "<org-name>",
+  "subscriptionType": "pro"
+}

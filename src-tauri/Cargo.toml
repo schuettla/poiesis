@@ -113,6 +113,9 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_JobObjects",
   "Win32_System_Threading",
   "Win32_Security",
+  # CLI-2: read the PATH the user has *now* (registry), not the one this process started with.
+  "Win32_System_Registry",
+  "Win32_System_Environment",
 ] }
 # Answers WebView2's microphone question for the app's own pages (mic_permission.rs).
 # Same version tauri's own webview uses, so it adds no second copy.

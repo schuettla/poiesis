@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAppStore } from "../../lib/store";
-import type { Decision, PermissionRequest } from "../../lib/api";
+import type { AppTool, CallKind, Decision, PermissionRequest, ToolView } from "../../lib/api";
+import { ToolChips } from "../Apps/ConnectorGate";
 import "./PermissionPanel.css";
 
 /** Widening scope: "may I reach into this folder at all?" */
@@ -30,6 +31,79 @@ function capabilityChoices(kind: string, target: string): { decision: Decision; 
     { decision: "forever", label: always },
     { decision: "deny", label: "No" },
   ];
+}
+
+/** `MCG-UI-1`: the three buttons a connected app's call gets. Which words depend
+ * on what the call does, because "always" means something different for each: a
+ * change can be allowed for good; a send is allowed up to a daily cap. */
+export function appChoices(
+  kind: CallKind | undefined,
+  app: string,
+  cap: number | undefined,
+): { decision: Decision; label: string; primary?: boolean }[] {
+  if (kind === "send") {
+    return [
+      { decision: "once", label: "Send once", primary: true },
+      { decision: "forever", label: `Up to ${cap ?? 25} a day for ${app}` },
+      { decision: "deny", label: "No" },
+    ];
+  }
+  if (kind === "read") {
+    return [
+      { decision: "once", label: "Allow once", primary: true },
+      { decision: "forever", label: `Always let me read ${app}` },
+      { decision: "deny", label: "No" },
+    ];
+  }
+  return [
+    { decision: "once", label: "Allow once", primary: true },
+    { decision: "forever", label: `Always for ${app} changes` },
+    { decision: "deny", label: "No" },
+  ];
+}
+
+/** Values longer than this are folded until asked for. */
+const FOLD_AT = 120;
+
+function Folded({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  if (text.length <= FOLD_AT) return <>{text}</>;
+  return (
+    <>
+      {open ? text : `${text.slice(0, FOLD_AT)}…`}{" "}
+      <button className="permission-fold" onClick={() => setOpen((v) => !v)}>
+        {open ? "Show less" : "Show all"}
+      </button>
+    </>
+  );
+}
+
+/** The arguments a call would run with, as a compact key/value list. Falls back
+ * to the raw text when it isn't an object (a very long payload is cut mid-JSON). */
+function ArgumentList({ json }: { json: string }) {
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    parsed = null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return <pre className="permission-diff">{json}</pre>;
+  }
+  const rows = Object.entries(parsed as Record<string, unknown>);
+  if (rows.length === 0) return null;
+  return (
+    <dl className="permission-args" aria-label="What I would send">
+      {rows.map(([key, value]) => (
+        <div key={key} className="permission-arg">
+          <dt>{key}</dt>
+          <dd>
+            <Folded text={typeof value === "string" ? value : JSON.stringify(value)} />
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
 }
 
 function minutes(secs: number | undefined): string {
@@ -100,6 +174,149 @@ function ExecutionPrompt({
   );
 }
 
+/** The agent app's id for a name on the panel, so a link can open its settings. */
+function useEngineId(name: string | undefined): string | undefined {
+  return useAppStore((s) => s.engines.find((e) => e.name === name)?.id);
+}
+
+/**
+ * `CLI-UI-3`: an agent app asks to run a command or change a file. The header
+ * names it, because it is not Poiesis asking and not one of Poiesis's own
+ * agents. The command is shown one piece to a line and an edit as a change, so
+ * what is being approved can be read rather than trusted. It says plainly that
+ * the agent runs outside my sandbox: its own permission system is what stands
+ * between it and the folder, and this panel is one half of that.
+ */
+function EnginePrompt({ request, onResolve }: { request: PermissionRequest; onResolve: (d: Decision) => void }) {
+  const openEngines = useAppStore((s) => s.openEngines);
+  const engineId = useEngineId(request.engine);
+  const argv = request.argv ?? [];
+  return (
+    <>
+      <p className="permission-eyebrow">{request.engine} is asking</p>
+      <p className="permission-summary">{request.summary}</p>
+      {argv.length > 0 && (
+        <ol className="permission-argv" aria-label="The command">
+          {argv.map((token, i) => (
+            <li key={i}>{token}</li>
+          ))}
+        </ol>
+      )}
+      {request.diff && <pre className="permission-diff">{request.diff}</pre>}
+      <p className="permission-where">It runs outside my sandbox, in {request.path}</p>
+      <div className="permission-actions">
+        <button className="permission-btn primary" onClick={() => onResolve("once")}>
+          Allow once
+        </button>
+        <button className="permission-btn" onClick={() => onResolve("chat")}>
+          Allow for this run
+        </button>
+        <button className="permission-btn deny" onClick={() => onResolve("deny")}>
+          Deny
+        </button>
+      </div>
+      {engineId && (
+        <button className="permission-fold" onClick={() => openEngines(engineId)}>
+          Change what {request.engine} may do
+        </button>
+      )}
+    </>
+  );
+}
+
+/**
+ * `RTE-UI-2`: the lead wants to hand a job to an agent app and the mode is
+ * "suggest it, I confirm". The card says which of the user's own rules made the
+ * lead think so, and "Always for this" relaxes that one rule, not the agent.
+ */
+function HandoverPrompt({ request, onResolve }: { request: PermissionRequest; onResolve: (d: Decision) => void }) {
+  const openEngines = useAppStore((s) => s.openEngines);
+  const engineId = useEngineId(request.engine);
+  return (
+    <>
+      <p className="permission-eyebrow">{request.summary}</p>
+      {request.diff && <p className="permission-summary">“{request.diff}”</p>}
+      {request.rule ? (
+        <p className="permission-where">
+          Because of your rule {request.rule.label}: {request.rule.text}
+        </p>
+      ) : (
+        <p className="permission-where">You asked for it.</p>
+      )}
+      <div className="permission-actions">
+        <button className="permission-btn primary" onClick={() => onResolve("once")}>
+          Hand it over
+        </button>
+        <button className="permission-btn" onClick={() => onResolve("deny")}>
+          Do it yourself
+        </button>
+        {request.rule && (
+          <button className="permission-btn" onClick={() => onResolve("forever")}>
+            Always for this
+          </button>
+        )}
+      </div>
+      {engineId && (
+        <button className="permission-fold" onClick={() => openEngines(engineId)}>
+          Change when I use {request.engine}
+        </button>
+      )}
+    </>
+  );
+}
+
+/**
+ * `MCG-7`: what each app tool in this request is taken to do, marked R / C / S,
+ * with the chip's own menu to correct a wrong guess. Composio shows no tool list
+ * per app, so this is where a tool is first seen. A correction applies from the
+ * next call: the question already asked stays as it is.
+ */
+export function ToolKinds({ tools }: { tools: AppTool[] }) {
+  const [shown, setShown] = useState(tools);
+  const [changed, setChanged] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const apps = [...new Set(shown.map((t) => t.app))];
+  return (
+    <div className="permission-kinds">
+      {apps.map((app) => {
+        const mine = shown.filter((t) => t.app === app);
+        const views: ToolView[] = mine.map((t) => ({
+          name: t.name,
+          description: "",
+          input_schema: null,
+          kind: t.kind,
+          auto_kind: t.auto_kind,
+          overridden: t.overridden,
+        }));
+        return (
+          <div className="connector-tools" key={app}>
+            <ToolChips
+              connector={{ id: mine[0].connector_id, tools: views }}
+              app={app}
+              lead={`${mine[0].app_name}:`}
+              onChanged={(name, kind) => {
+                setChanged(true);
+                setError(null);
+                setShown((all) =>
+                  all.map((t) =>
+                    t.app === app && t.name === name
+                      ? { ...t, kind: kind ?? t.auto_kind, overridden: kind !== null && kind !== t.auto_kind }
+                      : t
+                  )
+                );
+              }}
+              onError={(m) => setError(m.replace(/^Error:\s*/, ""))}
+            />
+          </div>
+        );
+      })}
+      <p className="permission-kinds-note">
+        {error ?? (changed ? "Noted. It applies from the next time." : "Wrong about what one does? Click it to correct me.")}
+      </p>
+    </div>
+  );
+}
+
 /** Calm side-panel consent prompt (PRD §5.4.4). Shows the oldest pending
  *  request; the agent loop is paused awaiting the answer. */
 export default function PermissionPanel() {
@@ -113,6 +330,20 @@ export default function PermissionPanel() {
   // lead started, and the answer is a different one depending on which.
   const agent = permissionAgents[request.id];
 
+  if (request.capability === "engine" || request.capability === "handover") {
+    const Prompt = request.capability === "engine" ? EnginePrompt : HandoverPrompt;
+    return (
+      <div className="side-panel" role="dialog" aria-label="Permission request">
+        <div className="side-panel-inner">
+          <Prompt key={request.id} request={request} onResolve={(d) => resolve(request.id, d)} />
+          {pending.length > 1 && (
+            <p className="permission-queue">{pending.length - 1} more request(s) waiting</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (request.capability === "task" || request.capability === "command") {
     return (
       <div className="side-panel" role="dialog" aria-label="Permission request">
@@ -125,6 +356,40 @@ export default function PermissionPanel() {
             agent={agent}
             onResolve={(d) => resolve(request.id, d)}
           />
+          {pending.length > 1 && (
+            <p className="permission-queue">{pending.length - 1} more request(s) waiting</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (request.capability === "app") {
+    const send = request.call_kind === "send";
+    return (
+      <div className={`side-panel ${send ? "outbound" : ""}`} role="dialog" aria-label="Permission request">
+        <div className="side-panel-inner">
+          <p className="permission-eyebrow">
+            {agent
+              ? `The ${agent} agent I started is asking`
+              : send
+                ? "Poiesis Agent wants to send something"
+                : "Poiesis Agent is asking"}
+          </p>
+          <p className="permission-summary">{request.summary}</p>
+          {request.diff && <ArgumentList key={request.id} json={request.diff} />}
+          {request.tools && request.tools.length > 0 && <ToolKinds key={`kinds-${request.id}`} tools={request.tools} />}
+          <div className="permission-actions">
+            {appChoices(request.call_kind, request.path, request.cap).map((c) => (
+              <button
+                key={c.decision}
+                className={`permission-btn ${c.primary ? "primary" : ""} ${c.decision === "deny" ? "deny" : ""}`}
+                onClick={() => resolve(request.id, c.decision)}
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
           {pending.length > 1 && (
             <p className="permission-queue">{pending.length - 1} more request(s) waiting</p>
           )}

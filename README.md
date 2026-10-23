@@ -87,6 +87,17 @@ creation), `TASKS.md` (checklist) and `Project_Nexus_PRD.md` (product spec).
 
 ---
 
+## Download
+
+**[Download the latest Windows installer](https://github.com/schuettla/poiesis/releases/latest)**
+from the Releases page (the `-setup.exe` file). Installed copies check for
+newer releases themselves and always ask before installing one.
+
+The installer isn't code-signed yet, so Windows may show "Windows protected
+your PC". Choose **More info → Run anyway**.
+
+To build it yourself instead, see Quick start below.
+
 ## Quick start
 
 ```sh

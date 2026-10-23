@@ -134,8 +134,9 @@
   cursor: pointer;
   font-family: var(--font-sans);
   font-size: var(--fs-caption);
+  line-height: 1.2;
+  text-align: center;
   color: var(--ink-muted);
-  white-space: nowrap;
 }
 .mc-effort-opt:hover {
   background: var(--fill-hover);

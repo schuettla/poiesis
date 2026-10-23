@@ -49,6 +49,7 @@ export default function Providers() {
   const refreshCloud = useAppStore((s) => s.refreshCloud);
   const setView = useAppStore((s) => s.setView);
   const openRuntime = useAppStore((s) => s.openRuntime);
+  const openEngines = useAppStore((s) => s.openEngines);
   const [spend, setSpend] = useState<number | null>(null);
 
   useEffect(() => {
@@ -107,6 +108,12 @@ export default function Providers() {
           Running Ollama or LM Studio?{" "}
           <button className="link-button inline" onClick={() => openRuntime("servers")}>
             Add it under Runtime → Your servers
+          </button>
+        </p>
+        <p className="setting-help providers-servers-hint">
+          Coding agents you've installed (Claude Code, Codex…) are set up in{" "}
+          <button className="link-button inline" onClick={() => openEngines()}>
+            External agents →
           </button>
         </p>
       </div>

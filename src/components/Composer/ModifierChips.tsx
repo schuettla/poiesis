@@ -1,14 +1,7 @@
 import { useAppStore } from "../../lib/store";
 import type { TurnModifiers } from "../../lib/types";
+import { EFFORTS } from "../../lib/effort";
 import "./ModifierChips.css";
-
-const EFFORT_WORD: Record<string, string> = {
-  off: "no thinking",
-  low: "low",
-  medium: "medium",
-  high: "high",
-  provider: "model's default",
-};
 
 /**
  * `CMP-6`: what the next message alone has been told to do. One chip each,
@@ -33,7 +26,7 @@ export default function ModifierChips() {
       fromDefault: !!mods.planFirstIsDefault,
     });
   }
-  if (mods.effort) chips.push({ key: "effort", label: `Think: ${EFFORT_WORD[mods.effort] ?? mods.effort}` });
+  if (mods.effort) chips.push({ key: "effort", label: `Effort: ${EFFORTS.find((e) => e.value === mods.effort)?.label ?? mods.effort}` });
   if (mods.maxSteps) chips.push({ key: "maxSteps", label: `Up to ${mods.maxSteps} steps` });
   if (!chips.length) return null;
 

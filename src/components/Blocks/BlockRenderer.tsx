@@ -4,6 +4,8 @@ import type { BlockView } from "../../lib/types";
 import { useAppStore } from "../../lib/store";
 import type { Diagnostic } from "../../lib/api";
 import DiagnosticsList, { locateDiagnostic } from "../Conversation/Diagnostics";
+import ConnectBlock from "./ConnectBlock";
+import Frame from "./Frame";
 import "./blocks.css";
 
 /** Loose object access for lenient, model-provided block data. */
@@ -22,32 +24,10 @@ export default function BlockRenderer({ block }: { block: BlockView }) {
   );
 }
 
-/** Shared frame: mono header (title + kind) and an optional footer summary. */
-function Frame({
-  title,
-  kind,
-  footer,
-  children,
-}: {
-  title: string;
-  kind: string;
-  footer?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section className="block" aria-label={`${title} — ${kind} block`}>
-      <div className="block-head">
-        <span className="block-title">{title}</span>
-        <span className="block-kind">{kind}</span>
-      </div>
-      <div className="block-body">{children}</div>
-      {footer != null && <div className="block-foot">{footer}</div>}
-    </section>
-  );
-}
-
 function BlockFrame({ block }: { block: BlockView }) {
   switch (block.kind) {
+    case "connect":
+      return <ConnectBlock block={block} />;
     case "comparison":
       return <ComparisonBlock block={block} />;
     case "collection":
@@ -428,6 +408,7 @@ function FormBlock({ block }: { block: BlockView }) {
         {fields.map((f) => {
           const id = String(f.id);
           const type = String(f.type ?? "text");
+          const options = optionsOf(f.options);
           return (
             <div className="form-field" key={id}>
               <label className="form-label" htmlFor={`${block.id}-${id}`}>
@@ -435,12 +416,12 @@ function FormBlock({ block }: { block: BlockView }) {
                 {f.required && <span className="form-req" aria-hidden="true"> *</span>}
               </label>
               {submitted ? (
-                <span className="form-frozen">{formatCell(values[id])}</span>
+                <span className="form-frozen">{formatCell(shownValue(values[id], options))}</span>
               ) : (
                 <FieldInput
                   fieldId={`${block.id}-${id}`}
                   type={type}
-                  options={asArr2(f.options)}
+                  options={options}
                   value={values[id]}
                   onChange={(v) => setField(id, v)}
                 />
@@ -451,7 +432,7 @@ function FormBlock({ block }: { block: BlockView }) {
       </div>
       {!submitted && (
         <div className="form-actions">
-          <button className="form-submit" disabled={busy || missingRequired} onClick={submit}>
+          <button className="btn-primary" disabled={busy || missingRequired} onClick={submit}>
             {data.submit_label ?? "Send"}
           </button>
         </div>
@@ -469,7 +450,7 @@ function FieldInput({
 }: {
   fieldId: string;
   type: string;
-  options: string[];
+  options: FormOption[];
   value: unknown;
   onChange: (v: unknown) => void;
 }) {
@@ -486,11 +467,11 @@ function FieldInput({
   }
   if (type === "select") {
     return (
-      <select id={fieldId} className="form-select" value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
+      <select id={fieldId} className="field-input form-select" value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
         <option value="" />
         {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
+          <option key={o.value} value={o.value}>
+            {o.label}
           </option>
         ))}
       </select>
@@ -501,13 +482,13 @@ function FieldInput({
     return (
       <div className="form-multi">
         {options.map((o) => (
-          <label key={o} className="form-multi-opt">
+          <label key={o.value} className="form-multi-opt">
             <input
               type="checkbox"
-              checked={arr.includes(o)}
-              onChange={(e) => onChange(e.target.checked ? [...arr, o] : arr.filter((x) => x !== o))}
+              checked={arr.includes(o.value)}
+              onChange={(e) => onChange(e.target.checked ? [...arr, o.value] : arr.filter((x) => x !== o.value))}
             />
-            {o}
+            {o.label}
           </label>
         ))}
       </div>
@@ -517,7 +498,7 @@ function FieldInput({
     <input
       id={fieldId}
       type={type === "number" ? "number" : "text"}
-      className="form-input"
+      className="field-input form-input"
       value={String(value ?? "")}
       onChange={(e) => onChange(type === "number" ? e.target.valueAsNumber : e.target.value)}
     />
@@ -660,8 +641,34 @@ function asArr2(x: unknown): string[] {
   return [String(x)];
 }
 
+/** A select option as the model may write it: a bare string, or an object with
+ * `value` / `id` and `label` / `title` / `name`. */
+interface FormOption {
+  value: string;
+  label: string;
+}
+
+function optionsOf(x: unknown): FormOption[] {
+  if (!Array.isArray(x)) return [];
+  return x.map((o) => {
+    if (o && typeof o === "object") {
+      const n = o as Obj;
+      const value = String(n.value ?? n.id ?? n.label ?? n.title ?? n.name ?? "");
+      return { value, label: String(n.label ?? n.title ?? n.name ?? value) };
+    }
+    return { value: String(o), label: String(o) };
+  });
+}
+
+/** A submitted value as the person saw it: an option's label, not its id. */
+function shownValue(v: unknown, options: FormOption[]): unknown {
+  const label = (x: unknown) => options.find((o) => o.value === x)?.label ?? x;
+  return Array.isArray(v) ? v.map(label) : label(v);
+}
+
 function formatCell(v: unknown): string {
   if (v === undefined || v === null || v === "") return "—";
+  if (Array.isArray(v) && v.length === 0) return "—";
   if (typeof v === "boolean") return v ? "yes" : "no";
   if (Array.isArray(v)) return v.map(String).join(", ");
   if (typeof v === "object") return JSON.stringify(v);

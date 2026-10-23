@@ -127,6 +127,45 @@ function EmailProposal({ id, proposedText }: { id: string; proposedText: string 
   );
 }
 
+/** `MCG-3`: a connected app's call that a run nobody was watching could not ask
+ * about. Mirrors `render_app_proposal` in `agent/connector_gate.rs`: a few header
+ * lines, a blank line, then the exact arguments it will run with. */
+function parseAppProposal(text: string): { kind: string; summary: string; args: string } | null {
+  const split = text.indexOf("\n\n");
+  if (split < 0) return null;
+  let kind = "";
+  let summary = "";
+  for (const line of text.slice(0, split).split("\n")) {
+    const i = line.indexOf(": ");
+    if (i < 0) continue;
+    const key = line.slice(0, i);
+    if (key === "Kind") kind = line.slice(i + 2);
+    else if (key === "Summary") summary = line.slice(i + 2);
+  }
+  return summary ? { kind, summary, args: text.slice(split + 2) } : null;
+}
+
+function AppProposal({ id, proposedText }: { id: string; proposedText: string }) {
+  const resolve = useAppStore((s) => s.resolveChangeProposal);
+  const fields = parseAppProposal(proposedText);
+  if (!fields) return null;
+  const send = fields.kind === "send";
+  return (
+    <div className={`proposal-card wide ${send ? "outbound" : ""}`}>
+      <p className="proposal-text">I couldn't ask you while I was working, so this is waiting. {fields.summary}</p>
+      <pre className="proposal-preview">{fields.args}</pre>
+      <div className="proposal-actions">
+        <button className="btn-text" onClick={() => resolve(id, true)}>
+          {send ? "Send it" : "Do it"}
+        </button>
+        <button className="btn-text" onClick={() => resolve(id, false)}>
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SkillProposal({
   id,
   slug,
@@ -276,6 +315,93 @@ function RecurrenceEscalationProposal({ id }: { id: string }) {
   );
 }
 
+/** `MCPS-2`: something an agent app suggested keeping. The words are shown in
+ * full before anything is saved, and saying yes writes them as a lesson. */
+function EngineMemoryProposal({ id, rationale, proposedText }: { id: string; rationale: string; proposedText: string }) {
+  const resolve = useAppStore((s) => s.resolveChangeProposal);
+  const [error, setError] = useState<string | null>(null);
+
+  async function keep() {
+    setError(null);
+    try {
+      await resolve(id, true);
+    } catch (err) {
+      setError(String(err).replace(/^Error:\s*/, ""));
+    }
+  }
+
+  return (
+    <div className="proposal-card">
+      <p className="proposal-text">{rationale} Keep this?</p>
+      <pre className="proposal-preview">{proposedText}</pre>
+      {error && <p className="proposal-risk">{error}</p>}
+      <div className="proposal-actions">
+        <button className="btn-text" onClick={() => void keep()}>
+          Keep it
+        </button>
+        <button className="btn-text" onClick={() => resolve(id, false)}>
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** What an `engine-rule` proposal would do, read back from its payload
+ * (`engines/learn.rs`): `{ engine_id, action, rule_id?, kind?, text? }`. */
+export interface EngineRuleChange {
+  engine_id: string;
+  action: "edit" | "add" | "off";
+  rule_id?: string;
+  kind?: "use" | "avoid";
+  text?: string;
+}
+
+export function parseRuleChange(text: string): EngineRuleChange | null {
+  try {
+    const v = JSON.parse(text) as EngineRuleChange;
+    return v && typeof v.engine_id === "string" && ["edit", "add", "off"].includes(v.action) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `RTE-6`: a change to the rules for when I hand work to an agent app. Shown at
+ * the top of that agent's rules, and never applied without this click. */
+function EngineRuleProposal({ id, rationale, proposedText }: { id: string; rationale: string; proposedText: string }) {
+  const resolve = useAppStore((s) => s.resolveChangeProposal);
+  const loadEngines = useAppStore((s) => s.loadEngines);
+  const [error, setError] = useState<string | null>(null);
+  const change = parseRuleChange(proposedText);
+  if (!change) return null;
+  const yes = change.action === "off" ? "Turn it off" : change.action === "edit" ? "Change it" : "Add it";
+
+  async function accept() {
+    setError(null);
+    try {
+      await resolve(id, true);
+      await loadEngines();
+    } catch (err) {
+      setError(String(err).replace(/^Error:\s*/, ""));
+    }
+  }
+
+  return (
+    <div className="proposal-card" role="group" aria-label="Suggested change to a rule">
+      <p className="proposal-text">{rationale}</p>
+      {error && <p className="proposal-risk">{error}</p>}
+      <div className="proposal-actions">
+        <button className="btn-text" onClick={() => void accept()}>
+          {yes}
+        </button>
+        <button className="btn-text" onClick={() => resolve(id, false)}>
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /**
  * A change the agent would like to make to itself, shown where it was raised
  * (SOUL-UI-2). Inline and quiet — the same visual register as a permission
@@ -294,6 +420,15 @@ export default function ProposalCard({ id }: { id: string }) {
 
   if (proposal.target === "email") {
     return <EmailProposal id={id} proposedText={proposal.proposed_text} />;
+  }
+  if (proposal.target === "app") {
+    return <AppProposal id={id} proposedText={proposal.proposed_text} />;
+  }
+  if (proposal.target === "engine-memory") {
+    return <EngineMemoryProposal id={id} rationale={proposal.rationale} proposedText={proposal.proposed_text} />;
+  }
+  if (proposal.target === "engine-rule") {
+    return <EngineRuleProposal id={id} rationale={proposal.rationale} proposedText={proposal.proposed_text} />;
   }
   if (proposal.target === "project_instructions") {
     return (

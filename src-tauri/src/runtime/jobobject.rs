@@ -50,6 +50,21 @@ mod imp {
             AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE);
         }
     }
+
+    /// Same as `assign`, for a child whose `std::process::Child` is not at hand
+    /// (a `tokio::process::Child` only gives its raw handle). External agent
+    /// apps (`CLI-3`) are bound to the job too: everything below the process
+    /// inherits it, so a crash of Poiesis cannot leave an agent's node child
+    /// running.
+    pub fn assign_raw(handle: std::os::windows::io::RawHandle) {
+        let job = job_handle();
+        if job.is_null() {
+            return;
+        }
+        unsafe {
+            AssignProcessToJobObject(job, handle as HANDLE);
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -58,3 +73,5 @@ mod imp {
 }
 
 pub use imp::assign;
+#[cfg(windows)]
+pub use imp::assign_raw;

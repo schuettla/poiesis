@@ -67,18 +67,7 @@ fn build(f: &serde_json::Value) -> PromptInputs {
                 model_invocable: s["model_invocable"].as_bool().unwrap_or(true),
             })
             .collect(),
-        blocks: f["blocks"]
-            .as_array()
-            .unwrap_or(&Vec::new())
-            .iter()
-            .map(|b| BlockEntry {
-                id: b["id"].as_str().unwrap_or_default().to_string(),
-                title: b["title"].as_str().unwrap_or_default().to_string(),
-                kind: b["kind"].as_str().unwrap_or_default().to_string(),
-                data_json: b["data_json"].as_str().unwrap_or_default().to_string(),
-                state_json: b["state_json"].as_str().map(str::to_string),
-            })
-            .collect(),
+        workspace: f["workspace"].as_bool().unwrap_or(false),
         surface: f["surface"].as_object().map(|s| SurfaceView {
             data_json: s["data_json"].as_str().unwrap_or_default().to_string(),
             state_json: s.get("state_json").and_then(|v| v.as_str()).map(str::to_string),

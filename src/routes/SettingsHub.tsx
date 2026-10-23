@@ -5,6 +5,7 @@ import PoiesisMark from "../components/Mark/PoiesisMark";
 import { SectionIcon } from "../components/Icons/Icons";
 import Models from "./Models";
 import Providers from "./Providers";
+import Engines from "./Engines";
 import Runtime from "./Runtime";
 import Apps from "./Apps";
 import Skills from "./Skills";
@@ -42,18 +43,37 @@ export default function SettingsHub() {
   // Self badge below, which points at the wrong tab.
   const isSkill = (target: string) =>
     target === "skill" || target === "skill-revision" || target === "recipe";
+  // `RTE-6`: a suggested change to an agent app's rules badges External agents,
+  // where accepting it writes. It is not a change to me, so Self stays quiet.
   const selfPending = useAppStore((s) =>
-    s.changeProposals.some((p) => p.target !== "soul" && !isSkill(p.target))
+    s.changeProposals.some((p) => p.target !== "soul" && p.target !== "engine-rule" && !isSkill(p.target))
   );
+  const enginePending = useAppStore((s) => s.changeProposals.some((p) => p.target === "engine-rule"));
   const skillPending = useAppStore((s) => s.changeProposals.some((p) => isSkill(p.target)));
   const consolidationPending = useAppStore((s) => s.consolidationPending);
   // `UPD-UI-3`: a newer version of me is waiting (or already staged).
   const updateWaiting = useAppStore((s) => updateIsWaiting(s.updateState));
+  // `CA-UI-3`: a connected app's sign-in has expired.
+  const appsNeedAttention = useAppStore((s) => s.appsNeedAttention);
+  // `CLI-2`: an agent app was found that I haven't shown yet.
+  const enginesNewlyFound = useAppStore((s) => s.enginesNewlyFound);
   const badgeFor = (v: View) =>
     (v === "settings" && soulPending) ||
     (v === "self" && (selfPending || consolidationPending)) ||
     (v === "skills" && skillPending) ||
+    (v === "apps" && appsNeedAttention) ||
+    (v === "engines" && (enginesNewlyFound || enginePending)) ||
     (v === "about" && updateWaiting);
+  const badgeText = (v: View) =>
+    v === "about"
+      ? "An update is waiting"
+      : v === "apps"
+        ? "A sign-in has expired"
+        : v === "engines"
+          ? enginePending
+            ? "A change to the rules is waiting for you"
+            : "I found an agent app"
+          : "Changes waiting for review";
 
   // `SHL-16` is withdrawn: the hub owns its own section navigation, always,
   // whatever the Rail is doing. Moving it into the Rail made the sections read
@@ -77,8 +97,8 @@ export default function SettingsHub() {
               <span
                 className="sht-badge"
                 role="img"
-                aria-label={t.view === "about" ? "An update is waiting" : "Changes waiting for review"}
-                title={t.view === "about" ? "An update is waiting" : "Changes waiting for review"}
+                aria-label={badgeText(t.view)}
+                title={badgeText(t.view)}
               />
             )}
           </button>
@@ -91,6 +111,7 @@ export default function SettingsHub() {
         {view === "tools" && <Tools />}
         {view === "models" && <Models />}
         {view === "providers" && <Providers />}
+        {view === "engines" && <Engines />}
         {view === "runtime" && <Runtime />}
         {view === "apps" && <Apps />}
         {view === "skills" && <Skills />}

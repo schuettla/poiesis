@@ -11,6 +11,7 @@ import {
   ChevronIcon,
   FolderIcon,
   KebabIcon,
+  LayoutIcon,
   MessageIcon,
   PlusIcon,
   SearchIcon,
@@ -233,8 +234,8 @@ function ChatRow({ c, active, now }: { c: Conversation; active: boolean; now: nu
       }}
     >
       {c.workspace && (
-        <span className="chat-workspace" aria-label="Workspace session" title="Workspace session">
-          ▦
+        <span className="chat-workspace" role="img" aria-label="Workspace session" title="Workspace session">
+          <LayoutIcon size={12} />
         </span>
       )}
       <span className="chat-title">{c.title}</span>

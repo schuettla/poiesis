@@ -58,6 +58,7 @@
       <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" /></symbol>
       <symbol id="i-chat" viewBox="0 0 16 16"><path d="M3 4.5a1.5 1.5 0 0 1 1.5-1.5h7A1.5 1.5 0 0 1 13 4.5v5a1.5 1.5 0 0 1-1.5 1.5H7l-3 2.5V11a1.5 1.5 0 0 1-1-1.4z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" /></symbol>
       <symbol id="i-chevron" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></symbol>
+      <symbol id="i-download" viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7.5 8 11l3.5-3.5M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></symbol>
       <symbol id="i-github" viewBox="0 0 16 16"><path fill="currentColor" d="M8 .2a8 8 0 0 0-2.53 15.59c.4.07.55-.17.55-.38v-1.35c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.05-.49.05-.49.8.06 1.23.83 1.23.83.72 1.22 1.88.87 2.34.66.07-.52.28-.87.5-1.07-1.78-.2-3.65-.89-3.65-3.96 0-.88.31-1.6.82-2.16-.08-.2-.36-1.02.08-2.12 0 0 .67-.22 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.16 0 3.08-1.87 3.76-3.66 3.96.29.25.54.74.54 1.5v2.22c0 .21.15.46.55.38A8 8 0 0 0 8 .2z" /></symbol>
     </defs>
   </svg>
@@ -74,7 +75,6 @@
         <a href="#control">Control</a>
         <a href="#agents">Agents</a>
         <a href="#private">Privacy</a>
-        <a href="#status">Status</a>
         <a href="#faq">FAQ</a>
       </nav>
       <div class="topbar-end">
@@ -82,9 +82,12 @@
           <button type="button" data-mode-btn="light" aria-pressed="true">Daylight</button>
           <button type="button" data-mode-btn="dark" aria-pressed="false">Backlit</button>
         </div>
-        <a class="btn btn-primary btn-sm" href="https://github.com/schuettla/poiesis">
-          <svg><use href="#i-github" /></svg>
-          GitHub
+        <a class="btn btn-secondary btn-sm btn-icon" href="https://github.com/schuettla/poiesis" aria-label="GitHub" title="GitHub">
+          <svg aria-hidden="true"><use href="#i-github" /></svg>
+        </a>
+        <a class="btn btn-primary btn-sm" href="https://github.com/schuettla/poiesis/releases/latest">
+          <svg><use href="#i-download" /></svg>
+          Download
         </a>
       </div>
     </div>
@@ -103,9 +106,12 @@
               breaks, and shows you every change it makes to itself. You decide what it may change.
             </p>
             <div class="cta">
-              <a class="btn btn-primary" href="https://github.com/schuettla/poiesis">
-                <svg><use href="#i-github" /></svg>
-                View on GitHub
+              <a class="btn btn-primary" href="https://github.com/schuettla/poiesis/releases/latest">
+                <svg><use href="#i-download" /></svg>
+                Download for Windows
+              </a>
+              <a class="btn btn-secondary btn-icon" href="https://github.com/schuettla/poiesis" aria-label="GitHub" title="GitHub">
+                <svg aria-hidden="true"><use href="#i-github" /></svg>
               </a>
               <a class="btn btn-secondary" href="#idea">See how it works</a>
             </div>
@@ -173,6 +179,14 @@
             <div>
               <span class="eyebrow">Where the name comes from</span>
               <h3 class="sub-h">Poiesis is Greek for making.</h3>
+              <p class="prose">
+                <strong>Poiesis</strong> (ποίησις) is the act of bringing something into being that
+                was not there before. It is the root of the word &ldquo;poetry&rdquo;. In Plato&rsquo;s
+                <em>Symposium</em> it is the cause that makes anything pass from non-being into
+                being, and Heidegger later used it for a bringing-forth that reveals something
+                rather than merely producing it. The app is named for both halves: it makes things
+                with you, and it keeps making itself.
+              </p>
               <p class="prose">
                 <strong>Autopoiesis</strong> is a word from the biologists Maturana and Varela. It
                 describes a system that keeps producing the parts it is made of. A living cell is
@@ -561,53 +575,21 @@ https://example.com/mcp</pre>
         </div>
       </section>
 
-      <!-- ================= STATUS ================= -->
-      <section class="band" id="status" aria-labelledby="status-h">
-        <div class="wrap">
-          <div data-reveal>
-            <span class="eyebrow">Status</span>
-            <h2 class="h2" id="status-h">Early, and honest about it.</h2>
-            <p class="lede">
-              A lot of Poiesis is written and tested in code. Less of it has met real models, real
-              inboxes and real websites. This is where things stand.
-            </p>
-          </div>
-          <div class="ledger" data-reveal>
-            <div>
-              <h3><i class="sig ok"></i>Checked on a real machine</h3>
-              <ul>
-                <li><i class="sig ok"></i><span><b>Local chat</b> with a model running on the machine.</span></li>
-                <li><i class="sig ok"></i><span><b>Local image making</b> on a 6 GB graphics card.</span></li>
-                <li><i class="sig ok"></i><span><b>Cloud chat</b> through OpenRouter.</span></li>
-                <li><i class="sig ok"></i><span><b>Folders, recall and memory.</b></span></li>
-              </ul>
-            </div>
-            <div>
-              <h3><i class="sig" style="border: 1px solid var(--ink-faint)"></i>Built, not proven end to end</h3>
-              <ul>
-                <li><i class="sig"></i><span><b>Scheduled tasks</b> left to run overnight.</span></li>
-                <li><i class="sig"></i><span><b>A lesson taught in one chat</b> and applied in another.</span></li>
-                <li><i class="sig"></i><span><b>Mail and browser tasks</b> on real accounts and sites.</span></li>
-                <li><i class="sig"></i><span><b>The Changes view and code search</b> on a real project.</span></li>
-              </ul>
-            </div>
-          </div>
-          <p class="after" data-reveal>
-            Code that compiles and passes its tests is not the same as code that works. The first
-            manual pass over each new part has found real bugs. The README says so on purpose, and
-            so does this page.
-          </p>
-        </div>
-      </section>
-
       <!-- ================= START ================= -->
       <section class="band canvas" id="start" aria-labelledby="start-h">
         <div class="wrap">
           <div class="start">
             <div data-reveal>
               <span class="eyebrow">Get started</span>
-              <h2 class="h2" id="start-h">Run it from source today.</h2>
-              <p class="prose">Installer releases are planned. Until then it takes a few commands.</p>
+              <h2 class="h2" id="start-h">Download it, or run it from source.</h2>
+              <p class="prose">Get the Windows installer from the latest release, or build it yourself with a few commands.</p>
+              <div class="cta" style="margin-bottom: 20px">
+                <a class="btn btn-primary" href="https://github.com/schuettla/poiesis/releases/latest">
+                  <svg><use href="#i-download" /></svg>
+                  Download the latest release
+                </a>
+              </div>
+              <p class="prose">The installer isn't code-signed yet, so Windows may show "Windows protected your PC". Choose More info, then Run anyway.</p>
               <ol class="steps">
                 <li><span><b>Install the tools.</b> Rust, the MSVC C++ build tools, and Node.js 18 or newer. Windows 11 already has WebView2.</span></li>
                 <li><span><b>Run it.</b> The first start builds the Rust backend, which takes a few minutes.</span></li>
@@ -682,9 +664,12 @@ https://example.com/mcp</pre>
           <div data-reveal>
             <h2 id="close-h">Meet an agent that keeps its own house.</h2>
             <div class="cta" style="margin-top: 28px">
-              <a class="btn btn-primary" href="https://github.com/schuettla/poiesis">
-                <svg><use href="#i-github" /></svg>
-                View on GitHub
+              <a class="btn btn-primary" href="https://github.com/schuettla/poiesis/releases/latest">
+                <svg><use href="#i-download" /></svg>
+                Download for Windows
+              </a>
+              <a class="btn btn-secondary btn-icon" href="https://github.com/schuettla/poiesis" aria-label="GitHub" title="GitHub">
+                <svg aria-hidden="true"><use href="#i-github" /></svg>
               </a>
               <a class="btn btn-secondary" href="#start">How to run it</a>
             </div>
@@ -702,8 +687,10 @@ https://example.com/mcp</pre>
       </a>
       <span>Copyright 2026 Erich Holzbauer. MIT license.</span>
       <nav aria-label="Footer">
-        <a href="https://github.com/schuettla/poiesis">GitHub</a>
-        <a href="#status">Status</a>
+        <a href="https://github.com/schuettla/poiesis/releases/latest">Download</a>
+        <a href="https://github.com/schuettla/poiesis" aria-label="GitHub" title="GitHub">
+          <svg aria-hidden="true"><use href="#i-github" /></svg>
+        </a>
         <a href="#faq">FAQ</a>
       </nav>
     </div>

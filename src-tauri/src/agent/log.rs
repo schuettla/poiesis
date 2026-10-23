@@ -334,6 +334,83 @@ pub fn replay(db: &Db, run_id: &str) -> Vec<serde_json::Value> {
     out
 }
 
+/// `LRN-2`: the first thing this run did that had already left the machine, in
+/// words that finish "I had already …". `None` means a resume cannot repeat
+/// anything the outside world has seen.
+///
+/// Read from the run's own rows, never from model text: a tool call counts only
+/// when its result row came back without an error. Mail and a git push are named
+/// here; any other tool counts when the connector gate would hold it as a send
+/// (`CallKind::Send`: posts, messages, payments), and a Composio batch is judged
+/// by the tools inside it. A call with no result row is not counted, so a send
+/// that was cut off before it finished can still be picked up.
+pub fn outward_done(db: &Db, run_id: &str) -> Option<String> {
+    use std::collections::HashMap;
+
+    let rows = db.session_events_for_run(run_id).ok()?;
+    let mut calls: Vec<(String, String, serde_json::Value)> = Vec::new();
+    let mut ok: HashMap<String, bool> = HashMap::new();
+    for row in &rows {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&row.payload_json) else { continue };
+        match row.kind.as_str() {
+            "tool_call" => {
+                for c in v["tool_calls"].as_array().into_iter().flatten() {
+                    let args = c["function"]["arguments"].as_str().unwrap_or("{}");
+                    calls.push((
+                        c["id"].as_str().unwrap_or_default().to_string(),
+                        c["function"]["name"].as_str().unwrap_or_default().to_string(),
+                        serde_json::from_str(args).unwrap_or_default(),
+                    ));
+                }
+            }
+            "tool_result" => {
+                let failed = v["content"].as_str().is_some_and(|t| t.trim_start().starts_with("Error"));
+                ok.insert(v["tool_call_id"].as_str().unwrap_or_default().to_string(), !failed);
+            }
+            _ => {}
+        }
+    }
+    calls
+        .iter()
+        .filter(|(id, ..)| ok.get(id).copied().unwrap_or(false))
+        .find_map(|(_, name, args)| outward_of(name, args))
+}
+
+/// What one finished call did to the outside world, if it did.
+fn outward_of(name: &str, args: &serde_json::Value) -> Option<String> {
+    use super::connector_gate::{classify, CallKind, ToolHints};
+
+    match name {
+        "send_mail" => return Some("sent the email".into()),
+        "reply_mail" => return Some("sent the reply".into()),
+        "run_command" => {
+            let git = args["command"].as_str().is_some_and(|c| c.trim().trim_end_matches(".exe").eq_ignore_ascii_case("git"));
+            let push = args["args"].as_array().and_then(|a| a.first()).and_then(|a| a.as_str()) == Some("push");
+            return (git && push).then(|| "pushed to git".to_string());
+        }
+        n if n == crate::connectors::composio::MULTI_EXECUTE => {
+            return args["tools"]
+                .as_array()?
+                .iter()
+                .filter_map(|t| t["tool_slug"].as_str())
+                .find(|slug| classify(slug, &ToolHints::default()) == CallKind::Send)
+                .map(|slug| format!("called {slug}"));
+        }
+        _ => {}
+    }
+    // The loop's own tools are placed by name; only a name nobody placed is a
+    // connector's, and only those are judged by their verb.
+    if super::toolsets::classify_mutation(name).is_some() {
+        return None;
+    }
+    (classify(name, &ToolHints::default()) == CallKind::Send).then(|| format!("called {name}"))
+}
+
+/// What the person is told when `outward_done` stops a resume.
+pub fn cut_off_after(what: &str) -> String {
+    format!("I was cut off after I had already {what}, so I didn't start over.")
+}
+
 /// What resume tells the model when it picks a run back up. It says the run was
 /// interrupted rather than pretending it flowed on, because the transcript the
 /// model is looking at ends mid-thought and an unexplained gap invites it to
@@ -756,5 +833,69 @@ mod tests {
             5,
             "the source log is untouched by a fork"
         );
+    }
+
+    fn call(id: &str, name: &str, args: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "role": "assistant", "content": null,
+            "tool_calls": [{ "id": id, "type": "function", "function": { "name": name, "arguments": args.to_string() } }]
+        })
+    }
+
+    fn result(id: &str, text: &str) -> serde_json::Value {
+        serde_json::json!({ "role": "tool", "tool_call_id": id, "content": text })
+    }
+
+    /// `LRN-T2`: a mail that went out stops a resume, and says so in words.
+    #[test]
+    fn a_run_that_already_sent_mail_is_not_picked_up_again() {
+        let db = db();
+        let c = conv(&db);
+        let log = SessionLog::new(&db, &c, "run-1");
+        log.appended(&call("c1", "read_file", serde_json::json!({ "path": "a.txt" })));
+        log.appended(&result("c1", "text"));
+        assert_eq!(outward_done(&db, "run-1"), None, "reading is not outward");
+        log.appended(&call("c2", "send_mail", serde_json::json!({ "to": "a@b.c" })));
+        log.appended(&result("c2", "Sent."));
+        let what = outward_done(&db, "run-1").expect("the send is found");
+        assert_eq!(cut_off_after(&what), "I was cut off after I had already sent the email, so I didn't start over.");
+    }
+
+    #[test]
+    fn a_send_that_failed_or_never_finished_can_be_picked_up() {
+        let db = db();
+        let c = conv(&db);
+        let log = SessionLog::new(&db, &c, "run-1");
+        log.appended(&call("c1", "send_mail", serde_json::json!({})));
+        log.appended(&result("c1", "Error: no account is connected"));
+        log.appended(&call("c2", "send_mail", serde_json::json!({})));
+        assert_eq!(outward_done(&db, "run-1"), None);
+    }
+
+    #[test]
+    fn connector_sends_and_pushes_count_and_connector_reads_do_not() {
+        assert_eq!(outward_of("mcp__slack__post_message", &serde_json::json!({})).as_deref(), Some("called mcp__slack__post_message"));
+        assert_eq!(outward_of("mcp__slack__list_channels", &serde_json::json!({})), None);
+        assert_eq!(outward_of("write_file", &serde_json::json!({})), None);
+        assert_eq!(outward_of("run_command", &serde_json::json!({ "command": "git", "args": ["status"] })), None);
+        assert_eq!(
+            outward_of("run_command", &serde_json::json!({ "command": "git", "args": ["push", "origin"] })).as_deref(),
+            Some("pushed to git")
+        );
+        let batch = serde_json::json!({ "tools": [{ "tool_slug": "GMAIL_FETCH_EMAILS" }, { "tool_slug": "GMAIL_SEND_EMAIL" }] });
+        assert_eq!(outward_of(crate::connectors::composio::MULTI_EXECUTE, &batch).as_deref(), Some("called GMAIL_SEND_EMAIL"));
+    }
+
+    #[test]
+    fn another_runs_send_does_not_block_this_one() {
+        let db = db();
+        let c = conv(&db);
+        let old = SessionLog::new(&db, &c, "run-1");
+        old.appended(&call("c1", "send_mail", serde_json::json!({})));
+        old.appended(&result("c1", "Sent."));
+        let new = SessionLog::new(&db, &c, "run-2");
+        new.appended(&call("c1", "read_file", serde_json::json!({})));
+        new.appended(&result("c1", "x"));
+        assert_eq!(outward_done(&db, "run-2"), None);
     }
 }

@@ -1,11 +1,12 @@
 import { useEffect, useRef } from "react";
 import { Component, type ReactNode } from "react";
 import type { UINode } from "../../lib/types";
+import { ArrowUpRightIcon } from "../Icons/Icons";
 import "./Surface.css";
 
 /** The dynamic Workspace surface: one recursive renderer that walks the
  * interface tree the agent composed with `render_ui`. There are no prebuilt
- * widgets here — every interface is an arrangement of ~14 primitives, so the
+ * widgets here — every interface is an arrangement of ~15 primitives, so the
  * agent can project any UI (dashboard, board, wizard, picker) it needs.
  * All fields are treated leniently; an unknown node type degrades to its
  * children or a raw dump, never a crash. */
@@ -51,6 +52,32 @@ const num = (v: unknown, fallback = 0): number => (typeof v === "number" && Numb
 const obj = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 const arr = (v: unknown): UINode[] => (Array.isArray(v) ? (v as UINode[]) : []);
+
+/** A choice option as the model may write it: a bare string or number, or an
+ * object with `id` / `value` and `label` / `title` / `name`. */
+function optionOf(o: unknown, i: number): { id: string; label: string; detail: string } {
+  if (typeof o === "string" || typeof o === "number") {
+    return { id: String(o), label: String(o), detail: "" };
+  }
+  const n = obj(o);
+  const id = str(n.id) || str(n.value) || String(i);
+  return { id, label: str(n.label) || str(n.title) || str(n.name) || id, detail: str(n.detail) };
+}
+
+/** A table cell or header as the model may write it: text and numbers as they
+ * are, yes/no for booleans, a dash for nothing, a `{label}`-style object by its
+ * name (the older comparison columns), anything else as compact JSON. */
+function cellText(v: unknown): string {
+  if (typeof v === "string" || typeof v === "number") return String(v);
+  if (typeof v === "boolean") return v ? "Yes" : "No";
+  if (v === null || v === undefined) return "—";
+  if (typeof v === "object" && !Array.isArray(v)) {
+    const n = v as Record<string, unknown>;
+    const named = str(n.label) || str(n.title) || str(n.name) || str(n.value) || str(n.id);
+    if (named) return named;
+  }
+  return JSON.stringify(v);
+}
 
 function Children({ node, ctx }: { node: UINode; ctx: SurfaceCtx }) {
   return (
@@ -125,7 +152,7 @@ function Node({ node, ctx }: { node: UINode; ctx: SurfaceCtx }) {
         <div className="sf-progress" role="progressbar" aria-valuenow={value} aria-valuemax={max}>
           {str(node.label) && <span className="sf-progress-label">{str(node.label)}</span>}
           <span className="sf-progress-track">
-            <span className="sf-progress-fill" style={{ width: `${(value / max) * 100}%` }} />
+            <span className="sf-progress-fill" style={{ transform: `scaleX(${value / max})` }} />
           </span>
           <span className="sf-progress-nums">
             {value} / {max}
@@ -133,10 +160,39 @@ function Node({ node, ctx }: { node: UINode; ctx: SurfaceCtx }) {
         </div>
       );
     }
+    case "table": {
+      const columns = Array.isArray(node.columns) ? (node.columns as unknown[]) : [];
+      const rows = Array.isArray(node.rows) ? (node.rows as unknown[]) : [];
+      return (
+        <div className="sf-table-scroll">
+          <table className="sf-table">
+            {columns.length > 0 && (
+              <thead>
+                <tr>
+                  {columns.map((col, i) => (
+                    <th key={i}>{cellText(col)}</th>
+                  ))}
+                </tr>
+              </thead>
+            )}
+            <tbody>
+              {rows.map((row, i) => (
+                <tr key={i}>
+                  {(Array.isArray(row) ? row : [row]).map((cell, j) => (
+                    <td key={j}>{cellText(cell)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
     case "link":
       return (
         <a className="sf-link" href={str(node.url)} target="_blank" rel="noreferrer">
-          {str(node.value) || str(node.url)} ↗
+          {str(node.value) || str(node.url)}
+          <ArrowUpRightIcon size={12} />
         </a>
       );
 
@@ -178,36 +234,37 @@ function Node({ node, ctx }: { node: UINode; ctx: SurfaceCtx }) {
       const selected = multi
         ? new Set(Array.isArray(current) ? (current as unknown[]).map(String) : [])
         : new Set(current != null ? [String(current)] : []);
-      const options = arr(node.options);
+      const options = (Array.isArray(node.options) ? node.options : []).map(optionOf);
       return (
         <div className="sf-choice" role={multi ? "group" : "radiogroup"}>
-          {options.map((o, i) => {
-            const oid = str(o.id) || String(i);
+          {options.map((o) => {
+            const oid = o.id;
             const isOn = selected.has(oid);
+            // The drawn radios and checkboxes of the shell (global.css), so a
+            // choice reads and behaves like every other one. Picking the
+            // chosen radio again clears it, which a native radio cannot do
+            // on its own, hence the click handler.
             return (
-              <button
-                key={oid}
-                className={`sf-choice-option${isOn ? " on" : ""}`}
-                role={multi ? "checkbox" : "radio"}
-                aria-checked={isOn}
-                onClick={() => {
-                  if (!bind) return;
-                  if (multi) {
-                    const next = new Set(selected);
-                    if (isOn) next.delete(oid);
-                    else next.add(oid);
-                    ctx.onBind(bind, [...next]);
-                  } else {
-                    ctx.onBind(bind, isOn ? null : oid);
-                  }
-                }}
-              >
-                <span className="sf-choice-dot" aria-hidden="true">
-                  {isOn ? "●" : "○"}
-                </span>
-                <span className="sf-choice-label">{str(o.label) || oid}</span>
-                {str(o.detail) && <span className="sf-choice-detail">{str(o.detail)}</span>}
-              </button>
+              <label key={oid} className={`sf-choice-option${isOn ? " on" : ""}`}>
+                <input
+                  type={multi ? "checkbox" : "radio"}
+                  checked={isOn}
+                  onChange={() => {}}
+                  onClick={() => {
+                    if (!bind) return;
+                    if (multi) {
+                      const next = new Set(selected);
+                      if (isOn) next.delete(oid);
+                      else next.add(oid);
+                      ctx.onBind(bind, [...next]);
+                    } else {
+                      ctx.onBind(bind, isOn ? null : oid);
+                    }
+                  }}
+                />
+                <span className="sf-choice-label">{o.label}</span>
+                {o.detail && <span className="sf-choice-detail">{o.detail}</span>}
+              </label>
             );
           })}
         </div>
@@ -221,6 +278,7 @@ function Node({ node, ctx }: { node: UINode; ctx: SurfaceCtx }) {
         <label className="sf-input">
           {str(node.label) && <span className="sf-input-label">{str(node.label)}</span>}
           <input
+            className="field-input"
             type={type}
             placeholder={str(node.placeholder) || undefined}
             value={value == null ? "" : String(value)}
@@ -237,17 +295,10 @@ function Node({ node, ctx }: { node: UINode; ctx: SurfaceCtx }) {
       const bind = str(node.bind);
       const on = ctx.state[bind] === true;
       return (
-        <button
-          className={`sf-toggle${on ? " on" : ""}`}
-          role="switch"
-          aria-checked={on}
-          onClick={() => bind && ctx.onBind(bind, !on)}
-        >
-          <span className="sf-toggle-box" aria-hidden="true">
-            {on ? "✓" : ""}
-          </span>
+        <label className="sf-toggle">
+          <input type="checkbox" checked={on} onChange={() => bind && ctx.onBind(bind, !on)} />
           <span>{str(node.label)}</span>
-        </button>
+        </label>
       );
     }
     case "button": {
@@ -255,7 +306,7 @@ function Node({ node, ctx }: { node: UINode; ctx: SurfaceCtx }) {
       const label = str(node.label) || action;
       return (
         <button
-          className={`sf-button${str(node.style) === "primary" ? " primary" : ""}`}
+          className={`sf-button ${str(node.style) === "primary" ? "btn-primary" : "btn-secondary"}`}
           disabled={ctx.disabled || !action}
           onClick={() =>
             ctx.onAction(action, obj(node.payload), `Chose “${label}” in the workspace.`)
@@ -302,6 +353,7 @@ function Node({ node, ctx }: { node: UINode; ctx: SurfaceCtx }) {
               <label className="sf-input sf-field" key={fid}>
                 <span className="sf-input-label">{label}{req}</span>
                 <input
+                  className="field-input"
                   type={isNum ? "number" : "text"}
                   placeholder={str(f.placeholder) || undefined}
                   value={value == null ? "" : String(value)}

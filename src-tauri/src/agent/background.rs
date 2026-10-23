@@ -98,6 +98,17 @@ pub struct Spawn {
     /// when it was queued — otherwise a full pool spends a child's whole budget
     /// on waiting.
     pub timeout_secs: u64,
+    /// `CLI-4`: set when an agent app does this child's work instead of the loop.
+    pub engine: Option<EngineSpawn>,
+}
+
+/// What an agent-app child needs that cannot be borrowed.
+pub struct EngineSpawn {
+    pub offered: crate::engines::rules::Offered,
+    /// The lead's task, with the shape of answer it asked for.
+    pub task: String,
+    pub folder: std::path::PathBuf,
+    pub folder_trust: crate::permissions::Trust,
 }
 
 #[derive(Default)]
@@ -243,30 +254,50 @@ async fn run_one(spawn: Spawn) {
         read_only: spawn.read_only,
     };
 
-    let outcome = run_agent(
-        &mgr.client,
-        &spawn.endpoint,
-        spawn.local_endpoint.as_ref(),
-        &db,
-        &mgr,
-        &embed_mgr,
-        &rerank_mgr,
-        &perms,
-        &memory,
-        // Headless, so the Browser toolset refuses before ever touching a pool.
-        None,
-        &spawn.child_conversation_id,
-        None,
-        &data_dir,
-        &spawn.model_name,
-        spawn.messages.clone(),
-        spawn.temperature,
-        true,
-        true,
-        &rc,
-        &sink,
-    )
-    .await;
+    let outcome = if let Some(e) = &spawn.engine {
+        // An agent app, not the loop. Not headless: the user is in the app (a
+        // headless parent never gets here), so what it asks reaches the panel,
+        // attributed to it, instead of being refused.
+        crate::engines::run::run_external(crate::engines::run::Request {
+            db: &db,
+            perms: &perms,
+            sink: &sink,
+            run: &run,
+            offered: &e.offered,
+            child_conversation_id: &spawn.child_conversation_id,
+            task: &e.task,
+            folder: &e.folder,
+            folder_trust: e.folder_trust,
+            headless: false,
+            resume: None,
+        })
+        .await
+    } else {
+        run_agent(
+            &mgr.client,
+            &spawn.endpoint,
+            spawn.local_endpoint.as_ref(),
+            &db,
+            &mgr,
+            &embed_mgr,
+            &rerank_mgr,
+            &perms,
+            &memory,
+            // Headless, so the Browser toolset refuses before ever touching a pool.
+            None,
+            &spawn.child_conversation_id,
+            None,
+            &data_dir,
+            &spawn.model_name,
+            spawn.messages.clone(),
+            spawn.temperature,
+            true,
+            true,
+            &rc,
+            &sink,
+        )
+        .await
+    };
 
     let text = outcome.text.trim();
     let text = if text.is_empty() { "(it produced no text)" } else { text };

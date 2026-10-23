@@ -5,7 +5,9 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::db::{Connector, Db};
+use crate::agent::connector_gate;
+use crate::connectors::composio;
+use crate::db::{Connector, ConnectorPolicy, Db};
 use crate::mcp::{McpClient, McpPrompt, McpTool};
 use crate::runtime::RuntimeManager;
 use crate::secrets::{self, SERVICE_MCP};
@@ -37,8 +39,33 @@ pub struct ConnectorView {
     pub transport: String,
     pub enabled: bool,
     pub has_auth: bool,
-    pub tools: Vec<McpTool>,
+    pub tools: Vec<ToolView>,
     pub created_at: i64,
+    /// `MCG-UI-2`: what its tools may do without asking.
+    pub policy: PolicyView,
+}
+
+/// A tool plus what the gate holds it to (`MCG-UI-2`), so the chip can show
+/// R / C / S and the person can see when a guess was corrected.
+#[derive(Debug, Serialize)]
+pub struct ToolView {
+    #[serde(flatten)]
+    pub tool: McpTool,
+    /// What the gate holds it to now: the person's override, else `auto_kind`.
+    pub kind: String,
+    /// What the name and the server's hint say, before any override.
+    pub auto_kind: String,
+    pub overridden: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PolicyView {
+    pub read_policy: String,
+    pub change_policy: String,
+    pub send_policy: String,
+    pub send_cap: i64,
+    /// Sends that ran today, against `send_cap`.
+    pub sent_today: i64,
 }
 
 fn now_ms() -> i64 {
@@ -57,10 +84,45 @@ fn cached_tools(c: &Connector) -> Vec<McpTool> {
         .unwrap_or_default()
 }
 
-fn to_view(c: Connector) -> ConnectorView {
-    let tools = cached_tools(&c);
+/// What one connector (or one app of Composio) may do without asking, and how
+/// many sends it has used today.
+pub fn policy_view(db: &Db, connector_id: &str, app: &str) -> PolicyView {
+    let policy = db
+        .get_connector_policy(connector_id, app)
+        .unwrap_or_else(|_| ConnectorPolicy::defaults(connector_id, app));
+    let sent_today = db
+        .app_send_count(connector_id, app, &connector_gate::send_day())
+        .unwrap_or(0);
+    PolicyView {
+        read_policy: policy.read_policy,
+        change_policy: policy.change_policy,
+        send_policy: policy.send_policy,
+        send_cap: policy.send_cap,
+        sent_today,
+    }
+}
+
+fn to_view(db: &Db, c: Connector) -> ConnectorView {
+    let policy = db
+        .get_connector_policy(&c.id, "")
+        .unwrap_or_else(|_| ConnectorPolicy::defaults(&c.id, ""));
+    let overrides = connector_gate::overrides_of(&policy);
+    let tools = cached_tools(&c)
+        .into_iter()
+        .map(|tool| {
+            let auto = connector_gate::classify(&tool.name, &connector_gate::hints_of(&tool));
+            let kind = overrides.get(&tool.name).copied().unwrap_or(auto);
+            ToolView {
+                tool,
+                kind: kind.as_str().to_string(),
+                auto_kind: auto.as_str().to_string(),
+                overridden: kind != auto,
+            }
+        })
+        .collect();
     let has_auth = secrets::has_secret(SERVICE_MCP, &c.id);
     ConnectorView {
+        policy: policy_view(db, &c.id, ""),
         id: c.id,
         name: c.name,
         url: c.url,
@@ -114,13 +176,86 @@ pub async fn add_connector_cmd(
     }
     let _ = db.log_activity(None, "mcp", &format!("Connected {name}"));
 
-    Ok(to_view(connector))
+    Ok(to_view(&db, connector))
 }
 
 /// List configured connectors with their cached tools (MCP-3).
 #[tauri::command]
 pub fn list_connectors_cmd(db: State<'_, Db>) -> Cmd<Vec<ConnectorView>> {
-    Ok(db.list_connectors().map_err(err)?.into_iter().map(to_view).collect())
+    Ok(db
+        .list_connectors()
+        .map_err(err)?
+        .into_iter()
+        .map(|c| to_view(&db, c))
+        .collect())
+}
+
+/// `MCG-UI-2`: what a connector's tools may do without asking. The cap is held
+/// to 1-1000 by the database. The tool overrides are left as they were. `app` is
+/// a Composio app's slug when the policy is one app's; empty for the connector.
+#[tauri::command]
+pub fn set_connector_policy_cmd(
+    db: State<'_, Db>,
+    id: String,
+    app: Option<String>,
+    read_policy: String,
+    change_policy: String,
+    send_policy: String,
+    send_cap: i64,
+) -> Cmd<()> {
+    let app = app.unwrap_or_default();
+    let mut policy = db.get_connector_policy(&id, &app).map_err(err)?;
+    policy.read_policy = read_policy;
+    policy.change_policy = change_policy;
+    policy.send_policy = send_policy;
+    policy.send_cap = send_cap;
+    db.save_connector_policy(&policy).map_err(err)
+}
+
+/// `MCG-7`: treat one tool as read, change or send, or (`kind` empty) go back to
+/// what its name says. `app` is a Composio app's slug when the tool is one of
+/// that app's; its override is kept with that app's policy.
+#[tauri::command]
+pub fn set_tool_kind_cmd(
+    db: State<'_, Db>,
+    id: String,
+    tool: String,
+    kind: Option<String>,
+    app: Option<String>,
+) -> Cmd<()> {
+    set_tool_kind(&db, &id, app.as_deref().unwrap_or(""), &tool, kind.as_deref())
+}
+
+pub fn set_tool_kind(db: &Db, id: &str, app: &str, tool: &str, kind: Option<&str>) -> Cmd<()> {
+    if !app.is_empty() && !composio::valid_slug(app) {
+        return Err(PoiesisError::Message("I don't know that app.".into()));
+    }
+    let tool = tool.trim().to_string();
+    if tool.is_empty() || tool.len() > 200 {
+        return Err(PoiesisError::Message("Name the tool.".into()));
+    }
+    let mut policy = db.get_connector_policy(id, app).map_err(err)?;
+    let mut overrides: std::collections::BTreeMap<String, String> = policy
+        .tool_overrides
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    match kind.filter(|k| !k.is_empty()) {
+        Some(k) => {
+            let parsed = connector_gate::CallKind::parse(k)
+                .ok_or_else(|| PoiesisError::Message("A tool is read, change or send.".into()))?;
+            overrides.insert(tool, parsed.as_str().to_string());
+        }
+        None => {
+            overrides.remove(&tool);
+        }
+    }
+    policy.tool_overrides = if overrides.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&overrides).map_err(err)?)
+    };
+    db.save_connector_policy(&policy).map_err(err)
 }
 
 /// Result of re-probing a connector.
@@ -148,6 +283,28 @@ pub async fn probe_connector(db: &Db, http: &reqwest::Client, id: &str) -> Cmd<C
         .get_connector(&id)
         .map_err(err)?
         .ok_or_else(|| PoiesisError::Message("Connector not found.".into()))?;
+    // Composio has no stored address: its session is made, or found, on demand.
+    if connector.transport == composio::TRANSPORT {
+        if !composio::has_key() {
+            return Ok(ConnectorStatus {
+                ok: false,
+                tool_count: 0,
+                error: Some("No Composio key is saved.".into()),
+            });
+        }
+        return Ok(match composio::refresh_tools(db, http).await {
+            Ok(tool_count) => {
+                composio::set_last_error(db, None);
+                // So the checkup can tell which sign-ins have expired.
+                let _ = composio::refresh_accounts(db, http).await;
+                ConnectorStatus { ok: true, tool_count, error: None }
+            }
+            Err(e) => {
+                composio::set_last_error(db, Some(&e));
+                ConnectorStatus { ok: false, tool_count: 0, error: Some(e) }
+            }
+        });
+    }
     let Some(url) = connector.url.clone() else {
         return Ok(ConnectorStatus {
             ok: false,

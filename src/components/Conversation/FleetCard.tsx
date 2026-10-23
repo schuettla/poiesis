@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 import type { SubRun } from "../../lib/types";
 import { stillWorking } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
+import { usePersonaAppsLine } from "../Apps/personaAppsLine";
+import BlockRenderer from "../Blocks/BlockRenderer";
+import { SettingsIcon } from "../Icons/Icons";
+import { ContinueThere, EngineChips, UndoHandover } from "./EngineChips";
 import Orb from "../Orb/Orb";
 import { orbForSubRun } from "../Orb/orbState";
 
@@ -69,6 +73,10 @@ function FleetRow({ run }: { run: SubRun }) {
   const openItem = useAppStore((s) => s.openItem);
   const steerSubRun = useAppStore((s) => s.steerSubRun);
   const stopSubRun = useAppStore((s) => s.stopSubRun);
+  const openEngines = useAppStore((s) => s.openEngines);
+  // `CA-UI-6`: an agent backed by a persona narrowed to some apps says which.
+  const personaId = useAppStore((s) => s.personas.find((p) => p.name === run.agent)?.id);
+  const appsLine = usePersonaAppsLine(personaId);
   const [steering, setSteering] = useState(false);
   const [draft, setDraft] = useState("");
   const [sent, setSent] = useState(false);
@@ -102,8 +110,12 @@ function FleetRow({ run }: { run: SubRun }) {
           <span className="fleet-dot" style={{ background: dotColor(run.agent) }} aria-hidden="true" />
         )}
       </span>
-      <span className="fleet-agent" title={run.task}>
-        {run.agent}
+      <span className="fleet-who">
+        <span className="fleet-agent" title={appsLine ? `${run.task}
+${appsLine}` : run.task}>
+          {run.agent}
+        </span>
+        <EngineChips run={run} />
       </span>
       <span className="fleet-doing">{running ? nowDoing(run) : endedLine(run)}</span>
       {running && <span className="fleet-clock">{clock(Date.now() - run.startedAt)}</span>}
@@ -133,6 +145,16 @@ function FleetRow({ run }: { run: SubRun }) {
             Report {open ? "⌃" : "⌄"}
           </button>
         )}
+        {run.engine && (
+          <button
+            className="fleet-action fleet-gear"
+            title={`Rules for ${run.engine.name}`}
+            aria-label={`Rules for ${run.engine.name}`}
+            onClick={() => run.engine && openEngines(run.engine.id)}
+          >
+            <SettingsIcon size={13} />
+          </button>
+        )}
       </span>
       {steering && (
         <form
@@ -145,7 +167,11 @@ function FleetRow({ run }: { run: SubRun }) {
           <input
             autoFocus
             value={draft}
-            placeholder="Tell this agent something"
+            placeholder={
+              run.engine && !run.engine.can_steer
+                ? "I'll pass this on when it's done with this job"
+                : "Tell this agent something"
+            }
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Escape") setSteering(false);
@@ -154,9 +180,27 @@ function FleetRow({ run }: { run: SubRun }) {
         </form>
       )}
       {sent && running && (
-        <p className="fleet-note">Sent. It will pick this up after the step it is on.</p>
+        <p className="fleet-note">
+          {run.engine && !run.engine.can_steer
+            ? "Sent. I'll pass this on when it's done with this job."
+            : "Sent. It will pick this up after the step it is on."}
+        </p>
+      )}
+      {/* `MCPS-2`: what the agent put on its card with `present`. */}
+      {run.blocks && run.blocks.length > 0 && (
+        <div className="fleet-blocks">
+          {run.blocks.map((b) => (
+            <BlockRenderer key={b.id} block={b} />
+          ))}
+        </div>
       )}
       {open && !running && <pre className="fleet-report">{run.text}</pre>}
+      {!running && run.engine && (
+        <div className="engine-after">
+          <ContinueThere run={run} />
+          <UndoHandover run={run} />
+        </div>
+      )}
     </div>
   );
 }

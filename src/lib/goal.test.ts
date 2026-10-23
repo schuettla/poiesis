@@ -160,6 +160,65 @@ describe("the loop", () => {
     }
   });
 
+  /** `LRN-T1`: stop on evidence from the round's steps, not on the round count. */
+  describe("stopping on evidence (LRN-1)", () => {
+    const worked = { ok: 2, errors: [] };
+    const nothing = { ok: 0, errors: [] };
+
+    it("two continuations in a row with no working tool call end it stalled, and say so", async () => {
+      const h = harness(Array(5).fill(NOT_YET));
+      await afterRun(h.host, "c1", { evidence: nothing }); // round 1: not a continuation
+      expect(h.goals.c1.quiet).toBe(0);
+      await afterRun(h.host, "c1", { evidence: nothing }); // continuation 1
+      expect(h.goals.c1).toMatchObject({ status: "active", quiet: 1 });
+      await afterRun(h.host, "c1", { evidence: nothing }); // continuation 2
+      expect(h.goals.c1).toMatchObject({ status: "stalled", checking: false });
+      expect(h.goals.c1.stalled).toBe("I stopped because the last two rounds got nowhere: none of my tool calls worked.");
+      expect(h.notes[h.notes.length - 1]).toBe(h.goals.c1.stalled);
+      expect(h.sent).toHaveLength(2);
+    });
+
+    it("a round in which something worked starts the count again", async () => {
+      const h = harness(Array(5).fill(NOT_YET));
+      await afterRun(h.host, "c1", { evidence: worked });
+      await afterRun(h.host, "c1", { evidence: nothing });
+      await afterRun(h.host, "c1", { evidence: worked });
+      await afterRun(h.host, "c1", { evidence: nothing });
+      expect(h.goals.c1).toMatchObject({ status: "active", quiet: 1 });
+    });
+
+    it("the same error in three rounds ends it, quoting the error", async () => {
+      const h = harness(Array(5).fill(NOT_YET));
+      const wall = { ok: 1, errors: ["— Cannot find module 'x'", "— cannot find module  'x'"] };
+      await afterRun(h.host, "c1", { evidence: wall });
+      await afterRun(h.host, "c1", { evidence: wall });
+      expect(h.goals.c1.status).toBe("active");
+      await afterRun(h.host, "c1", { evidence: wall });
+      expect(h.goals.c1.status).toBe("stalled");
+      expect(h.goals.c1.stalled).toBe("I stopped after three identical errors: Cannot find module 'x'");
+    });
+
+    it("three of the same error in one round is one round, not three", async () => {
+      const h = harness(Array(5).fill(NOT_YET));
+      await afterRun(h.host, "c1", { evidence: { ok: 1, errors: ["— boom", "— boom", "— boom"] } });
+      expect(h.goals.c1).toMatchObject({ status: "active", walls: { boom: 1 } });
+    });
+
+    it("a goal that is met is met, whatever the round looked like", async () => {
+      const h = harness([MET]);
+      await afterRun(h.host, "c1", { evidence: nothing });
+      expect(h.goals.c1.status).toBe("met");
+    });
+
+    it("without evidence the loop behaves as before", async () => {
+      const h = harness(Array(3).fill(NOT_YET));
+      await afterRun(h.host, "c1", {});
+      await afterRun(h.host, "c1", {});
+      await afterRun(h.host, "c1", {});
+      expect(h.goals.c1.status).toBe("active");
+    });
+  });
+
   it("a chat with no goal is not touched at all", async () => {
     const h = harness([MET]);
     delete h.goals.c1;

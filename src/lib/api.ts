@@ -52,6 +52,8 @@ export interface DbConversation {
    * the two fields above are the fallback rather than the answer.
    */
   project_id?: string | null;
+  /** `RTE-5`: this chat keeps external agent apps out. */
+  engines_off?: boolean;
 }
 
 /** `PRJ-1`: a working directory and the sessions that happened in it. */
@@ -553,7 +555,13 @@ export type AgentEvent =
       agent: string;
       task: string;
       index: number;
+      /** `CLI-UI-2`: set when an agent app does this child's work. */
+      engine?: EngineBadge;
     }
+  /** A question on the panel is no longer wanted (the agent hung up, or Stop). */
+  | { type: "permission_gone"; id: string }
+  /** `MCPS-2`: a question an agent app put to you is no longer wanted. */
+  | { type: "question_gone"; id: string }
   /** One event from a delegated child, tagged with whose it is (`SUB-2`). */
   | { type: "sub"; run_id: string; event: AgentEvent }
   | {
@@ -637,7 +645,18 @@ export interface PermissionRequest {
   /** `BRW-3`/`SYS-1`: set for a non-filesystem capability request —
    * `"domain"` | `"screen"` | `"open-app"` — instead of a folder request.
    * `path` carries the domain/app name. */
-  capability?: "domain" | "screen" | "open-app" | "task" | "command";
+  capability?: "domain" | "screen" | "open-app" | "task" | "command" | "app" | "engine" | "handover";
+  /** `CLI-6`: the agent app that is asking ("Claude Code"), for `engine` and `handover`. */
+  engine?: string;
+  /** The agent's own word for what it wants to do (`Bash`, `Edit`). */
+  tool?: string;
+  /** `RTE-4`: for a `handover` card, the rule that makes the lead think this fits. */
+  rule?: { label: string; text: string };
+  /** `MCG-UI-1`: for an `"app"` request, what the call does. A send is drawn in
+   * the outbound colour. `path` is the app's name, `diff` its arguments as JSON. */
+  call_kind?: CallKind;
+  /** For a send: how many a day "always" covers, so the button can say so. */
+  cap?: number;
   /** `COD-UI-4`: for a task or command, the exact program and arguments. */
   argv?: string[];
   /** The project it runs in. */
@@ -646,6 +665,20 @@ export interface PermissionRequest {
   timeout_secs?: number;
   /** What "always allow" remembers: a task's name, or a `command argv[0]` pair. */
   remember?: string;
+  /** `MCG-7`: for a Composio `"app"` request, the app tools it runs, so a wrong
+   * guess about what one does can be corrected here. Applies from the next call. */
+  tools?: AppTool[];
+}
+
+/** One app tool an approval names, with what the gate holds it to. */
+export interface AppTool {
+  connector_id: string;
+  app: string;
+  app_name: string;
+  name: string;
+  kind: CallKind;
+  auto_kind: CallKind;
+  overridden: boolean;
 }
 
 export type Decision = "deny" | "once" | "chat" | "forever";
@@ -718,6 +751,8 @@ export interface TurnRunOptions {
   /** `SKC-2`: a skill the user named with `/name`, loaded before the first token. */
   skill?: string;
   skillArgs?: string;
+  /** `CLI-UI-6`: the agent the user named with `/delegate <agent> ...`. */
+  delegateTo?: string;
   /** `PLF`: may read, may not change; writes a plan and stops for approval. */
   planFirst?: boolean;
   /** `PLF-4`: the plan the user approved. The run starts from it, unrestricted. */
@@ -930,6 +965,13 @@ export interface SubagentRun {
   steps: number;
   started_at: number;
   ended_at: number | null;
+  /** `CLI-4`: set when an agent app did the work. */
+  engine_id: string | null;
+  /** The rule it cited (`U2`), or `asked`. */
+  because: string | null;
+  paid_by: EnginePaidBy | null;
+  /** The agent's own session id, for **Continue there**. */
+  engine_session: string | null;
 }
 
 /** An agent type the lead may hand a job to: `general`, plus spawnable personas. */
@@ -937,6 +979,7 @@ export interface AgentType {
   name: string;
   description: string;
   persona_id: string | null;
+  engine_id?: string;
 }
 
 export const listSubagentRuns = (conversationId: string) =>
@@ -957,6 +1000,21 @@ export const steerSubagent = (runId: string, text: string) =>
 
 export const listAgentTypes = () => invoke<AgentType[]>("list_agent_types_cmd");
 
+/** One thing `/delegate` can name in a chat (`CLI-UI-6`). */
+export interface DelegateTarget {
+  /** What is typed after `/delegate`: `claude-code`, `opencode`, a persona's name. */
+  slug: string;
+  name: string;
+  kind: "general" | "persona" | "engine";
+  engine_id: string | null;
+  hint: string;
+  /** Why it cannot be chosen in this chat, in a few words. */
+  disabled_reason: string | null;
+}
+
+export const listDelegateTargets = (conversationId: string | null) =>
+  invoke<DelegateTarget[]>("list_delegate_targets_cmd", { conversationId });
+
 /** One line of the Usage panel (`OBS-2`): a day, a model, or a conversation. */
 export interface UsageBucket {
   /** A UTC day start in epoch ms, a model name, or a conversation id. */
@@ -973,11 +1031,26 @@ export interface UsageBucket {
   cost_usd: number | null;
 }
 
+/** `CLI-UI-7`: what one agent app did for me over the range. Not part of any total. */
+export interface AgentAppUsage {
+  name: string;
+  runs: number;
+  prompt_tokens: number;
+  output_tokens: number;
+  duration_ms: number;
+  /** What the app says the jobs would have cost at list prices; `null` when it never says. */
+  notional_usd: number | null;
+  /** Who paid, `mixed` when the jobs differ. */
+  paid_by: EnginePaidBy | "mixed" | null;
+}
+
 export interface PricedUsage {
   total: UsageBucket;
   by_day: UsageBucket[];
   by_model: UsageBucket[];
   by_conversation: UsageBucket[];
+  /** Jobs done by agent apps (Claude Code, Codex...), listed apart from the totals. */
+  agent_apps?: AgentAppUsage[];
   /** At least one model has no price, so the total is a floor, not a figure. */
   some_prices_unknown: boolean;
 }
@@ -1393,6 +1466,9 @@ export interface ToolsetInfo {
   enabled: boolean;
   /** True if enabling sends data off the device or runs code — UI warns. */
   sensitive: boolean;
+  /** `LRN-5`: why this switched-on tool is not being offered yet (no mail
+   * account, no image model), in my words. Absent when nothing is missing. */
+  needs?: string;
 }
 
 export const listToolsets = () => invoke<ToolsetInfo[]>("list_toolsets_cmd");
@@ -1849,6 +1925,8 @@ export interface Persona {
   description: string | null;
   /** `SUB-3`: may the agent delegate work to this one. Off by default. */
   spawnable: boolean;
+  /** `CLI-UI-4`: the agent app this persona runs on, or `null` for Poiesis. */
+  engine_id?: string | null;
 }
 
 export const listPersonas = () => invoke<Persona[]>("list_personas_cmd");
@@ -1861,8 +1939,10 @@ export const createPersona = (args: {
   skillsJson?: string | null;
   description?: string | null;
   spawnable?: boolean;
+  engineId?: string | null;
 }) =>
   invoke<Persona>("create_persona_cmd", {
+    engineId: args.engineId ?? null,
     name: args.name,
     systemPrompt: args.systemPrompt,
     modelId: args.modelId ?? null,
@@ -2001,12 +2081,228 @@ export const testEndpoint = (baseUrl: string, apiKey?: string, endpointId?: stri
   invoke<EndpointProbe>("test_endpoint_cmd", { baseUrl, apiKey, endpointId });
 export const listEndpointModels = () => invoke<EndpointModel[]>("list_endpoint_models_cmd");
 
+// ---- external agent apps (CLI engines, `CLI-12`) ----
+
+export type EngineKind = "claude-code" | "codex" | "acp";
+/** Who pays: the user's plan, an API key they chose, or the agent's own provider. */
+export type EnginePaidBy = "plan" | "api-key" | "own" | "free";
+export type EngineTested = "yes" | "newer" | "older" | "unknown";
+export type EngineTrust = "read-only" | "confirm" | "auto";
+
+/** Everything Settings → External agents shows about one agent. The API key is
+ * never in it: `has_key` says only whether one is saved. */
+export interface EngineInfo {
+  id: string;
+  kind: EngineKind;
+  name: string;
+  /** In the bundled catalog, as opposed to added by hand. */
+  builtin: boolean;
+  found: boolean;
+  /** An npm `.cmd` wrapper. */
+  shim: boolean;
+  /** The path the user set; null = auto-detect. */
+  program: string | null;
+  found_path: string | null;
+  version: string | null;
+  tested: EngineTested;
+  signed_in: boolean | null;
+  paid_by: EnginePaidBy | null;
+  last_error: string | null;
+  last_probe_at: number | null;
+  enabled: boolean;
+  payment: "plan" | "api-key";
+  trust_ceiling: EngineTrust;
+  headless: boolean;
+  memory_tools: boolean;
+  /** `CAP-14`: may use my connected apps through Poiesis. */
+  app_tools: boolean;
+  model: string | null;
+  extra_args: string[];
+  env: Record<string, string>;
+  args: string[];
+  has_key: boolean;
+  supports_api_key: boolean;
+  can_pick_model: boolean;
+  install_url: string | null;
+  /** Found for the first time since the section was last opened. */
+  is_new: boolean;
+  /** `RTE-1`: when the lead may use it. */
+  use_mode: EngineUseMode;
+  /** `RTE-3`: conditions checked in Rust, whatever the model says. */
+  guards: EngineGuards;
+  /** `RTE-2`: the user's rules, with the labels the lead cites. */
+  rules: EngineRule[];
+  /** I can hand this kind of agent a job today. Others are configurable only. */
+  delegate_ready: boolean;
+  /** `MCPS-2`: this kind of agent can be given my own tools (memory and the rest). */
+  memory_ready: boolean;
+  /** `CLI-10`: how its recent jobs went. */
+  diagnostics: EngineDiagnostics;
+}
+
+export type EngineUseMode = "on_request" | "suggest" | "auto";
+
+/** `CLI-UI-2`: what the Fleet row shows for a child that an agent app runs. */
+export interface EngineBadge {
+  id: string;
+  name: string;
+  paid_by: EnginePaidBy | null;
+  /** The rule it cited (`U2`), or `asked`. */
+  because: string | null;
+  /** That rule's words, for the hover. */
+  because_text: string | null;
+  /** It can take a message while it works. */
+  can_steer: boolean;
+}
+
+export interface EngineGuards {
+  code_projects_only: boolean;
+  min_trust: EngineTrust;
+  max_per_conversation: number;
+  not_in_projects: string[];
+}
+
+/** One line of the user's rules for an agent app (`RTE-2`). */
+export interface EngineRule {
+  id: string;
+  engine_id: string;
+  kind: "use" | "avoid";
+  text: string;
+  enabled: boolean;
+  /** "Always for this": a handover that cites it starts without asking. */
+  auto: boolean;
+  position: number;
+  source: "default" | "user" | "proposed";
+  /** Handovers that cited it. */
+  hits: number;
+  /** Times the user said no to one that cited it. */
+  overrides: number;
+  /** `U1`, `A2`...: what the lead cites. */
+  label: string;
+}
+
+export interface EngineDiagnostics {
+  runs: number;
+  failed: number;
+  unknown_events: number;
+  last_error: string | null;
+  last_stderr: string;
+}
+
+/** `RTE-7`: what the lead would do with a request. */
+export interface EngineRoutePreview {
+  agent: string | null;
+  label: string | null;
+  rule_text: string | null;
+  consequence: "ask" | "start" | "only_when_asked" | null;
+  blocked: string | null;
+}
+
+/** Any subset of the editable settings. An empty string clears a text value. */
+export interface EnginePatch {
+  use_mode?: EngineUseMode;
+  guards?: EngineGuards;
+  enabled?: boolean;
+  program?: string;
+  payment?: "plan" | "api-key";
+  trust_ceiling?: EngineTrust;
+  headless?: boolean;
+  memory_tools?: boolean;
+  app_tools?: boolean;
+  model?: string;
+  extra_args?: string[];
+  env?: Record<string, string>;
+  /** Custom agents only. */
+  display_name?: string;
+  args?: string[];
+}
+
+export interface EngineTryResult {
+  ok: boolean;
+  reply: string;
+  seconds: number;
+  paid_by: EnginePaidBy | null;
+  model: string | null;
+  error: string | null;
+  needs_sign_in: boolean;
+}
+
+export interface EngineModel {
+  id: string;
+  name: string;
+  is_default: boolean;
+}
+
+/** What is known now, without searching or probing. */
+export const listEngines = () => invoke<EngineInfo[]>("engines_list_cmd");
+/** Search for the agents and probe those that are due. `force` probes all. */
+export const detectEngines = (force: boolean) => invoke<EngineInfo[]>("engines_detect_cmd", { force });
+export const markEnginesSeen = () => invoke<void>("engines_mark_seen_cmd");
+export const probeEngine = (id: string) => invoke<EngineInfo[]>("engines_probe_cmd", { id });
+export const updateEngineSettings = (id: string, patch: EnginePatch) =>
+  invoke<EngineInfo[]>("engines_update_cmd", { id, patch });
+export const addAcpEngine = (displayName: string, program: string, args: string[]) =>
+  invoke<EngineInfo[]>("engines_add_acp_cmd", { displayName, program, args });
+export const removeEngine = (id: string) => invoke<EngineInfo[]>("engines_remove_cmd", { id });
+/** Write-only: nothing returns the key. */
+export const setEngineKey = (id: string, key: string) => invoke<EngineInfo[]>("engines_set_key_cmd", { id, key });
+export const clearEngineKey = (id: string) => invoke<EngineInfo[]>("engines_clear_key_cmd", { id });
+/** Opens a terminal running the agent's own sign-in; we never see the credentials. */
+export const openEngineLogin = (id: string) => invoke<void>("engines_open_login_cmd", { id });
+/** One tiny tool-free turn, to prove the whole path works. */
+export const testEngine = (id: string) => invoke<EngineTryResult>("engines_test_cmd", { id });
+export const listEngineModels = (id: string) => invoke<EngineModel[]>("engines_models_cmd", { id });
+
+// ---- when I hand work over (`RTE-2`..`RTE-7`) ----
+
+export const addEngineRule = (engineId: string, kind: "use" | "avoid", text: string) =>
+  invoke<EngineInfo[]>("engines_rule_add_cmd", { engineId, kind, text });
+export const updateEngineRule = (
+  ruleId: string,
+  patch: { text?: string; kind?: "use" | "avoid"; enabled?: boolean; auto?: boolean },
+) => invoke<EngineInfo[]>("engines_rule_update_cmd", { ruleId, patch });
+export const deleteEngineRule = (ruleId: string) => invoke<EngineInfo[]>("engines_rule_delete_cmd", { ruleId });
+export const reorderEngineRules = (engineId: string, ids: string[]) =>
+  invoke<EngineInfo[]>("engines_rules_reorder_cmd", { engineId, ids });
+export const resetEngineRules = (engineId: string) => invoke<EngineInfo[]>("engines_rules_reset_cmd", { engineId });
+/** `RTE-5`: keep agent apps out of one chat. */
+export const setConversationEnginesOff = (id: string, off: boolean) =>
+  invoke<void>("set_conversation_engines_off_cmd", { id, off });
+/** **Continue there**: opens a terminal in the job's folder, resuming its session.
+ * Returns the command, so it can be copied whatever happens to the terminal. */
+export const continueEngineJob = (runId: string) =>
+  invoke<{ command: string; opened: boolean; error: string | null }>("engines_continue_cmd", { runId });
+/** "This shouldn't have gone to Claude Code": stops it and counts a no on the rule. */
+export const undoEngineHandover = (runId: string) => invoke<boolean>("engines_undo_handover_cmd", { runId });
+/** **Try a request**: one cheap call on the chosen model. Guards are applied in Rust. */
+export const previewEngineRoute = (text: string, target?: ChatTarget) =>
+  invoke<EngineRoutePreview>("engines_route_preview_cmd", { text, target: target ?? null });
+
 // ---- MCP connectors (Phase 6) ----
 
 export interface McpTool {
   name: string;
   description: string;
   input_schema: unknown;
+}
+/** `MCG-2`: what a connector's tool does to the world. */
+export type CallKind = "read" | "change" | "send";
+/** A tool plus what the gate holds it to. */
+export interface ToolView extends McpTool {
+  /** What the gate holds it to now: the person's override, else `auto_kind`. */
+  kind: CallKind;
+  /** What its name and the server's hint say, before any override. */
+  auto_kind: CallKind;
+  overridden: boolean;
+}
+/** `MCG-UI-2`: what a connector's tools may do without asking. */
+export interface ConnectorPolicy {
+  read_policy: "run" | "ask";
+  change_policy: "ask" | "allow";
+  send_policy: "ask" | "allow";
+  send_cap: number;
+  /** Sends that ran today, against `send_cap`. */
+  sent_today: number;
 }
 export interface ConnectorView {
   id: string;
@@ -2015,8 +2311,9 @@ export interface ConnectorView {
   transport: string;
   enabled: boolean;
   has_auth: boolean;
-  tools: McpTool[];
+  tools: ToolView[];
   created_at: number;
+  policy: ConnectorPolicy;
 }
 export interface ConnectorStatus {
   ok: boolean;
@@ -2038,6 +2335,146 @@ export const testConnector = (id: string) => invoke<ConnectorStatus>("test_conne
 export const setConnectorEnabled = (id: string, enabled: boolean) =>
   invoke<void>("set_connector_enabled_cmd", { id, enabled });
 export const deleteConnector = (id: string) => invoke<void>("delete_connector_cmd", { id });
+export const setConnectorPolicy = (
+  id: string,
+  policy: Omit<ConnectorPolicy, "sent_today">,
+  /** A Composio app's slug when the policy is one app's. */
+  app?: string
+) =>
+  invoke<void>("set_connector_policy_cmd", {
+    id,
+    app,
+    readPolicy: policy.read_policy,
+    changePolicy: policy.change_policy,
+    sendPolicy: policy.send_policy,
+    sendCap: policy.send_cap,
+  });
+/** `MCG-7`: treat one tool as read, change or send; `null` goes back to its name.
+ * `app` is a Composio app's slug when the tool is one of that app's. */
+export const setToolKind = (id: string, tool: string, kind: CallKind | null, app?: string) =>
+  invoke<void>("set_tool_kind_cmd", { id, tool, kind, app });
+
+// ---- Composio: hundreds of apps through one key (`CAP`) ----
+
+/** `INITIATED` and `INITIALIZING` are waiting for the person to finish signing in. */
+export type AccountStatus =
+  | "ACTIVE"
+  | "INITIALIZING"
+  | "INITIATED"
+  | "FAILED"
+  | "EXPIRED"
+  | "INACTIVE"
+  | "REVOKED"
+  | string;
+export interface AppAccount {
+  id: string;
+  app: string;
+  app_name: string;
+  label: string | null;
+  status: AccountStatus;
+}
+export interface AppPolicy {
+  app: string;
+  policy: ConnectorPolicy;
+}
+/**
+ * Which kind of Composio key is saved (`CAP-C1`): `connect` is the person's own
+ * `ck_` key from Composio Connect, `project` a developer `ak_` key. `null` when
+ * there is no key.
+ */
+export type ComposioMode = "connect" | "project" | null;
+/** Never carries the key, the user id, the session id or a sign-in address. */
+export interface ComposioStatus {
+  configured: boolean;
+  mode: ComposioMode;
+  connector_id: string | null;
+  enabled: boolean;
+  tool_count: number;
+  checked_at: number | null;
+  last_error: string | null;
+  accounts: AppAccount[];
+  policies: AppPolicy[];
+}
+export interface CatalogApp {
+  slug: string;
+  name: string;
+  logo?: string;
+  description: string;
+  categories: string[];
+  /** Composio can sign the person in without their own setup. */
+  managed: boolean;
+}
+export interface Catalog {
+  apps: CatalogApp[];
+  /** Composio has more apps than it sent; search to reach the rest. */
+  partial: boolean;
+  /** `bundled` is the list that ships with the app. */
+  source: "composio" | "bundled";
+  note: string | null;
+  /** How many apps there are in all, before the search. */
+  total: number;
+}
+export interface PersonaAppGrant {
+  connector_id: string;
+  /** `""` is the explicit "no apps". */
+  app: string;
+  /** `*`, or a JSON list of tool names. */
+  tools: string;
+}
+export interface AppUsage {
+  app: string;
+  app_name: string;
+  calls: number;
+}
+
+/** An account is usable only while Composio says it is active. */
+export const accountWaiting = (a: Pick<AppAccount, "status">) =>
+  a.status === "INITIATED" || a.status === "INITIALIZING";
+/** A sign-in that worked and stopped. Only this raises the hub dot (`CAP-C-F2`). */
+export const accountExpired = (a: Pick<AppAccount, "status">) => a.status === "EXPIRED";
+/** A sign-in that was never finished: abandoned, or refused. */
+export const accountFailed = (a: Pick<AppAccount, "status">) => a.status === "FAILED";
+export const accountBroken = (a: Pick<AppAccount, "status">) => accountExpired(a) || accountFailed(a);
+
+export const composioStatus = () => invoke<ComposioStatus>("composio_status_cmd");
+/** Checks the key with Composio before keeping it. */
+export const composioSaveKey = (key: string) => invoke<ComposioStatus>("composio_save_key_cmd", { key });
+export const composioRemoveKey = () => invoke<ComposioStatus>("composio_remove_key_cmd");
+export const composioRefresh = () => invoke<ComposioStatus>("composio_refresh_cmd");
+/**
+ * `refresh` asks Composio first; the sign-in card polls with it. With a Connect
+ * key Composio has no account list, so `apps` narrows the question to the apps
+ * being watched (omitted: every app I know of).
+ */
+export const composioAccounts = (refresh: boolean, apps?: string[]) =>
+  invoke<AppAccount[]>("composio_accounts_cmd", { refresh, apps });
+/**
+ * Starts a sign-in and opens it in the browser; the address never comes back
+ * here. An app that is connected already comes back `ACTIVE` and opens nothing.
+ * A `label` adds one more account under that name (Add account).
+ */
+export const composioConnect = (app: string, label?: string) =>
+  invoke<AppAccount>("composio_connect_cmd", { app, label });
+/** Makes a sign-in that stopped working again and opens it. */
+export const composioReconnect = (accountId: string) =>
+  invoke<AppAccount>("composio_reconnect_cmd", { accountId });
+/** Gives up on a sign-in that is still open, so it does not linger half made. */
+export const composioCancel = (accountId: string) => invoke<void>("composio_cancel_cmd", { accountId });
+/** Removes the sign-in at Composio (with a Connect key, every account of the app
+ * when it has one, else only this account), then stops listing it. */
+export const composioDisconnect = (accountId: string) =>
+  invoke<AppAccount[]>("composio_disconnect_cmd", { accountId });
+export const composioCatalog = (query?: string) => invoke<Catalog>("composio_catalog_cmd", { query });
+/** Gives one account a new name, at Composio too (Connect keys only). */
+export const composioRename = (accountId: string, label: string) =>
+  invoke<AppAccount[]>("composio_rename_cmd", { accountId, label });
+/** `MCG-7`: one app's tools I can name (those that ran, those given a kind). */
+export const composioAppTools = (app: string) => invoke<ToolView[]>("composio_app_tools_cmd", { app });
+export const getPersonaAppGrants = (personaId: string) =>
+  invoke<PersonaAppGrant[]>("get_persona_app_grants_cmd", { personaId });
+export const setPersonaAppGrants = (personaId: string, grants: PersonaAppGrant[]) =>
+  invoke<void>("set_persona_app_grants_cmd", { personaId, grants });
+export const composioUsage = (days: number) => invoke<AppUsage[]>("composio_usage_cmd", { days });
 
 /** A prompt a connected server offers. In the menu it is a command. */
 export interface McpPromptView {

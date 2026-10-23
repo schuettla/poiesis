@@ -42,7 +42,7 @@ import {
 } from "./updates";
 import { save } from "@tauri-apps/plugin-dialog";
 import { proposedDraft, type TaskDraft } from "./when";
-import { afterRun as afterGoalRun, newGoal, openingTurn, type Goal, type GoalHost } from "./goal";
+import { afterRun as afterGoalRun, newGoal, openingTurn, type Goal, type GoalHost, type RoundEvidence } from "./goal";
 import { budgetTurns, withSummary, KEEP_RECENT, KEEP_RECENT_WORKSPACE } from "./context";
 import { getSpeechBridge } from "./voice/bridge";
 import {
@@ -150,6 +150,14 @@ export const AUTONOMY_CLASSES: {
     id: "email_send",
     label: "Sending mail on your behalf",
     blurb: "Mail leaving this machine. I can't unsend it, so I always ask first unless you turn this on.",
+    fallback: "ask",
+    rungs: ["auto", "ask", "off"],
+  },
+  {
+    id: "app_send",
+    label: "Sending through connected apps",
+    blurb:
+      "Posts, messages and payments an app makes for you. I can't take them back, so I ask first unless you allow it, and never past the daily limit you set under Apps.",
     fallback: "ask",
     rungs: ["auto", "ask", "off"],
   },
@@ -290,6 +298,29 @@ export interface AppState {
   openRuntime: (tab?: RuntimeTab) => void;
   providerFocus: string | null;
   openProviders: (id?: string) => void;
+  /** `CLI-UI-1`: external agent apps (Claude Code, Codex, ACP agents). */
+  engines: api.EngineInfo[];
+  /** One agent was found since the section was last opened: the hub tab wears a dot. */
+  enginesNewlyFound: boolean;
+  /** Arriving from a link (the Fleet card's gear, a permission panel) lands on
+   * this agent with its settings open. */
+  engineFocus: string | null;
+  openEngines: (id?: string) => void;
+  /** Read what is known; no searching, no probing. */
+  loadEngines: () => Promise<void>;
+  /** Search and probe what is due (`force`: everything). Keeps the old list if it fails. */
+  detectEngines: (force?: boolean) => Promise<void>;
+  /** Any edit, and the other commands that return the fresh list. Throws the
+   * backend's message so the row can show it next to the control. */
+  updateEngine: (id: string, patch: api.EnginePatch) => Promise<void>;
+  /** Take a fresh list that another command returned (a key saved, an agent added). */
+  adoptEngines: (engines: api.EngineInfo[]) => void;
+  /** The user opened the section: the dot goes away. */
+  markEnginesSeen: () => void;
+  /** `CLI-UI-6`: what `/delegate` can name in the active chat, with the reason
+   * one cannot be used. Read when the menu opens and when the command is sent. */
+  delegateTargets: api.DelegateTarget[];
+  loadDelegateTargets: () => Promise<api.DelegateTarget[]>;
 
   /** Catalog downloads in flight, keyed by catalog entry id — percent
    * complete, or "done" briefly while the library refreshes. Lives in the
@@ -351,6 +382,15 @@ export interface AppState {
    * the agent's UI is the interaction point, the message stream is a log. */
   workspaceMode: boolean;
   setWorkspaceMode: (on: boolean) => void;
+  /** Mode and view are two things, as with voice: the mode is the chat's own
+   * flag, this is only whether its canvas is on screen right now. False means
+   * the standard message stream is showing, with the mode still on. */
+  workspaceShown: boolean;
+  setWorkspaceShown: (shown: boolean) => void;
+  /** Chats whose composed interface changed while it was out of sight. Drives
+   * the dot on the top bar's switch and the offer to open it. */
+  surfaceUnseen: Record<string, boolean>;
+  clearSurfaceUnseen: (conversationId: string) => void;
 
   // ---- commands (`COMMANDS_PLAN`) ----
   /** `CMP-6`: what the user decided about the next message only. Read and
@@ -377,6 +417,8 @@ export interface AppState {
   /** `AGC-3`: the question the run is waiting on, if any. A pending question
    * turns the next thing typed into its answer instead of a steer. */
   pendingQuestion: PendingQuestion | null;
+  /** `MCPS-2`: questions from agent apps that arrived while another waited. */
+  queuedQuestions: PendingQuestion[];
   /** Answer it with a choice, several, your own words, or a mix. `false` when
    * the run is gone, so the caller can send the words as a message instead. */
   answerQuestion: (answer: api.QuestionAnswer) => Promise<boolean>;
@@ -429,6 +471,12 @@ export interface AppState {
   /** Prompts that connected servers offer, as commands. */
   mcpPrompts: api.McpPromptView[];
   refreshMcpPrompts: () => Promise<void>;
+  /** `CA-UI-3`: the apps signed in through Composio, as last read from the
+   * local copy (no network). Feeds `/connect`'s choices and the hub badge. */
+  appAccounts: api.AppAccount[];
+  /** A sign-in has expired or failed; the Apps tab wears a dot until it is looked at. */
+  appsNeedAttention: boolean;
+  refreshApps: () => Promise<void>;
   /** `RUN-3`: the latest run's summary per conversation, for the run bar. Not
    * persisted. A new send replaces it; leaving the chat or the × clears it. */
   runSummaries: Record<string, RunSummary>;
@@ -514,7 +562,9 @@ export interface AppState {
     /** `SUB-3`: when to use this agent, and whether it may be handed work. */
     description?: string | null;
     spawnable?: boolean;
-  }) => Promise<void>;
+    /** `CLI-UI-4`: the agent app it runs on; `null` = Poiesis. */
+    engineId?: string | null;
+  }) => Promise<api.Persona | undefined>;
   updatePersona: (persona: api.Persona) => Promise<void>;
   deletePersona: (id: string) => Promise<void>;
   setDefaultPersona: (id: string) => Promise<void>;
@@ -946,6 +996,8 @@ export interface AppState {
   attachFolder: () => Promise<void>;
   detachFolder: () => Promise<void>;
   setFolderTrust: (trust: FolderTrust) => Promise<void>;
+  /** `RTE-5`: keep external agent apps out of (or let them back into) one chat. */
+  setEnginesOff: (conversationId: string, off: boolean) => Promise<void>;
   /** Reload one directory's children, or the whole tree when omitted. */
   refreshTree: (path?: string) => Promise<void>;
   refreshTrash: () => Promise<void>;
@@ -1217,6 +1269,15 @@ function toBlockView(b: api.DbBlock): BlockView {
   };
 }
 
+/** A copy of `map` without `key`; the same object when there is nothing to drop,
+ * so a selector over it does not see a change. */
+function withoutKey<T>(map: Record<string, T>, key: string | null | undefined): Record<string, T> {
+  if (!key || !(key in map)) return map;
+  const next = { ...map };
+  delete next[key];
+  return next;
+}
+
 function safeParse(json: string): unknown {
   try {
     return JSON.parse(json);
@@ -1241,6 +1302,7 @@ function toConversation(c: api.DbConversation): Conversation {
     folderTrust: (c.folder_trust as FolderTrust) ?? "confirm",
     parentConversationId: c.parent_conversation_id,
     projectId: c.project_id ?? null,
+    enginesOff: c.engines_off ?? false,
   };
 }
 
@@ -1677,6 +1739,46 @@ export const useAppStore = create<AppState>((set, get) => ({
   openRuntime: (tab) => set({ runtimeTab: tab ?? null, view: "runtime" }),
   providerFocus: null,
   openProviders: (id) => set({ providerFocus: id ?? null, view: "providers" }),
+  engines: [],
+  enginesNewlyFound: false,
+  engineFocus: null,
+  openEngines: (id) => set({ engineFocus: id ?? null, view: "engines" }),
+  loadEngines: async () => {
+    if (!api.inTauri()) return;
+    try {
+      applyEngines(set, await api.listEngines());
+    } catch {
+      // Keep the last list: a failed read should not empty the screen.
+    }
+  },
+  detectEngines: async (force = false) => {
+    if (!api.inTauri()) return;
+    try {
+      applyEngines(set, await api.detectEngines(force));
+    } catch {
+      // Same: keep what was known.
+    }
+  },
+  updateEngine: async (id, patch) => {
+    applyEngines(set, await api.updateEngineSettings(id, patch));
+  },
+  adoptEngines: (engines) => applyEngines(set, engines),
+  markEnginesSeen: () => {
+    if (!get().enginesNewlyFound) return;
+    set((s) => ({ enginesNewlyFound: false, engines: s.engines.map((e) => ({ ...e, is_new: false })) }));
+    api.markEnginesSeen().catch(() => {});
+  },
+  delegateTargets: [],
+  loadDelegateTargets: async () => {
+    if (!api.inTauri()) return get().delegateTargets;
+    try {
+      const list = await api.listDelegateTargets(get().activeConversationId);
+      set({ delegateTargets: list });
+      return list;
+    } catch {
+      return get().delegateTargets;
+    }
+  },
 
   conversations: [],
   activeConversationId: null,
@@ -1698,12 +1800,32 @@ export const useAppStore = create<AppState>((set, get) => ({
     const convId = get().activeConversationId;
     set((s) => ({
       workspaceMode,
+      // The surface is a tool call (`render_ui`), so the mode cannot work
+      // without tools. Every way of turning it on gets that from here.
+      ...(workspaceMode ? { toolsEnabled: true } : {}),
+      // Turning it on opens the canvas; turning it off resets the view so the
+      // next time starts there too.
+      workspaceShown: true,
+      surfaceUnseen: workspaceMode ? withoutKey(s.surfaceUnseen, convId) : s.surfaceUnseen,
       conversations: convId
         ? s.conversations.map((c) => (c.id === convId ? { ...c, workspace: workspaceMode } : c))
         : s.conversations,
     }));
     if (convId && api.inTauri()) api.setConversationWorkspace(convId, workspaceMode).catch(() => {});
   },
+  workspaceShown: true,
+  setWorkspaceShown: (workspaceShown) =>
+    set((s) => {
+      // With the mode off there is no canvas to show or hide.
+      if (!s.workspaceMode) return {};
+      return {
+        workspaceShown,
+        surfaceUnseen: workspaceShown ? withoutKey(s.surfaceUnseen, s.activeConversationId) : s.surfaceUnseen,
+      };
+    }),
+  surfaceUnseen: {},
+  clearSurfaceUnseen: (conversationId) =>
+    set((s) => ({ surfaceUnseen: withoutKey(s.surfaceUnseen, conversationId) })),
   turnModifiers: {},
   setTurnModifier: (patch) => set((s) => ({ turnModifiers: { ...s.turnModifiers, ...patch } })),
   clearTurnModifier: (key) =>
@@ -1784,12 +1906,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   commandRequest: null,
   pendingQuestion: null,
+  queuedQuestions: [],
   answerQuestion: async (answer) => {
     const q = get().pendingQuestion;
     if (!q) return false;
     // Off the screen first: the card is a question, not a receipt. The step row
     // keeps what you chose.
-    set((s) => ({ pendingQuestion: null, presence: afterListening(s) }));
+    set((s) => dropQuestion(s, q.id));
     if (!api.inTauri()) return false;
     return api.answerQuestion(q.runId, q.id, answer).catch(() => false);
   },
@@ -1932,6 +2055,22 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ mcpPrompts: await api.listMcpPrompts() });
     } catch {
       // Keep the last list: a failed read should not empty the menu.
+    }
+  },
+  appAccounts: [],
+  appsNeedAttention: false,
+  refreshApps: async () => {
+    if (!api.inTauri()) return;
+    try {
+      const status = await api.composioStatus();
+      set({
+        appAccounts: status.accounts,
+        // Only a sign-in that worked and stopped raises the dot; one that was never
+        // finished does not (`CAP-C-F2`).
+        appsNeedAttention: status.configured && status.accounts.some(api.accountExpired),
+      });
+    } catch {
+      // Keep what was known: a failed read should not clear the dot.
     }
   },
   sideAnswer: null,
@@ -2227,11 +2366,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     skillsJson,
     description,
     spawnable,
+    engineId,
   }) => {
-    if (!api.inTauri()) return;
+    if (!api.inTauri()) return undefined;
     const paramsJson =
       typeof temperature === "number" ? JSON.stringify({ temperature }) : null;
-    await api.createPersona({
+    const created = await api.createPersona({
       name,
       systemPrompt,
       modelId: modelId ?? null,
@@ -2240,8 +2380,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       skillsJson: skillsJson ?? null,
       description: description ?? null,
       spawnable: spawnable ?? false,
+      engineId: engineId ?? null,
     });
     await get().refreshPersonas();
+    return created;
   },
   updatePersona: async (persona) => {
     if (!api.inTauri()) return;
@@ -2855,7 +2997,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const wasWorkspace = get().workspaceMode;
     // The `skill` tool is how the model reads the steps at all (SKL-2 stage 2);
     // with tools off, "start from a skill" would start nothing.
-    set({ workspaceMode: !!treeJson, toolsEnabled: true });
+    set({ workspaceMode: !!treeJson, workspaceShown: true, toolsEnabled: true });
     await get().newConversation();
     const convId = get().activeConversationId;
     if (!convId) {
@@ -3060,6 +3202,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().refreshToolHealth();
     get().refreshScheduler();
     get().refreshMcpPrompts();
+    get().refreshApps();
+    void refreshAppsFromComposio(get);
+    get().loadEngines();
+    listenForEngineEvents(get);
     listenForSelfEvents(set, get);
     maybeDailyProfileTick(get);
     scheduleCatchUpReflection(get);
@@ -3094,11 +3240,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     // a just-picked media model back to the last chat model.
     const current = get().models.find((m) => m.id === get().selectedModelId);
     const restoreChatModel = switchingConversation && current?.modality && current.modality !== "chat";
+    // Bound state still waiting for its debounced save is written now, before
+    // the chat it belongs to goes out of view.
+    if (switchingConversation) flushAllSurfaceStates();
     set({
       activeConversationId: id,
       view: "chat",
       ...(restoreChatModel ? { selectedModelId: get().lastChatModelId } : {}),
       workspaceMode: !!conv?.workspace,
+      // The surface is a tool call, so a workspace chat needs tools, same as
+      // turning the mode on (see setWorkspaceMode).
+      ...(conv?.workspace ? { toolsEnabled: true } : {}),
+      // Opening a workspace chat opens its canvas, not the stream behind it.
+      workspaceShown: true,
+      surfaceUnseen: conv?.workspace ? withoutKey(get().surfaceUnseen, id) : get().surfaceUnseen,
       // Item tabs stay open across a switch; each one remembers its own chat.
       // Only focus moves: the sidebar goes back to its overview. An item being
       // opened in that chat sets its focus right after this.
@@ -3271,6 +3426,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           ...s.conversations,
         ],
         activeConversationId: id,
+        workspaceShown: true,
         view: "chat",
         selected: null,
         activeItemId: null,
@@ -3283,6 +3439,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       conversations: [{ ...toConversation(created), projectId, folderPath }, ...s.conversations],
       activeConversationId: created.id,
+      workspaceShown: true,
       view: "chat",
       selected: null,
       activeItemId: null,
@@ -3437,7 +3594,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = get();
     const convId = state.activeConversationId;
     if (!convId || state.busy) return;
-    const model = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
+    const selected = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
+    // A click in the interface needs an answer, not a picture: with an image or
+    // video model picked, the last chat model takes the action turn.
+    const model =
+      sendOpts?.action && selected?.modality && selected.modality !== "chat"
+        ? (state.models.find((m) => m.id === state.lastChatModelId) ?? selected)
+        : selected;
     if (!model && sendOpts?.spoken) {
       // The voice surface has no chat to show an error in.
       getSpeechBridge()?.fail("There is no model to answer with yet. Open Models and choose one.");
@@ -3453,14 +3616,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     // media id reaching the agent loop would fail deep in the engine with an
     // unrecognisable error, so reroute here rather than trusting one caller.
     if (model?.modality && model.modality !== "chat") {
-      await get().createMedia({ prompt: text, modelId: model.id });
+      // An interaction with the interface is not a prompt to draw from. Only
+      // reached when there is no chat model to fall back to at all.
+      if (!sendOpts?.action) await get().createMedia({ prompt: text, modelId: model.id });
       return;
     }
 
     // `CMP-6`: the chips are for this message and no other. Taken here, in the
     // one place every user turn passes through, so none can outlive its send.
-    const turn = turnRunOptions(state.turnModifiers, sendOpts);
-    reseedModifiers(set, get);
+    const turn = sendOpts?.action ? undefined : turnRunOptions(state.turnModifiers, sendOpts);
+    if (!sendOpts?.action) reseedModifiers(set, get);
     // `VTN-1`: the user spoke this turn and will hear the reply.
     const spoken = sendOpts?.spoken === true;
 
@@ -3475,7 +3640,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       attachments: attachments.length ? attachments : undefined,
       // `SKC-2`: a skill command's bubble says which one it was.
       command: sendOpts?.skill
-        ? { name: sendOpts.skill, args: sendOpts.skillArgs ?? "" }
+        ? { name: sendOpts.skill, args: skillWords(sendOpts) }
         : undefined,
       spoken: spoken || undefined,
       createdAt: Date.now(),
@@ -3510,7 +3675,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           : s.lastMediaArtifact,
     }));
 
-    if (isFirstMessage) {
+    if (isFirstMessage && !sendOpts?.action) {
       get().renameConversation(convId, deriveTitle(text));
     }
 
@@ -3541,7 +3706,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (sendOpts?.skill) {
         get().recordCommand(convId, {
           name: sendOpts.skill,
-          args: sendOpts.skillArgs ?? "",
+          args: skillWords(sendOpts),
           by: "user",
           outcome: "done",
           messageId: userRow.id,
@@ -3651,7 +3816,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       ? state.personas.find((p) => p.id === conv.personaId)
       : undefined;
     const baseSystemPrompt = persona?.system_prompt ?? get().systemPrompt;
-    const { memory, matches, injectedFacts } = await recallForPrompt(get, text);
+    const { memory, matches, injectedFacts } = await recallForPrompt(get, sendOpts?.action ?? text);
     const effectiveSystemPrompt = composeSystemPrompt(baseSystemPrompt, {
       conv: get().conversations.find((c) => c.id === convId),
       sessionState: get().sessionState[convId],
@@ -3697,8 +3862,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const convId = state.activeConversationId;
     if (!convId || state.busy) return;
     const conv = state.conversations.find((c) => c.id === convId);
-    const model = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
-    if (!model) return;
+    if (!state.models.find((m) => m.id === state.selectedModelId) && !state.models[0]) return;
 
     // Deterministic session-state auto-patch from the interaction (Phase C):
     // no model round-trip needed to remember pins / form submissions.
@@ -3707,8 +3871,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // W2 (workspace mode): pure state mutations don't spend a model turn — the
     // UI already applied them. Queue a note the next real message will carry.
+    // Typed blocks only: a composed surface names its own actions, and a button
+    // it calls "pin" is a request the model has to see.
     const action = String(payload.action ?? "");
-    if (state.workspaceMode && (action === "pin" || action === "unpin" || action === "set_step")) {
+    if (
+      state.workspaceMode &&
+      payload.a === "block_action" &&
+      (action === "pin" || action === "unpin" || action === "set_step")
+    ) {
       set((s) => ({
         pendingActions: {
           ...s.pendingActions,
@@ -3718,111 +3888,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    // The model sees the sentence plus a compact action payload; the transcript
-    // renders it as a chip (see UserTurn).
-    const modelContent = `${humanText}\n\n\`\`\`poiesis-action\n${JSON.stringify(payload)}\n\`\`\``;
-
-    const userMsg: Message = {
-      id: `u-${Date.now()}`,
-      role: "user",
-      text: modelContent,
-      createdAt: Date.now(),
-    };
-    const assistantId = `a-${Date.now()}`;
-    const assistantMsg: Message = {
-      id: assistantId,
-      role: "assistant",
-      model: { name: model.name, provenance: model.provenance },
-      steps: [],
-      text: "",
-      streaming: true,
-      createdAt: Date.now() + 1,
-    };
-    set((s) => ({
-      busy: true,
-      presence: "active",
-      conversations: s.conversations.map((c) =>
-        c.id === convId
-          ? { ...c, updatedAt: Date.now(), messages: [...c.messages, userMsg, assistantMsg] }
-          : c
-      ),
-    }));
-
-    if (!api.inTauri()) {
-      patchAssistant(set, convId, assistantId, { streaming: false });
-      // Back to resting unless a self-process is still working (PRES-1).
-    set((st) => ({ busy: false, presence: st.reflectingIds.length ? "reflecting" : "idle" }));
-      return;
-    }
-
-    let persistedAssistantId = assistantId;
-    try {
-      await api.appendMessage({ conversationId: convId, role: "user", content: modelContent });
-      const row = await api.appendMessage({
-        conversationId: convId,
-        role: "assistant",
-        content: "",
-        modelName: model.name,
-        modelProvenance: model.provenance,
-      });
-      persistedAssistantId = row.id;
-    } catch {
-      /* non-fatal */
-    }
-
-    // Reuse the same engine-readiness gate as a normal turn.
-    const engineError = await ensureEngineForModel(get, model);
-    if (engineError) {
-      patchAssistant(set, convId, assistantId, { text: engineError, streaming: false });
-      // Back to resting unless a self-process is still working (PRES-1).
-    set((st) => ({ busy: false, presence: st.reflectingIds.length ? "reflecting" : "idle" }));
-      try {
-        await api.finalizeMessage(persistedAssistantId, engineError, undefined);
-      } catch {
-        /* ignore */
-      }
-      return;
-    }
-
-    const persona = conv?.personaId
-      ? state.personas.find((p) => p.id === conv.personaId)
-      : undefined;
-    const baseSystemPrompt = persona?.system_prompt ?? get().systemPrompt;
-    const { memory, matches, injectedFacts } = await recallForPrompt(get, humanText);
-    const effectiveSystemPrompt = composeSystemPrompt(baseSystemPrompt, {
-      conv: get().conversations.find((c) => c.id === convId),
-      sessionState: get().sessionState[convId],
-      toolsEnabled: get().toolsEnabled,
-      surface: get().surfaces[convId],
-      memory,
-      memoryEnabled: get().memoryToolEnabled,
-      toolHealth: get().toolHealth,
-      skills: skillsForPersona(get().skills, persona?.skills_json),
-      planMode: get().planMode,
-      ...projectPrompt(get(), convId),
-    });
-    const effectiveTemperature =
-      conv?.overrides?.temperature ?? personaTemperature(persona);
-
-    const turns = await assembleTurns(set, get, {
-      convId,
-      system: effectiveSystemPrompt,
-      current: { role: "user", content: modelContent },
-      currentId: userMsg.id,
-      model,
-    });
-
-    const recalled = recallStep(matches);
-    await streamAssistantTurn(set, get, {
-      convId,
-      assistantId,
-      persistedAssistantId,
-      turns,
-      model,
-      temperature: effectiveTemperature,
-      initialSteps: recalled ? [recalled] : undefined,
-      contextRefs: buildContextRefs({ personaId: persona?.id ?? null, memory, injectedFacts, matches }),
-    });
+    // From here it is an ordinary turn, so it goes the ordinary way. The model
+    // sees the sentence plus a compact action payload; the transcript renders
+    // it as a chip (see UserTurn).
+    await get().sendMessage(
+      `${humanText}\n\n\`\`\`poiesis-action\n${JSON.stringify(payload)}\n\`\`\``,
+      [],
+      { action: humanText }
+    );
   },
 
   setBlockState: (blockId, blockState) => {
@@ -3880,15 +3953,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const surface = get().surfaces[convId];
     if (!surface) return;
     set((s) => ({ surfaces: { ...s.surfaces, [convId]: { ...surface, state: stateObj } } }));
-    if (api.inTauri()) {
-      api.updateBlockState(surface.id, JSON.stringify(stateObj)).catch(() => {});
-    }
+    saveSurfaceState(surface.id, stateObj);
   },
   sendSurfaceAction: async (humanText, payload) => {
     const convId = get().activeConversationId;
     if (!convId) return;
     const surface = get().surfaces[convId];
     if (!surface) return;
+    flushSurfaceState(surface.id);
     await get().sendBlockAction(surface.id, humanText, {
       a: "ui_action",
       ...payload,
@@ -3995,6 +4067,20 @@ export const useAppStore = create<AppState>((set, get) => ({
           text: row.result ?? "",
           startedAt: row.started_at,
           endedAt: row.ended_at ?? undefined,
+          // `CLI-UI-2`: after a reload the row still knows an agent app did it.
+          ...(row.engine_id
+            ? {
+                engine: {
+                  id: row.engine_id,
+                  name: row.agent,
+                  paid_by: row.paid_by,
+                  because: row.because,
+                  because_text: null,
+                  can_steer: false,
+                },
+                ...(row.engine_session ? { engineSession: row.engine_session } : {}),
+              }
+            : {}),
         };
       }
       return { subRuns };
@@ -4458,6 +4544,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       projects: s.projects.map((p) => (p.id === projectId ? { ...p, trust } : p)),
     }));
     if (api.inTauri()) await api.setConversationTrust(convId, trust);
+  },
+
+  setEnginesOff: async (conversationId, off) => {
+    set((s) => ({
+      conversations: s.conversations.map((c) => (c.id === conversationId ? { ...c, enginesOff: off } : c)),
+    }));
+    if (api.inTauri()) await api.setConversationEnginesOff(conversationId, off);
   },
 
   refreshIndexStatus: async () => {
@@ -5098,6 +5191,16 @@ async function startMediaTurn(
   }
 }
 
+/** The composed interface changed. If its canvas is not what the user is
+ * looking at, remember that, so the top bar can say so and the chat can offer
+ * to open it. */
+function noteSurfaceChange(set: StoreSet, get: () => AppState, convId: string) {
+  const s = get();
+  const visible = s.workspaceMode && s.workspaceShown && s.activeConversationId === convId;
+  if (visible || s.surfaceUnseen[convId]) return;
+  set((st) => ({ surfaceUnseen: { ...st.surfaceUnseen, [convId]: true } }));
+}
+
 /** Patch fields on a specific assistant message inside a conversation. */
 function patchAssistant(
   set: StoreSet,
@@ -5135,6 +5238,33 @@ function patchSubRun(set: StoreSet, runId: string, patch: Partial<SubRun>) {
  * they were folded in here they would land on the lead's message and appear to
  * be the lead's own work.
  */
+/** `MCPS-2`: take a question off the screen, and bring up the one waiting behind it. */
+function dropQuestion(
+  s: Pick<AppState, "pendingQuestion" | "queuedQuestions" | "presence">,
+  id: string
+): Partial<AppState> {
+  const queued = s.queuedQuestions.filter((q) => q.id !== id);
+  if (s.pendingQuestion?.id !== id) return { queuedQuestions: queued };
+  const [next, ...rest] = queued;
+  return {
+    pendingQuestion: next ?? null,
+    queuedQuestions: rest,
+    presence: next ? ("listening" as const) : afterListening(s as AppState),
+  };
+}
+
+/** Every question one job still has open, gone with it. */
+function dropQuestionsOf(s: AppState, runId: string): Partial<AppState> {
+  let out: Partial<AppState> = {};
+  let cur = s;
+  for (const q of [s.pendingQuestion, ...s.queuedQuestions]) {
+    if (q?.runId !== runId) continue;
+    out = { ...out, ...dropQuestion(cur, q.id) };
+    cur = { ...cur, ...out } as AppState;
+  }
+  return out;
+}
+
 export function applySubEvent(set: StoreSet, runId: string, event: api.AgentEvent) {
   set((s) => {
     const run = s.subRuns[runId];
@@ -5232,6 +5362,46 @@ export function applySubEvent(set: StoreSet, runId: string, event: api.AgentEven
           usage: event.usage ?? run.usage,
           costUsd: event.cost_usd !== undefined ? event.cost_usd : (run.costUsd ?? null),
         };
+        // A question this agent still had open dies with the job.
+        return { subRuns: { ...s.subRuns, [runId]: next }, ...dropQuestionsOf(s, runId) };
+      case "question": {
+        // `MCPS-2`: an agent app asks you something. The card sits in the turn
+        // that handed it the job, and a second question waits behind the first.
+        const lead = s.conversations
+          .find((c) => c.id === run.parentConversationId)
+          ?.messages.find((m) => m.subRunIds?.includes(runId));
+        if (!lead) return {};
+        const q: PendingQuestion = {
+          runId,
+          id: event.id,
+          convId: run.parentConversationId,
+          messageId: lead.id,
+          question: event.question,
+          options: event.options,
+          multi: event.multi,
+          agent: run.agent,
+        };
+        if (s.pendingQuestion) return { queuedQuestions: [...s.queuedQuestions, q] };
+        return { pendingQuestion: q, presence: "listening" as const };
+      }
+      case "question_gone":
+        return dropQuestion(s, event.id);
+      case "block":
+        // A surface belongs to a chat, not to a job's card.
+        if (event.kind === "surface") return {};
+        next = {
+          ...run,
+          blocks: [
+            ...(run.blocks ?? []).filter((b) => b.id !== event.id),
+            { id: event.id, kind: event.kind as BlockView["kind"], title: event.title, data: event.data, messageId: null },
+          ],
+        };
+        break;
+      case "block_update":
+        next = {
+          ...run,
+          blocks: (run.blocks ?? []).map((b) => (b.id === event.id ? { ...b, title: event.title, data: event.data } : b)),
+        };
         break;
       case "permission":
         // `SUB-UI-4`: the panel must say which agent is asking. Two children can
@@ -5240,6 +5410,10 @@ export function applySubEvent(set: StoreSet, runId: string, event: api.AgentEven
           pendingPermissions: [...s.pendingPermissions, event.request],
           permissionAgents: { ...s.permissionAgents, [event.request.id]: run.agent },
         };
+      case "permission_gone":
+        // An agent app hung up or was stopped with a question open: the panel
+        // drops it instead of asking about something that no longer matters.
+        return { pendingPermissions: s.pendingPermissions.filter((p) => p.id !== event.id) };
       default:
         return {};
     }
@@ -5488,6 +5662,15 @@ function putGoal(set: StoreSet, convId: string, goal: Goal | null) {
   });
 }
 
+/** `LRN-1`: what a turn's tool steps came to. A step still running when the turn
+ * ended did not work, and is not counted either way. */
+function roundEvidence(steps: AgentStep[]): RoundEvidence {
+  return {
+    ok: steps.filter((s) => s.status === "done").length,
+    errors: steps.filter((s) => s.status === "error").map((s) => s.result ?? ""),
+  };
+}
+
 /** `GOL-3`: what the goal loop needs from this store. */
 function goalHost(set: StoreSet, get: () => AppState): GoalHost {
   return {
@@ -5582,9 +5765,8 @@ async function applyHarnessProposal(get: () => AppState, p: HarnessProposalView)
       // The next turn only. It never re-scopes a run that is already going (`PLF-6`).
       s.setTurnModifier({ planFirst: true });
     } else {
+      // Turns tools on too: Workspace needs `render_ui`.
       s.setWorkspaceMode(true);
-      // Workspace needs `render_ui`, so it turns tools on too.
-      s.setToolsEnabled(true);
     }
   } else if (p.name === "schedule") {
     const conv = s.conversations.find((c) => c.id === p.convId);
@@ -5615,7 +5797,13 @@ export function turnRunOptions(
     turn.skill = sendOpts.skill;
     if (sendOpts.skillArgs) turn.skillArgs = sendOpts.skillArgs;
   }
+  if (sendOpts?.delegateTo) turn.delegateTo = sendOpts.delegateTo;
   return Object.keys(turn).length ? turn : undefined;
+}
+
+/** What the user typed after `/name`: for `/delegate`, the agent they named comes first. */
+function skillWords(o: SendOptions): string {
+  return [o.delegateTo, o.skillArgs].filter(Boolean).join(" ");
 }
 
 /** Optimistic ids are minted client-side and mean nothing to the backend. */
@@ -5984,10 +6172,13 @@ async function streamAssistantTurn(
                   parentConversationId: convId,
                   agent: e.agent,
                   task: e.task,
-                  status: "running",
+                  // An agent app waits for a free slot (`engines.max_parallel`)
+                  // before it starts; `run_started` says when it has one.
+                  status: e.engine ? "queued" : "running",
                   steps: [],
                   text: "",
                   startedAt: Date.now(),
+                  ...(e.engine ? { engine: e.engine } : {}),
                 },
               },
             }));
@@ -5996,6 +6187,13 @@ async function streamAssistantTurn(
           }
           case "sub":
             applySubEvent(set, e.run_id, e.event);
+            // `MCPS-2`: a memory an agent app suggested is met in the turn that
+            // handed it the job, as any other suggestion is.
+            if (e.event.type === "proposal") {
+              proposalIds.push(e.event.id);
+              patchAssistant(set, convId, assistantId, { proposalIds: [...proposalIds] });
+              get().refreshChangeProposals();
+            }
             break;
           case "sub_ended":
             patchSubRun(set, e.run_id, {
@@ -6180,6 +6378,7 @@ async function streamAssistantTurn(
                   },
                 },
               }));
+              noteSurfaceChange(set, get, convId);
               break;
             }
             blocks.push({
@@ -6198,6 +6397,7 @@ async function streamAssistantTurn(
               set((st) => ({
                 surfaces: { ...st.surfaces, [convId]: { ...surf, title: e.title, data: e.data } },
               }));
+              noteSurfaceChange(set, get, convId);
               break;
             }
             const b = blocks.find((x) => x.id === e.id);
@@ -6401,6 +6601,8 @@ async function streamAssistantTurn(
     void afterGoalRun(goalHost(set, get), convId, {
       stopReason: stopReason ?? (failed ? "error" : undefined),
       awaitingApproval: plan?.awaiting_approval,
+      // `LRN-1`: this turn's own calls, not the recall step that came with it.
+      evidence: roundEvidence(steps.slice(opts.initialSteps?.length ?? 0)),
     });
   }
 }
@@ -6409,6 +6611,25 @@ async function streamAssistantTurn(
  * date. Fire-and-forget from `bootstrap`; `maybeAutoRebuildProfile` already
  * covers every "decided not to" case silently, so this is safe to call on
  * every launch once that date has turned over. */
+/**
+ * `CAP-C-F4`: ask Composio once at startup, in the background, so a sign-in that
+ * has expired lights the hub dot without the Apps page being opened first. With a
+ * Connect key only apps that are not mid sign-in are asked about.
+ */
+async function refreshAppsFromComposio(get: () => AppState) {
+  if (!api.inTauri()) return;
+  try {
+    const status = await api.composioStatus();
+    if (!status.configured) return;
+    const settled = status.accounts.filter((a) => !api.accountWaiting(a)).map((a) => a.app);
+    if (status.mode === "connect" && settled.length === 0) return;
+    await api.composioAccounts(true, status.mode === "connect" ? settled : undefined);
+    await get().refreshApps();
+  } catch {
+    // Nothing to say: the Apps page will show the problem when it is opened.
+  }
+}
+
 async function maybeDailyProfileTick(get: () => AppState) {
   if (!api.inTauri()) return;
   const today = new Date().toISOString().slice(0, 10);
@@ -6569,6 +6790,32 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
   });
 }
 
+// ---- external agent apps (`CLI-2`) ----
+
+/** Store a fresh list and work out whether the hub tab should wear its dot. */
+export function applyEngines(set: (p: Partial<AppState>) => void, engines: api.EngineInfo[]) {
+  set({ engines, enginesNewlyFound: engines.some((e) => e.is_new) });
+}
+
+/** How often a window coming back to the front may look for new agents. */
+const ENGINE_FOCUS_CHECK_MS = 5 * 60 * 1000;
+
+/** Finding an agent installed in a terminal while Poiesis was open needs no
+ * restart: the backend tells us when it looked at boot, and returning to the
+ * window looks again (cheap file checks; the backend probes only what changed). */
+function listenForEngineEvents(get: () => AppState) {
+  api.onAppEvent<string[]>("poiesis-engines-found", () => {
+    get().loadEngines();
+  });
+  if (typeof window === "undefined") return;
+  let last = Date.now();
+  window.addEventListener("focus", () => {
+    if (Date.now() - last < ENGINE_FOCUS_CHECK_MS) return;
+    last = Date.now();
+    get().detectEngines(false);
+  });
+}
+
 // ---- session state helpers (Generative UI, Phase C) ----
 
 /** PRO-6: the agent's own synthesis of how this user likes to be talked to —
@@ -6626,8 +6873,8 @@ function sessionStateBlock(state: Record<string, unknown> | undefined): string {
  * same kind of thing (how to go about the work), and `never` must be able to
  * remove it without leaving a gap. Mirrors `tool_guidance_block` in
  * `agent/context.rs`; the golden gate (`CTX-4`) holds the two to the byte. */
-function toolGuidanceBlock(planMode: PlanMode | undefined): string {
-  const out = `${SURFACE_GUIDANCE}\n\n${BLOCK_GUIDANCE}\n\n${PLAN_FIRST_GUIDANCE}`;
+function toolGuidanceBlock(planMode: PlanMode | undefined, workspace: boolean): string {
+  const out = workspace ? `${SURFACE_GUIDANCE}\n\n${PLAN_FIRST_GUIDANCE}` : PLAN_FIRST_GUIDANCE;
   const planning = planGuidance(planMode);
   return planning ? `${out}\n${planning}` : out;
 }
@@ -6739,20 +6986,23 @@ export function composeSystemPrompt(base: string, opts: ComposePromptOpts): stri
   if (projectText) out += `\n\n${projectText}`;
   const indexText = memoryIndexBlock(opts.memory?.index, opts.toolsEnabled);
   if (indexText) out += `\n\n${indexText}`;
-  // Only mention blocks/surface machinery when the model can actually call the
+  const workspace = opts.conv?.workspace === true;
+  // Only mention the surface machinery when the model can actually call the
   // tools — otherwise it imitates tool-call JSON as prose and it leaks raw.
   if (opts.toolsEnabled) {
     const skillsText = skillsBlock(opts.skills);
     if (skillsText) out += `\n\n${skillsText}`;
-    const registry = blockRegistry(opts.conv);
-    if (registry) out += `\n\n${registry}`;
-    const surface = surfaceContext(opts.surface);
-    if (surface) out += `\n\n${surface}`;
+    // Only a chat in Workspace mode has `render_ui` (`ToolRegistry::build`), so
+    // only there is the interface described or shown.
+    if (workspace) {
+      const surface = surfaceContext(opts.surface);
+      if (surface) out += `\n\n${surface}`;
+    }
   }
   const sessionText = sessionStateBlock(opts.sessionState);
   if (sessionText) out += `\n\n${sessionText}`;
   if (opts.toolsEnabled) {
-    out += `\n\n${toolGuidanceBlock(opts.planMode)}`;
+    out += `\n\n${toolGuidanceBlock(opts.planMode, workspace)}`;
     // MEM-COLD: last of the guidance, and sent even at zero facts — that is
     // precisely the state it exists to break out of.
     if (opts.memoryEnabled) {
@@ -6864,7 +7114,7 @@ function surfaceContext(surface: BlockView | undefined): string {
 /** Teach the model that the Workspace is a composable surface it owns. */
 const SURFACE_GUIDANCE = [
   "## Composing the workspace",
-  "The Workspace view renders whatever interface tree you pass to `render_ui` — compose a real interface for the task (a dashboard, a board, a picker, a wizard, a tracker) instead of describing things in prose or emitting fixed chat blocks.",
+  "The Workspace view renders whatever interface tree you pass to `render_ui` — compose a real interface for the task (a dashboard, a board, a picker, a wizard, a tracker) instead of describing things in prose.",
   "Keep the surface CURRENT: as the task evolves, revise it (render_ui with node_id for one region, or re-render the whole tree) rather than accumulating chat.",
   "When a `ui_action` message arrives, it carries the user's bound state — revise the surface to reflect the interaction and reply in at most one sentence.",
   // ORG-UI-2: the data is already in this prompt (notes, lessons)
@@ -6873,53 +7123,12 @@ const SURFACE_GUIDANCE = [
   "If the user asks how you are, what you remember, or what you've learned, you may render your notes and lessons as a workspace surface.",
 ].join("\n");
 
-/** W4/W5: teach the model to treat blocks as the surface, not to narrate them,
- * and to acknowledge bare interactions briefly. Only added when tools are on. */
-const BLOCK_GUIDANCE = [
-  "## Presenting blocks",
-  "When you present a block (comparison, plan, collection, form, progress, document), the user sees it rendered in full in their workspace. Do NOT restate the block's contents in prose — after presenting, conclude in at most two sentences.",
-  "To change a block that already exists, call `present` with that block's existing `block_id` (see the workspace-block list above) rather than creating a new one.",
-  "If the user's message is only a block interaction (a workspace update, or a `poiesis-action`), acknowledge it in one short sentence and do not present a menu of follow-up options.",
-].join("\n");
-
 /** LOOP-3: a multi-step run reads as deliberate rather than flailing when the
  * model says what it intends before the first tool call. One line, tools only. */
 const PLAN_FIRST_GUIDANCE = [
   "## Working through a task",
   "For multi-step tasks, state a one-line plan before your first tool call.",
 ].join("\n");
-
-/** W3: a compact registry of the blocks already on the user's workspace, so the
- * model can update them by id instead of recreating (the duplicate-block bug). */
-function blockRegistry(conv: Conversation | undefined): string {
-  if (!conv) return "";
-  const blocks = conv.messages.flatMap((m) => m.blocks ?? []);
-  if (!blocks.length) return "";
-  const lines = blocks.map((b) => {
-    const summary = blockSummary(b);
-    return `[${b.id}] "${b.title}" (${b.kind}${summary ? `, ${summary}` : ""})`;
-  });
-  return `## Workspace blocks (already visible to the user — update these by passing their block_id to present, do not recreate)\n${lines.join("\n")}`;
-}
-
-function blockSummary(b: BlockView): string {
-  const data = b.data && typeof b.data === "object" ? (b.data as Record<string, unknown>) : {};
-  const arr = (x: unknown) => (Array.isArray(x) ? (x as Record<string, unknown>[]) : []);
-  if (b.kind === "plan") {
-    const steps = arr(data.steps);
-    const state = b.state && typeof b.state === "object" ? (b.state as Record<string, unknown>) : {};
-    const checked =
-      state.checked && typeof state.checked === "object"
-        ? (state.checked as Record<string, unknown>)
-        : {};
-    const done = steps.filter((s) => (checked[String(s.id)] ?? s.status) === "done").length;
-    return `${done}/${steps.length} done`;
-  }
-  if (b.kind === "comparison") return `${arr(data.options).length} options`;
-  if (b.kind === "collection") return `${arr(data.items).length} items`;
-  if (b.kind === "form") return `${arr(data.fields).length} fields`;
-  return "";
-}
 
 /** Apply a JSON merge patch to a conversation's session state and persist it. */
 function applySessionPatch(
@@ -6967,6 +7176,9 @@ function autoPatchForAction(
   blockId: string,
   payload: Record<string, unknown>
 ): Record<string, unknown> | null {
+  // Only the typed blocks speak this vocabulary. A composed surface names its
+  // own actions, and "select" or "submit" there say nothing about a decision.
+  if (payload.a !== "block_action") return null;
   const action = payload.action as string | undefined;
   const title = findBlockTitle(conv, blockId) ?? "selection";
   if (action === "pin") {
@@ -6990,6 +7202,39 @@ function findBlockTitle(conv: Conversation | undefined, blockId: string): string
     if (b) return b.title;
   }
   return undefined;
+}
+
+/** Typing in a composed interface changes its bound state on every keystroke.
+ * The screen follows at once; the database write waits for a pause, and is made
+ * early when the interface sends an action. */
+const SURFACE_SAVE_DELAY_MS = 400;
+const surfaceSaves = new Map<string, { timer: ReturnType<typeof setTimeout>; state: unknown }>();
+
+function saveSurfaceState(surfaceId: string, state: unknown): void {
+  if (!api.inTauri()) return;
+  const open = surfaceSaves.get(surfaceId);
+  if (open) clearTimeout(open.timer);
+  const timer = setTimeout(() => flushSurfaceState(surfaceId), SURFACE_SAVE_DELAY_MS);
+  surfaceSaves.set(surfaceId, { timer, state });
+}
+
+function flushSurfaceState(surfaceId: string): void {
+  const open = surfaceSaves.get(surfaceId);
+  if (!open) return;
+  clearTimeout(open.timer);
+  surfaceSaves.delete(surfaceId);
+  api.updateBlockState(surfaceId, JSON.stringify(open.state)).catch(() => {});
+}
+
+/** Write every save still waiting on its pause: on a chat switch, and when the
+ * window goes away, so the last keystrokes are not lost with the timer. */
+function flushAllSurfaceStates(): void {
+  for (const id of [...surfaceSaves.keys()]) flushSurfaceState(id);
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", flushAllSurfaceStates);
+  window.addEventListener("pagehide", flushAllSurfaceStates);
 }
 
 const NO_MODEL: Model = { id: "__none__", name: "No model yet", provenance: "local", available: false };

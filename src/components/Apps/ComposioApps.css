@@ -1,0 +1,268 @@
+/* The Composio key card, the apps signed in through it, and the Browse modal.
+   Tokens only; status is always said in words next to its dot. */
+
+.composio-card .section-title {
+  margin-top: 0;
+}
+.composio-head {
+  margin-bottom: 10px;
+}
+.composio-head .composio-title {
+  margin: 0;
+  font-size: var(--fs-ui-lg);
+}
+.composio-manage {
+  margin-left: 0;
+}
+.composio-quiet.composio-hint {
+  margin: 0 0 14px;
+}
+.composio-disclosure,
+.composio-line {
+  margin: 0 0 10px;
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  line-height: 1.5;
+}
+.composio-quiet {
+  margin: 10px 0 0;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.composio-key {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.composio-key .field-input {
+  flex: 1;
+  min-width: 220px;
+}
+.composio-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.composio-problem {
+  margin: 10px 0 0;
+  font-size: var(--fs-footnote);
+  color: var(--danger);
+}
+.composio-via {
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+}
+
+/* An app's mark, or its first letter. The one such tile: Apps rows and Browse
+   cards use it at 32px, the sign-in card larger. */
+.app-logo {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 5px;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--paper);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+.app-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.app-logo.large {
+  width: 40px;
+  height: 40px;
+  padding: 6px;
+  font-size: var(--fs-ui-lg);
+}
+
+.status-dot.wait {
+  background: transparent;
+  border: 1.5px solid var(--ink-muted);
+}
+.status-dot.bad {
+  background: var(--danger);
+}
+
+.composio-accounts {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.composio-account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--paper-edge);
+}
+.composio-account-label {
+  font-size: var(--fs-ui);
+  color: var(--ink);
+}
+.composio-account-state {
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.composio-account-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+/* CAP-C6: naming one account in place. */
+.composio-name-field {
+  display: flex;
+  flex: 1;
+  gap: 8px;
+  align-items: center;
+}
+.composio-name-field .field-input {
+  max-width: 220px;
+}
+
+/* ---- Browse apps ----
+   A fixed-size dialog in the same shell as the confirm dialog: the header,
+   search and filter keep their place, and only the list scrolls, so choosing a
+   category or typing never makes the window jump. */
+.browse-card {
+  width: min(780px, calc(100vw - 48px));
+  height: min(640px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+  padding: 18px 20px 16px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-modal);
+  animation: dialog-in var(--dur) var(--ease-out);
+  overflow: hidden;
+}
+.browse-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.browse-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.browse-title {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  font-weight: 600;
+  color: var(--ink);
+}
+.browse-count {
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.browse-key-note {
+  flex: none;
+  margin: 0;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.browse-filters {
+  flex: none;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.browse-search {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.browse-filters .select {
+  flex: none;
+  width: 240px;
+  min-width: 0;
+}
+.browse-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-auto-rows: min-content;
+  gap: 10px;
+  align-content: start;
+  padding-right: 2px;
+}
+.browse-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+.browse-more {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 2px;
+}
+.browse-app {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+}
+.browse-app-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: flex-start;
+}
+.browse-app-name {
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink);
+}
+.browse-app-blurb,
+.browse-app-note,
+.browse-app-state {
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+/* A long blurb takes two lines, so cards keep a steady height. */
+.browse-app-blurb {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.browse-app-error {
+  font-size: var(--fs-footnote);
+  color: var(--danger);
+}
+.browse-app-label {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.browse-foot {
+  flex: none;
+  margin: 0;
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+}

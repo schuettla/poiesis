@@ -9,16 +9,6 @@ import "../ModelPicker/ModelPicker.css";
 import "./EffortPicker.css";
 import "./ModelControl.css";
 
-/** The word the trigger spends on effort. The model is the decision; this only
- * qualifies it, so it gets one short word, not a sentence. */
-const SHORT: Record<string, string> = {
-  off: "No thinking",
-  low: "Brief",
-  medium: "Think",
-  high: "Hard",
-  provider: "Default",
-};
-
 const compact = (n: number) =>
   n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);
 
@@ -88,7 +78,7 @@ export default function ModelControl({
         aria-label={`Model: ${selected.name}${media ? "" : `, ${effortLabel}`}${showRing ? `, context ${usage!.label}` : ""}`}
         title={[
           `Model: ${selected.name}`,
-          media ? null : `Thinking: ${effortLabel}`,
+          media ? null : `Effort: ${effortLabel}`,
           usage ? `Context: ${usage.label}` : null,
         ]
           .filter(Boolean)
@@ -100,7 +90,7 @@ export default function ModelControl({
         <span className="mc-model">{selected.name}</span>
         {!media && (
           <span className="mc-effort">
-            {SHORT[current.value]}
+            {current.label}
             {chipped && <span className="effort-once"> ·</span>}
           </span>
         )}
@@ -110,7 +100,7 @@ export default function ModelControl({
       </button>
 
       {open && (
-        <div className="mc-panel" role="dialog" aria-label="Model, thinking and context">
+        <div className="mc-panel" role="dialog" aria-label="Model, effort and context">
           <div className="mc-list" role="listbox" aria-label="Choose a model">
             <ModelList onDone={() => setOpen(false)} />
           </div>
@@ -119,12 +109,12 @@ export default function ModelControl({
           {!media && (
             <div className="mc-section">
               <div className="mc-section-head">
-                <span>Thinking</span>
+                <span>Effort</span>
                 <span className="mc-section-hint">
                   {chipped ? `Just this message · default ${standing.label.toLowerCase()}` : current.hint}
                 </span>
               </div>
-              <div className="mc-efforts" role="radiogroup" aria-label="How hard to think">
+              <div className="mc-efforts" role="radiogroup" aria-label="Effort">
                 {EFFORTS.map((e) => (
                   <button
                     key={e.value}
@@ -135,7 +125,7 @@ export default function ModelControl({
                     onClick={() => choose(e)}
                   >
                     <Meter bars={e.bars} />
-                    <span>{SHORT[e.value]}</span>
+                    <span>{e.label}</span>
                   </button>
                 ))}
               </div>

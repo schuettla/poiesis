@@ -50,6 +50,24 @@ export default function About() {
           </button>
         </section>
 
+        <section className="setting-block">
+          <h2 className="setting-title">About the name</h2>
+          <p className="setting-help">
+            Poiesis (ποίησις) is the ancient Greek word for "making": the act of bringing
+            something into being that wasn't there before. It's the root of our word "poetry",
+            and in Plato's Symposium it is the cause that makes anything pass from non-being
+            into being. Heidegger later used it for a kind of bringing-forth that reveals
+            something, as opposed to merely producing it.
+          </p>
+          <p className="setting-help">
+            It fits this app in two ways. I'm built to make things with you (documents, code,
+            images, plans) rather than only talk about them. And I'm meant to keep making
+            myself: I remember what I learn about you, learn from my own mistakes, and repair
+            what breaks. That echoes autopoiesis, "self-making", the term biologists Maturana
+            and Varela coined for a system that keeps producing and maintaining itself.
+          </p>
+        </section>
+
         <UpdatesBlock version={version} />
 
         {inTauri() && (

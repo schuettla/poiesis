@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getSetting, setSetting } from "../../lib/api";
+import { EFFORTS, type Effort } from "../../lib/effort";
 import { ChevronIcon } from "../Icons/Icons";
 import "./EffortPicker.css";
 
@@ -20,18 +21,9 @@ import "./EffortPicker.css";
  */
 const EFFORT_KEY = "models.reasoning_effort";
 
-/** Matches `cloud::Effort`. `provider` sends no parameter at all, which is the
- * only honest option for a server we know nothing about — so it is last, and
- * its meter reads as unknown rather than as a level. */
-export const EFFORTS = [
-  { value: "off", label: "No thinking", bars: 0, hint: "Answer straight away. Fastest and cheapest." },
-  { value: "low", label: "Think briefly", bars: 1, hint: "A moment's thought first." },
-  { value: "medium", label: "Think", bars: 2, hint: "For questions with a few moving parts." },
-  { value: "high", label: "Think hard", bars: 3, hint: "Slow and costly. Difficult work only." },
-  { value: "provider", label: "Model's default", bars: -1, hint: "Send nothing and take the provider's own setting." },
-] as const;
-
-export type Effort = (typeof EFFORTS)[number];
+// The levels live in `lib/effort` so the `/effort` menu shares them.
+export { EFFORTS };
+export type { Effort };
 
 const DEFAULT = EFFORTS[1];
 
@@ -127,7 +119,7 @@ export default function EffortPicker({
         className="effort-trigger"
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`How hard to think: ${current.label}${chipped ? " (just this message)" : ""}`}
+        aria-label={`Effort: ${current.label}${chipped ? " (just this message)" : ""}`}
         title={
           chipped
             ? `Just this message. My default is ${standing.label.toLowerCase()}.`
@@ -148,7 +140,7 @@ export default function EffortPicker({
       </button>
 
       {open && (
-        <div className="effort-dropdown" role="listbox" aria-label="How hard to think">
+        <div className="effort-dropdown" role="listbox" aria-label="Effort">
           {EFFORTS.map((e) => (
             <div
               key={e.value}

@@ -4,6 +4,7 @@ import * as api from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import Timeline from "../Conversation/Timeline";
 import RunText from "../Conversation/RunText";
+import { ContinueThere, EngineChips, UndoHandover } from "../Conversation/EngineChips";
 import Orb from "../Orb/Orb";
 import { orbForSubRun } from "../Orb/orbState";
 
@@ -111,12 +112,19 @@ export function RunView({ run }: { run: SubRun }) {
     <div className="agents-detail">
       <div className="agents-detail-head">
         <span className="agents-detail-agent">{run.agent}</span>
+        <EngineChips run={run} />
         {!ended(run) && (
           <button className="fleet-action" onClick={() => stopSubRun(run.runId)}>
             Stop
           </button>
         )}
       </div>
+      {ended(run) && run.engine && (
+        <div className="engine-after">
+          <ContinueThere run={run} />
+          <UndoHandover run={run} />
+        </div>
+      )}
       <p className="agents-task">{run.task}</p>
       {run.steps.length > 0 && <Timeline steps={run.steps} />}
       {run.text && <RunText text={run.text} streaming={!ended(run)} />}
@@ -134,7 +142,11 @@ export function RunView({ run }: { run: SubRun }) {
         >
           <input
             value={draft}
-            placeholder="Tell this agent something"
+            placeholder={
+              run.engine && !run.engine.can_steer
+                ? "I'll pass this on when it's done with this job"
+                : "Tell this agent something"
+            }
             onChange={(e) => setDraft(e.target.value)}
           />
         </form>

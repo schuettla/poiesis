@@ -12,6 +12,7 @@ import ProposalCard from "./ProposalCard";
 import QuestionCard from "./QuestionCard";
 import HarnessProposal from "./HarnessProposal";
 import Orb from "../Orb/Orb";
+import { ChevronIcon } from "../Icons/Icons";
 import { SpokenGlyph, StoppedHere } from "./SpokenMark";
 import { orbForStep } from "../Orb/orbState";
 import type { OrbState } from "thinking-orbs";
@@ -77,7 +78,17 @@ function NoAnswer() {
  * already shows one: two orbs in one turn would break the rule that only one
  * slow animation is on screen at a time. The slot is kept either way so the
  * text does not slide sideways when a step starts or ends. */
-function RunMeter({ steps, orb }: { steps?: Message["steps"]; orb: OrbState | null }) {
+export function RunMeter({
+  steps,
+  orb,
+  idle = false,
+}: {
+  steps?: Message["steps"];
+  orb: OrbState | null;
+  /** Before the run's first step, show a plain "what it is doing" line instead
+   * of nothing. For views (the Workspace dock) with no other sign of life. */
+  idle?: boolean;
+}) {
   const run = useAppStore((s) => s.activeRun);
   const [, tick] = useState(0);
   useEffect(() => {
@@ -85,7 +96,16 @@ function RunMeter({ steps, orb }: { steps?: Message["steps"]; orb: OrbState | nu
     const t = setInterval(() => tick((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, [run]);
-  if (!run || run.step < 1) return null;
+  if (!run || run.step < 1) {
+    if (!idle) return null;
+    const pending = steps?.find((s) => s.status === "running");
+    return (
+      <div className="run-meter-row" role="status">
+        <span className="run-meter-orb">{orb && <Orb state={orb} />}</span>
+        <p className="run-meter">{pending ? `${pending.verb} ${pending.target}`.trim() : "working"}</p>
+      </div>
+    );
+  }
   const secs = Math.floor((Date.now() - run.startedAt) / 1000);
   const clock = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
   // `OBS-3`: a percentage only where the window is actually known. Where it is
@@ -147,7 +167,13 @@ function ThinkingTrace({ text }: { text: string }) {
   if (!text) return null;
   return (
     <details className="run-thinking" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
-      <summary>Thinking ({text.length.toLocaleString()} characters so far)</summary>
+      <summary>
+        <span className="run-thinking-twisty" aria-hidden="true">
+          <ChevronIcon dir="right" size={11} strokeWidth={1.6} />
+        </span>
+        Thinking
+        <span className="run-thinking-count">{text.length.toLocaleString()} characters</span>
+      </summary>
       {/* The tail, not the head: what it is thinking about now is the part
           that says whether it is still going anywhere. */}
       <pre>{text.slice(-4000)}</pre>
@@ -158,7 +184,7 @@ function ThinkingTrace({ text }: { text: string }) {
 /** `HRN-3`: why a turn stopped, when it stopped for anything but finishing.
  * The text above is what the run had in hand, and saying so is the difference
  * between a short answer and a truthful one. */
-function StoppedNote({ reason }: { reason: StopReason }) {
+export function StoppedNote({ reason }: { reason: StopReason }) {
   const said: Record<StopReason, string> = {
     completed: "",
     aborted: "You stopped me. This is what I had.",
@@ -332,13 +358,30 @@ function TurnActions({ message, last }: { message: Message; last: boolean }) {
   );
 }
 
-export default function AgentRun({ message, last = false }: { message: Message; last?: boolean }) {
-  const model = message.model;
+/** `AGC-3`/`AGC-4`: what the run is waiting on, and what it asked of you. These
+ * are decisions, not decoration — the Workspace view shows them too, because a
+ * run paused on a question nobody can see never continues. */
+export function RunAsks({ message }: { message: Message }) {
   // Selectors return stable references (zustand v5): the filter is a memo.
   const pending = useAppStore((s) => s.pendingQuestion);
   const proposals = useAppStore((s) => s.harnessProposals);
   const question = pending && pending.messageId === message.id ? pending : null;
   const asked = useMemo(() => proposals.filter((p) => p.messageId === message.id), [proposals, message.id]);
+  return (
+    <>
+      {message.proposalIds?.map((id) => (
+        <ProposalCard key={id} id={id} />
+      ))}
+      {question && <QuestionCard q={question} />}
+      {asked.map((p) => (
+        <HarnessProposal key={p.id} proposal={p} />
+      ))}
+    </>
+  );
+}
+
+export default function AgentRun({ message, last = false }: { message: Message; last?: boolean }) {
+  const model = message.model;
   const busyNow = useAppStore((s) => s.busy);
   // Video counts as media here too — filtering to `"image"` used to drop a
   // generated clip on the floor, leaving the turn showing only its timeline
@@ -432,14 +475,7 @@ export default function AgentRun({ message, last = false }: { message: Message; 
       {message.fileChangeIds && message.fileChangeIds.length > 0 && (
         <ChangedFiles ids={message.fileChangeIds} />
       )}
-      {message.proposalIds?.map((id) => (
-        <ProposalCard key={id} id={id} />
-      ))}
-      {/* `AGC-3`/`AGC-4`: what the run is waiting on, and what it asked of you. */}
-      {question && <QuestionCard q={question} />}
-      {asked.map((p) => (
-        <HarnessProposal key={p.id} proposal={p} />
-      ))}
+      <RunAsks message={message} />
     </div>
   );
 }

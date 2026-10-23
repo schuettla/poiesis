@@ -44,9 +44,6 @@ const RESPONSE_RESERVE: f64 = 0.25;
 /// Recent turns that are never dropped: the thread of the live exchange.
 pub const KEEP_RECENT: usize = 6;
 
-/// Fewer in workspace mode: the surface and session state carry the task state.
-pub const KEEP_RECENT_WORKSPACE: usize = 3;
-
 /// Estimated tokens for one turn. Text is charged by length; an image is charged
 /// a flat `IMAGE_TOKEN_COST` rather than the meaningless character count of its
 /// data URI.
@@ -144,17 +141,6 @@ pub struct SkillEntry {
     pub model_invocable: bool,
 }
 
-/// One workspace block already visible to the user.
-pub struct BlockEntry {
-    pub id: String,
-    pub title: String,
-    pub kind: String,
-    /// The block's payload as stored, never re-serialized.
-    pub data_json: String,
-    /// The user's interaction state as stored, or `None`.
-    pub state_json: Option<String>,
-}
-
 /// The live surface the model composed with `render_ui`.
 pub struct SurfaceView {
     /// The tree as stored, never re-serialized.
@@ -199,7 +185,11 @@ pub struct PromptInputs {
     /// without an index.
     pub memory_enabled: bool,
     pub skills: Vec<SkillEntry>,
-    pub blocks: Vec<BlockEntry>,
+    /// Is this chat in Workspace mode. Only then is the model told it can compose
+    /// an interface, and only then is it shown the one it composed. A chat that is
+    /// not in the mode has no such tool (`ToolRegistry::build`), so describing one
+    /// would send it looking for something it cannot call.
+    pub workspace: bool,
     pub surface: Option<SurfaceView>,
     /// Durable session state as stored, never re-serialized.
     pub session_state_json: Option<String>,
@@ -255,12 +245,13 @@ pub fn compose_system_prompt(inputs: &PromptInputs) -> String {
     // the tools — otherwise it imitates tool-call JSON as prose and it leaks raw.
     if inputs.tools_enabled {
         push(skills_block(&inputs.skills));
-        push(block_registry(&inputs.blocks));
-        push(surface_context(inputs.surface.as_ref()));
+        if inputs.workspace {
+            push(surface_context(inputs.surface.as_ref()));
+        }
     }
     push(session_state_block(inputs.session_state_json.as_deref()));
     if inputs.tools_enabled {
-        push(tool_guidance_block(inputs.plan_mode));
+        push(tool_guidance_block(inputs.plan_mode, inputs.workspace));
         // `MEM-COLD`: last of the guidance, and sent even at zero facts — that
         // is precisely the state it exists to break out of.
         if inputs.memory_enabled {
@@ -346,8 +337,13 @@ fn session_state_block(state_json: Option<&str>) -> String {
 /// `PLN-3`: the planning sentence rides on the end of the same block, because
 /// it is the same kind of thing — how to go about the work — and because
 /// `plan.mode = never` must be able to remove it without leaving a gap.
-fn tool_guidance_block(plan_mode: super::plan::PlanMode) -> String {
-    let mut out = format!("{SURFACE_GUIDANCE}\n\n{BLOCK_GUIDANCE}\n\n{PLAN_FIRST_GUIDANCE}");
+fn tool_guidance_block(plan_mode: super::plan::PlanMode, workspace: bool) -> String {
+    let mut out = String::new();
+    if workspace {
+        out.push_str(SURFACE_GUIDANCE);
+        out.push_str("\n\n");
+    }
+    out.push_str(PLAN_FIRST_GUIDANCE);
     let planning = plan_mode.guidance();
     if !planning.is_empty() {
         out.push('\n');
@@ -467,7 +463,7 @@ fn surface_context(surface: Option<&SurfaceView>) -> String {
 /// Teach the model that the Workspace is a composable surface it owns.
 const SURFACE_GUIDANCE: &str = concat!(
     "## Composing the workspace\n",
-    "The Workspace view renders whatever interface tree you pass to `render_ui` — compose a real interface for the task (a dashboard, a board, a picker, a wizard, a tracker) instead of describing things in prose or emitting fixed chat blocks.\n",
+    "The Workspace view renders whatever interface tree you pass to `render_ui` — compose a real interface for the task (a dashboard, a board, a picker, a wizard, a tracker) instead of describing things in prose.\n",
     "Keep the surface CURRENT: as the task evolves, revise it (render_ui with node_id for one region, or re-render the whole tree) rather than accumulating chat.\n",
     "When a `ui_action` message arrives, it carries the user's bound state — revise the surface to reflect the interaction and reply in at most one sentence.\n",
     // `ORG-UI-2`: the data is already in this prompt (notes, lessons) and
@@ -476,76 +472,12 @@ const SURFACE_GUIDANCE: &str = concat!(
     "If the user asks how you are, what you remember, or what you've learned, you may render your notes and lessons as a workspace surface.",
 );
 
-/// `W4`/`W5`: teach the model to treat blocks as the surface, not to narrate
-/// them, and to acknowledge bare interactions briefly.
-const BLOCK_GUIDANCE: &str = concat!(
-    "## Presenting blocks\n",
-    "When you present a block (comparison, plan, collection, form, progress, document), the user sees it rendered in full in their workspace. Do NOT restate the block's contents in prose — after presenting, conclude in at most two sentences.\n",
-    "To change a block that already exists, call `present` with that block's existing `block_id` (see the workspace-block list above) rather than creating a new one.\n",
-    "If the user's message is only a block interaction (a workspace update, or a `poiesis-action`), acknowledge it in one short sentence and do not present a menu of follow-up options.",
-);
-
 /// `LOOP-3`: a multi-step run reads as deliberate rather than flailing when the
 /// model says what it intends before the first tool call. One line, tools only.
 const PLAN_FIRST_GUIDANCE: &str = concat!(
     "## Working through a task\n",
     "For multi-step tasks, state a one-line plan before your first tool call.",
 );
-
-/// `W3`: a compact registry of the blocks already on the user's workspace, so
-/// the model can update them by id instead of recreating (the duplicate-block
-/// bug).
-fn block_registry(blocks: &[BlockEntry]) -> String {
-    if blocks.is_empty() {
-        return String::new();
-    }
-    let lines: Vec<String> = blocks
-        .iter()
-        .map(|b| {
-            let summary = block_summary(b);
-            let tail = if summary.is_empty() { String::new() } else { format!(", {summary}") };
-            format!("[{}] \"{}\" ({}{tail})", b.id, b.title, b.kind)
-        })
-        .collect();
-    format!("## Workspace blocks (already visible to the user — update these by passing their block_id to present, do not recreate)\n{}", lines.join("\n"))
-}
-
-fn block_summary(b: &BlockEntry) -> String {
-    let data: serde_json::Value =
-        serde_json::from_str(&b.data_json).unwrap_or(serde_json::Value::Null);
-    let arr = |v: &serde_json::Value| v.as_array().cloned().unwrap_or_default();
-    match b.kind.as_str() {
-        "plan" => {
-            let steps = arr(&data["steps"]);
-            let state: serde_json::Value = b
-                .state_json
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or(serde_json::Value::Null);
-            let checked = &state["checked"];
-            let done = steps
-                .iter()
-                .filter(|s| {
-                    // The user's tick wins over the model's stored status, and
-                    // an absent tick falls back to it — `checked[id] ?? status`.
-                    let key = match &s["id"] {
-                        serde_json::Value::String(s) => s.clone(),
-                        other if other.is_null() => "undefined".to_string(),
-                        other => other.to_string(),
-                    };
-                    let ticked = &checked[&key];
-                    let effective = if ticked.is_null() { &s["status"] } else { ticked };
-                    effective.as_str() == Some("done")
-                })
-                .count();
-            format!("{done}/{} done", steps.len())
-        }
-        "comparison" => format!("{} options", arr(&data["options"]).len()),
-        "collection" => format!("{} items", arr(&data["items"]).len()),
-        "form" => format!("{} fields", arr(&data["fields"]).len()),
-        _ => String::new(),
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Reading the inputs out of the database
@@ -668,23 +600,15 @@ fn from_db(db: &crate::db::Db, opts: &GatherOpts<'_>) -> PromptInputs {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string());
 
-    // The surface shares the blocks table with the ordinary blocks, so one read
-    // serves both and the surface is lifted out by its reserved kind and title.
-    let mut blocks = Vec::new();
+    // The surface shares the blocks table with the blocks other tools leave
+    // (a build's diagnostics, say), so it is lifted out by its reserved kind and
+    // title. Only the surface goes into the prompt.
     let mut surface = None;
     let mut tool_health = Vec::new();
     if opts.tools_enabled {
         for b in db.list_blocks(opts.conversation_id).unwrap_or_default() {
             if b.kind == SURFACE_KIND && b.title == SURFACE_TITLE {
                 surface = Some(SurfaceView { data_json: b.data_json, state_json: b.state_json });
-            } else {
-                blocks.push(BlockEntry {
-                    id: b.id,
-                    title: b.title,
-                    kind: b.kind,
-                    data_json: b.data_json,
-                    state_json: b.state_json,
-                });
             }
         }
         tool_health = db
@@ -702,13 +626,15 @@ fn from_db(db: &crate::db::Db, opts: &GatherOpts<'_>) -> PromptInputs {
         .and_then(|c| c.project_id.as_deref())
         .and_then(|id| db.get_project(id).ok().flatten());
 
+    let workspace = conv.as_ref().is_some_and(|c| c.workspace);
+
     PromptInputs {
         base,
         project_name: project.as_ref().map(|p| p.name.clone()),
         project_instructions: project.and_then(|p| p.instructions),
         tools_enabled: opts.tools_enabled,
         memory_enabled: super::toolsets::Toolset::Memory.is_enabled(db),
-        blocks,
+        workspace,
         surface,
         session_state_json: db.get_session_state(opts.conversation_id).ok().flatten(),
         tool_health,
@@ -893,13 +819,7 @@ mod tests {
     fn tool_machinery_is_silent_when_the_model_cannot_call_tools() {
         let mut inputs = base();
         inputs.skills.push(skill("pdf", "Read PDFs", None));
-        inputs.blocks.push(BlockEntry {
-            id: "b1".into(),
-            title: "Options".into(),
-            kind: "comparison".into(),
-            data_json: r#"{"options":[1,2]}"#.into(),
-            state_json: None,
-        });
+        inputs.workspace = true;
         inputs.surface =
             Some(SurfaceView { data_json: r#"{"type":"stack"}"#.into(), state_json: None });
         inputs.memory_enabled = true;
@@ -909,7 +829,7 @@ mod tests {
 
         inputs.tools_enabled = true;
         let on = compose_system_prompt(&inputs);
-        for expected in ["Skills available", "Workspace blocks", "Workspace surface", "Remembering"]
+        for expected in ["Skills available", "Workspace surface", "Composing the workspace", "Remembering"]
         {
             assert!(on.contains(expected), "missing {expected}");
         }
@@ -1009,42 +929,11 @@ mod tests {
         }
     }
 
-    /// A plan block's progress is the user's ticks first, the model's stored
-    /// status second — the same fallback the workspace itself renders.
-    #[test]
-    fn a_plans_progress_counts_the_users_ticks_over_the_models_status() {
-        let mut inputs = base();
-        inputs.tools_enabled = true;
-        inputs.blocks.push(BlockEntry {
-            id: "b1".into(),
-            title: "Ship it".into(),
-            kind: "plan".into(),
-            data_json: r#"{"steps":[{"id":"1","status":"done"},{"id":"2","status":"todo"},{"id":"3","status":"todo"}]}"#.into(),
-            state_json: Some(r#"{"checked":{"2":"done"}}"#.into()),
-        });
-        let out = compose_system_prompt(&inputs);
-        assert!(out.contains(r#"[b1] "Ship it" (plan, 2/3 done)"#), "{out}");
-    }
-
-    #[test]
-    fn a_block_kind_with_no_summary_has_no_trailing_comma() {
-        let mut inputs = base();
-        inputs.tools_enabled = true;
-        inputs.blocks.push(BlockEntry {
-            id: "b9".into(),
-            title: "Notes".into(),
-            kind: "document".into(),
-            data_json: r#"{"body":"hi"}"#.into(),
-            state_json: None,
-        });
-        let out = compose_system_prompt(&inputs);
-        assert!(out.contains(r#"[b9] "Notes" (document)"#), "{out}");
-    }
-
     #[test]
     fn a_huge_surface_tree_is_truncated_with_an_instruction_not_just_cut() {
         let mut inputs = base();
         inputs.tools_enabled = true;
+        inputs.workspace = true;
         inputs.surface = Some(SurfaceView { data_json: "z".repeat(5000), state_json: None });
         let out = compose_system_prompt(&inputs);
         assert!(out.contains("re-render regions you need to change"));
@@ -1127,13 +1016,6 @@ mod tests {
         assert_eq!(bt.overflow, 30 - KEEP_RECENT);
     }
 
-    #[test]
-    fn workspace_mode_keeps_fewer_turns_because_the_surface_carries_the_state() {
-        let prior: Vec<_> = (0..30).map(|_| turn("user", &"x".repeat(4000))).collect();
-        let bt = budget_turns("system", &prior, &turn("user", "q"), 128, KEEP_RECENT_WORKSPACE);
-        assert_eq!(bt.turns.len(), 1 + KEEP_RECENT_WORKSPACE + 1);
-    }
-
     /// The kept turns are the *newest* ones, in their original order. A budget
     /// that kept the oldest would hand the model an exchange that stops before
     /// the thing being discussed.
@@ -1188,19 +1070,40 @@ mod tests {
         assert_eq!(from_db(&db, &opts(&conv, true)).base, "You are a ruthless editor.");
     }
 
-    /// The surface rides on the blocks table, so it has to be told apart from
-    /// the ordinary blocks. Left in the registry it would be advertised as
-    /// something to update with `present`, which is not how it is revised.
+    /// The surface rides on the blocks table next to the blocks other tools
+    /// leave there, so it has to be told apart from them by its reserved kind.
     #[test]
-    fn the_surface_is_lifted_out_of_the_block_list_rather_than_listed_with_it() {
+    fn the_surface_is_lifted_out_of_the_blocks_table() {
+        let (db, conv) = seeded();
+        db.add_block(&conv, None, "diagnostics", "Build", r#"{"items":[]}"#).unwrap();
+        assert!(from_db(&db, &opts(&conv, true)).surface.is_none());
+        db.add_block(&conv, None, "surface", "Workspace", r#"{"type":"stack"}"#).unwrap();
+        assert!(from_db(&db, &opts(&conv, true)).surface.is_some());
+    }
+
+    /// The mode is the chat's own flag. A chat outside it is told nothing about
+    /// composing an interface, and is not shown one left over from before.
+    #[test]
+    fn the_workspace_is_only_described_to_a_chat_that_is_in_the_mode() {
         let (db, conv) = seeded();
         db.add_block(&conv, None, "surface", "Workspace", r#"{"type":"stack"}"#).unwrap();
-        db.add_block(&conv, None, "comparison", "Which laptop", r#"{"options":[1]}"#).unwrap();
+        assert!(!from_db(&db, &opts(&conv, true)).workspace);
+        db.set_conversation_workspace(&conv, true).unwrap();
+        assert!(from_db(&db, &opts(&conv, true)).workspace);
 
-        let inputs = from_db(&db, &opts(&conv, true));
-        assert_eq!(inputs.blocks.len(), 1);
-        assert_eq!(inputs.blocks[0].title, "Which laptop");
-        assert!(inputs.surface.is_some());
+        let mut inputs = base();
+        inputs.tools_enabled = true;
+        inputs.surface =
+            Some(SurfaceView { data_json: r#"{"type":"stack"}"#.into(), state_json: None });
+        let plain = compose_system_prompt(&inputs);
+        assert!(!plain.contains("render_ui"), "{plain}");
+        assert!(!plain.contains("Workspace surface"), "{plain}");
+        assert!(plain.contains("Working through a task"));
+
+        inputs.workspace = true;
+        let inside = compose_system_prompt(&inputs);
+        assert!(inside.contains("Composing the workspace"));
+        assert!(inside.contains("Workspace surface"));
     }
 
     /// With tools off none of this can be acted on, so none of it is read —
@@ -1212,7 +1115,6 @@ mod tests {
         db.set_session_state(&conv, r#"{"a":1}"#).unwrap();
 
         let inputs = from_db(&db, &opts(&conv, false));
-        assert!(inputs.blocks.is_empty());
         assert!(inputs.surface.is_none());
         assert!(inputs.tool_health.is_empty());
         // Session state is not tool machinery: it is the task's own state, and

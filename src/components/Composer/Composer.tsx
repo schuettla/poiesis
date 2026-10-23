@@ -185,7 +185,7 @@ export default function Composer({
     value,
     setValue,
     focus: () => inputRef.current?.focus(),
-    sendSkill: (text, skill, skillArgs) => sendWithExtras(text, { skill, skillArgs }),
+    sendSkill: (text, skill, skillArgs, delegateTo) => sendWithExtras(text, { skill, skillArgs, delegateTo }),
     sendText: (text) => sendWithExtras(text),
     busy: !!busy,
   });
@@ -273,11 +273,6 @@ export default function Composer({
 
     if (!text && attachments.length === 0 && refs.length === 0) return;
     sendWithExtras(text);
-  }
-
-  function chooseFromPopover(i: number) {
-    const line = cmd.model.lines.filter((l) => l.kind === "command")[i];
-    if (line && line.kind === "command") cmd.chooseFromPopover(line.row.view);
   }
 
   function addAttachment(a: Attachment) {
@@ -615,9 +610,20 @@ export default function Composer({
             <CommandMenu
               model={cmd.model}
               onHover={cmd.setIndex}
-              onChoose={(i) => (cmd.model.popover ? chooseFromPopover(i) : cmd.activateAt(i))}
+              onChoose={cmd.activateAt}
+              onControl={cmd.controlAt}
+              onBack={cmd.goBack}
               onFilter={cmd.model.popover ? cmd.setFilter : undefined}
             />
+            <div className="composer-field">
+            {/* While a command is being typed, the rest of the best match, faint
+                after the cursor. Tab or → takes it. */}
+            {cmd.ghost && (
+              <span className="composer-ghost" aria-hidden="true">
+                <span className="composer-ghost-typed">{value}</span>
+                {cmd.ghost}
+              </span>
+            )}
             <input
               ref={inputRef}
               type="text"
@@ -662,6 +668,7 @@ export default function Composer({
                 }
               }}
             />
+            </div>
           </div>
           {busy && canSteer && value.trim() ? (
             // Typing during a run means you have something to say to it, not

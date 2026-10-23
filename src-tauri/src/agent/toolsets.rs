@@ -133,16 +133,30 @@ pub fn set_step_note(ctx: &ToolContext<'_>, note: impl Into<String>) {
 /// UI happens regardless of risk, since the marking is about provenance, not
 /// an alarm (Part I §4.2).
 pub fn mark_untrusted(ctx: &ToolContext<'_>, label: &str, text: &str) -> String {
+    mark_untrusted_for(ctx.db, ctx.sink, ctx.conversation_id, ctx.call_id, label, text)
+}
+
+/// [`mark_untrusted`] for a caller that has no `ToolContext`: an MCP connector's
+/// result is outside text too (`MCG-1`), and `dispatch` holds exactly these four
+/// things when it makes that call.
+pub fn mark_untrusted_for(
+    db: &Db,
+    sink: &AgentEventSink,
+    conversation_id: &str,
+    call_id: &str,
+    label: &str,
+    text: &str,
+) -> String {
     let scan = super::untrusted::scan(text);
     if scan.risk >= 2 {
-        let _ = ctx.db.log_activity(
-            Some(ctx.conversation_id),
+        let _ = db.log_activity(
+            Some(conversation_id),
             "untrusted",
             &format!("risk {} in {label}: {}", scan.risk, scan.flags.join(", ")),
         );
     }
-    ctx.sink.emit(super::AgentEvent::Untrusted {
-        id: ctx.call_id.to_string(),
+    sink.emit(super::AgentEvent::Untrusted {
+        id: call_id.to_string(),
         label: label.to_string(),
         risk: scan.risk,
         flags: scan.flags.clone(),
@@ -272,6 +286,10 @@ pub struct ToolsetInfo {
     /// True if turning this on sends data off the device (web search) or runs
     /// code — the UI shows a heads-up.
     pub sensitive: bool,
+    /// `LRN-5`: why a switched-on toolset is not on the tool menu yet, in my
+    /// words. `None` when it is ready, or off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs: Option<String>,
 }
 
 impl Toolset {
@@ -357,7 +375,7 @@ impl Toolset {
                 "Generate images on your device from a text prompt. Set it up in Models → Image."
             }
             Toolset::Present => {
-                "Let the assistant compose a live, interactive interface for the task in the Workspace view — plus inline chat blocks."
+                "In a chat that is in Workspace mode, let the assistant compose a live, interactive interface for the task, and keep notes about the task's state."
             }
             Toolset::Recall => {
                 "Search your past conversations and saved memories. Stays on your device."
@@ -438,17 +456,53 @@ impl Toolset {
         }
     }
 
+    /// `LRN-5`: switched on is not the same as able to do anything. A toolset
+    /// whose one job needs something the person has not set up yet is kept off
+    /// the tool menu, so the model is never offered a call that can only fail.
+    /// The switch in Settings is untouched, and the tool comes back the moment
+    /// the setup is done, because this is read for every run.
+    ///
+    /// Only the two toolsets that need an account or a model say no. Every
+    /// other one works with nothing beyond its switch (and the folder or site
+    /// permissions they ask for at the moment of use).
+    pub fn ready(self, db: &Db) -> bool {
+        match self {
+            // At least one mail account that is not switched off. A failed read
+            // is not a reason to withdraw the tool.
+            Toolset::Mail => db.list_mail_accounts().map_or(true, |a| a.iter().any(|a| a.enabled)),
+            // The same question `generate_image` asks when it runs: is any image
+            // backend usable, local or cloud?
+            Toolset::ImageGen => {
+                crate::media::resolve_backend(&crate::media::Registry::new(), db, crate::media::Modality::Image).is_ok()
+            }
+            _ => true,
+        }
+    }
+
     pub fn set_enabled(self, db: &Db, on: bool) {
         let _ = db.set_setting(&self.setting_key(), if on { "true" } else { "false" });
     }
 
     pub fn info(self, db: &Db) -> ToolsetInfo {
+        let enabled = self.is_enabled(db);
         ToolsetInfo {
             id: self.id().to_string(),
             label: self.label().to_string(),
             description: self.description().to_string(),
-            enabled: self.is_enabled(db),
+            enabled,
             sensitive: self.sensitive(),
+            needs: (enabled && !self.ready(db)).then(|| self.needs().to_string()),
+        }
+    }
+
+    /// What is missing, said to the person (`LRN-5`). Read only when `ready` is no.
+    fn needs(self) -> &'static str {
+        match self {
+            Toolset::Mail => "I can't use this yet. Add a mail account in Settings \u{2192} Mail.",
+            Toolset::ImageGen => {
+                "I can't use this yet. Set up image generation in Models \u{2192} Image, or connect an account in Providers."
+            }
+            _ => "",
         }
     }
 
@@ -589,11 +643,11 @@ impl Toolset {
 
 /// `PLF-1`: `Some(true)` changes something, `Some(false)` only reads, `None` is
 /// a tool nobody has placed yet.
-fn classify_mutation(tool: &str) -> Option<bool> {
+pub(crate) fn classify_mutation(tool: &str) -> Option<bool> {
     const MUTATING: &[&str] = &[
         "write_file", "edit_file", "create_dir", "move_file", "delete_file", "run_code", "run_task",
         "run_command", "send_mail", "reply_mail", "generate_image", "create_artifact",
-        "update_artifact", "render_ui", "present", "remember", "memory", "propose_soul_edit",
+        "update_artifact", "render_ui", "remember", "memory", "propose_soul_edit",
         "propose_skill", "propose_project_instructions", "browser_click", "browser_type", "browser_press", "open_app",
     ];
     const READ_ONLY: &[&str] = &[

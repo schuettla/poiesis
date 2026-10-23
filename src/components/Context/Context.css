@@ -27,23 +27,24 @@
   background: var(--fill-hover);
 }
 
-/* Same chip convention as the model/reasoning pickers (`.model-picker.compact
-   .model-picker-trigger`): a transparent border at rest, drawn in on hover, so
-   these read as the same family of quiet controls instead of plain text
-   links. */
+/* Same hover as the model/reasoning pickers and the context chip under the
+   composer (`.model-picker.compact .model-picker-trigger`): no border, a filled
+   background and darker ink, so every quiet control answers the pointer the same
+   way instead of plain text links drawing an outline. */
 .why-link {
   background: none;
-  border: 1px solid transparent;
+  border: none;
   border-radius: var(--radius);
-  padding: 2px 6px;
-  margin-left: -6px;
+  padding: 3px 7px;
   font-family: var(--font-sans);
   font-size: var(--fs-caption);
   color: var(--ink-faint);
   cursor: pointer;
 }
-.why-link:hover {
-  border-color: var(--paper-edge-2);
+.why-link:hover,
+.why-link:focus-visible,
+.why-link[aria-expanded="true"] {
+  background: var(--fill-hover);
   color: var(--ink);
 }
 

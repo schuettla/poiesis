@@ -1,0 +1,175 @@
+/* "When I use it" inside an agent's row (`RTE-UI-1`). Flat lines with hairlines,
+   the same quiet as the rest of External agents. Amber is only for a rule that
+   was declined more often than it was used. The mode is the app's segmented
+   control (global.css); the guards are the same `Opt` lines as every setting. */
+
+.rule-modes {
+  align-self: flex-start;
+}
+
+.rule-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+.rule-title {
+  margin: 0;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink);
+}
+.rule-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 14px;
+  border: 1px solid var(--paper-edge);
+  border-radius: var(--radius);
+}
+.rule-list:empty {
+  display: none;
+}
+.rule-item {
+  display: grid;
+  grid-template-columns: 2.4em minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--paper-edge);
+  font-size: var(--fs-ui);
+}
+.rule-item:first-child {
+  border-top: 0;
+}
+.rule-item.off .rule-words {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+.rule-label {
+  padding-top: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+}
+.rule-words {
+  display: block;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: text;
+  overflow-wrap: anywhere;
+}
+.rule-edit {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rule-edit .field-input {
+  flex: 1;
+  min-width: 220px;
+}
+.rule-count {
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.rule-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+}
+.rule-meta:empty {
+  display: none;
+}
+.rule-tag {
+  padding: 0 7px;
+  background: none;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-pill);
+  color: var(--ink-muted);
+  font: inherit;
+}
+button.rule-tag {
+  cursor: pointer;
+}
+button.rule-tag:hover {
+  background: var(--fill-hover);
+}
+.rule-uses.warn {
+  color: var(--cloud);
+}
+/* Move, re-file, delete: out of the way until the rule is pointed at or
+   focused, and always there where nothing can point. */
+.rule-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  margin-top: 2px;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+.rule-item:hover .rule-tools,
+.rule-item:focus-within .rule-tools {
+  opacity: 1;
+}
+@media (hover: none) {
+  .rule-tools {
+    opacity: 1;
+  }
+}
+.rule-tools .btn-text {
+  padding: 2px 0;
+  font-size: var(--fs-footnote);
+}
+.rule-on {
+  display: inline-flex;
+  align-items: center;
+  padding-top: 1px;
+}
+.rule-add {
+  align-self: flex-start;
+}
+
+/* The checks that hold whatever I decide: one panel of `Opt` lines. */
+.rule-guards {
+  display: flex;
+  flex-direction: column;
+  padding: 0 14px;
+  border: 1px solid var(--paper-edge);
+  border-radius: var(--radius);
+}
+.rule-foot {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.rule-stderr summary {
+  cursor: pointer;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.rule-stderr pre {
+  margin: 6px 0 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: 6px 8px;
+  background: var(--canvas);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  white-space: pre-wrap;
+  color: var(--ink-muted);
+}
+
+.rule-try {
+  border-top: 1px solid var(--paper-edge-2);
+}

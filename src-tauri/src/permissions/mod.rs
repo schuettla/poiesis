@@ -148,17 +148,93 @@ pub struct PermissionRequest {
     /// `command argv[0]` pair.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remember: Option<String>,
+    /// `MCG-UI-1`: for an `"app"` request, what the call does: `"read"`,
+    /// `"change"` or `"send"`. The panel draws a send in the outbound colour.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_kind: Option<String>,
+    /// For a send: how many a day "always" covers, so the button can say so.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cap: Option<i64>,
+    /// `MCG-7`: for a Composio `"app"` request, the app tools it runs and what
+    /// each is held to, so a wrong guess can be corrected from the panel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<AppTool>>,
+    /// `CLI-6`: the agent app that is asking, by its display name ("Claude
+    /// Code"). Set for an `"engine"` approval and for a `"handover"` card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    /// `CLI-6`: the agent app's own name for what it wants to do (`Bash`, `Edit`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// `RTE-4`: for a `"handover"` card, the rule that makes the lead think this
+    /// belongs to the agent app.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule: Option<RuleRef>,
+}
+
+/// A rule as the handover card shows it: its label (`U2`) and its words.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuleRef {
+    pub label: String,
+    pub text: String,
+}
+
+/// One app tool an `"app"` request runs. A correction applies from the next call;
+/// the question already asked stays as it is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AppTool {
+    pub connector_id: String,
+    pub app: String,
+    pub app_name: String,
+    pub name: String,
+    /// What the gate holds it to now.
+    pub kind: String,
+    /// What its name says.
+    pub auto_kind: String,
+    pub overridden: bool,
 }
 
 impl PermissionRequest {
     /// A scope request: "may I reach into this folder at all?"
     pub fn scope(id: String, summary: String, path: String, mode: Mode) -> Self {
-        Self { id, summary, path, mode, diff: None, in_folder: false, capability: None, argv: None, project: None, timeout_secs: None, remember: None }
+        Self { id, summary, path, mode, diff: None, in_folder: false, capability: None, argv: None, project: None, timeout_secs: None, remember: None, call_kind: None, cap: None, tools: None, engine: None, tool: None, rule: None }
     }
 
     /// An operation confirm inside the already-attached folder.
     pub fn operation(id: String, summary: String, path: String, mode: Mode, diff: Option<String>) -> Self {
-        Self { id, summary, path, mode, diff, in_folder: true, capability: None, argv: None, project: None, timeout_secs: None, remember: None }
+        Self { id, summary, path, mode, diff, in_folder: true, capability: None, argv: None, project: None, timeout_secs: None, remember: None, call_kind: None, cap: None, tools: None, engine: None, tool: None, rule: None }
+    }
+
+    /// `MCG-3`: a connected app's tool wants to run. `path` is the app's name,
+    /// `diff` the arguments it would run with, `remember` what "always" would
+    /// remember in words, and `cap` the daily limit when the call is a send.
+    pub fn app_call(
+        id: String,
+        summary: String,
+        app: String,
+        call_kind: &str,
+        arguments: String,
+        cap: Option<i64>,
+    ) -> Self {
+        Self {
+            id,
+            summary,
+            path: app.clone(),
+            mode: Mode::Read,
+            diff: Some(arguments),
+            in_folder: false,
+            capability: Some("app".to_string()),
+            argv: None,
+            project: None,
+            timeout_secs: None,
+            remember: Some(app),
+            call_kind: Some(call_kind.to_string()),
+            cap,
+            tools: None,
+            engine: None,
+            tool: None,
+            rule: None,
+        }
     }
 
     /// A one-off capability consent: visiting a domain, taking a screenshot,
@@ -177,6 +253,12 @@ impl PermissionRequest {
             project: None,
             timeout_secs: None,
             remember: None,
+            call_kind: None,
+            cap: None,
+            tools: None,
+            engine: None,
+            tool: None,
+            rule: None,
         }
     }
 
@@ -205,6 +287,70 @@ impl PermissionRequest {
             project: Some(project),
             timeout_secs: Some(timeout_secs),
             remember: Some(remember),
+            call_kind: None,
+            cap: None,
+            tools: None,
+            engine: None,
+            tool: None,
+            rule: None,
+        }
+    }
+
+    /// `CLI-6`: an agent app asks to do something. `tool` is its own word for it
+    /// (`Bash`, `Edit`), `path` the folder it works in, `argv` the command (when
+    /// it is one) and `diff` what an edit would write.
+    pub fn engine_ask(
+        id: String,
+        engine: String,
+        tool: String,
+        summary: String,
+        cwd: String,
+        argv: Option<Vec<String>>,
+        diff: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            summary,
+            path: cwd,
+            mode: Mode::ReadWrite,
+            diff,
+            in_folder: false,
+            capability: Some("engine".to_string()),
+            argv,
+            project: None,
+            timeout_secs: None,
+            remember: None,
+            call_kind: None,
+            cap: None,
+            tools: None,
+            engine: Some(engine),
+            tool: Some(tool),
+            rule: None,
+        }
+    }
+
+    /// `RTE-4`: "Hand this to Claude Code?". The answers map onto `Decision`:
+    /// `Once` hands it over, `Deny` keeps it with the lead, `Forever` hands it
+    /// over and stops asking for this rule.
+    pub fn handover(id: String, engine: String, task: String, rule: Option<RuleRef>) -> Self {
+        Self {
+            id,
+            summary: format!("Hand this to {engine}?"),
+            path: engine.clone(),
+            mode: Mode::Read,
+            diff: Some(task),
+            in_folder: false,
+            capability: Some("handover".to_string()),
+            argv: None,
+            project: None,
+            timeout_secs: None,
+            remember: None,
+            call_kind: None,
+            cap: None,
+            tools: None,
+            engine: Some(engine),
+            tool: None,
+            rule,
         }
     }
 }

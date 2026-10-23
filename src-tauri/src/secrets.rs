@@ -24,6 +24,12 @@ pub const SERVICE_MEDIA: &str = "poiesis-media";
 /// remote box) — most of these need no key at all, so this is separate from
 /// `poiesis-cloud`. `account` is the `local_endpoints.id`.
 pub const SERVICE_ENDPOINT: &str = "poiesis-endpoint";
+/// The Composio project key (`CAP-2`). One per install; `account` is `"project"`.
+/// The key never reaches the frontend, a prompt, a child process or a log.
+pub const SERVICE_COMPOSIO: &str = "poiesis-composio";
+/// An API key the user chose for an external agent app (`CLI-12`). `account`
+/// is the `engines.id`. Injected into that agent's environment only.
+pub const SERVICE_ENGINES: &str = "poiesis-engines";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {

@@ -353,7 +353,7 @@ the timeline, and executes it. It is not an Agent Skill (§6).
 |---|---|---|---|
 | File System (`filesystem`) | `read_file` `list_directory` `search_files` `find_symbol` `changes` `write_file` `edit_file` `create_dir` `move_file` `delete_file` | on | Real disk, scope + trust + undo (§9.1); read-before-edit (§7.2) |
 | Artifacts (`artifacts`) | `create_artifact` `read_artifact` `update_artifact` `check_preview` | on | Served on a loopback origin (`preview.rs`); `check_preview` runs HTML in headless Chrome, or a code artifact in the sandbox |
-| Workspace UI (`present`) | `render_ui` `present` `remember` | on | Typed blocks (incl. `diagnostics`) and a composable surface |
+| Workspace UI (`present`) | `render_ui` `remember` | on | A composable surface for chats in Workspace mode (`render_ui` is offered only there); the old `present` block tool is gone, blocks other tools leave (a build's diagnostics) are still drawn |
 | Recall (`recall`) | `search_history` `read_conversation` | on | FTS over past chats |
 | Memory (`memory`) | `memory` `propose_soul_edit` | on | Autonomy-gated |
 | Folder reading (`indexing`) | `search_folder` `find_similar` | on | Retrieval over the index; duplicate grouping |

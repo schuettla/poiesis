@@ -127,6 +127,12 @@ export interface SubRun {
    * to their group, so its timeline bands them the same way the lead's does. */
   parallelPending?: Record<string, string>;
   steerPending?: boolean;
+  /** `CLI-UI-2`: set when an agent app does this child's work. */
+  engine?: import("./api").EngineBadge;
+  /** The agent's own session id, for **Continue there** (`CLI-UI-5`). */
+  engineSession?: string;
+  /** `MCPS-2`: what the agent put on its card with `present` (a table, a bar). */
+  blocks?: BlockView[];
   /** `RUN-1b`: what it used, and what that cost. `costUsd` is `undefined` while
    * it has not said, and `null` once it has said it cannot be priced — the run
    * bar tells those apart, and never sums over a `null`. */
@@ -162,6 +168,7 @@ export type BlockKind =
   | "document"
   | "table"
   | "diagnostics"
+  | "connect"
   | "surface";
 
 /** One node of the agent-composed interface tree (the dynamic Workspace
@@ -293,6 +300,8 @@ export interface Conversation {
   folderPath?: string | null;
   /** How much the agent may change inside that folder. Reads are always free. */
   folderTrust?: FolderTrust;
+  /** `RTE-5`: keep external agent apps out of this chat. */
+  enginesOff?: boolean;
   /** `PRJ-1`: the project this session belongs to, or null for a loose chat.
    * With one set, the project owns the folder and the trust level and the two
    * fields above are only the fallback. */
@@ -381,6 +390,7 @@ export const ALL_VIEWS = [
   "chat",
   "models",
   "providers",
+  "engines",
   "runtime",
   "apps",
   "settings",
@@ -418,6 +428,7 @@ export const HUB_SECTIONS: { view: View; label: string; icon: string }[] = [
   { view: "models", label: "Models", icon: "▤" },
   { view: "providers", label: "Providers", icon: "⌁" },
   { view: "runtime", label: "Runtime", icon: "◧" },
+  { view: "engines", label: "External agents", icon: "⇄" },
   { view: "tools", label: "Tools", icon: "⚒" },
   { view: "skills", label: "Skills", icon: "▦" },
   { view: "apps", label: "Apps", icon: "◇" },
@@ -519,6 +530,8 @@ export interface PendingQuestion {
   question: string;
   options: { label: string; detail?: string }[];
   multi: boolean;
+  /** `MCPS-2`: set when an agent app is the one asking ("Claude Code"). */
+  agent?: string;
 }
 
 /** `AGC-2`: the one suggestion on screen. Replaced, never stacked. */
@@ -555,6 +568,8 @@ export interface SendOptions {
   /** `SKC-2`: the skill the user named with `/name`. */
   skill?: string;
   skillArgs?: string;
+  /** `CLI-UI-6`: the agent `/delegate <agent>` named; this message only. */
+  delegateTo?: string;
   refs?: ContextRef[];
   /** `PLF-4`: Go ahead. The plan the user approved; the run starts from it with
    * nothing restricted, and the Plan first chip is never sent with it. */
@@ -562,4 +577,9 @@ export interface SendOptions {
   /** `VTN-1`: the user spoke this turn and will hear the reply, so the prompt
    * says so and the reply is read out. */
   spoken?: boolean;
+  /** A block or surface interaction sent as a turn: the sentence the person
+   * would have said. `text` then holds that sentence plus the action fence. An
+   * action takes no turn chips, names no chat, and is recalled against by its
+   * sentence, not by the JSON. */
+  action?: string;
 }

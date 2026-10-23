@@ -1,16 +1,18 @@
 [
   {
     "name": "effort",
+    "title": "Thinking",
     "aliases": [],
     "section": "turn",
     "kind": "modifier",
-    "args": { "type": "choice", "source": "effort", "hint": "low|medium|high", "required": true },
+    "args": { "type": "choice", "source": "effort", "hint": "off|low|medium|high|provider", "required": true },
     "summary": "How hard to think, for the next message only",
     "who": "user",
     "needs": []
   },
   {
     "name": "steps",
+    "title": "Step limit",
     "aliases": [],
     "section": "turn",
     "kind": "modifier",
@@ -21,6 +23,7 @@
   },
   {
     "name": "stop",
+    "title": "Stop",
     "aliases": [],
     "section": "turn",
     "kind": "ui",
@@ -31,6 +34,7 @@
   },
   {
     "name": "continue",
+    "title": "Carry on",
     "aliases": [],
     "section": "turn",
     "kind": "action",
@@ -41,6 +45,7 @@
   },
   {
     "name": "retry",
+    "title": "Try again",
     "aliases": [],
     "section": "turn",
     "kind": "action",
@@ -52,6 +57,7 @@
 
   {
     "name": "plan",
+    "title": "Plan first",
     "aliases": [],
     "section": "turn",
     "kind": "modifier",
@@ -64,6 +70,7 @@
   },
   {
     "name": "btw",
+    "title": "Ask on the side",
     "aliases": [],
     "section": "turn",
     "kind": "action",
@@ -75,6 +82,7 @@
 
   {
     "name": "new",
+    "title": "New chat",
     "aliases": ["clear"],
     "section": "conversation",
     "kind": "ui",
@@ -85,6 +93,7 @@
   },
   {
     "name": "rename",
+    "title": "Rename this chat",
     "aliases": [],
     "section": "conversation",
     "kind": "action",
@@ -96,6 +105,7 @@
   },
   {
     "name": "fork",
+    "title": "Branch here",
     "aliases": [],
     "section": "conversation",
     "kind": "action",
@@ -107,6 +117,7 @@
   },
   {
     "name": "export",
+    "title": "Save as a file",
     "aliases": [],
     "section": "conversation",
     "kind": "action",
@@ -117,6 +128,7 @@
   },
   {
     "name": "rewind",
+    "title": "Go back to an earlier turn",
     "aliases": [],
     "section": "conversation",
     "kind": "action",
@@ -127,6 +139,7 @@
   },
   {
     "name": "compact",
+    "title": "Shorten the history",
     "aliases": [],
     "section": "conversation",
     "kind": "action",
@@ -139,6 +152,7 @@
   },
   {
     "name": "context",
+    "title": "What I'm holding in mind",
     "aliases": [],
     "section": "conversation",
     "kind": "ui",
@@ -149,6 +163,7 @@
   },
   {
     "name": "why",
+    "title": "Why I answered that",
     "aliases": [],
     "section": "conversation",
     "kind": "ui",
@@ -159,6 +174,7 @@
   },
   {
     "name": "talk",
+    "title": "Talk out loud",
     "aliases": ["voice"],
     "section": "conversation",
     "kind": "ui",
@@ -170,6 +186,7 @@
 
   {
     "name": "remember",
+    "title": "Remember something",
     "aliases": [],
     "section": "me",
     "kind": "action",
@@ -181,6 +198,7 @@
   },
   {
     "name": "forget",
+    "title": "Forget something",
     "aliases": [],
     "section": "me",
     "kind": "action",
@@ -192,6 +210,7 @@
   },
   {
     "name": "always",
+    "title": "Always do this",
     "aliases": [],
     "section": "me",
     "kind": "action",
@@ -203,6 +222,7 @@
   },
   {
     "name": "reflect",
+    "title": "Think back",
     "aliases": [],
     "section": "me",
     "kind": "action",
@@ -215,6 +235,7 @@
   },
   {
     "name": "checkup",
+    "title": "Check up on me",
     "aliases": [],
     "section": "me",
     "kind": "action",
@@ -225,7 +246,30 @@
     "needs": []
   },
   {
+    "name": "apps",
+    "title": "My apps",
+    "aliases": [],
+    "section": "me",
+    "kind": "ui",
+    "args": { "type": "none" },
+    "summary": "Let me show the apps I'm connected to",
+    "who": "user",
+    "needs": []
+  },
+  {
+    "name": "connect",
+    "title": "Connect an app",
+    "aliases": [],
+    "section": "me",
+    "kind": "action",
+    "args": { "type": "choice", "source": "apps", "hint": "app, then a name if you have one already", "required": true },
+    "summary": "I'll open an app's sign-in so I can use it",
+    "who": "user",
+    "needs": []
+  },
+  {
     "name": "skillify",
+    "title": "Turn this into a skill",
     "aliases": ["make-skill"],
     "section": "me",
     "kind": "skill",
@@ -238,6 +282,7 @@
   },
   {
     "name": "tidy",
+    "title": "Tidy my memory",
     "aliases": [],
     "section": "me",
     "kind": "action",
@@ -249,6 +294,7 @@
   },
   {
     "name": "self",
+    "title": "Visit me",
     "aliases": [],
     "section": "me",
     "kind": "ui",
@@ -259,6 +305,7 @@
   },
   {
     "name": "autonomy",
+    "title": "How much I decide",
     "aliases": [],
     "section": "me",
     "kind": "ui",
@@ -270,6 +317,7 @@
 
   {
     "name": "workspace",
+    "title": "Workspace",
     "aliases": [],
     "section": "modes",
     "kind": "action",
@@ -282,6 +330,7 @@
   },
   {
     "name": "tools",
+    "title": "Tools",
     "aliases": [],
     "section": "modes",
     "kind": "action",
@@ -292,7 +341,20 @@
     "trace": true
   },
   {
+    "name": "external",
+    "title": "External agents",
+    "aliases": [],
+    "section": "modes",
+    "kind": "action",
+    "args": { "type": "choice", "source": "onoff", "hint": "on|off", "required": true },
+    "summary": "Let me hand work to the agent apps you've set up",
+    "who": "user",
+    "needs": ["conv", "engines"],
+    "trace": true
+  },
+  {
     "name": "persona",
+    "title": "Persona",
     "aliases": [],
     "section": "modes",
     "kind": "action",
@@ -304,6 +366,7 @@
   },
   {
     "name": "model",
+    "title": "Model",
     "aliases": [],
     "section": "modes",
     "kind": "action",
@@ -316,17 +379,19 @@
 
   {
     "name": "delegate",
+    "title": "Hand off to a helper",
     "aliases": [],
     "section": "agents",
     "kind": "skill",
-    "args": { "type": "text", "hint": "task", "required": true },
-    "summary": "Hand this to a background agent and keep talking",
+    "args": { "type": "text", "hint": "[agent] task", "required": true, "lead": "agents" },
+    "summary": "Hand this to an agent and keep talking",
     "who": "user",
     "needs": ["conv", "norun"],
     "trace": true
   },
   {
     "name": "agents",
+    "title": "See my helpers",
     "aliases": [],
     "section": "agents",
     "kind": "ui",
@@ -337,6 +402,7 @@
   },
   {
     "name": "schedule",
+    "title": "Do it later",
     "aliases": [],
     "section": "agents",
     "kind": "ui",
@@ -349,6 +415,7 @@
 
   {
     "name": "image",
+    "title": "Make a picture",
     "aliases": [],
     "section": "create",
     "kind": "modifier",
@@ -359,6 +426,7 @@
   },
   {
     "name": "video",
+    "title": "Make a clip",
     "aliases": [],
     "section": "create",
     "kind": "modifier",
@@ -370,6 +438,7 @@
 
   {
     "name": "goal",
+    "title": "Work toward a goal",
     "aliases": [],
     "section": "work",
     "kind": "action",
@@ -381,6 +450,7 @@
   },
   {
     "name": "init",
+    "title": "Learn this project",
     "aliases": [],
     "section": "work",
     "kind": "skill",
@@ -392,6 +462,7 @@
   },
   {
     "name": "review",
+    "title": "Review my changes",
     "aliases": [],
     "section": "work",
     "kind": "skill",
@@ -403,6 +474,7 @@
   },
   {
     "name": "verify",
+    "title": "Run the checks",
     "aliases": [],
     "section": "work",
     "kind": "skill",
@@ -414,6 +486,7 @@
   },
   {
     "name": "changes",
+    "title": "See what I changed",
     "aliases": [],
     "section": "work",
     "kind": "ui",
@@ -424,6 +497,7 @@
   },
   {
     "name": "undo",
+    "title": "Take back my changes",
     "aliases": [],
     "section": "work",
     "kind": "action",
@@ -435,6 +509,7 @@
   },
   {
     "name": "keep",
+    "title": "Keep my changes",
     "aliases": [],
     "section": "work",
     "kind": "action",
@@ -446,6 +521,7 @@
   },
   {
     "name": "permissions",
+    "title": "What I may touch",
     "aliases": [],
     "section": "work",
     "kind": "ui",
@@ -457,6 +533,7 @@
 
   {
     "name": "usage",
+    "title": "What this cost",
     "aliases": [],
     "section": "inspect",
     "kind": "ui",
@@ -467,6 +544,7 @@
   },
   {
     "name": "activity",
+    "title": "Everything I did",
     "aliases": [],
     "section": "inspect",
     "kind": "ui",
@@ -477,6 +555,7 @@
   },
   {
     "name": "help",
+    "title": "All commands",
     "aliases": [],
     "section": "inspect",
     "kind": "ui",

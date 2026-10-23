@@ -285,6 +285,12 @@ export function SectionIcon({ view, ...props }: IconProps & { view: string }) {
           />
         </Glyph>
       );
+    case "engines":
+      return (
+        <Glyph {...props}>
+          <path d="M4 7h11.5M12.5 4l3 3-3 3M16 13H4.5M7.5 10l-3 3 3 3" strokeLinecap="round" strokeLinejoin="round" />
+        </Glyph>
+      );
     case "runtime":
       return (
         <Glyph {...props}>
@@ -434,6 +440,15 @@ export function RefreshIcon(props: IconProps) {
   return (
     <Glyph {...props}>
       <path d="M16 10a6 6 0 1 1-1.8-4.3M16 3v3h-3" strokeLinecap="round" strokeLinejoin="round" />
+    </Glyph>
+  );
+}
+
+/** An arrow leaving the page by its upper right corner: this link opens elsewhere. */
+export function ArrowUpRightIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M6 14 14 6M7.5 6H14v6.5" strokeLinecap="round" strokeLinejoin="round" />
     </Glyph>
   );
 }

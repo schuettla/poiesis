@@ -164,13 +164,43 @@ describe("/talk (VOC-UI-2)", () => {
     expect(voice.openVoice).toHaveBeenCalledOnce();
   });
 
-  it("says why not in workspace mode, where the voice surface is not shown", async () => {
+  it("also works in a workspace chat: voice steps the canvas aside itself", async () => {
     voice.openVoice.mockClear();
     useAppStore.setState({ activeConversationId: "c1", conversations: [{ id: "c1", messages: [] } as never], workspaceMode: true });
     const result = await runCommand(parseCommandLine("/talk", views())!, useAppStore.getState());
-    expect(result.kind).toBe("error");
-    expect(voice.openVoice).not.toHaveBeenCalled();
+    expect(result.kind).toBe("done");
+    expect(voice.openVoice).toHaveBeenCalledOnce();
     useAppStore.setState({ workspaceMode: false });
+  });
+});
+
+describe("/workspace", () => {
+  const run = (line: string) => runCommand(parseCommandLine(line, views())!, useAppStore.getState());
+  beforeEach(() => {
+    useAppStore.setState({ activeConversationId: "c1", conversations: [{ id: "c1", messages: [] } as never], workspaceMode: false, workspaceShown: true });
+  });
+
+  it("turns the mode on and off", async () => {
+    await run("/workspace on");
+    expect(useAppStore.getState().workspaceMode).toBe(true);
+    await run("/workspace off");
+    expect(useAppStore.getState().workspaceMode).toBe(false);
+  });
+
+  it("brings the canvas back when the mode is on with the stream showing, instead of ending the mode", async () => {
+    useAppStore.setState({ workspaceMode: true, workspaceShown: false });
+    expect(await run("/workspace")).toEqual({ kind: "done", note: "opened the Workspace" });
+    expect(useAppStore.getState().workspaceMode).toBe(true);
+    expect(useAppStore.getState().workspaceShown).toBe(true);
+    useAppStore.setState({ workspaceShown: false });
+    await run("/workspace on");
+    expect(useAppStore.getState().workspaceShown).toBe(true);
+  });
+
+  it("still ends the mode on request while the stream shows", async () => {
+    useAppStore.setState({ workspaceMode: true, workspaceShown: false });
+    await run("/workspace off");
+    expect(useAppStore.getState().workspaceMode).toBe(false);
   });
 });
 

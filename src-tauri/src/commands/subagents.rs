@@ -60,3 +60,10 @@ pub fn steer_subagent_cmd(fleet: State<'_, Fleet>, run_id: String, text: String)
 pub fn list_agent_types_cmd(db: State<'_, Db>) -> Vec<AgentType> {
     agent_types(&db)
 }
+
+/// `CLI-UI-6`: what `/delegate` can name in this chat, with the reason one cannot
+/// be used here.
+#[tauri::command]
+pub fn list_delegate_targets_cmd(db: State<'_, Db>, conversation_id: Option<String>) -> Vec<crate::agent::subagents::Target> {
+    crate::agent::subagents::delegate_targets(&db, conversation_id.as_deref())
+}

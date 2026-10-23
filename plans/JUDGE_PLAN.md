@@ -1,5 +1,9 @@
 # Project Poiesis - Judge Plan
 
+> **Superseded (2026-10-13) by `plans/DUAL_PROCESS_PLAN.md`**, which merges this
+> plan with the DPAR concept and switches the local backend to Clef. Kept for
+> history.
+
 **Poiesis asks small questions all the time and answers them badly.**
 
 "Do these excerpts answer the question?" "Is this fact global or topical?"

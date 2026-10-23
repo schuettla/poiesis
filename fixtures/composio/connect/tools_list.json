@@ -1,0 +1,524 @@
+[
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Retrieve input schemas for tools by slug. Returns complete parameter definitions required to execute each tool. Only pass tool slugs returned by COMPOSIO_SEARCH_TOOLS — never guess or fabricate slugs. If unsure of the exact slug, call COMPOSIO_SEARCH_TOOLS first.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "include": {
+          "default": [
+            "input_schema"
+          ],
+          "description": "Schema fields to include. Defaults to [\"input_schema\"]. Include \"output_schema\" when calling tools in the workbench to validate response structure.\nExamples:\n  [\"input_schema\"]\n  [\"input_schema\",\"output_schema\"]",
+          "items": {
+            "enum": [
+              "input_schema",
+              "output_schema"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "session_id": {
+          "description": "Pass the session_id if you received one from a prior COMPOSIO_SEARCH_TOOLS call.",
+          "type": "string"
+        },
+        "tool_slugs": {
+          "description": "Array of tool slugs to retrieve schemas for. Pass valid tool slugs; never invent.\nExample: [\"GMAIL_SEND_EMAIL\",\"SLACK_SEND_MESSAGE\"]",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tool_slugs"
+      ],
+      "type": "object"
+    },
+    "name": "COMPOSIO_GET_TOOL_SCHEMAS"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": false
+    },
+    "description": "\nCreate or manage connections to user's apps. Supports multiple accounts per toolkit.\n\nCall policy:\n- First call COMPOSIO_SEARCH_TOOLS for the user's query.\n- If COMPOSIO_SEARCH_TOOLS indicates there is no active connection for a toolkit, call COMPOSIO_MANAGE_CONNECTIONS with the exact toolkit name(s) returned.\n- Use exact toolkit slugs returned by COMPOSIO_SEARCH_TOOLS; never invent toolkit names.\n- NEVER execute any toolkit tool without an ACTIVE connection.\n\nActions:\n- \"add\" (default): Add a connection. Always creates a new auth link. Enforces max account limit.\n- \"rename\": Rename the alias on an existing account. Requires account_id and alias.\n- \"list\": List all connected accounts for a toolkit. Returns account IDs, aliases, and statuses. No side effects.\n- \"remove\": Remove/delete a connected account. Requires account_id.\n\nWorkflow after initiating connection:\n- Always show the returned redirect_url as a FORMATTED MARKDOWN LINK in your final response for this turn as intermediate messages may be hidden or summarized by the chat interface, so the user may not see the link there. Ask the user to click on the link to finish authentication and reply when done.\n- After the user replies, call COMPOSIO_MANAGE_CONNECTIONS with action=\"list\" and check that the newly added account is active before continuing.\n- Begin executing tools only after the connection is confirmed Active.\n    ",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "session_id": {
+          "description": "Pass the session_id if you received one from a prior COMPOSIO_SEARCH_TOOLS call.",
+          "type": "string"
+        },
+        "toolkits": {
+          "description": "List of toolkit connection operations. Each entry specifies a toolkit and the action to perform.",
+          "items": {
+            "additionalProperties": false,
+            "description": "ToolkitItem",
+            "properties": {
+              "account_id": {
+                "description": "Target a specific account by its ID (from a previous response). Required for \"rename\" and \"remove\".",
+                "type": "string"
+              },
+              "action": {
+                "default": "add",
+                "description": "Action to perform on this toolkit:\n- \"add\" (default): Add a connection. Always creates a new auth link. Enforces max account limit.\n- \"rename\": Rename the alias on an existing account. Requires account_id and alias.\n- \"list\": List all connected accounts. Returns IDs, aliases, and statuses. No side effects.\n- \"remove\": Remove/delete a connected account. Requires account_id.",
+                "enum": [
+                  "add",
+                  "rename",
+                  "list",
+                  "remove"
+                ],
+                "type": "string"
+              },
+              "alias": {
+                "description": "Optional human-readable alias for the connection (e.g. \"work\", \"personal\").",
+                "type": "string"
+              },
+              "name": {
+                "description": "Toolkit slug (e.g. 'gmail', 'slack'). Must be a valid toolkit slug; never invent.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "toolkits"
+      ],
+      "type": "object"
+    },
+    "name": "COMPOSIO_MANAGE_CONNECTIONS"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": false
+    },
+    "description": "\n  Fast and parallel tool executor for tools discovered through COMPOSIO_SEARCH_TOOLS. Use this tool to execute up to 50 tools in parallel across apps only when they're logically independent (no ordering/output dependencies). Response contains structured outputs ready for immediate analysis - avoid reprocessing them via remote bash/workbench tools.\n\nPrerequisites:\n- Always use valid tool slugs and their arguments. NEVER invent tool slugs or argument fields. ALWAYS pass STRICTLY schema-compliant arguments with each tool execution.\n- Ensure an ACTIVE connection exists for the toolkits that are going to be executed. If none exists, MUST initiate one via COMPOSIO_MANAGE_CONNECTIONS before execution.\n- Only batch tools that are logically independent - no ordering, no output-to-input dependencies, and no intra-call chaining (tools in one call can't use each other's outputs). DO NOT pass dummy or placeholder inputs; always resolve required inputs using appropriate tools first.\n\nUsage guidelines:\n- If COMPOSIO_SEARCH_TOOLS returns a tool that can perform the task, prefer calling it via this executor. Do not write custom API calls or ad-hoc scripts for tasks that can be completed by available Composio tools.\n- Prefer parallel execution: group independent tools into a single multi-execute call where possible.\n- Predictively set sync_response_to_workbench=true if the response may be large or needed for later scripting. It still shows response inline; if the actual response data turns out small and easy to handle, keep everything inline and SKIP workbench usage.\n- Responses contain structured outputs for each tool. RULE: Small data - process yourself inline; large data - process in the workbench.\n- ALWAYS include inline references/links to sources in MARKDOWN format directly next to the relevant text. Eg provide slack thread links alongside with summary, render document links instead of raw IDs.\n\nRestrictions: Some tools or toolkits may be disabled in this environment. If the response indicates a restriction, inform the user and STOP execution immediately. Do NOT attempt workarounds or speculative actions.\n\n\n",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "current_step": {
+          "description": "Short enum for current step of the workflow execution. Eg FETCHING_EMAILS, GENERATING_REPLIES. Always include to keep execution aligned with the workflow.",
+          "type": "string"
+        },
+        "current_step_metric": {
+          "description": "Progress metrics for the current step - use to track how far execution has advanced. Format as a string \"done/total units\" - example \"10/100 emails\", \"0/n messages\", \"3/10 pages\".",
+          "type": "string"
+        },
+        "session_id": {
+          "description": "Pass the session_id if you received one from a prior COMPOSIO_SEARCH_TOOLS call.",
+          "type": "string"
+        },
+        "sync_response_to_workbench": {
+          "description": "Predictively set true when the response may be large or needed for later scripting. Saves the full response to the workbench while returning an inline preview. If the result is small, keep it inline. Default false.",
+          "type": "boolean"
+        },
+        "thought": {
+          "description": "One-sentence, concise, high-level rationale (no step-by-step).",
+          "type": "string"
+        },
+        "tools": {
+          "description": "List of logically independent tools to execute in parallel.",
+          "items": {
+            "additionalProperties": false,
+            "description": "MultiExecuteToolItem",
+            "properties": {
+              "account": {
+                "description": "When multiple accounts are connected, you MUST specify which account to use. Use the alias (e.g. \"work\") or account ID (e.g. \"coup_hurricane_dal_analytical\").",
+                "type": "string"
+              },
+              "arguments": {
+                "additionalProperties": true,
+                "description": "The arguments to pass to the tool. Use exact field names and types; do not diverge from the tool's argument schema.\nExamples:\n  {\"body\":\"This is a test\",\"subject\":\"Hello\",\"to\":\"user@example.com\"}\n  {\"channel\":\"#general\",\"text\":\"Hello from Composio!\"}\n  {\"body\":\"Description of the issue\",\"labels\":[\"bug\"],\"title\":\"Bug Report\"}",
+                "properties": {},
+                "type": "object"
+              },
+              "tool_slug": {
+                "description": "The slug of the tool to execute — must be a valid tool slug; never invent.\nExamples:\n  \"GMAIL_SEND_EMAIL\"\n  \"SLACK_SEND_MESSAGE\"\n  \"GITHUB_CREATE_AN_ISSUE\"",
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "tool_slug",
+              "arguments"
+            ],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "tools",
+        "sync_response_to_workbench"
+      ],
+      "type": "object"
+    },
+    "name": "COMPOSIO_MULTI_EXECUTE_TOOL"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": false
+    },
+    "description": "\n  Execute bash commands in a REMOTE sandbox for file operations, data processing, and system tasks. Essential for handling large tool responses saved to remote files. **Hard 3-minute (180s) execution limit** — break large tasks into smaller commands.\n  PRIMARY USE CASES:\n- Process large tool responses saved by COMPOSIO_MULTI_EXECUTE_TOOL to remote sandbox\n- File system operations, extract specific information from JSON with shell tools like jq, awk, sed, grep, etc.\n- Commands run from /home/user directory by default\n    ",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "description": "The bash command to execute. **Hard 3-minute (180s) execution limit** — break large tasks into smaller commands.",
+          "type": "string"
+        },
+        "session_id": {
+          "description": "Pass the session_id if you received one from a prior COMPOSIO_SEARCH_TOOLS call.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    "name": "COMPOSIO_REMOTE_BASH_TOOL"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": false
+    },
+    "description": "\nUse this persistent Jupyter sandbox only for **remote files** or scripted **bulk tool executions**. Do not use it for inline data, quick parsing or summaries, or basic math.\n\nUSE IT TO\n- Parse or analyze tool outputs saved by COMPOSIO_MULTI_EXECUTE_TOOL, script multi-tool chains, or run known Composio tools in bulk.\n- Call APIs via proxy_execute when no Composio tool exists for that API.\n\n\nOUTPUTS\n- Returns compact results; long outputs become artifacts under `/mnt/files/.composio/output` (cloud-backed and persistent across sandbox restarts).\n\nRULES\n1. Work stepwise. State persists across cells, including variables, functions, imports, and files. Save resumable checkpoints to `/mnt/files/` and call this tool again for the next step.\n2. Top-level cells cannot use `return`; end with `output` or `print(output)`.\n3. Each cell has a hard 180-second limit. Use `ThreadPoolExecutor` for bulk operations and split large data into batches across cells.\n4. Schema safety: Never assume the response schema for run_composio_tool if not known already from previous tools. To inspect schema, either run a simple request **outside** the workbench or use invoke_llm helper.\n5. Use `invoke_llm` for summaries, analysis, or field extraction instead of ad hoc filtering.\n6. Avoid Meta Loops: Do not use run_composio_tool to call COMPOSIO_* meta tools. Only use it for app tools.\n7. Paginate until no `next_page_token` or cursor remains. Parallelize when page numbers are supported.\n8. Never hardcode data; load it from files or tool responses and iterate to build outputs.\n9. For user-downloadable files, call `upload_local_file`; never expose raw sandbox paths.\n\n\nENVIRONMENT & PRELOADED HELPERS\n- Home: `/home/user`. Do not import or redeclare these helpers:\n    - `run_composio_tool(tool_slug: str, arguments: dict, *, account: str = None) -> tuple[Dict[str, Any], str]`: Execute a known Composio **app** tool in loops, parallel, or bulk. Use an exact known name and schema; pass an account ID or alias to select an account. Results have top-level \"data\" and may be nested.\n    - `invoke_llm(query: str, reasoning_effort: Optional[Literal[\"low\",\"medium\",\"high\"]] = None) -> tuple[str, str]`: Run semantic tasks with at most 200k characters. reasoning_effort is an optional hint passed to the model (some models ignore it); omit it unless a task clearly needs \"high\" reasoning. Define the exact output JSON schema and batch items into small groups. Use f-strings or concatenation to preserve literal braces; with str.format, escape them as {{ }}.\n    - `upload_local_file(*file_paths) -> tuple[Dict[str, Any], str]`: Upload user-downloadable artifacts to Composio S3/R2. Multiple files are auto-zipped; success data includes s3_url, uploaded_file, type, s3key, and message.\n    - `proxy_execute(method: Literal[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"], endpoint, toolkit, query_params=None, body=None, headers=None) -> tuple[Any, str]`: Call a toolkit API directly when no Composio tool exists. Only one toolkit can be invoked per workbench call.\n    - `web_search(query: str) -> tuple[str, str]`: Search the web for information.\n    - `smart_file_extract(sandbox_file_path: str, show_preview: bool = True) -> tuple[str, str]`: Extracts text from files in the sandbox (e.g., PDF, image).\n- All helpers return `(result, error)`; always check `error` before using `result`.\n- Parse responses defensively: inspect keys while narrowing because data can be nested.\n- For bulk calls, use `ThreadPoolExecutor` and set concurrency so the cell finishes within 180 seconds.\n\n",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "code_to_execute": {
+          "description": "Python to run inside the persistent **remote Jupyter sandbox**. State (imports, variables, files) is preserved across executions. Keep code concise. Avoid unnecessary comments. **Hard 3-minute (180s) execution limit** — break large tasks into smaller cells.\nExamples:\n  \"import json, glob\\npaths = glob.glob(file_path)\\n...\"\n  \"result, error = run_composio_tool(tool_slug='SLACK_SEARCH_MESSAGES', arguments={'query': 'Rube'})\\nif error:\\n    print(error)\\nelse:\\n    messages = result.get('data', {}).get('messages', [])\"",
+          "type": "string"
+        },
+        "current_step": {
+          "description": "Short enum for current step of the workflow execution. Eg FETCHING_EMAILS, GENERATING_REPLIES. Always include to keep execution aligned with the workflow.",
+          "type": "string"
+        },
+        "current_step_metric": {
+          "description": "Progress metrics for the current step - use to track how far execution has advanced. Format as a string \"done/total units\" - example \"10/100 emails\", \"0/n messages\", \"3/10 pages\".",
+          "type": "string"
+        },
+        "session_id": {
+          "description": "Pass the session_id if you received one from a prior COMPOSIO_SEARCH_TOOLS call.",
+          "type": "string"
+        },
+        "thought": {
+          "description": "Brief objective for this step.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code_to_execute"
+      ],
+      "type": "object"
+    },
+    "name": "COMPOSIO_REMOTE_WORKBENCH"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "\n  Tool Server Info: Composio connects 500+ apps—Slack, GitHub, Notion, Google Workspace (Gmail, Sheets, Drive, Calendar), Microsoft (Outlook, Teams), X/Twitter, Figma, Web Search / Deep research, Browser tool (scrape URLs, browser automation), Meta apps (Instagram, Meta Ads), TikTok, and more—for seamless cross-app automation.\n  Use this tool to discover relevant tools plus the recommended plan and common pitfalls for reliable execution.\n  Always call this tool first whenever a user mentions or implies an external app, service, or workflow—never say \"I don't have access to X/Y app\" before calling it.\n\nUsage guidelines:\n  - Use this tool whenever kicking off a task. Re-run it when you need additional tools/plans due to missing details, errors, or a changed use case.\n  - Use search_strategy: \"auto\" normally. If the returned plan does not match the current request or an expected tool is missing, retry the same queries with search_strategy: \"tool_search\" to bypass cached plans and run direct tool search.\n  - If the user pivots to a different use case in same chat, you MUST call this tool again with the new use case and generate a new session_id.\n  - Specify the use_case with a normalized description of the problem, query, or task. Be clear and precise. Queries can be simple single-app actions or multiple linked queries for complex cross-app workflows.\n  - Pass known_fields along with use_case as a string of key–value hints (for example, \"channel_name: general\") to help the search resolve missing details such as IDs.\n  \n\nSplitting guidelines (Important):\n  1. Atomic queries: 1 query = 1 tool call. Include hidden prerequisites (e.g., add \"get Linear issue\" before \"update Linear issue\").\n  2. Include app names: If user names a toolkit, include it in every sub query so intent stays scoped (e.g., \"fetch Gmail emails\", \"reply to Gmail email\").\n  3. English input: Translate non-English prompts while preserving intent and identifiers.\n\n  Example:\n  User query: \"send an email to John welcoming him and create a meeting invite for tomorrow\"\n  Search call: queries: [\n    {use_case: \"send an email to someone\", known_fields: \"recipient_name: John\"},\n    {use_case: \"create a meeting invite\", known_fields: \"meeting_date: tomorrow\"}\n  ]\n\nPlan review checklist (Important):\n  - The response includes a detailed execution plan and common pitfalls. You MUST review this plan carefully, adapt it to your current context, and generate your own final step-by-step plan before execution. Execute the steps in order to ensure reliable and accurate execution. Skipping or ignoring required steps can lead to unexpected failures.\n  - Check the plan and pitfalls for input parameter nuances (required fields, IDs, formats, limits). Before executing any tool, you MUST review its COMPLETE input schema and provide STRICTLY schema-compliant arguments to avoid invalid-input errors.\n  - Determine whether pagination is needed; if a response returns a pagination token and completeness is implied, paginate until exhaustion and do not return partial results.\n\nResponse:\n  - Tools & Input Schemas: The response lists toolkits (apps) and tools suitable for the task, along with their tool_slug, description, input schema / schemaRef, and related tools for prerequisites, alternatives, or next steps.\n    - NOTE: Tools with schemaRef instead of input_schema require you to call COMPOSIO_GET_TOOL_SCHEMAS first to load their full input_schema before use.\n  - Connection Info: If a toolkit has an active connection, the response includes it along with any available current user information. If no active connection exists, you MUST initiate a new connection via COMPOSIO_MANAGE_CONNECTIONS with the correct toolkit name. DO NOT execute any toolkit tool without an ACTIVE connection.\n  - Time Info: The response includes the current UTC time for reference. You can reference UTC time from the response if needed.\n  \n  - The tools returned to you through this are to be called via COMPOSIO_MULTI_EXECUTE_TOOL. Ensure each tool execution specifies the correct tool_slug and arguments exactly as defined by the tool's input schema.\n  \nSESSION: ALWAYS set this parameter, first for any workflow. Pass session: {generate_id: true} for new workflows OR session: {id: \"EXISTING_ID\"} to continue. ALWAYS use the returned session_id in ALL subsequent meta tool calls.\n    ",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "description": "Client LLM model name (recommended). Used to optimize planning/search behavior. Ignored if omitted or invalid.\nExamples:\n  \"gpt-5.2\"\n  \"claude-4.5-sonnet\"",
+          "type": "string"
+        },
+        "queries": {
+          "description": "Structured English search queries to process in parallel. Split independent app/API actions into separate queries, including hidden prerequisites. Each query returns 4-6 tools.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "known_fields": {
+                "description": "Provide known workflow inputs as a single English string of comma-separated key:value pairs (not an array). Keep 1-2 short, structured items - stable identifiers, names, emails, or settings only. Omit if not relevant. No free-form or long text (messages, notes, descriptions).\nExamples:\n  \"channel_name:pod-sdk\"\n  \"channel_id:123\"\n  \"invitee_names:John,Maria, timezone:Asia/Kolkata\"",
+                "type": "string"
+              },
+              "use_case": {
+                "description": "Provide a normalized English description of the complete use case to enable precise planning. Focus on the specific action and intended outcome. Include any specific apps if mentioned by user in each use_case. Do NOT include personal identifiers (names, emails, IDs) here — put those in known_fields.\nExamples:\n  \"send an email to someone\"\n  \"search issues with label in jira toolkit\"\n  \"put issue details in a google sheet\"\n  \"post a formatted message to slack channel\"",
+                "maxLength": 1024,
+                "type": "string"
+              }
+            },
+            "required": [
+              "use_case"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "search_strategy": {
+          "default": "auto",
+          "description": "Search path to use. Use auto normally. If the returned plan does not match the current request or an expected tool is missing, retry with tool_search to bypass cached plans and run direct tool search.",
+          "enum": [
+            "auto",
+            "tool_search"
+          ],
+          "type": "string"
+        },
+        "session": {
+          "additionalProperties": false,
+          "description": "Session context for correlating meta tool calls within a workflow. Always pass this parameter. Use {generate_id: true} for new workflows or {id: \"EXISTING_ID\"} to continue existing workflows.",
+          "properties": {
+            "generate_id": {
+              "description": "Set to true for the first search call of a new usecase/workflow to generate a new session ID. When user pivots to a different task, set this true. If omitted or false with an existing session.id, the provided session ID will be reused.",
+              "type": "boolean"
+            },
+            "id": {
+              "description": "Existing session identifier for the current workflow to reuse across calls.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "queries"
+      ],
+      "type": "object"
+    },
+    "name": "COMPOSIO_SEARCH_TOOLS"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": false
+    },
+    "description": "\nReport a Composio tool execution that returned empty or incorrect results, failed transiently, or exposed a missing capability.\n\nUse the tool_slug of the execution being reported; the most recent execution of that tool in this session is what gets reported. Keep the explanation concise and do not include tool arguments, response payloads, credentials, or other sensitive data.\n    ",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "description": "The type of tool-quality problem observed.",
+          "enum": [
+            "empty_results",
+            "incorrect_results",
+            "transient_failure",
+            "missing_capability"
+          ],
+          "type": "string"
+        },
+        "explanation": {
+          "description": "A concise explanation of what was wrong, without copying tool arguments or response data.",
+          "maxLength": 300,
+          "minLength": 10,
+          "type": "string"
+        },
+        "reported_by": {
+          "description": "Whether the agent identified the problem or a human reported it.",
+          "enum": [
+            "agent",
+            "human"
+          ],
+          "type": "string"
+        },
+        "tool_slug": {
+          "description": "The slug of the tool whose most recent execution in this session is being reported, e.g. GITHUB_LIST_REPOS.",
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool_slug",
+        "category",
+        "explanation",
+        "reported_by"
+      ],
+      "type": "object"
+    },
+    "name": "COMPOSIO_SUBMIT_FEEDBACK"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "\nWait for user auth to finish. Call only after the user confirms they have completed authentication.\nWait until mode=any/all toolkits reach a terminal state (ACTIVE/FAILED) or timeout.\n\nExample Input: { toolkits: [\"gmail\",\"outlook\"], mode: \"any\" }\n    ",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "default": "any",
+          "description": "Wait for ANY connection or ALL connections to reach active/failed state (default: any)",
+          "enum": [
+            "any",
+            "all"
+          ],
+          "type": "string"
+        },
+        "session_id": {
+          "description": "Pass the session_id if you received one from a prior COMPOSIO_SEARCH_TOOLS call.",
+          "type": "string"
+        },
+        "toolkits": {
+          "description": "List of toolkit slugs to wait for.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "toolkits"
+      ],
+      "type": "object"
+    },
+    "name": "COMPOSIO_WAIT_FOR_CONNECTIONS"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": false
+    },
+    "description": "Create, update, or delete a Skill when the user explicitly asks. Pass exactly one of create (a new Skill), update (change an existing Skill), or delete (only for an explicit deletion request). For updates and deletions, copy the exact Skill ID returned by COMPOSIO_SEARCH_SKILLS or COMPOSIO_USE_SKILL; never invent an ID or pass a slug as an ID. If the target is ambiguous, ask the user to choose. Load the existing Skill with COMPOSIO_USE_SKILL before editing. Update never creates a Skill; if the ID is not found, search again or ask the user, never fall back to create. Preserve the title unless the user requests a rename. Pass the complete SKILL.md, preserving frontmatter and unrelated instructions; inspect for secrets or machine-specific paths before saving. Create only selected Skills. Never delete duplicates automatically.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "maxProperties": 1,
+      "minProperties": 1,
+      "properties": {
+        "create": {
+          "additionalProperties": false,
+          "description": "Create a new Skill.",
+          "properties": {
+            "skill_markdown": {
+              "description": "The complete SKILL.md with name and description in YAML frontmatter, followed by Markdown instructions.",
+              "maxLength": 65536,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": {
+              "description": "The Skill's display title.",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "skill_markdown"
+          ],
+          "type": "object"
+        },
+        "delete": {
+          "additionalProperties": false,
+          "description": "Delete a Skill the user explicitly asked to delete.",
+          "properties": {
+            "id": {
+              "description": "The exact Skill ID returned by Search or Use for the Skill the user explicitly asked to delete.",
+              "pattern": "^sk_[A-Za-z0-9_-]{12}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "update": {
+          "additionalProperties": false,
+          "description": "Replace an existing Skill's title and SKILL.md.",
+          "properties": {
+            "id": {
+              "description": "The exact existing Skill ID returned by COMPOSIO_SEARCH_SKILLS or COMPOSIO_USE_SKILL. Never invent an ID.",
+              "pattern": "^sk_[A-Za-z0-9_-]{12}$",
+              "type": "string"
+            },
+            "skill_markdown": {
+              "description": "The complete SKILL.md with name and description in YAML frontmatter, followed by Markdown instructions.",
+              "maxLength": 65536,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": {
+              "description": "The Skill's display title.",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "title",
+            "skill_markdown"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "name": "COMPOSIO_MANAGE_SKILL"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Search reusable Skills in the current organization before doing a task that may have an existing workflow.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "default": 5,
+          "maximum": 10,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "query": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "COMPOSIO_SEARCH_SKILLS"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Load one organization Skill by its exact slug. Keep its Markdown in task context and follow it as guidance while using normal Composio tools.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "slug": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    },
+    "name": "COMPOSIO_USE_SKILL"
+  }
+]

@@ -14,7 +14,7 @@ import VoiceButton from "./VoiceButton";
  */
 export default function VoiceControl(props: React.ComponentProps<typeof MicButton>) {
   const [open, setOpen] = useState(false);
-  const workspaceMode = useAppStore((s) => s.workspaceMode);
+  const workspaceMode = useAppStore((s) => s.workspaceMode && s.workspaceShown);
   const live = useVoiceStore((s) => s.floor !== "off");
 
   return (
@@ -38,7 +38,6 @@ export default function VoiceControl(props: React.ComponentProps<typeof MicButto
               <button
                 className="composer-menu-item"
                 role="menuitem"
-                disabled={workspaceMode}
                 onClick={() => {
                   setOpen(false);
                   void openVoice();
@@ -48,10 +47,10 @@ export default function VoiceControl(props: React.ComponentProps<typeof MicButto
                 <span className="mi-body">
                   {live ? "Back to the voice conversation" : "Voice mode"}
                   <span className="mi-hint">
-                    {workspaceMode
-                      ? "opens in the chat view, leave workspace mode first"
-                      : live
-                        ? "the microphone is still on"
+                    {live
+                      ? "the microphone is still on"
+                      : workspaceMode
+                        ? "opens in the chat view, the workspace waits"
                         : "talk back and forth, I answer out loud"}
                   </span>
                 </span>

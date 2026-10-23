@@ -59,24 +59,24 @@ async function open() {
 describe("the effort picker", () => {
   it("starts at brief, not at the provider's maximum", async () => {
     await render();
-    expect(trigger().textContent).toContain("Think briefly");
+    expect(trigger().textContent).toContain("Low");
   });
 
   it("shows what is stored when something is stored", async () => {
     stored = "high";
     await render();
-    expect(trigger().textContent).toContain("Think hard");
+    expect(trigger().textContent).toContain("High");
   });
 
   it("offers off through hard, plus taking the provider's own setting", async () => {
     await render();
     await open();
     expect(options().map((o) => o.querySelector(".name")?.textContent)).toEqual([
-      "No thinking",
-      "Think briefly",
-      "Think",
-      "Think hard",
-      "Model's default",
+      "Off",
+      "Low",
+      "Medium",
+      "High",
+      "Default",
     ]);
   });
 
@@ -86,7 +86,7 @@ describe("the effort picker", () => {
     await act(async () => options()[3].click());
     expect(saved).toEqual([["models.reasoning_effort", "high"]]);
     expect(options()).toHaveLength(0);
-    expect(trigger().textContent).toContain("Think hard");
+    expect(trigger().textContent).toContain("High");
   });
 
   it("is a button and a listbox, not a native select", async () => {
@@ -129,9 +129,9 @@ describe("a /effort chip (DEF-1)", () => {
   it("shows the chip's value, marked as just this message", async () => {
     stored = "low";
     await render({ chip: "high" });
-    expect(trigger().textContent).toContain("Think hard");
+    expect(trigger().textContent).toContain("High");
     expect(trigger().querySelector(".effort-once")).not.toBeNull();
-    expect(trigger().title).toBe("Just this message. My default is think briefly.");
+    expect(trigger().title).toBe("Just this message. My default is low.");
   });
 
   it("shows nothing special without a chip", async () => {
@@ -153,7 +153,7 @@ describe("a /effort chip (DEF-1)", () => {
     await act(async () => {
       window.dispatchEvent(new CustomEvent("poiesis:effort-default", { detail: "high" }));
     });
-    expect(trigger().textContent).toContain("Think hard");
+    expect(trigger().textContent).toContain("High");
   });
 });
 

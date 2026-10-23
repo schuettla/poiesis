@@ -68,6 +68,7 @@ describe("the settings hub", () => {
       Models: "models",
       Providers: "providers",
       Runtime: "runtime",
+      "External agents": "engines",
       Tools: "tools",
       Skills: "skills",
       Apps: "apps",
@@ -110,6 +111,13 @@ describe("the settings hub", () => {
     expect(labels).not.toContain("Engine");
     renderAt("runtime");
     expect(container.querySelector("h1")?.textContent).toBe("Runtime");
+  });
+
+  it("routes External agents, right after Runtime (CLI-UI-1)", () => {
+    renderAt("engines");
+    expect(container.querySelector("h1")?.textContent).toBe("External agents");
+    const labels = renderedTabs();
+    expect(labels.indexOf("External agents")).toBe(labels.indexOf("Runtime") + 1);
   });
 
   it("General points to Providers and Runtime instead of holding keys and servers", () => {

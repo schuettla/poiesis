@@ -17,9 +17,11 @@ pub mod vectors;
 pub mod index_roots;
 /// Cached perceptual image hashes (Perception, PHS).
 pub mod phash;
+/// External agent apps (`CLI-1`).
+pub mod engines;
 
 const SCHEMA: &str = include_str!("schema.sql");
-pub const SCHEMA_VERSION: i64 = 30;
+pub const SCHEMA_VERSION: i64 = 36;
 
 /// The rationale a skill-revision proposal is written with (`OUT-2`). Only
 /// display text — the proposal is *identified* by its `skill-revision` target,
@@ -89,6 +91,10 @@ pub struct Conversation {
     /// two columns above are ignored — see `Db::conversation_folder`.
     #[serde(default)]
     pub project_id: Option<String>,
+    /// `RTE-5`: the user turned external agents off for this chat. No agent app
+    /// is offered to the lead in it.
+    #[serde(default)]
+    pub engines_off: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -165,6 +171,10 @@ pub struct Persona {
     /// `SUB-3`: may the agent delegate to this one at all. Off by default.
     #[serde(default)]
     pub spawnable: bool,
+    /// `CLI-UI-4`: the agent app this persona runs on, instead of a model of
+    /// Poiesis's. `NULL` = Poiesis (it chooses a model).
+    #[serde(default)]
+    pub engine_id: Option<String>,
 }
 
 /// One delegated child run (`SUB-3`). The child's work is a conversation of its
@@ -187,6 +197,15 @@ pub struct SubagentRun {
     pub steps: usize,
     pub started_at: i64,
     pub ended_at: Option<i64>,
+    /// `CLI-4`: the agent app that did the work, when one did.
+    pub engine_id: Option<String>,
+    /// The rule it cited (`U2`), or `asked` when the user named it.
+    pub because: Option<String>,
+    /// `plan` | `api-key` | `own`, once the app said.
+    pub paid_by: Option<String>,
+    /// The app's own session id, so the user can pick the work up in a terminal
+    /// (`CLI-UI-5`). Read from the child's conversation.
+    pub engine_session: Option<String>,
 }
 
 /// One row of the session log (`CTX-2`). The payload is kept as text rather
@@ -230,7 +249,30 @@ impl UsageBucket {
     }
 }
 
-/// What was spent over a window, grouped three ways (`OBS-2`).
+/// Provenance of a job done by an agent app (Claude Code, Codex, ...). Such a job
+/// is listed on its own and is never added to what the cloud models cost.
+pub const AGENT_APP: &str = "agent-app";
+
+/// One agent app's jobs over a window (`CLI-UI-7`).
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct AgentAppBucket {
+    /// The app's name as the user knows it.
+    pub name: String,
+    pub runs: u64,
+    pub prompt_tokens: u64,
+    pub output_tokens: u64,
+    /// Time spent working, summed.
+    pub duration_ms: u64,
+    /// What the app says the jobs would have cost at list prices, where it says.
+    /// `None` when it never reports one (Codex). Never added to any total.
+    pub notional_usd: Option<f64>,
+    /// Who paid, when every job agrees (`plan` | `api-key` | `own` | `free`);
+    /// `mixed` when they differ.
+    pub paid_by: Option<String>,
+}
+
+/// What was spent over a window, grouped three ways (`OBS-2`), and what agent
+/// apps did on the side.
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct UsageSummary {
     pub total: UsageBucket,
@@ -239,6 +281,8 @@ pub struct UsageSummary {
     /// Biggest spender first.
     pub by_model: Vec<UsageBucket>,
     pub by_conversation: Vec<UsageBucket>,
+    /// Jobs done by agent apps, busiest first. Not part of the totals above.
+    pub agent_apps: Vec<AgentAppBucket>,
 }
 
 /// The start of the UTC day `ms` falls in, as epoch ms in a string so it both
@@ -503,6 +547,65 @@ pub struct Connector {
     pub enabled: bool,
     pub config_json: Option<String>,
     pub created_at: i64,
+}
+
+/// What one connector's tools may do without asking (`MCG-5`). The defaults are
+/// what a connector has until the person says otherwise: reading runs, changing
+/// and sending ask.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConnectorPolicy {
+    pub connector_id: String,
+    /// `''` for a whole connector; a toolkit slug for an app inside one.
+    pub app: String,
+    /// `run` | `ask`
+    pub read_policy: String,
+    /// `ask` | `allow`
+    pub change_policy: String,
+    /// `ask` | `allow`
+    pub send_policy: String,
+    /// Sends per day an `allow` policy covers (`MCG-4`).
+    pub send_cap: i64,
+    /// `MCG-7`: `{tool_name: "read" | "change" | "send"}`.
+    pub tool_overrides: Option<String>,
+}
+
+/// `MCG-4`: the cap a connector starts with, and the range it can be set to.
+pub const DEFAULT_SEND_CAP: i64 = 25;
+pub const MAX_SEND_CAP: i64 = 1000;
+
+impl ConnectorPolicy {
+    pub fn defaults(connector_id: &str, app: &str) -> Self {
+        Self {
+            connector_id: connector_id.to_string(),
+            app: app.to_string(),
+            read_policy: "run".into(),
+            change_policy: "ask".into(),
+            send_policy: "ask".into(),
+            send_cap: DEFAULT_SEND_CAP,
+            tool_overrides: None,
+        }
+    }
+}
+
+/// `CAP-1`: one sign-in Composio holds, as last seen.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AppAccount {
+    pub id: String,
+    pub connector_id: String,
+    pub app: String,
+    pub label: Option<String>,
+    pub status: String,
+    pub updated_at: i64,
+}
+
+/// `CAP-10`: one line of a persona's "apps I may use".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersonaAppGrant {
+    pub connector_id: String,
+    /// `''` is the whole connector (only ever used for the explicit "none").
+    pub app: String,
+    /// `*` for every tool of the app, or a JSON array of exact tool slugs.
+    pub tools: String,
 }
 
 /// A user's own OpenAI-compatible model server (Ollama, LM Studio, or a
@@ -1105,6 +1208,44 @@ impl Db {
             // or written, which is what the default says.
             Self::add_column(&conn, "messages", "spoken", "INTEGER NOT NULL DEFAULT 0")?;
         }
+        // v31 (`MCG-5`): `connector_policy` and `app_send_log` are new tables
+        // that SCHEMA above creates; there is nothing to alter.
+        if current < 32 {
+            // v32 (`CLI-1`): `engines` is a new table that SCHEMA above
+            // creates. A persona can run on one (NULL = runs on Poiesis), and a
+            // conversation keeps the agent's own session id so a later turn can
+            // resume it.
+            Self::add_column(&conn, "personas", "engine_id", "TEXT")?;
+            Self::add_column(&conn, "conversations", "engine_session", "TEXT")?;
+        }
+        if current < 33 {
+            // v33 (`RTE-1`..`RTE-5`, `CLI-4`): when an agent app may be used,
+            // the user's rules for it (`engine_rules` is a new table that
+            // SCHEMA above creates), a per-chat off switch, and which agent
+            // app did a delegated child's work and why.
+            Self::add_column(&conn, "engines", "use_mode", "TEXT NOT NULL DEFAULT 'suggest'")?;
+            Self::add_column(&conn, "engines", "guards_json", "TEXT NOT NULL DEFAULT '{}'")?;
+            Self::add_column(&conn, "engines", "rules_seeded", "INTEGER NOT NULL DEFAULT 0")?;
+            Self::add_column(&conn, "conversations", "engines_off", "INTEGER NOT NULL DEFAULT 0")?;
+            Self::add_column(&conn, "subagent_runs", "engine_id", "TEXT")?;
+            Self::add_column(&conn, "subagent_runs", "because", "TEXT")?;
+            Self::add_column(&conn, "subagent_runs", "paid_by", "TEXT")?;
+        }
+        if current < 34 {
+            // v34 (`CLI-UI-7`): what a job done by an agent app cost and who
+            // paid, next to the tokens `run_usage` already holds.
+            Self::add_column(&conn, "run_usage", "paid_by", "TEXT")?;
+            Self::add_column(&conn, "run_usage", "notional_usd", "REAL")?;
+            Self::add_column(&conn, "run_usage", "duration_ms", "INTEGER")?;
+        }
+        // v35 (`RTE-6`): `engine_signals` is a new table that SCHEMA above creates,
+        // so there is nothing to add to an existing one; the version is bumped below.
+        if current < 36 {
+            // v36 (`CAP-14`): whether an agent app may use the person's connected
+            // apps through Poiesis. Off for every agent that exists already.
+            Self::add_column(&conn, "engines", "app_tools", "INTEGER NOT NULL DEFAULT 0")?;
+        }
+        //
         // v24 (`OBS-2`): `run_usage` is created by SCHEMA above and has no
         // columns to add to an existing table, so there is nothing to do here
         // beyond bumping the version. v25 (`CTX-2`) adds `session_events` the
@@ -1182,6 +1323,7 @@ impl Db {
             folder_trust: "confirm".to_string(),
             parent_conversation_id: None,
             project_id: None,
+            engines_off: false,
             created_at: ts,
             updated_at: ts,
         })
@@ -1562,7 +1704,7 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT id, title, model_id, persona_id, overrides_json, workspace, created_at, updated_at,
                     summary, summary_upto_message_id, reflected_at, folder_path, folder_trust,
-                    parent_conversation_id, project_id
+                    parent_conversation_id, project_id, engines_off
              FROM conversations ORDER BY updated_at DESC",
         )?;
         let rows = stmt
@@ -1706,7 +1848,7 @@ impl Db {
             .query_row(
                 "SELECT id, title, model_id, persona_id, overrides_json, workspace, created_at, updated_at,
                         summary, summary_upto_message_id, reflected_at, folder_path, folder_trust,
-                        parent_conversation_id, project_id
+                        parent_conversation_id, project_id, engines_off
                  FROM conversations WHERE id = ?1",
                 [id],
                 Self::map_conversation,
@@ -1720,7 +1862,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let row = conn
             .query_row(
-                "SELECT id, name, system_prompt, model_id, params_json, is_default, created_at, updated_at, tools_json, skills_json, description, spawnable
+                "SELECT id, name, system_prompt, model_id, params_json, is_default, created_at, updated_at, tools_json, skills_json, description, spawnable, engine_id
                  FROM personas WHERE id = ?1",
                 [id],
                 Self::map_persona,
@@ -1919,7 +2061,60 @@ impl Db {
             steps: 0,
             started_at: ts,
             ended_at: None,
+            engine_id: None,
+            because: None,
+            paid_by: None,
+            engine_session: None,
         })
+    }
+
+    /// `CLI-4`: say that an agent app does this child's work, and why.
+    pub fn set_subagent_engine(&self, id: &str, engine_id: &str, because: Option<&str>) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE subagent_runs SET engine_id = ?2, because = ?3 WHERE id = ?1",
+            params![id, engine_id, because],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_subagent_paid_by(&self, id: &str, paid_by: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE subagent_runs SET paid_by = ?2 WHERE id = ?1", params![id, paid_by])?;
+        Ok(())
+    }
+
+    /// The agent app's own session id for a child's conversation.
+    pub fn set_conversation_engine_session(&self, id: &str, session: Option<&str>) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE conversations SET engine_session = ?2 WHERE id = ?1", params![id, session])?;
+        Ok(())
+    }
+
+    pub fn conversation_engine_session(&self, id: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("SELECT engine_session FROM conversations WHERE id = ?1", [id], |r| r.get(0))
+            .ok()
+            .flatten()
+    }
+
+    /// `RTE-5`: keep agent apps out of this chat (or let them back in).
+    pub fn set_conversation_engines_off(&self, id: &str, off: bool) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE conversations SET engines_off = ?2 WHERE id = ?1", params![id, off as i64])?;
+        Ok(())
+    }
+
+    /// How many children an agent app has been handed in this chat (`RTE-3`'s
+    /// per-chat cap). Counts every run, finished or not.
+    pub fn count_engine_runs(&self, parent_conversation_id: &str, engine_id: &str) -> usize {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM subagent_runs WHERE parent_conversation_id = ?1 AND engine_id = ?2",
+            params![parent_conversation_id, engine_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0) as usize
     }
 
     /// Move a child between the states it can be in before it ends
@@ -1977,7 +2172,9 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, parent_conversation_id, parent_message_id, child_conversation_id,
-                    agent, task, status, stop_reason, result, steps, started_at, ended_at
+                    agent, task, status, stop_reason, result, steps, started_at, ended_at,
+                    engine_id, because, paid_by,
+                    (SELECT engine_session FROM conversations c WHERE c.id = child_conversation_id)
              FROM subagent_runs WHERE parent_conversation_id = ?1
              ORDER BY started_at ASC, rowid ASC",
         )?;
@@ -1992,7 +2189,9 @@ impl Db {
         let row = conn
             .query_row(
                 "SELECT id, parent_conversation_id, parent_message_id, child_conversation_id,
-                        agent, task, status, stop_reason, result, steps, started_at, ended_at
+                        agent, task, status, stop_reason, result, steps, started_at, ended_at,
+                        engine_id, because, paid_by,
+                        (SELECT engine_session FROM conversations c WHERE c.id = child_conversation_id)
                  FROM subagent_runs WHERE id = ?1",
                 [id],
                 Self::map_subagent_run,
@@ -2015,6 +2214,10 @@ impl Db {
             steps: row.get::<_, i64>(9)? as usize,
             started_at: row.get(10)?,
             ended_at: row.get(11)?,
+            engine_id: row.get(12)?,
+            because: row.get(13)?,
+            paid_by: row.get(14)?,
+            engine_session: row.get(15)?,
         })
     }
 
@@ -2060,13 +2263,52 @@ impl Db {
         Ok(())
     }
 
+    /// Record one finished job done by an agent app (`CLI-UI-7`). Written even when
+    /// the app reported no tokens: the job happened.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_agent_app_usage(
+        &self,
+        run_id: &str,
+        conversation_id: &str,
+        app_name: &str,
+        paid_by: Option<&str>,
+        prompt_tokens: u64,
+        output_tokens: u64,
+        steps: usize,
+        notional_usd: Option<f64>,
+        duration_ms: u64,
+    ) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO run_usage(run_id, conversation_id, model_name, provenance,
+                                   prompt_tokens, output_tokens, turns, created_at,
+                                   paid_by, notional_usd, duration_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                run_id,
+                conversation_id,
+                app_name,
+                AGENT_APP,
+                prompt_tokens as i64,
+                output_tokens as i64,
+                steps as i64,
+                now_ms(),
+                paid_by,
+                notional_usd,
+                duration_ms as i64
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Usage since `since` (epoch ms), grouped three ways. One pass over the
     /// rows rather than three queries — the table is small and the grouping is
     /// what the Usage panel shows all at once anyway.
     pub fn usage_summary(&self, since: i64) -> Result<UsageSummary, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT conversation_id, model_name, provenance, prompt_tokens, output_tokens, created_at
+            "SELECT conversation_id, model_name, provenance, prompt_tokens, output_tokens, created_at,
+                    paid_by, notional_usd, duration_ms
              FROM run_usage WHERE created_at >= ?1",
         )?;
         let rows = stmt.query_map(params![since], |r| {
@@ -2077,8 +2319,12 @@ impl Db {
                 r.get::<_, i64>(3)? as u64,
                 r.get::<_, i64>(4)? as u64,
                 r.get::<_, i64>(5)?,
+                r.get::<_, Option<String>>(6)?,
+                r.get::<_, Option<f64>>(7)?,
+                r.get::<_, Option<i64>>(8)?,
             ))
         })?;
+        let mut agent_apps: std::collections::HashMap<String, AgentAppBucket> = std::collections::HashMap::new();
 
         use std::collections::HashMap;
         let mut by_day: HashMap<String, UsageBucket> = HashMap::new();
@@ -2115,7 +2361,27 @@ impl Db {
         };
 
         for row in rows {
-            let (conversation_id, model_name, provenance, prompt, output, created_at) = row?;
+            let (conversation_id, model_name, provenance, prompt, output, created_at, paid_by, notional, duration) = row?;
+            // A job an agent app did is listed on its own and never added to what
+            // the cloud models cost.
+            if provenance == AGENT_APP {
+                let app = agent_apps.entry(model_name.clone()).or_insert_with(|| AgentAppBucket {
+                    name: model_name.clone(),
+                    paid_by: paid_by.clone(),
+                    ..Default::default()
+                });
+                app.runs += 1;
+                app.prompt_tokens += prompt;
+                app.output_tokens += output;
+                app.duration_ms += duration.unwrap_or(0).max(0) as u64;
+                if let Some(n) = notional {
+                    app.notional_usd = Some(app.notional_usd.unwrap_or(0.0) + n);
+                }
+                if app.paid_by != paid_by {
+                    app.paid_by = Some("mixed".into());
+                }
+                continue;
+            }
             let day = day_key(created_at);
             let root = root_of(&conversation_id);
             let is_agent = root != conversation_id;
@@ -2162,11 +2428,15 @@ impl Db {
             v
         };
 
+        let mut agent_apps: Vec<AgentAppBucket> = agent_apps.into_values().collect();
+        agent_apps.sort_by(|a, b| b.runs.cmp(&a.runs).then_with(|| a.name.cmp(&b.name)));
+
         Ok(UsageSummary {
             total,
             by_day: sorted(by_day, true),
             by_model: sorted(by_model, false),
             by_conversation: sorted(by_conversation, false),
+            agent_apps,
         })
     }
 
@@ -2245,8 +2515,8 @@ impl Db {
         };
         conn.execute(
             "INSERT INTO conversations(id, title, model_id, persona_id, overrides_json, workspace,
-                                      folder_path, folder_trust, project_id, created_at, updated_at)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+                                      folder_path, folder_trust, project_id, engines_off, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
             params![
                 new_conv_id,
                 title,
@@ -2259,6 +2529,8 @@ impl Db {
                 // A fork of a project session is another session in that
                 // project, not a loose chat that happens to point at the folder.
                 source.project_id,
+                // A chat told to keep agent apps out stays that way when forked.
+                source.engines_off as i64,
                 ts
             ],
         )?;
@@ -2348,6 +2620,7 @@ impl Db {
                 folder_trust: source.folder_trust,
                 parent_conversation_id: None,
                 project_id: source.project_id,
+                engines_off: source.engines_off,
                 created_at: ts,
                 updated_at: ts,
             },
@@ -3475,7 +3748,260 @@ impl Db {
     pub fn delete_connector(&self, id: &str) -> Result<(), DbError> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM connectors WHERE id = ?1", [id])?;
+        conn.execute("DELETE FROM connector_policy WHERE connector_id = ?1", [id])?;
+        conn.execute("DELETE FROM app_send_log WHERE connector_id = ?1", [id])?;
         Ok(())
+    }
+
+    // ---- connector gates (MCG-3, MCG-4, MCG-5) ----
+
+    /// The policy for `(connector, app)`, or the defaults when nothing was saved.
+    pub fn get_connector_policy(&self, connector_id: &str, app: &str) -> Result<ConnectorPolicy, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn
+            .query_row(
+                "SELECT read_policy, change_policy, send_policy, send_cap, tool_overrides
+                 FROM connector_policy WHERE connector_id = ?1 AND app = ?2",
+                params![connector_id, app],
+                |r| {
+                    Ok(ConnectorPolicy {
+                        connector_id: connector_id.to_string(),
+                        app: app.to_string(),
+                        read_policy: r.get(0)?,
+                        change_policy: r.get(1)?,
+                        send_policy: r.get(2)?,
+                        send_cap: r.get(3)?,
+                        tool_overrides: r.get(4)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row.unwrap_or_else(|| ConnectorPolicy::defaults(connector_id, app)))
+    }
+
+    /// Save a policy. Anything outside the words each column knows is stored as
+    /// the safe one, and the cap is held to 1-1000 (`MCG-4`), so a bad caller
+    /// can only make the gate ask more, never less.
+    pub fn save_connector_policy(&self, policy: &ConnectorPolicy) -> Result<(), DbError> {
+        let read = if policy.read_policy == "ask" { "ask" } else { "run" };
+        let change = if policy.change_policy == "allow" { "allow" } else { "ask" };
+        let send = if policy.send_policy == "allow" { "allow" } else { "ask" };
+        let cap = policy.send_cap.clamp(1, MAX_SEND_CAP);
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO connector_policy
+               (connector_id, app, read_policy, change_policy, send_policy, send_cap, tool_overrides, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(connector_id, app) DO UPDATE SET
+               read_policy = excluded.read_policy,
+               change_policy = excluded.change_policy,
+               send_policy = excluded.send_policy,
+               send_cap = excluded.send_cap,
+               tool_overrides = excluded.tool_overrides,
+               updated_at = excluded.updated_at",
+            params![
+                policy.connector_id,
+                policy.app,
+                read,
+                change,
+                send,
+                cap,
+                policy.tool_overrides,
+                now_ms()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Sends that ran for `(connector, app)` on `day` (`YYYY-MM-DD`).
+    pub fn app_send_count(&self, connector_id: &str, app: &str, day: &str) -> Result<i64, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .query_row(
+                "SELECT count FROM app_send_log WHERE connector_id = ?1 AND app = ?2 AND day = ?3",
+                params![connector_id, app, day],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(n.unwrap_or(0))
+    }
+
+    /// Count `by` more sends against `day`; returns the new total.
+    pub fn bump_app_send(&self, connector_id: &str, app: &str, day: &str, by: i64) -> Result<i64, DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO app_send_log(connector_id, app, day, count) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(connector_id, app, day) DO UPDATE SET count = count + excluded.count",
+            params![connector_id, app, day, by],
+        )?;
+        let n = conn.query_row(
+            "SELECT count FROM app_send_log WHERE connector_id = ?1 AND app = ?2 AND day = ?3",
+            params![connector_id, app, day],
+            |r| r.get(0),
+        )?;
+        Ok(n)
+    }
+
+    // ---- Composio (CAP-1, CAP-10, CAP-12) ----
+
+    /// The one `composio` connector, if it was ever set up.
+    pub fn composio_connector(&self) -> Result<Option<Connector>, DbError> {
+        Ok(self.list_connectors()?.into_iter().find(|c| c.transport == "composio"))
+    }
+
+    /// Create the `composio` connector row. Its `url` is NULL on purpose: the
+    /// address comes from the live session and is never stored (`CAP-1`).
+    pub fn add_composio_connector(&self, config_json: &str) -> Result<Connector, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let id = new_id();
+        let ts = now_ms();
+        conn.execute(
+            "INSERT INTO connectors(id, name, url, transport, enabled, config_json, created_at)
+             VALUES(?1, 'Composio', NULL, 'composio', 1, ?2, ?3)",
+            params![id, config_json, ts],
+        )?;
+        Ok(Connector {
+            id,
+            name: "Composio".to_string(),
+            url: None,
+            transport: "composio".to_string(),
+            enabled: true,
+            config_json: Some(config_json.to_string()),
+            created_at: ts,
+        })
+    }
+
+    pub fn list_app_accounts(&self, connector_id: &str) -> Result<Vec<AppAccount>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, connector_id, app, label, status, updated_at FROM app_accounts
+             WHERE connector_id = ?1 ORDER BY app, label",
+        )?;
+        let rows = stmt
+            .query_map([connector_id], |r| {
+                Ok(AppAccount {
+                    id: r.get(0)?,
+                    connector_id: r.get(1)?,
+                    app: r.get(2)?,
+                    label: r.get(3)?,
+                    status: r.get(4)?,
+                    updated_at: r.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Replace the mirror with what Composio just said, in one step. The labels
+    /// are Composio's aliases, so nothing the person typed is lost.
+    pub fn replace_app_accounts(&self, connector_id: &str, accounts: &[AppAccount]) -> Result<(), DbError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM app_accounts WHERE connector_id = ?1", [connector_id])?;
+        for a in accounts {
+            tx.execute(
+                "INSERT OR REPLACE INTO app_accounts(id, connector_id, app, label, status, updated_at)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                params![a.id, connector_id, a.app, a.label, a.status, a.updated_at],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Note one account right now, before the next full refresh (a link just made).
+    pub fn upsert_app_account(&self, a: &AppAccount) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO app_accounts(id, connector_id, app, label, status, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET label = excluded.label, status = excluded.status,
+               updated_at = excluded.updated_at",
+            params![a.id, a.connector_id, a.app, a.label, a.status, a.updated_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_app_account(&self, id: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM app_accounts WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// A persona's grants. Empty means no narrowing at all (`CAP-10`).
+    pub fn persona_app_grants(&self, persona_id: &str) -> Result<Vec<PersonaAppGrant>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT connector_id, app, tools FROM persona_app_grants WHERE persona_id = ?1 ORDER BY app",
+        )?;
+        let rows = stmt
+            .query_map([persona_id], |r| {
+                Ok(PersonaAppGrant { connector_id: r.get(0)?, app: r.get(1)?, tools: r.get(2)? })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Replace a persona's grants wholesale. An empty slice goes back to "every
+    /// connected app"; narrowing to nothing is a single `''`/`[]` row, written
+    /// by the caller.
+    pub fn set_persona_app_grants(&self, persona_id: &str, grants: &[PersonaAppGrant]) -> Result<(), DbError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM persona_app_grants WHERE persona_id = ?1", [persona_id])?;
+        for g in grants {
+            tx.execute(
+                "INSERT OR REPLACE INTO persona_app_grants(persona_id, connector_id, app, tools)
+                 VALUES(?1, ?2, ?3, ?4)",
+                params![persona_id, g.connector_id, g.app, g.tools],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// A persona that is deleted takes its grants with it.
+    pub fn delete_persona_app_grants(&self, persona_id: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM persona_app_grants WHERE persona_id = ?1", [persona_id])?;
+        Ok(())
+    }
+
+    /// Note one app tool that ran (`CAP-12`).
+    pub fn log_app_call(&self, app: &str, kind: &str, tool: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO app_call_log(app, kind, tool, created_at) VALUES(?1, ?2, ?3, ?4)",
+            params![app, kind, tool, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// `(app, calls)` since `since_ms`, busiest first.
+    pub fn app_calls_since(&self, since_ms: i64) -> Result<Vec<(String, i64)>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT app, COUNT(*) FROM app_call_log WHERE created_at >= ?1
+             GROUP BY app ORDER BY COUNT(*) DESC, app",
+        )?;
+        let rows = stmt
+            .query_map([since_ms], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// `(tool, calls)` that ran under `app`, busiest first: the tools a Composio
+    /// app has a list of at all, since Composio shows no tool list per app.
+    pub fn app_tools_used(&self, app: &str) -> Result<Vec<(String, i64)>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT tool, COUNT(*) FROM app_call_log WHERE app = ?1
+             GROUP BY tool ORDER BY COUNT(*) DESC, tool",
+        )?;
+        let rows = stmt
+            .query_map([app], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     // ---- local endpoints (a user's own Ollama/LM Studio/OpenAI-compatible server) ----
@@ -4242,13 +4768,14 @@ impl Db {
             skills_json: p.skills_json.clone(),
             description: p.description.clone(),
             spawnable: p.spawnable,
+            engine_id: None,
         })
     }
 
     pub fn list_personas(&self) -> Result<Vec<Persona>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, system_prompt, model_id, params_json, is_default, created_at, updated_at, tools_json, skills_json, description, spawnable
+            "SELECT id, name, system_prompt, model_id, params_json, is_default, created_at, updated_at, tools_json, skills_json, description, spawnable, engine_id
              FROM personas ORDER BY is_default DESC, name ASC",
         )?;
         let rows = stmt
@@ -4262,10 +4789,17 @@ impl Db {
         conn.execute(
             "UPDATE personas SET name = ?2, system_prompt = ?3, model_id = ?4, params_json = ?5,
                                  tools_json = ?6, skills_json = ?7, description = ?8,
-                                 spawnable = ?9, updated_at = ?10
+                                 spawnable = ?9, updated_at = ?10, engine_id = ?11
              WHERE id = ?1",
-            params![p.id, p.name, p.system_prompt, p.model_id, p.params_json, p.tools_json, p.skills_json, p.description, p.spawnable as i64, now_ms()],
+            params![p.id, p.name, p.system_prompt, p.model_id, p.params_json, p.tools_json, p.skills_json, p.description, p.spawnable as i64, now_ms(), p.engine_id],
         )?;
+        Ok(())
+    }
+
+    /// `CLI-UI-4`: run this persona on an agent app (or back on Poiesis).
+    pub fn set_persona_engine(&self, id: &str, engine_id: Option<&str>) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE personas SET engine_id = ?2, updated_at = ?3 WHERE id = ?1", params![id, engine_id, now_ms()])?;
         Ok(())
     }
 
@@ -4275,6 +4809,7 @@ impl Db {
         // the global system prompt rather than a dangling reference.
         conn.execute("UPDATE conversations SET persona_id = NULL WHERE persona_id = ?1", [id])?;
         conn.execute("DELETE FROM personas WHERE id = ?1", [id])?;
+        conn.execute("DELETE FROM persona_app_grants WHERE persona_id = ?1", [id])?;
         Ok(())
     }
 
@@ -4316,6 +4851,7 @@ impl Db {
             skills_json: row.get(9)?,
             description: row.get(10)?,
             spawnable: row.get::<_, i64>(11)? != 0,
+            engine_id: row.get(12)?,
         })
     }
 
@@ -4362,6 +4898,7 @@ impl Db {
                 .unwrap_or_else(|| "confirm".to_string()),
             parent_conversation_id: row.get(13)?,
             project_id: row.get(14)?,
+            engines_off: row.get::<_, i64>(15)? != 0,
         })
     }
 
@@ -5163,6 +5700,38 @@ mod tests {
 
         // A window that starts after the rows sees none of them.
         assert_eq!(db.usage_summary(now_ms() + 1000).unwrap().total.runs, 0);
+    }
+
+    /// `CLI-UI-7`: jobs done by agent apps are listed on their own, with who paid
+    /// and what the app says it would have cost, and are never part of the totals
+    /// the cloud models are summed into.
+    #[test]
+    fn agent_app_jobs_are_listed_apart_and_stay_out_of_the_totals() {
+        let db = Db::open_in_memory().unwrap();
+        let chat = db.create_conversation("one", None, false).unwrap();
+        let child = db.create_conversation("child", None, false).unwrap();
+        db.record_run_usage("r1", &chat.id, "claude-sonnet-4-5", "cloud", 1000, 100, 3).unwrap();
+        db.record_agent_app_usage("a1", &child.id, "Claude Code", Some("plan"), 5000, 400, 6, Some(0.25), 12_000).unwrap();
+        db.record_agent_app_usage("a2", &child.id, "Claude Code", Some("plan"), 3000, 200, 2, Some(0.10), 8_000).unwrap();
+        db.record_agent_app_usage("a3", &child.id, "Codex", Some("plan"), 9000, 700, 4, None, 30_000).unwrap();
+        // A job that reported nothing is still a job.
+        db.record_agent_app_usage("a4", &child.id, "Codex", Some("api-key"), 0, 0, 0, None, 1_000).unwrap();
+
+        let s = db.usage_summary(0).unwrap();
+        assert_eq!((s.total.runs, s.total.prompt_tokens), (1, 1000), "the cloud totals hold only the cloud run");
+        assert_eq!(s.by_model.len(), 1);
+        assert_eq!(s.by_conversation.len(), 1);
+        assert_eq!(s.by_conversation[0].agents_runs, 0);
+
+        assert_eq!(s.agent_apps.len(), 2);
+        let claude = s.agent_apps.iter().find(|a| a.name == "Claude Code").unwrap();
+        assert_eq!((claude.runs, claude.prompt_tokens, claude.output_tokens, claude.duration_ms), (2, 8000, 600, 20_000));
+        assert!((claude.notional_usd.unwrap() - 0.35).abs() < 1e-9);
+        assert_eq!(claude.paid_by.as_deref(), Some("plan"));
+        let codex = s.agent_apps.iter().find(|a| a.name == "Codex").unwrap();
+        assert_eq!(codex.runs, 2);
+        assert_eq!(codex.notional_usd, None, "Codex never reports a price");
+        assert_eq!(codex.paid_by.as_deref(), Some("mixed"), "one on the plan, one on a key");
     }
 
     /// `RUN-T1d`: what an agent spent belongs to the chat that started it. The

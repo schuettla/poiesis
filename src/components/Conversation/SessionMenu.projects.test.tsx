@@ -79,6 +79,6 @@ describe("the session menu's project items", () => {
 
   it("offers nothing about projects when there are none", () => {
     setup(conv(), []);
-    expect(labels()).toEqual(["Schedule this…", "Delete chat"]);
+    expect(labels()).toEqual(["Turn on Workspace mode", "Schedule this…", "Delete chat"]);
   });
 });

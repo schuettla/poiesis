@@ -4,6 +4,8 @@ import { useAppStore, useExpert, personaTemperature } from "../../lib/store";
 import * as api from "../../lib/api";
 import type { Persona, ToolsetInfo } from "../../lib/api";
 import { PERSONA_PRESETS, type PersonaPreset } from "../../lib/personaPresets";
+import PersonaApps from "../Apps/PersonaApps";
+import { forgetPersonaApps } from "../Apps/personaAppsLine";
 import "./PersonaEditor.css";
 
 /**
@@ -112,6 +114,11 @@ interface Draft {
   description: string;
   /** `SUB-3`: may the agent delegate work to this persona. */
   spawnable: boolean;
+  /** `CLI-UI-4`: the agent app it runs on, or `""` for Poiesis. */
+  engineId: string;
+  /** `CA-UI-6`: the connected apps this persona may use. `null` is untouched, so
+   * Save leaves what is stored alone. */
+  appGrants: api.PersonaAppGrant[] | null;
 }
 
 const EMPTY: Draft = {
@@ -122,8 +129,10 @@ const EMPTY: Draft = {
   temperature: "",
   checkedTools: [],
   checkedSkills: [],
+  appGrants: null,
   description: "",
   spawnable: false,
+  engineId: "",
 };
 
 /** `PER-UI-1`: what this persona may do — checked-but-disabled + a note is how
@@ -208,6 +217,8 @@ function PersonaSkillsEditor({
 /** CRUD editor for saved personas (CHT-4), shown in Settings. */
 export default function PersonaEditor() {
   const personas = useAppStore((s) => s.personas);
+  const engines = useAppStore((s) => s.engines);
+  const openEngines = useAppStore((s) => s.openEngines);
   const models = useAppStore((s) => s.models);
   const modelPrefs = useAppStore((s) => s.modelPrefs);
   const favoriteChat = availableFavorites(models, modelPrefs, "chat");
@@ -218,7 +229,13 @@ export default function PersonaEditor() {
   const setDefaultPersona = useAppStore((s) => s.setDefaultPersona);
 
   const [draft, setDraft] = useState<Draft | null>(null);
+  // `CLI-UI-4`: the agent apps a persona can run on: the ones that take jobs and
+  // are on, and the one this persona already has even if it has since been
+  // turned off (so the choice is not silently lost).
+  const runsOnChoices = engines.filter((e) => e.found && e.delegate_ready && (e.enabled || e.id === draft?.engineId));
+  const onAgentApp = (draft?.spawnable && draft.engineId && engines.find((e) => e.id === draft.engineId)) || null;
   const [busy, setBusy] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [addingPreset, setAddingPreset] = useState<string | null>(null);
   const [toolsets, setToolsets] = useState<ToolsetInfo[]>([]);
   const skills = useAppStore((s) => s.skills);
@@ -267,6 +284,8 @@ export default function PersonaEditor() {
       checkedSkills: allowSkills ?? skills.map((s) => s.name),
       description: p.description ?? "",
       spawnable: p.spawnable,
+      engineId: p.engine_id ?? "",
+      appGrants: null,
     });
   }
 
@@ -310,7 +329,9 @@ export default function PersonaEditor() {
   async function save() {
     if (!draft || !draft.name.trim() || !draft.systemPrompt.trim()) return;
     setBusy(true);
+    setSaveError(null);
     try {
+      let savedId = draft.id;
       const temperature = draft.temperature.trim() === "" ? undefined : Number(draft.temperature);
       const modelId = draft.modelId || null;
       const toolsJson = toolsJsonForSave(draft.checkedTools);
@@ -331,10 +352,11 @@ export default function PersonaEditor() {
             skills_json: skillsJson,
             description: draft.description.trim() || null,
             spawnable: draft.spawnable,
+            engine_id: draft.spawnable && draft.engineId ? draft.engineId : null,
           });
         }
       } else {
-        await createPersona({
+        const created = await createPersona({
           name: draft.name.trim(),
           systemPrompt: draft.systemPrompt.trim(),
           modelId,
@@ -344,7 +366,19 @@ export default function PersonaEditor() {
           skillsJson,
           description: draft.description.trim() || null,
           spawnable: draft.spawnable,
+          engineId: draft.spawnable && draft.engineId ? draft.engineId : null,
         });
+        savedId = created?.id ?? null;
+      }
+      // Which apps it may use is saved with it, like its tools and skills.
+      if (draft.appGrants && savedId) {
+        try {
+          await api.setPersonaAppGrants(savedId, draft.appGrants);
+          forgetPersonaApps(savedId);
+        } catch (e) {
+          setSaveError(`The persona is saved, but its apps weren't: ${String(e).replace(/^Error:\s*/, "")}`);
+          return;
+        }
       }
       setDraft(null);
     } finally {
@@ -449,6 +483,43 @@ export default function PersonaEditor() {
             I can hand work to this agent
           </label>
 
+          {/* `CLI-UI-4`: which agent app does the work, if not me. */}
+          {draft.spawnable && runsOnChoices.length > 0 && (
+            <div className="persona-runs-on">
+              <label className="field-label" htmlFor="persona-runs-on">
+                Runs on
+              </label>
+              <select
+                id="persona-runs-on"
+                className="field-input"
+                value={draft.engineId}
+                onChange={(e) => setDraft({ ...draft, engineId: e.target.value })}
+              >
+                <option value="">Poiesis (I choose a model)</option>
+                {runsOnChoices.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.enabled ? e.name : `${e.name} (off, turn it on in External agents)`}
+                  </option>
+                ))}
+              </select>
+              {onAgentApp && (
+                <p className="field-hint">
+                  It brings its own model and tools. I give it this persona's instructions with the task, and
+                  the folder.
+                </p>
+              )}
+              {onAgentApp && !onAgentApp.enabled && (
+                <p className="persona-tools-note" role="status">
+                  {onAgentApp.name} is off, so I won't hand this agent any work.{" "}
+                  <button className="link-btn" onClick={() => openEngines(onAgentApp.id)}>
+                    Turn it on in External agents
+                  </button>
+                </p>
+              )}
+            </div>
+          )}
+
+          {!onAgentApp && (
           <div className="persona-form-row">
             <div className="persona-field">
               <label className="field-label">Model (optional)</label>
@@ -493,14 +564,25 @@ export default function PersonaEditor() {
               />
             </div>
           </div>
+          )}
 
-          {expert && (
+          {expert && !onAgentApp && (
             <>
               <PersonaToolsEditor toolsets={toolsets} checked={draft.checkedTools} onToggle={toggleTool} />
               <PersonaSkillsEditor skills={skills} checked={draft.checkedSkills} onToggle={toggleSkill} />
+              <PersonaApps
+                personaId={draft.id}
+                value={draft.appGrants}
+                onChange={(appGrants) => setDraft({ ...draft, appGrants })}
+              />
             </>
           )}
 
+          {saveError && (
+            <p className="persona-tools-note" role="alert">
+              {saveError}
+            </p>
+          )}
           <div className="setting-actions">
             <button
               className="btn-primary"

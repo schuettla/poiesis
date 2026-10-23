@@ -1,0 +1,420 @@
+/* Settings → External agents (`CLI-UI-1`). Flat cards with hairlines, like
+   Providers: the only colour is the state dot, the amber caution and the
+   problem line. No vendor marks (TRM-3): every agent gets the same plain dot.
+   An agent's settings are lines of "what it is, then its control" (`Opt`), the
+   same shape everywhere on the page, with an on/off switch where it is a yes. */
+
+.engines-found {
+  margin: -12px 0 20px;
+  padding: 10px 14px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  background: var(--fill-quiet);
+  border-radius: var(--radius-lg);
+}
+
+.engines-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+.engines-head .link-button {
+  padding: 0;
+}
+.engines-section {
+  margin-top: 24px;
+}
+
+.engines-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0 8px;
+}
+.engines-empty {
+  margin: 12px 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.55;
+  color: var(--ink-muted);
+  max-width: 60ch;
+}
+.engines-add {
+  margin: 12px 0 28px;
+}
+
+/* ---- an agent's row ---- */
+.engines-row {
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+}
+.engines-row.missing {
+  border-color: var(--paper-edge);
+}
+.engines-row-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 16px 4px 4px;
+}
+.engines-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px;
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.engines-row-main:hover {
+  background: var(--fill-hover);
+}
+.engines-row-main.static {
+  cursor: default;
+}
+.engines-row-main.static:hover {
+  background: none;
+}
+.engines-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: none;
+}
+
+.engines-chevron {
+  flex: none;
+  display: inline-flex;
+  width: 12px;
+  color: var(--ink-faint);
+}
+.engines-glyph {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--ink-faint);
+}
+.engines-glyph.on {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+.engines-ident {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.engines-name {
+  font-size: var(--fs-ui-lg);
+  font-weight: 600;
+  line-height: 1.25;
+}
+.engines-status {
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.engines-status.warn {
+  color: var(--cloud);
+}
+.engines-status.bad {
+  color: var(--danger);
+}
+
+/* The opt-in: off until you turn it on, and the word says which it is. */
+.engines-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.engines-switch-state {
+  min-width: 18px;
+  text-align: right;
+  font-size: var(--fs-footnote);
+  font-weight: 500;
+  color: var(--ink-faint);
+}
+.engines-switch-state.on {
+  color: var(--ink);
+}
+
+.engines .btn-secondary.sm {
+  min-height: var(--control-sm);
+  padding: 0 11px;
+  font-size: var(--fs-footnote);
+}
+
+.engines-note,
+.engines-muted {
+  margin: 0;
+  font-size: var(--fs-footnote);
+  line-height: 1.55;
+  color: var(--ink-muted);
+  max-width: 62ch;
+}
+.engines-muted.warn {
+  color: var(--cloud);
+}
+.engines-value {
+  margin: 0;
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.engines-row > .engines-note,
+.engines-row > .engines-error {
+  padding: 0 20px 12px 38px;
+}
+.engines-error {
+  margin: 4px 0 0;
+  font-size: var(--fs-footnote);
+  color: var(--danger);
+}
+
+/* ---- an agent's settings ---- */
+.engines-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0 20px 10px;
+  border-top: 1px solid var(--paper-edge);
+}
+.engines-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px 0 14px;
+}
+.engines-body > .engines-group + .engines-group {
+  border-top: 1px solid var(--paper-edge);
+}
+.engines-group-title {
+  margin: 0 0 2px;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* One line: what it is, then its control. */
+.engines-opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 10px 0;
+  font-family: var(--font-sans);
+}
+.engines-opt + .engines-opt {
+  border-top: 1px solid var(--paper-edge);
+}
+label.engines-opt {
+  cursor: pointer;
+}
+.engines-opt-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.engines-opt-title {
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  color: var(--ink);
+}
+.engines-opt-help {
+  max-width: 58ch;
+  font-size: var(--fs-footnote);
+  line-height: 1.5;
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+.engines-opt-help .mono {
+  font-family: var(--font-mono);
+}
+.engines-opt-help .ok {
+  color: var(--ok);
+}
+.engines-opt-help .bad {
+  color: var(--danger);
+}
+.engines-opt-help .warn {
+  color: var(--cloud);
+}
+.engines-opt-help .engines-tag {
+  margin-left: 8px;
+}
+.engines-opt-control {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.engines-opt-control .select {
+  min-width: 150px;
+}
+.engines-opt.locked .engines-opt-title {
+  color: var(--ink-muted);
+}
+.engines-tag {
+  padding: 1px 8px;
+  font-size: var(--fs-caption);
+  color: var(--ink-muted);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-pill);
+}
+
+/* Billing: two choices, the chosen one outlined like a selected button. */
+.engines-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.engines-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.engines-choice:hover {
+  background: var(--fill-hover);
+}
+.engines-choice.on {
+  background: var(--fill-quiet);
+  border-color: var(--ink);
+}
+.engines-choice input {
+  flex: none;
+  margin: 2px 0 0;
+  accent-color: var(--ink);
+}
+.engines-keyform {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.engines-keyform .field-input {
+  flex: 1;
+  min-width: 220px;
+}
+
+/* Advanced: shut by default, so the page opens on what people change. */
+.engines-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.engines-label {
+  font-size: var(--fs-footnote);
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+.engines-envrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.engines-envrow .field-input {
+  flex: 1;
+  min-width: 0;
+}
+.engines-advanced {
+  display: block;
+  padding: 14px 0 10px;
+  border-top: 1px solid var(--paper-edge);
+}
+.engines-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  list-style: none;
+  cursor: pointer;
+}
+.engines-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+.engines-advanced > summary::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--t-fast);
+}
+.engines-advanced[open] > summary::before {
+  transform: rotate(45deg);
+}
+.engines-advanced > summary:hover {
+  color: var(--ink-muted);
+}
+.engines-advanced > :not(summary) {
+  margin-top: 14px;
+}
+.engines .btn-text.danger {
+  align-self: flex-start;
+  color: var(--danger);
+}
+
+.engines-addcard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0 28px;
+  padding: 18px 20px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+}
+.engines-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Limits for all agents: the same lines, in a card of their own. */
+.engines-limits {
+  margin-top: 8px;
+  padding-top: 20px;
+  border-top: 1px solid var(--paper-edge-2);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-family: var(--font-sans);
+}
+.engines-limits .section-title {
+  margin: 0;
+}
+.engines-panel {
+  padding: 4px 20px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+}

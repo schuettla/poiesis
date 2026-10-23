@@ -1,0 +1,28 @@
+{
+  "apps": [
+    { "slug": "gmail", "label": "Gmail", "blurb": "Read, search and draft email in a Google mailbox.", "domain": "mail.google.com", "category": "Communication" },
+    { "slug": "googlecalendar", "label": "Google Calendar", "blurb": "See and change events on your calendars.", "domain": "calendar.google.com", "category": "Productivity" },
+    { "slug": "googledrive", "label": "Google Drive", "blurb": "Find, read and organise files in Drive.", "domain": "drive.google.com", "category": "Files" },
+    { "slug": "googlesheets", "label": "Google Sheets", "blurb": "Read and update spreadsheets.", "domain": "sheets.google.com", "category": "Productivity" },
+    { "slug": "googledocs", "label": "Google Docs", "blurb": "Read and edit documents.", "domain": "docs.google.com", "category": "Productivity" },
+    { "slug": "slack", "label": "Slack", "blurb": "Read channels and post messages in a workspace.", "domain": "slack.com", "category": "Communication" },
+    { "slug": "notion", "label": "Notion", "blurb": "Search, read and update pages and databases.", "domain": "notion.so", "category": "Productivity" },
+    { "slug": "linear", "label": "Linear", "blurb": "Look up and update issues and projects.", "domain": "linear.app", "category": "Developer tools" },
+    { "slug": "github", "label": "GitHub", "blurb": "Work with repositories, issues and pull requests.", "domain": "github.com", "category": "Developer tools" },
+    { "slug": "outlook", "label": "Outlook", "blurb": "Read, search and draft email and calendar in Outlook.", "domain": "outlook.office.com", "category": "Communication" },
+    { "slug": "microsoft_teams", "label": "Microsoft Teams", "blurb": "Read and post in teams and chats.", "domain": "teams.microsoft.com", "category": "Communication" },
+    { "slug": "one_drive", "label": "OneDrive", "blurb": "Find and read files in OneDrive.", "domain": "onedrive.live.com", "category": "Files" },
+    { "slug": "dropbox", "label": "Dropbox", "blurb": "Find, read and share files.", "domain": "dropbox.com", "category": "Files" },
+    { "slug": "trello", "label": "Trello", "blurb": "Read and update boards and cards.", "domain": "trello.com", "category": "Productivity" },
+    { "slug": "asana", "label": "Asana", "blurb": "Look up and update tasks and projects.", "domain": "asana.com", "category": "Productivity" },
+    { "slug": "jira", "label": "Jira", "blurb": "Search and update issues.", "domain": "atlassian.com", "category": "Developer tools" },
+    { "slug": "hubspot", "label": "HubSpot", "blurb": "Look up contacts, companies and deals.", "domain": "hubspot.com", "category": "Sales" },
+    { "slug": "salesforce", "label": "Salesforce", "blurb": "Look up and update CRM records.", "domain": "salesforce.com", "category": "Sales" },
+    { "slug": "airtable", "label": "Airtable", "blurb": "Read and update bases and tables.", "domain": "airtable.com", "category": "Productivity" },
+    { "slug": "discord", "label": "Discord", "blurb": "Read and post in servers you belong to.", "domain": "discord.com", "category": "Communication" },
+    { "slug": "zoom", "label": "Zoom", "blurb": "See and schedule meetings.", "domain": "zoom.us", "category": "Communication" },
+    { "slug": "stripe", "label": "Stripe", "blurb": "Look up customers, payments and invoices.", "domain": "stripe.com", "category": "Finance" },
+    { "slug": "shopify", "label": "Shopify", "blurb": "Look up products and orders.", "domain": "shopify.com", "category": "Commerce" },
+    { "slug": "twitter", "label": "X", "blurb": "Read and post on X. Needs your own sign-in setup in Composio.", "domain": "x.com", "category": "Social" }
+  ]
+}

@@ -1,0 +1,56 @@
+/* A floating line above the composer, in the chat body (`position: relative`). */
+.ws-offer {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 48px);
+  padding: 6px 6px 6px 14px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  transform: translateX(-50%);
+  animation: ws-offer-in var(--dur) var(--ease-out);
+}
+.ws-offer-text {
+  min-width: 0;
+}
+.ws-offer-open {
+  min-height: var(--control-sm);
+  padding: 0 10px;
+  font-size: var(--fs-footnote);
+}
+.ws-offer-x {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.ws-offer-x:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+@keyframes ws-offer-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}

@@ -132,6 +132,63 @@ CREATE TABLE IF NOT EXISTS connectors (
   created_at  INTEGER NOT NULL
 );
 
+-- What a connector's tools may do without asking (`MCG-5`). One row per
+-- (connector, app); a connector that is just an MCP server uses app = ''. A
+-- missing row means the defaults below: read runs, change asks, send asks.
+CREATE TABLE IF NOT EXISTS connector_policy (
+  connector_id   TEXT NOT NULL,
+  app            TEXT NOT NULL DEFAULT '',
+  read_policy    TEXT NOT NULL DEFAULT 'run',   -- 'run' | 'ask'
+  change_policy  TEXT NOT NULL DEFAULT 'ask',   -- 'ask' | 'allow'
+  send_policy    TEXT NOT NULL DEFAULT 'ask',   -- 'ask' | 'allow'
+  send_cap       INTEGER NOT NULL DEFAULT 25,
+  tool_overrides TEXT,                          -- JSON {tool_name: 'read'|'change'|'send'} (MCG-7)
+  updated_at     INTEGER NOT NULL,
+  PRIMARY KEY (connector_id, app)
+);
+
+-- How many sends ran per connector per day (`MCG-4`), whoever approved them.
+CREATE TABLE IF NOT EXISTS app_send_log (
+  connector_id TEXT NOT NULL,
+  app          TEXT NOT NULL DEFAULT '',
+  day          TEXT NOT NULL,                   -- YYYY-MM-DD
+  count        INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (connector_id, app, day)
+);
+
+-- `CAP-1`: a mirror of the accounts Composio holds for this install, so the
+-- Apps view and the registry need no network. Composio is the truth and this is
+-- refreshed from it; it holds no token, only the person's own label for each.
+CREATE TABLE IF NOT EXISTS app_accounts (
+  id           TEXT PRIMARY KEY,                -- Composio connected-account id
+  connector_id TEXT NOT NULL,
+  app          TEXT NOT NULL,                   -- toolkit slug, as Composio spells it
+  label        TEXT,                            -- the person's alias: 'work', 'personal'
+  status       TEXT NOT NULL,                   -- ACTIVE | INITIATED | EXPIRED | FAILED ...
+  updated_at   INTEGER NOT NULL
+);
+
+-- `CAP-10`: which apps a persona may use. No rows for a persona means every
+-- connected app. A row with tools '[]' and app '' is the explicit "none".
+CREATE TABLE IF NOT EXISTS persona_app_grants (
+  persona_id   TEXT NOT NULL,
+  connector_id TEXT NOT NULL,
+  app          TEXT NOT NULL DEFAULT '',        -- '' = whole connector
+  tools        TEXT NOT NULL DEFAULT '*',       -- '*' | JSON array of exact tool slugs | '[]'
+  PRIMARY KEY (persona_id, connector_id, app)
+);
+
+-- `CAP-12`: every app tool that ran through Composio. No cost column: Composio
+-- bills the person's own plan and Poiesis does not know their rate.
+CREATE TABLE IF NOT EXISTS app_call_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  app        TEXT NOT NULL,
+  kind       TEXT NOT NULL,                     -- read | change | send
+  tool       TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_app_call_log_created ON app_call_log(created_at);
+
 -- A user's own OpenAI-compatible model server (Ollama, LM Studio, or a remote
 -- box) — a third model source alongside the integrated runtime and BYOK cloud
 -- providers. The API key, if the server even needs one, is **not** stored
@@ -146,6 +203,71 @@ CREATE TABLE IF NOT EXISTS local_endpoints (
   enabled    INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL
 );
+
+-- External agent apps (Claude Code, Codex, ACP agents) that can be handed work
+-- (`CLI-1`, `CLI-12`). One row per agent Poiesis has found or been told about.
+-- Finding one is not consent: `enabled` starts at 0. Nothing secret lives here:
+-- an API key for `payment = 'api-key'` is in the OS credential store
+-- (`secrets::SERVICE_ENGINES`, account = this row's `id`), and `env_json` holds
+-- non-secret variables only.
+CREATE TABLE IF NOT EXISTS engines (
+  id            TEXT PRIMARY KEY,          -- 'claude-code', 'codex', 'acp:opencode', 'acp:custom-<uuid>'
+  kind          TEXT NOT NULL,             -- 'claude-code' | 'codex' | 'acp'
+  display_name  TEXT NOT NULL,
+  program       TEXT,                      -- the path the user set; NULL = auto-detect
+  found_path    TEXT,                      -- what the last search resolved; NULL = not found
+  args_json     TEXT NOT NULL DEFAULT '[]',-- argv a custom ACP agent starts with
+  env_json      TEXT NOT NULL DEFAULT '{}',
+  enabled       INTEGER NOT NULL DEFAULT 0,
+  version       TEXT,                      -- from the last probe
+  signed_in     INTEGER,                   -- NULL unknown, 0/1
+  paid_by       TEXT,                      -- 'plan' | 'api-key' | 'own' | NULL
+  last_probe_at INTEGER,
+  last_error    TEXT,
+  payment       TEXT NOT NULL DEFAULT 'plan',    -- 'plan' | 'api-key'
+  trust_ceiling TEXT NOT NULL DEFAULT 'confirm', -- 'read-only' | 'confirm' | 'auto'
+  headless      INTEGER NOT NULL DEFAULT 0,
+  memory_tools  INTEGER NOT NULL DEFAULT 0,
+  app_tools     INTEGER NOT NULL DEFAULT 0,      -- may use my connected apps through Poiesis (`CAP-14`)
+  model         TEXT,                      -- NULL = the agent's own default
+  extra_args    TEXT NOT NULL DEFAULT '[]',
+  use_mode      TEXT NOT NULL DEFAULT 'suggest', -- 'on_request' | 'suggest' | 'auto' (`RTE-1`)
+  guards_json   TEXT NOT NULL DEFAULT '{}',      -- hard conditions checked in Rust (`RTE-3`)
+  rules_seeded  INTEGER NOT NULL DEFAULT 0,      -- the default rules were written once (`RTE-2`)
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+
+-- The user's own words for when to hand work to an agent (`RTE-2`). The lead
+-- reads them verbatim, the user edits them, and every handover cites one.
+CREATE TABLE IF NOT EXISTS engine_rules (
+  id          TEXT PRIMARY KEY,
+  engine_id   TEXT NOT NULL REFERENCES engines(id) ON DELETE CASCADE,
+  kind        TEXT NOT NULL,                 -- 'use' | 'avoid'
+  text        TEXT NOT NULL,                 -- plain language, at most 140 characters
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  auto        INTEGER NOT NULL DEFAULT 0,    -- "Always for this": no handover card for this rule
+  position    INTEGER NOT NULL,
+  source      TEXT NOT NULL,                 -- 'default' | 'user' | 'proposed'
+  hits        INTEGER NOT NULL DEFAULT 0,    -- handovers that cited it
+  overrides   INTEGER NOT NULL DEFAULT 0,    -- times the user said no to one that cited it
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS engine_rules_engine ON engine_rules(engine_id, position);
+
+-- What teaches the rules (`RTE-6`): every time the user said no to a handover that
+-- cited a rule (`override`), named an agent themselves (`asked`), or a pattern was
+-- looked at and left alone (`checked`). Small and local: the task is clipped.
+CREATE TABLE IF NOT EXISTS engine_signals (
+  id         TEXT PRIMARY KEY,
+  engine_id  TEXT NOT NULL,
+  rule_id    TEXT,
+  kind       TEXT NOT NULL,                  -- 'override' | 'asked' | 'checked'
+  task       TEXT NOT NULL DEFAULT '',
+  at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS engine_signals_engine ON engine_signals(engine_id, kind, at);
 
 -- Granted file-access folders (§6.1). Each carries a mode; revocable in Settings.
 CREATE TABLE IF NOT EXISTS permissions (
@@ -419,7 +541,10 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   result                 TEXT,
   steps                  INTEGER NOT NULL DEFAULT 0,
   started_at             INTEGER NOT NULL,
-  ended_at               INTEGER
+  ended_at               INTEGER,
+  engine_id              TEXT,               -- `CLI-4`: set when an agent app did the work
+  because                TEXT,               -- the rule label it cited, or 'asked'
+  paid_by                TEXT                -- 'plan' | 'api-key' | 'own', once known
 );
 CREATE INDEX IF NOT EXISTS idx_subagent_runs_parent ON subagent_runs(parent_conversation_id);
 
@@ -439,7 +564,13 @@ CREATE TABLE IF NOT EXISTS run_usage (
   prompt_tokens   INTEGER NOT NULL,
   output_tokens   INTEGER NOT NULL,
   turns           INTEGER NOT NULL,
-  created_at      INTEGER NOT NULL
+  created_at      INTEGER NOT NULL,
+  -- `CLI-UI-7`: set on a job done by an agent app (provenance `agent-app`, the
+  -- app's name in `model_name`). Who paid, what the app says it would have cost
+  -- at list prices, and how long it worked.
+  paid_by         TEXT,
+  notional_usd    REAL,
+  duration_ms     INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_run_usage_created ON run_usage(created_at);
 

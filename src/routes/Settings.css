@@ -222,6 +222,14 @@
   color: var(--ink-muted);
   line-height: 1.5;
 }
+/* LRN-5: a tool that is switched on but cannot be offered yet. Plain ink, not an
+   alarm: nothing is broken, something just has not been set up. */
+.toolset-needs {
+  margin-top: 3px;
+  font-size: var(--fs-footnote);
+  color: var(--ink);
+  line-height: 1.5;
+}
 /* LOOP-UI-1: how this skill's tools actually performed lately. Quieter than the
    description — a footnote, not a claim. Absent entirely when there's no data. */
 .toolset-reliability {

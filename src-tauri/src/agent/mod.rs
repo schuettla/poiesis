@@ -11,6 +11,8 @@ pub mod checkup;
 pub mod codeexec;
 pub mod coderun;
 pub mod commands;
+pub mod app_calls;
+pub mod connector_gate;
 pub mod context;
 mod context_golden;
 pub mod diagnostics;
@@ -58,6 +60,23 @@ pub struct QuestionOption {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+}
+
+/// `CLI-UI-2`: what the Fleet row shows for a child that an agent app runs.
+#[derive(Debug, Clone, Serialize)]
+pub struct EngineBadge {
+    pub id: String,
+    /// "Claude Code".
+    pub name: String,
+    /// `plan` | `api-key` | `own`.
+    pub paid_by: Option<String>,
+    /// The rule it cited (`U2`), or `asked`.
+    pub because: Option<String>,
+    /// That rule's words, for the hover.
+    pub because_text: Option<String>,
+    /// The app can take a message while it works. When it cannot, the steer box
+    /// says it will be passed on at the next step.
+    pub can_steer: bool,
 }
 
 /// Events streamed to the UI during an agent run. The frontend renders Step*
@@ -240,7 +259,13 @@ pub enum AgentEvent {
         agent: String,
         task: String,
         index: usize,
+        /// `CLI-UI-2`: set when an agent app does this child's work.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        engine: Option<EngineBadge>,
     },
+    /// A question put on the permission panel is no longer wanted: the agent
+    /// app hung up, or the run was stopped. The panel drops it.
+    PermissionGone { id: String },
     /// One event from a child run, tagged with whose it is. Deliberately wraps
     /// rather than flattens: a permission prompt, an artifact or a browser
     /// state from a child reaches the UI already attributed, with no per-variant
@@ -350,6 +375,9 @@ pub enum AgentEvent {
         options: Vec<QuestionOption>,
         multi: bool,
     },
+    /// `MCPS-2`: a question an agent app put to the person is no longer wanted
+    /// (it hung up, was stopped, or nobody answered), so its card comes off.
+    QuestionGone { id: String },
     /// The run completed normally.
     Done,
     /// The run was cancelled by the user.

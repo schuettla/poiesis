@@ -101,6 +101,11 @@
 
 .filter-row {
   margin: 2px 2px 8px;
+  display: flex;
+  width: auto;
+}
+.filter-row .filter-chip {
+  flex: 1 1 0;
 }
 /* `.filter-chip` is drawn by the shared segmented control (global.css). */
 

@@ -10,9 +10,11 @@ pub mod agent;
 pub mod autonomy;
 pub mod cloud;
 mod commands;
+pub mod connectors;
 #[cfg(windows)]
 mod mic_permission;
 pub mod db;
+pub mod engines;
 mod marketplace;
 mod mcp;
 pub mod media;
@@ -188,6 +190,9 @@ pub fn run() {
             // {background: true}` has nothing to spawn into and says so, rather
             // than accepting work it cannot do.
             agent::background::init(app.handle().clone());
+            // `CLI-2`: find the agent apps installed on this computer, in the
+            // background. Needs `app.manage(db)` above.
+            commands::engines::spawn_detect_on_start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -290,6 +295,7 @@ pub fn run() {
             commands::subagents::stop_run_cmd,
             commands::subagents::steer_subagent_cmd,
             commands::subagents::list_agent_types_cmd,
+            commands::subagents::list_delegate_targets_cmd,
             commands::usage::usage_summary_cmd,
             commands::agent::save_kept_result_cmd,
             commands::agent::resume_run_cmd,
@@ -378,6 +384,8 @@ pub fn run() {
             commands::browser::revoke_capability_grant_cmd,
             commands::connectors::add_connector_cmd,
             commands::connectors::list_connectors_cmd,
+            commands::connectors::set_connector_policy_cmd,
+            commands::connectors::set_tool_kind_cmd,
             commands::connectors::test_connector_cmd,
             commands::connectors::set_connector_enabled_cmd,
             commands::connectors::delete_connector_cmd,
@@ -385,6 +393,22 @@ pub fn run() {
             commands::connectors::list_mcp_prompts_cmd,
             commands::connectors::get_mcp_prompt_cmd,
             commands::connectors::import_connectors_cmd,
+            commands::composio::composio_status_cmd,
+            commands::composio::composio_save_key_cmd,
+            commands::composio::composio_remove_key_cmd,
+            commands::composio::composio_refresh_cmd,
+            commands::composio::composio_accounts_cmd,
+            commands::composio::composio_connect_cmd,
+            commands::composio::composio_reconnect_cmd,
+            commands::composio::composio_cancel_cmd,
+            commands::composio::composio_disconnect_cmd,
+            commands::composio::composio_record_cmd,
+            commands::composio::composio_catalog_cmd,
+            commands::composio::composio_app_tools_cmd,
+            commands::composio::composio_rename_cmd,
+            commands::composio::get_persona_app_grants_cmd,
+            commands::composio::set_persona_app_grants_cmd,
+            commands::composio::composio_usage_cmd,
             commands::cloud::list_providers_cmd,
             commands::cloud::set_provider_key_cmd,
             commands::cloud::verify_provider_key_cmd,
@@ -397,6 +421,27 @@ pub fn run() {
             commands::endpoints::delete_endpoint_cmd,
             commands::endpoints::test_endpoint_cmd,
             commands::endpoints::list_endpoint_models_cmd,
+            commands::engines::engines_list_cmd,
+            commands::engines::engines_detect_cmd,
+            commands::engines::engines_mark_seen_cmd,
+            commands::engines::engines_probe_cmd,
+            commands::engines::engines_update_cmd,
+            commands::engines::engines_add_acp_cmd,
+            commands::engines::engines_remove_cmd,
+            commands::engines::engines_set_key_cmd,
+            commands::engines::engines_clear_key_cmd,
+            commands::engines::engines_open_login_cmd,
+            commands::engines::engines_test_cmd,
+            commands::engines::engines_models_cmd,
+            commands::engines::engines_rule_add_cmd,
+            commands::engines::engines_rule_update_cmd,
+            commands::engines::engines_rule_delete_cmd,
+            commands::engines::engines_rules_reorder_cmd,
+            commands::engines::engines_rules_reset_cmd,
+            commands::engines::engines_undo_handover_cmd,
+            commands::engines::engines_continue_cmd,
+            commands::engines::engines_route_preview_cmd,
+            commands::engines::set_conversation_engines_off_cmd,
             commands::projects::list_projects_cmd,
             commands::projects::create_project_cmd,
             commands::projects::rename_project_cmd,

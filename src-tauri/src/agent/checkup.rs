@@ -14,7 +14,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::cloud::ProviderInfo;
-use crate::db::{Db, ToolStatRow};
+use crate::db::{AppAccount, Db, ToolStatRow};
 use crate::runtime::process::EngineStatus;
 
 /// How long any one area may take before it is reported as not answering.
@@ -125,6 +125,34 @@ pub fn connector_line(name: &str, outcome: Result<(), String>) -> CheckupLine {
     }
 }
 
+/// `CAP-13`: a connected app whose sign-in has stopped working. Said once per
+/// account, with the label so two accounts of one app can be told apart.
+pub fn expired_lines(accounts: &[AppAccount]) -> Vec<CheckupLine> {
+    accounts
+        .iter()
+        .filter(|a| ["EXPIRED", "FAILED"].iter().any(|s| a.status.eq_ignore_ascii_case(s)))
+        .map(|a| {
+            // `CAP-C-F2`: a sign-in that was never finished is not one that stopped.
+            let never_finished = a.status.eq_ignore_ascii_case("FAILED");
+            let name = crate::connectors::composio::app_label(&a.app);
+            let which = match a.label.as_deref() {
+                Some(label) => format!("{name} ({label})"),
+                None => name,
+            };
+            line(
+                "connector",
+                "needs_you",
+                if never_finished {
+                    format!("My sign-in to {which} didn't finish.")
+                } else {
+                    format!("My sign-in to {which} has expired.")
+                },
+                Some(("Open Apps", "connectors")),
+            )
+        })
+        .collect()
+}
+
 /// Tools that have been failing lately: a seven-day rate under half, from at
 /// least five calls, so one bad afternoon does not name anything.
 pub fn tool_lines(rows: &[ToolStatRow]) -> Vec<CheckupLine> {
@@ -202,6 +230,9 @@ pub async fn run(
     for (name, outcome) in connectors {
         lines.push(connector_line(&name, outcome));
     }
+    if let Ok(Some(composio)) = db.composio_connector() {
+        lines.extend(expired_lines(&db.list_app_accounts(&composio.id).unwrap_or_default()));
+    }
     lines.extend(tool_lines(&db.tool_stats_since(7).unwrap_or_default()));
     lines.push(behaviour_line(behaviour));
     Checkup { lines }
@@ -269,6 +300,30 @@ mod tests {
         let missing = recall_line(false);
         assert_eq!(missing.state, "off");
         assert_eq!(missing.text, "I can't search inside folders. My recall engine isn't installed.");
+    }
+
+    #[test]
+    fn an_expired_sign_in_is_named_with_its_label_and_a_working_one_is_not() {
+        let account = |app: &str, label: Option<&str>, status: &str| AppAccount {
+            id: format!("{app}-{status}"),
+            connector_id: "c".into(),
+            app: app.into(),
+            label: label.map(str::to_string),
+            status: status.into(),
+            updated_at: 0,
+        };
+        let lines = expired_lines(&[
+            account("googlecalendar", Some("work"), "EXPIRED"),
+            account("slack", None, "FAILED"),
+            account("gmail", Some("work"), "ACTIVE"),
+            account("notion", Some("x"), "INITIATED"),
+        ]);
+        let said: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(
+            said,
+            ["My sign-in to Google Calendar (work) has expired.", "My sign-in to Slack didn't finish."]
+        );
+        assert!(lines.iter().all(|l| l.state == "needs_you" && l.action.as_ref().unwrap().target == "connectors"));
     }
 
     #[test]

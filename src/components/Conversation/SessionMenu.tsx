@@ -14,6 +14,10 @@ export default function SessionMenu() {
   );
   const deleteConversation = useAppStore((s) => s.deleteConversation);
   const scheduleConversation = useAppStore((s) => s.scheduleConversation);
+  const workspaceMode = useAppStore((s) => s.workspaceMode);
+  const setWorkspaceMode = useAppStore((s) => s.setWorkspaceMode);
+  const setEnginesOff = useAppStore((s) => s.setEnginesOff);
+  const anyEngine = useAppStore((s) => s.engines.some((e) => e.enabled && e.delegate_ready));
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
@@ -35,6 +39,19 @@ export default function SessionMenu() {
         <>
           <div className="row-menu-backdrop" onClick={() => setOpen(false)} />
           <div className="row-menu" role="menu">
+            {/* The mode is the chat's own, so it is changed from the chat's own
+                menu as well as by `/workspace`. */}
+            <button
+              className="row-menu-item"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                setWorkspaceMode(!workspaceMode);
+              }}
+            >
+              {workspaceMode ? "Turn off Workspace mode" : "Turn on Workspace mode"}
+            </button>
+            <hr className="row-menu-sep" />
             {/* Turn this chat into something I do on a schedule. The moment
                 you want a task is usually just after you had the agent do the
                 thing once, by hand — which is this chat. */}
@@ -49,6 +66,21 @@ export default function SessionMenu() {
               Schedule this…
             </button>
             <ProjectMenuItems conversationId={conversation.id} onDone={() => setOpen(false)} />
+            {/* `RTE-5`: only offered once an agent app is on, so the menu of a
+                person who never set one up does not grow a line they cannot use. */}
+            {anyEngine && (
+              <button
+                className="row-menu-item"
+                role="menuitemcheckbox"
+                aria-checked={!conversation.enginesOff}
+                onClick={() => {
+                  setOpen(false);
+                  void setEnginesOff(conversation.id, !conversation.enginesOff);
+                }}
+              >
+                {conversation.enginesOff ? "Use external agents in this chat" : "Keep external agents out of this chat"}
+              </button>
+            )}
             <hr className="row-menu-sep" />
             <button
               className="row-menu-item danger"

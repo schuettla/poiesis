@@ -28,6 +28,7 @@ pub const AUTONOMY_DEFAULTS: &[(&str, &str)] = &[
     ("soul", "ask"),         // standing instructions (identity)
     ("profile", "auto"),     // synthesized style, derived + regenerable (PRO-8)
     ("email_send", "ask"),   // mail leaving the machine on the user's behalf (MAIL-3)
+    ("app_send", "ask"),     // a connected app sending, posting or paying for the user (MCG-3)
     ("skills", "ask"),       // new Agent Skills (identity, SKL-4)
     ("screen", "ask"),       // screenshot can contain anything (SYS-1)
     ("context", "auto"),     // clearing old tool output mid-run; undo = read_result (CLR)
@@ -91,6 +92,8 @@ mod tests {
         assert_eq!(autonomy_gate(&db, "screen"), Rung::Ask);
         // MAIL-3: mail leaving the machine is never the default.
         assert_eq!(autonomy_gate(&db, "email_send"), Rung::Ask);
+        // MCG-3: so is a connected app sending or posting.
+        assert_eq!(autonomy_gate(&db, "app_send"), Rung::Ask);
 
         db.set_setting(&setting_key("lessons"), "off").unwrap();
         assert_eq!(autonomy_gate(&db, "lessons"), Rung::Off);

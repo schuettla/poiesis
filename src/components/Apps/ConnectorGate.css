@@ -1,0 +1,124 @@
+/* MCG-UI-2: what a connector may do, and what each tool is held to. */
+.gate {
+  margin-top: 12px;
+  border-top: 1px solid var(--hairline);
+  padding-top: 10px;
+}
+.gate-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.gate-title {
+  font-size: var(--fs-footnote);
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.gate-line {
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.gate-toggle:hover .gate-line {
+  color: var(--ink);
+}
+.gate-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+.gate-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-family: var(--font-sans);
+}
+.gate-row-label {
+  width: 88px;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.gate-segments {
+  margin-bottom: 0;
+}
+.gate-cap {
+  width: 84px;
+  min-width: 0;
+}
+
+/* Tool chips that can be opened. */
+.tool-chip-wrap {
+  position: relative;
+  display: inline-block;
+}
+.tool-chip-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.tool-chip-button:hover {
+  border-color: var(--ink-faint);
+}
+.tool-kind {
+  font-family: var(--font-sans);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  color: var(--ink-muted);
+}
+/* A send is the one that leaves the machine: the cloud colour, as in the panel. */
+.tool-chip.kind-send .tool-kind {
+  color: var(--cloud);
+}
+.tool-loosened {
+  font-family: var(--font-sans);
+  font-size: var(--fs-micro);
+  color: var(--danger);
+}
+.tool-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+}
+.tool-menu-item {
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  text-align: left;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink);
+  cursor: pointer;
+}
+.tool-menu-item:hover:not(:disabled) {
+  background: var(--fill-hover);
+}
+.tool-menu-item:disabled {
+  color: var(--ink-muted);
+  cursor: default;
+}
+
+/* "3 of 25 used today": the same size as the row labels beside it. */
+.gate-cap-note {
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}

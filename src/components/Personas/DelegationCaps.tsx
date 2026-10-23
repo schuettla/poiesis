@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getSetting, inTauri, setSetting } from "../../lib/api";
+import { useAppStore } from "../../lib/store";
 
 /**
  * `SUB-UI-7`: delegation's caps, inline under its toggle in Settings → Tools.
@@ -36,6 +37,7 @@ const FIELDS = [
 const NESTED_KEY = "subagents.allow_nested";
 
 export default function DelegationCaps() {
+  const openEngines = useAppStore((s) => s.openEngines);
   const [values, setValues] = useState<Record<string, string>>({});
   const [nested, setNested] = useState(false);
 
@@ -87,6 +89,12 @@ export default function DelegationCaps() {
       <p className="delegation-note">
         Child conversations do not appear in the Rail. You will find one in Library if you go
         looking, and inside the turn that started it.
+      </p>
+      <p className="delegation-note">
+        External agents (Claude Code, Codex…) have their own limits.{" "}
+        <button className="link-button inline" onClick={() => openEngines()}>
+          External agents →
+        </button>
       </p>
     </div>
   );

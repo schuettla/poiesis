@@ -1,0 +1,47 @@
+{
+  "_note": "The agent apps Poiesis knows how to drive (CLI-2). An agent that is not listed here is never found automatically: the user adds it by hand. Every entry was recorded against a real session (fixtures/engines/) before it was written. `tested_from` is the version that was recorded, `tested_below` is the first one nobody has looked at. Never add a command here that prints secrets (OpenCode's `auth export` is the example).",
+  "engines": [
+    {
+      "id": "claude-code",
+      "kind": "claude-code",
+      "name": "Claude Code",
+      "binaries": ["claude"],
+      "install_url": "https://code.claude.com/docs/en/setup",
+      "login_args": ["auth", "login"],
+      "status": { "args": ["auth", "status"], "reads": "stdout", "format": "claude-json" },
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "tested_from": "2.1.301",
+      "tested_below": "2.3.0"
+    },
+    {
+      "id": "codex",
+      "kind": "codex",
+      "name": "Codex",
+      "binaries": ["codex"],
+      "install_url": "https://github.com/openai/codex",
+      "login_args": ["login"],
+      "status": { "args": ["login", "status"], "reads": "stderr", "format": "codex-text" },
+      "tested_from": "0.163.0",
+      "tested_below": "0.170.0"
+    },
+    {
+      "id": "acp:opencode",
+      "kind": "acp",
+      "name": "OpenCode",
+      "binaries": ["opencode"],
+      "install_url": "https://github.com/anomalyco/opencode",
+      "login_args": ["auth", "login"],
+      "acp_args": ["acp"],
+      "paid_by": "own",
+      "ask_everything_env": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":{\"edit\":\"ask\",\"bash\":\"ask\"}}"
+      },
+      "auto_edits_env": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":{\"edit\":\"allow\",\"bash\":\"ask\"}}"
+      },
+      "strip_env_prefixes": ["OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "OPENROUTER_", "GROQ_", "MISTRAL_", "XAI_", "DEEPSEEK_", "AZURE_", "AWS_"],
+      "tested_from": "2.1.0",
+      "tested_below": "3.0.0"
+    }
+  ]
+}

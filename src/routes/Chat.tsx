@@ -12,6 +12,8 @@ import { orbForPresence } from "../components/Orb/orbState";
 import Composer from "../components/Composer/Composer";
 import VoiceMode from "../components/Voice/VoiceMode";
 import { useVoiceStore } from "../lib/voice/voiceStore";
+import { hideVoiceSurface } from "../lib/voice/controller";
+import WorkspaceOffer from "../components/Workspace/WorkspaceOffer";
 import MemoryToast from "../components/Memory/MemoryToast";
 import RecallOffer from "../components/RecallRuntime/RecallOffer";
 import SessionStrip from "../components/Blocks/SessionStrip";
@@ -51,7 +53,8 @@ function placeNotes(notes: CommandNoteView[], messages: Message[]) {
 }
 
 export default function Chat() {
-  const workspaceMode = useAppStore((s) => s.workspaceMode);
+  // The mode is the chat's own flag; whether its canvas is up is only the view.
+  const canvasShown = useAppStore((s) => s.workspaceMode && s.workspaceShown);
   const conversation = useActiveConversation();
   const sendMessage = useAppStore((s) => s.sendMessage);
   const stopGenerating = useAppStore((s) => s.stopGenerating);
@@ -69,16 +72,32 @@ export default function Chat() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [conversation?.messages.length, lastMessage?.text]);
 
+  // Coming back from the canvas remounts the stream at the top. Land on the
+  // latest message instead, which is what "Open in chat" is asking to read.
+  useEffect(() => {
+    if (canvasShown) return;
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [canvasShown]);
+
   const isEmpty = !conversation || conversation.messages.length === 0;
   const allNotes = useAppStore((s) => (conversation ? s.commandNotes[conversation.id] : undefined));
   const notes = placeNotes(allNotes ?? [], msgs);
 
-  // Workspace mode: same session, inverted layout — the composed interface is
-  // the interaction point, the message stream demotes to an optional log.
-  if (workspaceMode) {
+  // A voice conversation lives over the stream. If one is up while the canvas
+  // is, the canvas steps aside the way the stream does for it; the mic stays on
+  // and the top bar says so.
+  useEffect(() => {
+    if (canvasShown && voiceShown) hideVoiceSurface();
+  }, [canvasShown, voiceShown]);
+
+  // Workspace mode with its canvas up: same session, inverted layout. The
+  // composed interface is the interaction point; the stream is one switch away.
+  // The composer is the same box in the same place in both views.
+  if (canvasShown) {
     return (
       <>
         <Workspace />
+        <Composer onSend={sendMessage} busy={busy} onStop={stopGenerating} />
         <MemoryToast />
         <RecallOffer />
       </>
@@ -172,6 +191,8 @@ export default function Chat() {
             )}
           </div>
         </div>
+        {/* Interface changes the user has not seen, offered while out of the canvas. */}
+        {!voiceShown && <WorkspaceOffer />}
         {voiceShown && <VoiceMode />}
       </div>
       {/* The voice surface has its own bar, so the box is not shown under it. */}

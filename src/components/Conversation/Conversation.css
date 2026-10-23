@@ -373,36 +373,67 @@
   height: 20px;
 }
 /* The model's thinking, while it is thinking. Deliberately quieter than the
-   meter above it: this is evidence the run is alive, not something to read. */
+   meter above it: this is evidence the run is alive, not something to read.
+   It hangs in the meter's text column (the orb's 20px slot + the row's 8px gap)
+   so the two lines read as one block, and it opens like the timeline does —
+   a turned chevron and the same hover fill as every other quiet control. */
 .run-thinking {
-  margin: 0 0 6px;
+  margin: 0 0 8px 28px;
   font-family: var(--font-sans);
   font-size: var(--fs-timeline);
   color: var(--ink-faint);
 }
 .run-thinking > summary {
-  cursor: pointer;
-  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: -6px;
+  padding: 3px 7px 3px 6px;
+  border-radius: var(--radius);
   list-style: none;
+  cursor: pointer;
+  user-select: none;
+  color: var(--ink-muted);
 }
-.run-thinking > summary::before {
-  content: "▸ ";
+.run-thinking > summary::-webkit-details-marker {
+  display: none;
 }
-.run-thinking[open] > summary::before {
-  content: "▾ ";
+.run-thinking > summary:hover,
+.run-thinking > summary:focus-visible {
+  background: var(--fill-hover);
+  color: var(--ink);
 }
+.run-thinking-twisty {
+  display: inline-flex;
+  color: var(--ink-faint);
+}
+.run-thinking-twisty svg {
+  transition: transform var(--dur) var(--ease-out);
+}
+.run-thinking[open] .run-thinking-twisty svg {
+  transform: rotate(90deg);
+}
+.run-thinking-count {
+  font-size: var(--fs-footnote);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+/* Reasoning is prose, not code: set in the reading face on a soft ground,
+   without the old mono block and its left rule. */
 .run-thinking > pre {
   max-height: 220px;
   overflow: auto;
   margin: 6px 0 0;
-  padding: 8px 10px;
-  border-left: 2px solid var(--paper-edge-2);
-  background: var(--paper-sunken, transparent);
-  font-family: var(--font-mono);
-  font-size: var(--fs-timeline);
-  line-height: 1.5;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--fill-quiet);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  line-height: 1.55;
   white-space: pre-wrap;
-  color: var(--ink-faint);
+  word-break: break-word;
+  color: var(--ink-muted);
+  animation: fade-in var(--dur) var(--ease-out);
 }
 
 /* `HRN-3`: why a turn stopped short. Sits directly under the prose it
@@ -1246,6 +1277,10 @@
   flex-direction: column;
   align-items: stretch;
 }
+/* Something leaving this machine: the same cloud colour as the permission panel. */
+.proposal-card.outbound .proposal-actions .btn-text:first-child {
+  color: var(--cloud);
+}
 .proposal-fields {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -1332,6 +1367,58 @@
   text-overflow: ellipsis;
   max-width: 12ch;
 }
+/* The agent's name with what an agent app adds to it (who paid, which rule). */
+.fleet-who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.fleet-chip {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink-faint);
+  font: inherit;
+  font-size: var(--fs-timeline);
+  white-space: nowrap;
+}
+.fleet-chip-why {
+  cursor: pointer;
+}
+.fleet-chip-why:hover {
+  color: var(--ink);
+  background: var(--fill-hover);
+}
+.fleet-gear {
+  display: inline-flex;
+  align-items: center;
+}
+/* Under an agent app's finished row: take it back, or pick it up there. */
+.engine-after {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 0;
+}
+.engine-after:empty {
+  display: none;
+}
+.engine-continue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+}
+.engine-continue .fleet-note {
+  margin: 0;
+}
 .fleet-doing {
   color: var(--ink-muted);
   white-space: nowrap;
@@ -1389,6 +1476,15 @@
   padding: 6px 8px;
   background: var(--canvas);
   border-radius: var(--radius);
+}
+
+/* `MCPS-2`: a table or bar an agent app put on its card with `present`. */
+.fleet-blocks {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
 }
 
 /* ---- `HRN-UI-2`: steps that ran at the same time ----

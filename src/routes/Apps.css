@@ -211,3 +211,16 @@
   margin-top: 14px;
 }
 /* .btn-text is a shared primitive — see styles/global.css. */
+
+/* The two tabs: a count of what each holds, and a dot when a sign-in needs a look. */
+.apps-tab-count {
+  font-size: var(--fs-caption);
+  font-weight: 500;
+  color: var(--ink-faint);
+}
+.apps-tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+}

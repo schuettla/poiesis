@@ -89,7 +89,9 @@ function LessonsTab() {
   const refreshSelf = useAppStore((s) => s.refreshSelf);
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  const pending = proposals.filter((p) => p.target === "lesson" || p.target === "lesson-critic");
+  const pending = proposals.filter(
+    (p) => p.target === "lesson" || p.target === "lesson-critic" || p.target === "engine-memory"
+  );
 
   async function answer(id: string, accept: boolean) {
     await resolve(id, accept);
@@ -110,12 +112,12 @@ function LessonsTab() {
       {pending.map((p) => (
         <div className="memory-proposal" key={p.id}>
           <p className="memory-proposal-head">
-            I'd like to learn this: {p.rationale}
+            {p.target === "engine-memory" ? `${p.rationale} Keep this?` : `I'd like to learn this: ${p.rationale}`}
           </p>
           <pre className="self-steps">{p.proposed_text}</pre>
           <div className="setting-actions">
             <button className="btn-primary" onClick={() => answer(p.id, true)}>
-              Learn it
+              {p.target === "engine-memory" ? "Keep it" : "Learn it"}
             </button>
             <button className="btn-text" onClick={() => answer(p.id, false)}>
               Not now

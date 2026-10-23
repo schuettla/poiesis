@@ -1,9 +1,12 @@
-/* Workspace blocks (Generative UI) — paper machinery: hairline rules, mono
-   labels, sans data, no shadows or fills. Tokens only (see styles/tokens.css). */
+/* Workspace blocks (Generative UI): the same panel as the plan and the timeline
+   beside them in the stream, so the edge and the corner are theirs (`--hairline`,
+   `--radius-lg`), not a second recipe. Fields and buttons are the shell's own
+   (global.css). Tokens only (see styles/tokens.css). */
 
 .block {
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
   background: var(--paper);
   margin: 14px 0;
   animation: block-in var(--t-fast);
@@ -305,14 +308,8 @@
 }
 .form-input,
 .form-select {
-  font-family: var(--font-sans);
-  font-size: var(--fs-ui-lg);
-  color: var(--ink);
-  background: var(--paper);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  padding: 6px 8px;
   width: 100%;
+  box-sizing: border-box;
 }
 .form-frozen {
   font-size: var(--fs-ui-lg);
@@ -335,21 +332,46 @@
   display: flex;
   justify-content: flex-end;
 }
-.form-submit {
-  font-family: var(--font-sans);
-  font-size: var(--fs-ui);
-  background: var(--ink);
-  color: var(--paper);
-  border: none;
-  border-radius: var(--radius);
-  padding: 7px 16px;
-  cursor: pointer;
+
+/* ---- connect (sign in to an app) ---- */
+.connect-block {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
 }
-.form-submit:disabled {
-  background: none;
-  color: var(--ink-faint);
-  border: 1px solid var(--paper-edge-2);
-  cursor: default;
+.connect-main {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+.connect-line {
+  margin: 0;
+  font-size: var(--fs-ui-lg);
+  color: var(--ink);
+}
+.connect-ok {
+  color: var(--ok);
+}
+.connect-quiet {
+  margin: 0;
+  font-size: var(--fs-caption);
+  color: var(--ink-muted);
+}
+.connect-error {
+  margin: 0;
+  font-size: var(--fs-ui);
+  color: var(--danger);
+}
+.connect-label {
+  display: grid;
+  gap: 4px;
+  max-width: 260px;
+}
+.signin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 
 /* ---- progress ---- */

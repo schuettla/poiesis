@@ -16,7 +16,12 @@ import type { GoalCheck, StopReason } from "./api";
  */
 export const MAX_ROUNDS = 5;
 
-export type GoalStatus = "active" | "met" | "stopped" | "exhausted";
+export type GoalStatus = "active" | "met" | "stopped" | "exhausted" | "stalled";
+
+/** `LRN-1`: continuations in a row that got nowhere before I stop. */
+export const MAX_QUIET_ROUNDS = 2;
+/** `LRN-1`: rounds that hit the same error before I stop. */
+export const MAX_SAME_WALL = 3;
 
 export interface Goal {
   /** What the user wants. */
@@ -31,6 +36,12 @@ export interface Goal {
   lastCheck: GoalCheck | null;
   /** A check is running: the turn is over, and I am deciding whether to go on. */
   checking: boolean;
+  /** `LRN-1`: continuation rounds in a row in which no tool call worked. */
+  quiet: number;
+  /** `LRN-1`: error text -> the number of rounds it showed up in. */
+  walls: Record<string, number>;
+  /** `LRN-1`: why I stopped, in words, when status is `stalled`. */
+  stalled?: string;
 }
 
 /** `/goal make the tests pass until npm test exits 0`, or `/goal stop`. */
@@ -47,7 +58,50 @@ export function parseGoalArgs(args: string): { text: string; until: string } | "
 }
 
 export function newGoal(text: string, until: string): Goal {
-  return { text, until, maxRounds: MAX_ROUNDS, round: 1, status: "active", lastCheck: null, checking: false };
+  return { text, until, maxRounds: MAX_ROUNDS, round: 1, status: "active", lastCheck: null, checking: false, quiet: 0, walls: {} };
+}
+
+/** What a round's own step records say, never what the model said about them. */
+export interface RoundEvidence {
+  /** Tool calls that finished without an error. */
+  ok: number;
+  /** The error text of each call that failed. */
+  errors: string[];
+}
+
+/** One error as a key: case, spacing and a long tail do not make it a different wall. */
+function wallKey(error: string): string {
+  return error.replace(/^\s*[—-]\s*/, "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 200);
+}
+
+/**
+ * `LRN-1`: stop on evidence, not on the round count. Two guards, both read from
+ * the round's step records:
+ * - **No progress:** two continuations in a row in which no tool call worked.
+ *   The first round is not a continuation, so a slow start is not counted.
+ * - **Same wall:** the same error in three rounds.
+ *
+ * Returns the counters to keep, and the reason in words when one tripped.
+ */
+export function weighRound(goal: Goal, evidence: RoundEvidence): { patch: Partial<Goal>; stalled?: string } {
+  const quiet = goal.round >= 2 && evidence.ok === 0 ? goal.quiet + 1 : evidence.ok > 0 ? 0 : goal.quiet;
+  const walls = { ...goal.walls };
+  const shown = new Map<string, string>();
+  for (const e of evidence.errors) {
+    const key = wallKey(e);
+    if (key && !shown.has(key)) shown.set(key, e.replace(/^\s*[—-]\s*/, "").trim());
+  }
+  let stalled: string | undefined;
+  for (const [key, text] of shown) {
+    walls[key] = (walls[key] ?? 0) + 1;
+    if (walls[key] >= MAX_SAME_WALL && !stalled) {
+      stalled = `I stopped after three identical errors: ${text.slice(0, 160)}`;
+    }
+  }
+  if (!stalled && quiet >= MAX_QUIET_ROUNDS) {
+    stalled = "I stopped because the last two rounds got nowhere: none of my tool calls worked.";
+  }
+  return { patch: { quiet, walls }, stalled };
 }
 
 /** The first turn: the goal, and when it counts as done, said as a request. */
@@ -74,6 +128,8 @@ export interface RunEnd {
   stopReason?: StopReason;
   /** The plan it wrote is waiting for the user's yes, so nothing was done yet. */
   awaitingApproval?: boolean;
+  /** `LRN-1`: what the round's tool calls did. Absent when nothing is known. */
+  evidence?: RoundEvidence;
 }
 
 /** What the loop needs from the app. Passed in, so the rules can be tried
@@ -144,6 +200,14 @@ export async function afterRun(host: GoalHost, convId: string, end: RunEnd): Pro
   if (!host.isOpen(convId)) {
     host.patch(convId, { checking: false, status: "stopped", lastCheck: check });
     host.note(convId, "I stopped working toward the goal because you left this chat.");
+    return;
+  }
+  // `LRN-1`: a goal that is stuck ends here with the reason, not at the round limit.
+  const weighed = end.evidence ? weighRound(goal, end.evidence) : undefined;
+  if (weighed) host.patch(convId, weighed.patch);
+  if (weighed?.stalled) {
+    host.patch(convId, { checking: false, status: "stalled", lastCheck: check, stalled: weighed.stalled });
+    host.note(convId, weighed.stalled);
     return;
   }
   if (goal.round >= goal.maxRounds) {

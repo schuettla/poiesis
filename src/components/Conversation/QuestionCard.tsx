@@ -15,7 +15,8 @@ import "./QuestionCard.css";
 export default function QuestionCard({ q }: { q: PendingQuestion }) {
   const answer = useAppStore((s) => s.answerQuestion);
   const [picked, setPicked] = useState<string[]>([]);
-  const [other, setOther] = useState(false);
+  // A question with no options is a free answer: the box is already open.
+  const [other, setOther] = useState(q.options.length === 0);
   const [text, setText] = useState("");
   const ref = useRef<HTMLDivElement>(null);
 
@@ -58,8 +59,14 @@ export default function QuestionCard({ q }: { q: PendingQuestion }) {
   }, [q.id, q.multi, q.options]);
 
   return (
-    <div className="question-card" ref={ref} tabIndex={-1} role="group" aria-label="I need you to decide">
-      <p className="question-card-head">I need you to decide</p>
+    <div
+      className="question-card"
+      ref={ref}
+      tabIndex={-1}
+      role="group"
+      aria-label={q.agent ? `${q.agent} asks you` : "I need you to decide"}
+    >
+      <p className="question-card-head">{q.agent ? `${q.agent} asks you` : "I need you to decide"}</p>
       <p className="question-card-text">{q.question}</p>
       <div className="question-card-options">
         {q.options.map((o, i) => {
@@ -83,7 +90,7 @@ export default function QuestionCard({ q }: { q: PendingQuestion }) {
       <div className="question-card-foot">
         {other ? (
           <input
-            className="question-card-input"
+            className="field-input question-card-input"
             autoFocus
             value={text}
             placeholder="Or tell me in your own words"
