@@ -171,7 +171,18 @@ export default function MemoryPanel() {
     : facts;
 
   const hasProposal =
-    !!pending && (pending.deletes.length > 0 || pending.edits.length > 0 || pending.merges.length > 0);
+    !!pending &&
+    (pending.deletes.length > 0 ||
+      pending.edits.length > 0 ||
+      pending.merges.length > 0 ||
+      (pending.lesson_deletes?.length ?? 0) > 0 ||
+      (pending.promotes?.length ?? 0) > 0 ||
+      (pending.contests?.length ?? 0) > 0);
+
+  /** `Not this one`: that row is not applied, the rest still can be. */
+  async function notThisOne(kind: string, key: string) {
+    setPending(await api.dropPendingRow(kind, key));
+  }
 
   return (
     <div className="memory-panel">
@@ -200,6 +211,26 @@ export default function MemoryPanel() {
           <p className="memory-proposal-head">
             A tidy-up is proposed. Nothing has changed yet.
           </p>
+          {(pending.promotes ?? []).map((p) => (
+            <div className="memory-proposal-row" key={`promote-${p.name}`}>
+              <span className="memory-proposal-kind">keep</span>
+              <span className="memory-proposal-body">
+                {p.into ? (
+                  <>
+                    I saw <strong>{p.into.replace(/-/g, " ")}</strong> again in {p.evidence.length} conversations
+                  </>
+                ) : (
+                  <>
+                    I saw this in {p.evidence.length} conversations and would keep it:{" "}
+                    <strong>{p.description || p.name}</strong>
+                  </>
+                )}
+              </span>
+              <button className="btn-text" onClick={() => notThisOne("promote", p.name)}>
+                Not this one
+              </button>
+            </div>
+          ))}
           {pending.merges.map((m) => (
             <div className="memory-proposal-row" key={`merge-${m.keep}`}>
               <span className="memory-proposal-kind">merge</span>
@@ -207,6 +238,9 @@ export default function MemoryPanel() {
                 keep <strong>{m.keep}</strong>, fold in {m.drop.join(", ")}
                 <pre>{m.text}</pre>
               </span>
+              <button className="btn-text" onClick={() => notThisOne("merge", m.keep)}>
+                Not this one
+              </button>
             </div>
           ))}
           {pending.edits.map((e) => (
@@ -216,6 +250,20 @@ export default function MemoryPanel() {
                 <strong>{e.name}</strong>
                 <pre>{e.text}</pre>
               </span>
+              <button className="btn-text" onClick={() => notThisOne("edit", e.name)}>
+                Not this one
+              </button>
+            </div>
+          ))}
+          {(pending.contests ?? []).map((names) => (
+            <div className="memory-proposal-row" key={`contest-${names.join("|")}`}>
+              <span className="memory-proposal-kind">unsure</span>
+              <span className="memory-proposal-body">
+                These cannot all be true: <strong>{names.join(", ")}</strong>. I would mark them unsure.
+              </span>
+              <button className="btn-text" onClick={() => notThisOne("contest", names.join("|"))}>
+                Not this one
+              </button>
             </div>
           ))}
           {pending.deletes.map((name) => (
@@ -224,6 +272,20 @@ export default function MemoryPanel() {
               <span className="memory-proposal-body">
                 <strong>{name}</strong>
               </span>
+              <button className="btn-text" onClick={() => notThisOne("drop", name)}>
+                Not this one
+              </button>
+            </div>
+          ))}
+          {(pending.lesson_deletes ?? []).map((name) => (
+            <div className="memory-proposal-row" key={`letgo-${name}`}>
+              <span className="memory-proposal-kind">let go</span>
+              <span className="memory-proposal-body">
+                the lesson <strong>{name}</strong>
+              </span>
+              <button className="btn-text" onClick={() => notThisOne("let-go", name)}>
+                Not this one
+              </button>
             </div>
           ))}
           <div className="setting-actions">

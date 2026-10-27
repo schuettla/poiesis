@@ -150,6 +150,33 @@ impl Db {
         Ok(())
     }
 
+    /// Encoded episodes with a digest that no tidy-up has folded in yet, newest
+    /// first (`SLP-1`, step 3 of the daily pass).
+    pub fn unconsolidated_episodes(&self, limit: usize) -> Result<Vec<Episode>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {EPISODE_COLUMNS} FROM conversations
+             WHERE encode_version > 0 AND consolidated_at IS NULL AND digest IS NOT NULL AND TRIM(digest) <> ''
+             ORDER BY updated_at DESC LIMIT ?1"
+        ))?;
+        let rows = stmt.query_map([limit as i64], episode_row)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Encoded episodes with a digest whose conversation was last worked on at or
+    /// after `since` (ms), newest first. A candidate that waited on one night's
+    /// conversation can be promoted by a later one, so the pool reaches back.
+    pub fn episodes_since(&self, since: i64) -> Result<Vec<Episode>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {EPISODE_COLUMNS} FROM conversations
+             WHERE encode_version > 0 AND updated_at >= ?1 AND digest IS NOT NULL AND TRIM(digest) <> ''
+             ORDER BY updated_at DESC"
+        ))?;
+        let rows = stmt.query_map([since], episode_row)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// `(conversation id, text)` for every episode with a digest and no vector
     /// under `model`. The text is what gets embedded: the goal and the digest, so
     /// a new task is matched against what the old one was for.

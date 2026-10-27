@@ -33,6 +33,7 @@ const JOBS_KEY: &str = "scheduler.jobs";
 const DIGEST_KEY: &str = "scheduler.digest";
 const TICK: std::time::Duration = std::time::Duration::from_secs(60);
 const BUILT_IN_NIGHTLY_ID: &str = "nightly-reflection";
+const BUILT_IN_NAME: &str = "Daily tidy-up";
 /// How many not-yet-reflected conversations one nightly pass reads back over —
 /// a cap, not a target, so a heavy day doesn't turn "the quiet night shift"
 /// into a long GPU-bound run.
@@ -121,7 +122,7 @@ const RUNS_KEPT: usize = 10;
 fn seed_nightly_job() -> Job {
     Job {
         id: BUILT_IN_NIGHTLY_ID.to_string(),
-        name: "Nightly reflection".to_string(),
+        name: BUILT_IN_NAME.to_string(),
         prompt: String::new(),
         cadence: Cadence::Daily,
         scope: None,
@@ -147,6 +148,11 @@ fn load_jobs(db: &Db) -> Vec<Job> {
         jobs.push(seed_nightly_job());
         let _ = save_jobs(db, &jobs);
     }
+    // `SLP-1`: the job that read conversations back is the daily tidy-up now. A job
+    // stored under the old name is shown under the new one; its id stays.
+    for job in jobs.iter_mut().filter(|j| j.built_in) {
+        job.name = BUILT_IN_NAME.to_string();
+    }
     jobs
 }
 
@@ -162,6 +168,10 @@ pub struct Digest {
     pub text: String,
     pub created_at: i64,
     pub unread: bool,
+    /// `SLP-3`: the pass applied changes on its own (`consolidate` at Auto) and the
+    /// snapshot before them is still there, so the digest offers Undo.
+    #[serde(default)]
+    pub undoable: bool,
 }
 
 fn load_digest(db: &Db) -> Option<Digest> {
@@ -169,9 +179,23 @@ fn load_digest(db: &Db) -> Option<Digest> {
 }
 
 fn save_digest(db: &Db, text: &str) {
-    let digest = Digest { text: text.to_string(), created_at: crate::db::now_ms(), unread: true };
+    save_digest_with(db, text, false);
+}
+
+fn save_digest_with(db: &Db, text: &str, undoable: bool) {
+    let digest = Digest { text: text.to_string(), created_at: crate::db::now_ms(), unread: true, undoable };
     if let Ok(json) = serde_json::to_string(&digest) {
         let _ = db.set_setting(DIGEST_KEY, &json);
+    }
+}
+
+/// The digest no longer offers Undo: the tidy-up it named was taken back.
+pub(crate) fn clear_digest_undo(db: &Db) {
+    if let Some(mut digest) = load_digest(db) {
+        digest.undoable = false;
+        if let Ok(json) = serde_json::to_string(&digest) {
+            let _ = db.set_setting(DIGEST_KEY, &json);
+        }
     }
 }
 
@@ -182,6 +206,10 @@ pub struct RunningJob {
     pub job_id: String,
     pub job_name: String,
     pub started_at: i64,
+    /// A person pressed Run now. Typing or clicking elsewhere does not stop it; the
+    /// Stop button does.
+    pub manual: bool,
+    pub built_in: bool,
     #[serde(skip)]
     cancel: CancelFlag,
 }
@@ -192,15 +220,43 @@ pub struct RunningJob {
 #[derive(Default)]
 pub struct SchedulerState {
     running: StdMutex<Option<RunningJob>>,
+    /// When the person last used the app, or a turn was last streaming (ms). A due
+    /// built-in pass waits until this is `IDLE_BEFORE_START_MS` old.
+    last_input: std::sync::atomic::AtomicI64,
 }
+
+/// `SLP-1`: how long the app must be quiet before the daily pass starts.
+const IDLE_BEFORE_START_MS: i64 = 2 * 60 * 1000;
 
 impl SchedulerState {
     pub fn new() -> Self {
-        Self::default()
+        let state = Self::default();
+        // Launching is use: the first pass waits two minutes after it.
+        state.last_input.store(crate::db::now_ms(), std::sync::atomic::Ordering::Relaxed);
+        state
+    }
+
+    /// The person is using the app (`stop`: they pressed a key or clicked) or a turn
+    /// is streaming (`!stop`). Input ends a daily pass that started by itself after the
+    /// item in flight; it never ends one the person started with Run now.
+    pub fn note_input(&self, stop: bool) {
+        self.last_input.store(crate::db::now_ms(), std::sync::atomic::Ordering::Relaxed);
+        if !stop {
+            return;
+        }
+        if let Some(r) = self.running.lock().unwrap().as_ref() {
+            if r.built_in && !r.manual {
+                r.cancel.cancel();
+            }
+        }
+    }
+
+    fn idle_for(&self, now: i64) -> i64 {
+        now - self.last_input.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Claim the one run slot for `job`, or `None` if something is already in it.
-    fn try_start(&self, job: &Job) -> Option<CancelFlag> {
+    fn try_start(&self, job: &Job, manual: bool) -> Option<CancelFlag> {
         let mut guard = self.running.lock().unwrap();
         if guard.is_some() {
             return None;
@@ -210,6 +266,8 @@ impl SchedulerState {
             job_id: job.id.clone(),
             job_name: job.name.clone(),
             started_at: crate::db::now_ms(),
+            manual,
+            built_in: job.built_in,
             cancel: cancel.clone(),
         });
         Some(cancel)
@@ -250,7 +308,7 @@ async fn execute_job(app: &AppHandle, job_id: &str, manual: bool) -> Result<Stri
         return Err("That job no longer exists.".to_string());
     };
 
-    let Some(cancel) = sched.try_start(&job) else {
+    let Some(cancel) = sched.try_start(&job, manual) else {
         return Err("Another scheduled job is already running.".to_string());
     };
     // SCH-UI-4: the Rail has no other way to learn a job just started — there
@@ -262,7 +320,8 @@ async fn execute_job(app: &AppHandle, job_id: &str, manual: bool) -> Result<Stri
 
     let built_in = job.built_in;
     let outcome = if built_in {
-        RunOutcome::bare(run_nightly_reflection_digest(app, cancel).await)
+        let (summary, unfinished) = run_nightly_reflection_digest(app, cancel).await;
+        RunOutcome { unfinished, ..RunOutcome::bare(summary) }
     } else if let Some(p) = if manual { None } else { skipped_by_condition(app, &job).await } {
         RunOutcome::skipped(p)
     } else {
@@ -304,7 +363,7 @@ async fn execute_job(app: &AppHandle, job_id: &str, manual: bool) -> Result<Stri
 /// one indivisible model call, so Stop finishes the conversation in flight and
 /// then ends — it can't abandon one half-read — and the digest says how far it
 /// actually got rather than implying the whole night's work happened.
-async fn run_nightly_reflection_digest(app: &AppHandle, cancel: CancelFlag) -> String {
+async fn run_nightly_reflection_digest(app: &AppHandle, cancel: CancelFlag) -> (String, bool) {
     // TTL-2: let short-lived facts go as part of the same quiet pass that
     // already runs overnight, not only at app startup.
     {
@@ -327,12 +386,6 @@ async fn run_nightly_reflection_digest(app: &AppHandle, cancel: CancelFlag) -> S
         .take(NIGHTLY_CONVERSATION_CAP)
         .collect();
     let when = DigestWhen::now();
-
-    if due.is_empty() {
-        let text = compose_digest(0, 0, 0, 0, when);
-        save_digest(&app.state::<Db>(), &text);
-        return "0 conversations".to_string();
-    }
 
     let mut learned = 0usize;
     let mut proposed = 0usize;
@@ -359,18 +412,37 @@ async fn run_nightly_reflection_digest(app: &AppHandle, cancel: CancelFlag) -> S
         }
     }
 
+    // `SLP-1`, step 3: the tidy-up. Input that stopped the reading stops it too, and
+    // what it did not reach stays due.
+    let tidy = if cancel.is_cancelled() { crate::commands::tidy::PassResult::default() } else { crate::commands::tidy::run_pass(app, &cancel).await };
+    let stopped = cancel.is_cancelled();
+
+    let bits = TidyBits {
+        merged: tidy.applied.merged,
+        let_go: tidy.applied.let_go,
+        noted: tidy.applied.noted,
+        reverted: tidy.reverted,
+    };
+    // A lesson the tidy-up promoted is something I learned; rows waiting for a yes,
+    // and skills drafted, are changes I'd like to make.
+    let learned_total = learned + tidy.applied.promoted;
+    let proposed_total = proposed + tidy.waiting + tidy.skills;
+    let digest = compose_digest_with(read, due.len(), learned_total, proposed_total, &bits, when);
+    let db = app.state::<Db>();
+    save_digest_with(&db, &digest, tidy.undoable);
+
     let n = read;
     let plural = if n == 1 { "" } else { "s" };
-    let digest = compose_digest(read, due.len(), learned, proposed, when);
-    let db = app.state::<Db>();
-    save_digest(&db, &digest);
     let _ = db.log_activity(
         None,
         "scheduler",
-        &format!("nightly reflection: read {n} conversation{plural}, learned {learned}, {proposed} pending"),
+        &format!(
+            "daily tidy-up: read {n} conversation{plural}, learned {learned_total}, merged {}, let {} go, {proposed_total} pending",
+            bits.merged, bits.let_go
+        ),
     );
-
-    format!("{n} conversation{plural}, {learned} learned, {proposed} pending")
+    let summary = format!("{n} conversation{plural}, {learned_total} learned, {proposed_total} pending");
+    (summary, stopped)
 }
 
 /// The digest sentence, kept apart from the run that produces it so the wording
@@ -411,8 +483,24 @@ impl DigestWhen {
     }
 }
 
+/// What the tidy-up did beyond learning, for the digest. Only what was done.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct TidyBits {
+    merged: usize,
+    let_go: usize,
+    /// Existing lessons that gained another source.
+    noted: usize,
+    /// The golden check found a tidy-up made me worse, and I put it back.
+    reverted: bool,
+}
+
 fn compose_digest(read: usize, total: usize, learned: usize, proposed: usize, when: DigestWhen) -> String {
-    if read == 0 {
+    compose_digest_with(read, total, learned, proposed, &TidyBits::default(), when)
+}
+
+fn compose_digest_with(read: usize, total: usize, learned: usize, proposed: usize, tidy: &TidyBits, when: DigestWhen) -> String {
+    let did_tidy = tidy.merged + tidy.let_go + tidy.noted > 0;
+    if read == 0 && !did_tidy && learned == 0 && !tidy.reverted {
         return if total == 0 {
             format!(
                 "{} I looked back over the day but didn't find anything new to reflect on.",
@@ -423,21 +511,48 @@ fn compose_digest(read: usize, total: usize, learned: usize, proposed: usize, wh
         };
     }
     let plural = if read == 1 { "" } else { "s" };
-    let lead = if read < total {
+    let lead = if read == 0 {
+        format!("{} I went over my notes", when.lead())
+    } else if read < total {
         format!("{} I read back over {read} conversation{plural} before you stopped me", when.lead())
     } else {
         format!("{} I read back over {read} conversation{plural}", when.lead())
     };
-    let learn_clause = match learned {
-        0 => "didn't find anything new to learn".to_string(),
-        1 => "learned one thing".to_string(),
-        k => format!("learned {k} things"),
-    };
-    match proposed {
-        0 => format!("{lead}. I {learn_clause}."),
-        1 => format!("{lead}. I {learn_clause}, and there's one change I'd like to make."),
-        k => format!("{lead}. I {learn_clause}, and there are {k} changes I'd like to make."),
+    let count = |n: usize, one: &str, many: &str| if n == 1 { one.to_string() } else { many.replace("{n}", &n.to_string()) };
+    let mut clauses: Vec<String> = Vec::new();
+    match learned {
+        0 => {}
+        1 => clauses.push("learned one thing".to_string()),
+        k => clauses.push(format!("learned {k} things")),
     }
+    if tidy.merged > 0 {
+        clauses.push(count(tidy.merged, "merged one note", "merged {n} notes"));
+    }
+    if tidy.let_go > 0 {
+        clauses.push(count(tidy.let_go, "let one old one go", "let {n} old ones go"));
+    }
+    if tidy.noted > 0 {
+        clauses.push(count(tidy.noted, "found another source for one thing", "found other sources for {n} things"));
+    }
+    if clauses.is_empty() {
+        clauses.push("didn't find anything new to learn".to_string());
+    }
+    let said = match clauses.len() {
+        1 => clauses.remove(0),
+        _ => {
+            let last = clauses.pop().unwrap();
+            format!("{}, and {last}", clauses.join(", "))
+        }
+    };
+    let mut text = match proposed {
+        0 => format!("{lead}. I {said}."),
+        1 => format!("{lead}. I {said}, and there's one change I'd like to make."),
+        k => format!("{lead}. I {said}, and there are {k} changes I'd like to make."),
+    };
+    if tidy.reverted {
+        text.push_str(" I tried a tidy-up, but it made me worse at something, so I put it back.");
+    }
+    text
 }
 
 /// What one run produced: the line the task list shows, and the conversation
@@ -448,24 +563,27 @@ struct RunOutcome {
     /// `USE-7`: the task's condition was judged not to hold, with this probability,
     /// so nothing ran.
     skipped: Option<f32>,
+    /// `SLP-1`: input ended the pass before it was done. The rest stays due, so the
+    /// next quiet moment picks it up instead of waiting a whole period.
+    unfinished: bool,
 }
 
 impl RunOutcome {
     /// A run that never reached a conversation — no engine, no room to work.
     fn bare(summary: impl Into<String>) -> Self {
-        Self { summary: summary.into(), conversation_id: None, skipped: None }
+        Self { summary: summary.into(), conversation_id: None, skipped: None, unfinished: false }
     }
 
     fn skipped(p: f32) -> Self {
         // Worded as an unfitted number, which can only hedge more: the skip does not carry
         // whether the fit was there, and the number is on the row's hover.
-        Self { summary: decide::runif::skipped_note(p, false), conversation_id: None, skipped: Some(p) }
+        Self { summary: decide::runif::skipped_note(p, false), conversation_id: None, skipped: Some(p), unfinished: false }
     }
 }
 
 /// Write one run's bookkeeping onto the job as it is now.
 fn record_run(job: &mut Job, outcome: &RunOutcome, now: i64) {
-    job.next_run_at = now + job.cadence.period_ms();
+    job.next_run_at = if outcome.unfinished { now } else { now + job.cadence.period_ms() };
     let remember = |job: &mut Job, row: JobRun| {
         job.runs.insert(0, row);
         job.runs.truncate(RUNS_KEPT);
@@ -647,7 +765,7 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
     } else {
         text.chars().take(RESULT_CLIP).collect()
     };
-    RunOutcome { summary, conversation_id: Some(conversation_id), skipped: None }
+    RunOutcome { summary, conversation_id: Some(conversation_id), skipped: None, unfinished: false }
 }
 
 /// Open the turn of a headless run in its conversation (`CRD-1`): the prompt,
@@ -692,9 +810,12 @@ pub fn spawn_ticker(app: AppHandle) {
             tokio::time::sleep(TICK).await;
             let Some(db) = app.try_state::<Db>() else { return };
             let now = crate::db::now_ms();
+            // `SLP-1`: the built-in pass is quiet work, so it waits for a quiet app. Your
+            // own tasks run when they are due, as before.
+            let idle = app.try_state::<SchedulerState>().map(|s| s.idle_for(now) >= IDLE_BEFORE_START_MS).unwrap_or(true);
             let due = load_jobs(&db)
                 .into_iter()
-                .find(|j| j.enabled && j.next_run_at <= now)
+                .find(|j| j.enabled && j.next_run_at <= now && (!j.built_in || idle))
                 .map(|j| j.id);
             drop(db);
             if let Some(job_id) = due {
@@ -802,6 +923,13 @@ pub fn delete_scheduler_job_cmd(db: State<'_, Db>, id: String) -> Result<(), Poi
 #[tauri::command]
 pub async fn run_scheduler_job_now_cmd(app: AppHandle, id: String) -> Result<String, PoiesisError> {
     execute_job(&app, &id, true).await.map_err(PoiesisError::Message)
+}
+
+/// The app reports use: `stop` for a key or a click, otherwise "a turn is streaming".
+/// Either holds a daily pass back; only the first ends one in flight.
+#[tauri::command]
+pub fn note_user_input_cmd(sched: State<'_, SchedulerState>, stop: bool) {
+    sched.note_input(stop);
 }
 
 #[tauri::command]
@@ -951,7 +1079,7 @@ mod tests {
         assert_eq!((row.skipped, row.summary.as_str(), row.conversation_id.as_str()), (Some(0.07), "Skipped: the condition did not hold", ""));
 
         // A real run after it moves the last run and has a conversation to open.
-        let real = RunOutcome { summary: "Found v2.4.0".into(), conversation_id: Some("c1".into()), skipped: None };
+        let real = RunOutcome { summary: "Found v2.4.0".into(), conversation_id: Some("c1".into()), skipped: None, unfinished: false };
         record_run(&mut job, &real, 90_000);
         assert_eq!((job.last_run_at, job.last_result.as_deref()), (Some(90_000), Some("Found v2.4.0")));
         assert_eq!(job.runs.len(), 2);
@@ -992,8 +1120,8 @@ mod tests {
     fn only_one_job_runs_at_a_time() {
         let sched = SchedulerState::new();
         let job = seed_nightly_job();
-        let cancel = sched.try_start(&job).expect("first claim succeeds");
-        assert!(sched.try_start(&job).is_none(), "a second claim while one is running must fail");
+        let cancel = sched.try_start(&job, true).expect("first claim succeeds");
+        assert!(sched.try_start(&job, true).is_none(), "a second claim while one is running must fail");
         assert!(sched.status().is_some());
 
         assert!(sched.stop(), "stop cancels the in-progress run");
@@ -1001,7 +1129,7 @@ mod tests {
 
         sched.finish();
         assert!(sched.status().is_none());
-        assert!(sched.try_start(&job).is_some(), "the slot is free again after finish");
+        assert!(sched.try_start(&job, true).is_some(), "the slot is free again after finish");
     }
 
     #[test]
@@ -1027,6 +1155,70 @@ mod tests {
 
         // Nothing was due in the first place: not the same event as being stopped.
         assert!(compose_digest(0, 0, 0, 0, away).contains("didn't find anything new to reflect on"));
+    }
+
+    #[test]
+    fn the_digest_says_what_the_tidy_up_did_and_no_more() {
+        let away = DigestWhen::Away;
+        let bits = TidyBits { merged: 2, let_go: 1, ..Default::default() };
+        assert_eq!(
+            compose_digest_with(3, 3, 1, 0, &bits, away),
+            "While you were away I read back over 3 conversations. I learned one thing, merged 2 notes, and let one old one go."
+        );
+        // Nothing read, but the notes were tidied: not "nothing to reflect on".
+        let only_tidy = compose_digest_with(0, 0, 0, 0, &TidyBits { merged: 1, ..Default::default() }, away);
+        assert_eq!(only_tidy, "While you were away I went over my notes. I merged one note.");
+        // Rows waiting for a yes are changes I'd like to make, not changes made.
+        let waiting = compose_digest_with(2, 2, 0, 3, &TidyBits::default(), away);
+        assert!(waiting.contains("didn't find anything new to learn") && waiting.contains("3 changes I'd like to make"));
+        // A tidy-up the golden check undid is said, and claims no merge.
+        let reverted = compose_digest_with(1, 1, 0, 0, &TidyBits { reverted: true, ..Default::default() }, away);
+        assert!(reverted.ends_with("so I put it back.") && !reverted.contains("merged"));
+    }
+
+    #[test]
+    fn input_ends_a_pass_that_started_itself_and_never_one_a_person_started() {
+        let job = |built_in: bool| Job { built_in, ..seed_nightly_job() };
+        let sched = SchedulerState::new();
+        let cancel = sched.try_start(&job(true), false).unwrap();
+        sched.note_input(false);
+        assert!(!cancel.is_cancelled(), "a streaming turn holds a pass back but does not end one in flight");
+        sched.note_input(true);
+        assert!(cancel.is_cancelled(), "a key press ends it");
+        sched.finish();
+
+        let manual = sched.try_start(&job(true), true).unwrap();
+        sched.note_input(true);
+        assert!(!manual.is_cancelled(), "Run now is not ended by typing elsewhere");
+        sched.finish();
+
+        let custom = sched.try_start(&Job { built_in: false, ..seed_nightly_job() }, false).unwrap();
+        sched.note_input(true);
+        assert!(!custom.is_cancelled(), "your own tasks are never stopped by input");
+    }
+
+    #[test]
+    fn the_pass_waits_for_a_quiet_app_and_a_stopped_pass_is_due_again_at_once() {
+        let sched = SchedulerState::new();
+        assert!(sched.idle_for(crate::db::now_ms()) < IDLE_BEFORE_START_MS, "launching counts as use");
+        assert!(sched.idle_for(crate::db::now_ms() + IDLE_BEFORE_START_MS + 1) >= IDLE_BEFORE_START_MS);
+
+        let mut job = seed_nightly_job();
+        record_run(&mut job, &RunOutcome { unfinished: true, ..RunOutcome::bare("2 conversations") }, 1_000);
+        assert_eq!(job.next_run_at, 1_000, "the rest stays due");
+        record_run(&mut job, &RunOutcome::bare("done"), 1_000);
+        assert_eq!(job.next_run_at, 1_000 + Cadence::Daily.period_ms());
+    }
+
+    #[test]
+    fn a_digest_that_applied_changes_offers_undo_until_it_is_used() {
+        let db = Db::open_in_memory().unwrap();
+        save_digest_with(&db, "While you were away I merged one note.", true);
+        assert!(load_digest(&db).unwrap().undoable);
+        clear_digest_undo(&db);
+        assert!(!load_digest(&db).unwrap().undoable);
+        save_digest(&db, "x");
+        assert!(!load_digest(&db).unwrap().undoable);
     }
 
     #[test]

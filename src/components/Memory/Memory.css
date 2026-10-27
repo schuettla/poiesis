@@ -142,7 +142,7 @@
 }
 .memory-proposal-kind {
   flex: none;
-  width: 46px;
+  width: 52px;
   font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
   color: var(--ink-faint);

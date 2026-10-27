@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useAppStore, useLiveItems } from "./lib/store";
 import { inTauri, voiceSettings } from "./lib/api";
+import { useReportUse } from "./lib/useReportUse";
 import { hideVoiceSurface, openVoice } from "./lib/voice/controller";
 import { getVoiceHotkey, matchesHotkey, setVoiceHotkey } from "./lib/voice/hotkey";
 import { useVoiceStore } from "./lib/voice/voiceStore";
@@ -35,6 +36,9 @@ export default function App() {
   useEffect(() => {
     bootstrap();
   }, [bootstrap]);
+
+  // `SLP-1`: the daily tidy-up starts when the app has been quiet, and stops on a key.
+  useReportUse();
 
   // `UPD-6`: the arrival receipt and the startup update check. Waits for
   // bootstrap, and the check itself waits a few seconds more, so neither

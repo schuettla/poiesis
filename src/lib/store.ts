@@ -147,9 +147,10 @@ export const AUTONOMY_CLASSES: {
   {
     id: "consolidate",
     label: "Tidying up my memory",
-    blurb: "Merging and pruning what I remember. You review the whole tidy-up.",
+    blurb:
+      "Merging duplicate notes, letting unused ones go, and keeping what I saw twice. Ask first: you review the tidy-up. Auto: my daily pass does it, with Undo.",
     fallback: "ask",
-    rungs: ["ask", "off"],
+    rungs: ["auto", "ask", "off"],
   },
   {
     id: "email_send",
@@ -6092,6 +6093,13 @@ export function applyReflecting(s: AppState, e: api.ReflectingEvent): Partial<Ap
   };
 }
 
+/** `SLP-1`: the tidy-up started or ended. A running turn keeps the mark `active`. */
+export function applyTending(s: AppState, on: boolean): Partial<AppState> {
+  if (on) return s.busy ? {} : { presence: "tending" as const };
+  if (s.presence !== "tending") return {};
+  return { presence: s.busy ? "active" : s.reflectingIds.length ? "reflecting" : "idle" };
+}
+
 /** `CPX-2`: tending to myself for a moment, then back to whatever was
  * underneath. Replaces `active` while it lasts and does not layer over it. */
 function tendBriefly(set: StoreSet) {
@@ -7218,6 +7226,15 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
   // `FIX-1`: every reflection, including the launch catch-up and the daily job.
   api.onAppEvent<api.ReflectingEvent>("poiesis-reflecting", (e) => {
     set((s) => applyReflecting(s, e));
+  });
+  // `SLP-1`: the tidy-up (the daily pass, or Tidy up) is going; the mark is `tending`
+  // while it is, and falls back to whatever is underneath when it ends.
+  api.onAppEvent<api.TendingEvent>("poiesis-tending", (e) => {
+    set((s) => applyTending(s, e.on));
+    if (!e.on) {
+      void get().refreshMemoryContext();
+      void get().refreshChangeProposals();
+    }
   });
   // TTL-2: short-lived facts let go, at startup or overnight.
   api.onAppEvent<api.ExpirySweptEvent>("poiesis-expiry-swept", (e) => {

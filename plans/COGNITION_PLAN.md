@@ -13,7 +13,7 @@ commit per phase.
 | 1 - The conversation becomes the episode | done (see notes) | 2026-10-27 |
 | 2 - Recall you can see | done (see notes) | 2026-10-27 |
 | 3 - Beliefs with evidence | done (see notes) | 2026-10-27 |
-| 4 - The daily tidy-up | not started | |
+| 4 - The daily tidy-up | done (see notes) | 2026-10-27 |
 | 5 - Lessons that fire, and rehearsal | not started | |
 | 6 - The self-improvement loop | not started | |
 | 7 - Intentions | not started | |
@@ -295,6 +295,87 @@ commit per phase.
   The write-site wiring itself (the `memory` tool and `remember_fact_cmd`) has no
   unit test, because both need a full tool context or app state; it compiles and
   is a thin layer over `save_checked`.
+
+### Phase 4 notes
+
+- **SLP-1, the code.** New `commands/tidy.rs` holds the pass. Its rules need no
+  model: **promotes** a held candidate (Phase 1 left every candidate without hard
+  evidence as `held` on its episode) once the same thing is seen in 2 or more
+  conversations, matched with the wording check reflection already uses
+  (`lessons_look_alike`), from a pool reaching back 180 days; a group that matches
+  an existing lesson only adds the sources it lacks. **Merges** duplicate notes
+  (facts by `belief::relation == Same`, lessons by the wording check): the older
+  survives, the newer folds in, and its evidence joins the survivor. **Lets go** of
+  an item with 5 or more chances and usefulness under 0.3 and, for lessons, of one
+  with no chance in 120 days. `Consolidation` gained `promotes`, `contests`,
+  `lesson_deletes` and a `collection` on merges; `Consolidation::absorb` joins a
+  second pass to the pending one without doubling a row; `apply_proposal` makes
+  the changes and counts what really happened (`Applied`), which is all the digest
+  may claim. Applying with the snapshot and the `GLD-2` check moved into
+  `apply_guarded`, shared by the Apply button and the daily pass; it keeps the
+  snapshot name for Undo.
+- **One tidy-up.** `consolidate_memory_cmd` (Tidy up and `/tidy`) now runs the same
+  rules over everything, then the model's own look (the old prompt, which now also
+  asks for sets of notes that cannot all be true: `contests`; names it invents are
+  dropped), then skill drafting. With no model loaded it still returns what the
+  rules found. The daily job's step 3 runs the rules over up to 5 conversations
+  that no tidy-up has folded in (`consolidated_at`), and a group is promoted only if
+  one of those is in it. What `consolidate` allows decides the landing: `ask`
+  adds the rows to the one pending proposal (Memory tab), `auto` applies them with
+  snapshot and golden check, `off` skips the step. `consolidate` now offers all
+  three rungs (default still `ask`). The Memory tab's pending block shows every kind
+  of row (keep, merge, edit, unsure, drop, let go), each with **Not this one**
+  (`drop_pending_row_cmd`).
+- **Idle start, stop on input.** The app reports use through `useReportUse`
+  (`note_user_input_cmd`): a key or click at most every 2 s, and a beat every 30 s
+  while a turn streams. A due built-in pass waits until the app has been quiet for
+  2 minutes (launching counts as use); your own tasks run when due, as before. A
+  key or click ends a pass that started by itself after the item in flight (the
+  reflection call or the stage in progress); it never ends one started with Run now.
+  A pass ended that way is due again at once, so the next quiet moment picks up the
+  rest instead of waiting a day. `poiesis-tending {on}` (from the pass and from Tidy
+  up) moves the mark to `tending`, and back to whatever is underneath.
+- **True words.** The built-in job is "Daily tidy-up", with the toggle "Do this
+  once a day" and the plan's description. The id `nightly-reflection` stays; a job
+  stored under the old name is shown under the new one.
+- **SLP-2.** `skill_groups`: finished (`done`) conversations of one known task kind
+  whose "what worked" lines read alike (word overlap 0.4), 2 or more, not used
+  before. One draft per pass, written by the local model with the `/skillify` ask
+  put to what they did, and filed as a `skill` proposal (the `skills` rung is `ask`,
+  so a skill never keeps itself); a name that is already a skill or already waiting,
+  an empty draft or one over 8000 characters is dropped. The source conversations
+  are remembered, so they do not draft again.
+- **SLP-3.** The digest is composed from the pass's own counts: lessons learned
+  (reflection plus promotions), notes merged, old ones let go, lessons that gained
+  another source, rows and skills waiting for a yes ("changes I'd like to make"), and
+  a tidy-up the golden check undid ("so I put it back"). It says "before you stopped
+  me" if input ended the reading. Tasks shows **Show me** (Self, Memory tab) and, when
+  the pass applied changes on its own, **Undo** (`undo_last_tidy_cmd` restores the
+  snapshot).
+- **Deviations.** (a) `CandidateGroup` and `BeliefRelation` are not decision
+  purposes yet; the rules fallback runs (as in Phase 3). (b) `contests` come only
+  from the model's look during Tidy up. The daily pass finds none: two notes that
+  differ in wording cannot be told apart from an addition by rules, and Phase 3
+  already catches them when they are written. (c) The model's edit/merge look runs
+  only on demand, not in the daily pass: it reads every note, and the plan feeds the
+  daily pass only the new conversations. (d) **Default on is not changed.** The plan
+  makes "on by default" a decision for Erich; the seeded job is still off, so a
+  fresh install does nothing until "Do this once a day" is ticked. (e) A fact is
+  never let go for idleness, only for testing badly: most facts are rarely
+  surfaced by design. (f) "Recent changes" has no Undo for the pass's own changes;
+  the digest's Undo restores the whole snapshot.
+- **Checks.** `vitest`: all pass except the old `ThoughtStrip` failure. `tsc`: only
+  the old `AgentRun.tsx` error. `cargo test --lib`: 1610 pass; the 7 stable failures
+  and 1 flaky `db` fork test fail as before; clippy shows nothing in the touched
+  files. The prompt golden did not move.
+- **Felt check not run here.** "Three conversations with the same small
+  correction, leave the app idle: the digest says one thing was learned, and the
+  Memory tab shows one belief with 3 evidence links" needs the app and a model. The
+  pipeline after reflection is covered by
+  `rules_find_a_promotion_a_merge_and_a_forget_in_a_real_store` (three held
+  candidates become one lesson with three sources, a duplicate folds in, nothing is
+  left to say the next night). The idle gate, stop on input and the ticker are
+  covered at the unit level (`SchedulerState`), not with a running app.
 
 **What v2 changes.** v1 described a second memory system beside the one that
 exists: a new `episodes` table, a new `memory_uses` table, a new

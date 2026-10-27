@@ -231,6 +231,23 @@ impl MemoryStore {
         groups
     }
 
+    /// Mark entries as disputed, both still in the prompt with the hedge marker. An
+    /// entry that is gone or already replaced is skipped. Returns how many were marked.
+    pub fn mark_contested(&self, db: &Db, names: &[String]) -> usize {
+        let mut marked = 0;
+        for name in names {
+            let live = self.read(name).is_some_and(|f| !f.is_superseded());
+            if live && self.rewrite(FACTS, name, |e| e.status = Some("contested".into())).is_ok() {
+                marked += 1;
+            }
+        }
+        if marked > 0 {
+            self.write_index();
+            self.sync_fts(db);
+        }
+        marked
+    }
+
     /// The person decided about a contested group. `keep` is the side that stays;
     /// with `both` every side stays, each as true only in some situations (topical).
     pub fn resolve_contest(&self, db: &Db, keep: &str, both: bool) -> Result<(), String> {

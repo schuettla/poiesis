@@ -31,11 +31,26 @@ export default function Tasks() {
   const updateJob = useAppStore((s) => s.updateScheduledJob);
   const deleteJob = useAppStore((s) => s.deleteScheduledJob);
   const runNow = useAppStore((s) => s.runScheduledJobNow);
+  const openSelf = useAppStore((s) => s.openSelf);
+  const refreshMemoryContext = useAppStore((s) => s.refreshMemoryContext);
   const draft = useAppStore((s) => s.taskDraft);
   const clearDraft = useAppStore((s) => s.clearTaskDraft);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [runNote, setRunNote] = useState<string | null>(null);
+  const [undoError, setUndoError] = useState("");
+
+  /** `SLP-3`: take back what the last tidy-up did on its own. */
+  async function undoTidy() {
+    setUndoError("");
+    try {
+      await api.undoLastTidy();
+      await refreshMemoryContext();
+      await refreshScheduler();
+    } catch (e) {
+      setUndoError(String(e));
+    }
+  }
 
   // Opening this section is what marks the digest read (SCH-UI-2) — no button,
   // and nothing nags if it's never opened. Sequenced so a slow refresh can't
@@ -100,6 +115,18 @@ export default function Tasks() {
       {digest && (
         <div className="self-block self-digest">
           <p className="self-line self-note">{digest.text}</p>
+          <div className="setting-actions">
+            {/* `SLP-3`: Show me opens the Memory tab on what changed. */}
+            <button className="btn-text" onClick={() => openSelf("memory")}>
+              Show me
+            </button>
+            {digest.undoable && (
+              <button className="btn-text" onClick={undoTidy}>
+                Undo
+              </button>
+            )}
+          </div>
+          {undoError && <p className="self-line task-meta">{undoError}</p>}
         </div>
       )}
 
@@ -109,10 +136,10 @@ export default function Tasks() {
 
       {nightly && (
         <section className="self-block">
-          <p className="self-subhead">Nightly reflection</p>
+          <p className="self-subhead">Daily tidy-up</p>
           <p className="self-line">
-            Once a day, read back over finished conversations, learn what I'm sure
-            enough of, and leave a short summary here in the morning.
+            Once a day, while you're not using me, I go over finished conversations,
+            keep what I learned, merge duplicate notes and let unused ones go.
           </p>
           <div className="setting-actions">
             <label className="toggle-line">
@@ -121,7 +148,7 @@ export default function Tasks() {
                 checked={nightly.enabled}
                 onChange={(e) => toggleNightly(e.target.checked)}
               />
-              <span>Run it nightly</span>
+              <span>Do this once a day</span>
             </label>
             <button
               className="btn-secondary"

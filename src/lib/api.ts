@@ -1323,7 +1323,31 @@ export interface ChangeProposal {
 export interface Consolidation {
   deletes: string[];
   edits: { name: string; text: string }[];
-  merges: { keep: string; drop: string[]; text: string }[];
+  merges: { keep: string; drop: string[]; text: string; collection?: string | null }[];
+  /** `SLP-1`: lessons to let go. */
+  lesson_deletes?: string[];
+  /** `SLP-1`: candidates seen in 2 or more conversations, to be believed. */
+  promotes?: { name: string; description: string; body: string; evidence: string[]; into?: string | null }[];
+  /** `SLP-1`: sets of notes that disagree. */
+  contests?: string[][];
+}
+
+/** `Not this one`: take a single row out of the pending tidy-up. `kind` is the row's
+ * kind (`drop`, `let-go`, `edit`, `merge`, `promote`, `contest`) and `key` its name
+ * (a contest's names joined with `|`). Resolves with what is left, if anything. */
+export const dropPendingRow = (kind: string, key: string) =>
+  invoke<Consolidation | null>("drop_pending_row_cmd", { kind, key });
+
+/** The digest's Undo: put the memory back as it was before the last tidy-up. */
+export const undoLastTidy = () => invoke<void>("undo_last_tidy_cmd");
+
+/** The app is in use. `stop` for a key or a click (ends a daily pass that began on
+ * its own), otherwise a turn is streaming (only holds one back). */
+export const noteUserInput = (stop: boolean) => invoke<void>("note_user_input_cmd", { stop });
+
+/** `SLP-1`: I am tidying my head (the mark's `tending` state). */
+export interface TendingEvent {
+  on: boolean;
 }
 
 export const getMemoryContext = () => invoke<MemoryContext>("get_memory_context_cmd");
@@ -3429,6 +3453,8 @@ export interface Digest {
   text: string;
   created_at: number;
   unread: boolean;
+  /** The pass applied changes on its own and the snapshot before them is there. */
+  undoable?: boolean;
 }
 
 export const listScheduledJobs = () => invoke<ScheduledJob[]>("list_scheduler_jobs_cmd");

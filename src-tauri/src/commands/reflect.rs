@@ -874,7 +874,7 @@ fn parse_critic(raw: &str) -> CriticVerdict {
 /// overlap (Jaccard) between "name description" pairs. Good enough to catch
 /// "the same lesson, phrased differently" without needing an embedder loaded,
 /// which reflection has no access to.
-fn lessons_look_alike(name_a: &str, desc_a: &str, name_b: &str, desc_b: &str) -> bool {
+pub(crate) fn lessons_look_alike(name_a: &str, desc_a: &str, name_b: &str, desc_b: &str) -> bool {
     fn words(s: &str) -> std::collections::HashSet<String> {
         s.to_lowercase()
             .split(|c: char| !c.is_alphanumeric())
@@ -893,7 +893,7 @@ fn lessons_look_alike(name_a: &str, desc_a: &str, name_b: &str, desc_b: &str) ->
 }
 
 /// Strip a ```json fence if the model wrapped its answer in one.
-fn strip_fence(s: &str) -> &str {
+pub(crate) fn strip_fence(s: &str) -> &str {
     let s = s.trim();
     let Some(rest) = s.strip_prefix("```") else { return s };
     let rest = rest.strip_prefix("json").unwrap_or(rest);

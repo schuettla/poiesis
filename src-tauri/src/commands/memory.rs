@@ -23,7 +23,7 @@ use crate::PoiesisError;
 type Cmd<T> = Result<T, PoiesisError>;
 
 /// Settings key holding a consolidation the user hasn't answered yet.
-const PENDING_CONSOLIDATION: &str = "memory.pending_consolidation";
+pub(crate) const PENDING_CONSOLIDATION: &str = "memory.pending_consolidation";
 /// `PRO-9`: the snapshot name to undo the most recent automatic or manual
 /// rebuild. Overwritten by every rebuild; a plain setting is enough for one
 /// level of undo, matching every other memory-write toast in this app.
@@ -1204,8 +1204,9 @@ pub async fn resolve_change_proposal_cmd(
 
 // ---- consolidation (MEM-5) ----
 
-/// A cleanup the model proposes over the whole fact set. Never applied without
-/// the user pressing Apply.
+/// A cleanup of the memory set: what the daily pass found by rules, and what the
+/// model proposed when asked. Under `ask` it waits for the user (`Apply all`, or
+/// `Not this one` per row); under `auto` it is applied at once with a snapshot.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Consolidation {
     #[serde(default)]
@@ -1214,6 +1215,17 @@ pub struct Consolidation {
     pub edits: Vec<ConsolidationEdit>,
     #[serde(default)]
     pub merges: Vec<ConsolidationMerge>,
+    /// `SLP-1`: lessons to let go (to the trash): they tested badly or have had no
+    /// chance to help for a long time.
+    #[serde(default)]
+    pub lesson_deletes: Vec<String>,
+    /// `SLP-1`: held candidates seen in more than one conversation, now believed.
+    #[serde(default)]
+    pub promotes: Vec<ConsolidationPromote>,
+    /// `SLP-1`: sets of notes that disagree; each is marked contested (still used,
+    /// with a hedge) until the person decides under Unsure.
+    #[serde(default)]
+    pub contests: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1226,29 +1238,211 @@ pub struct ConsolidationEdit {
 pub struct ConsolidationMerge {
     /// The entry that survives, rewritten with `text`.
     pub keep: String,
-    /// Entries folded into `keep` and moved to trash.
+    /// Entries folded into `keep` and moved to trash. Their evidence is joined
+    /// onto `keep`.
     pub drop: Vec<String>,
     pub text: String,
+    /// `facts` (the default) or `lessons`.
+    #[serde(default)]
+    pub collection: Option<String>,
 }
 
-/// Ask the model to propose a tidy-up of the memory set. Returns the proposal
-/// and stores it as a pending setting; **nothing is changed on disk here.**
-#[tauri::command]
-pub async fn consolidate_memory_cmd(
-    mgr: State<'_, RuntimeManager>,
-    db: State<'_, Db>,
-    mem: State<'_, MemoryStore>,
+/// A candidate seen in 2 or more conversations. With `into` it only adds those
+/// conversations as evidence to a lesson that exists; without, it becomes a lesson.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsolidationPromote {
+    pub name: String,
+    pub description: String,
+    pub body: String,
+    #[serde(default)]
+    pub cue: Option<String>,
+    pub evidence: Vec<String>,
+    #[serde(default)]
+    pub into: Option<String>,
+    /// `(conversation id, candidate name)` of each candidate folded in, so the
+    /// episode rows can say where they got to.
+    #[serde(default)]
+    pub members: Vec<(String, String)>,
+}
+
+/// What applying a `Consolidation` actually did: the digest only claims this.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Applied {
+    /// Lessons newly believed.
+    pub promoted: usize,
+    /// Existing lessons that gained another source.
+    pub noted: usize,
+    /// Notes folded into another.
+    pub merged: usize,
+    /// Notes or lessons moved to the trash.
+    pub let_go: usize,
+    pub edited: usize,
+    pub contested: usize,
+}
+
+impl Applied {
+    pub fn total(&self) -> usize {
+        self.promoted + self.noted + self.merged + self.let_go + self.edited + self.contested
+    }
+}
+
+impl Consolidation {
+    pub fn is_empty(&self) -> bool {
+        self.deletes.is_empty()
+            && self.edits.is_empty()
+            && self.merges.is_empty()
+            && self.lesson_deletes.is_empty()
+            && self.promotes.is_empty()
+            && self.contests.is_empty()
+    }
+
+    /// How many rows the proposal has, for the digest's "N changes waiting".
+    pub fn rows(&self) -> usize {
+        self.deletes.len()
+            + self.edits.len()
+            + self.merges.len()
+            + self.lesson_deletes.len()
+            + self.promotes.len()
+            + self.contests.len()
+    }
+
+    /// Add another proposal's rows to this one, leaving out any row about a name
+    /// this one already covers. A second pass never doubles a row.
+    pub fn absorb(&mut self, other: Consolidation) {
+        fn add<T>(into: &mut Vec<T>, more: Vec<T>, same: impl Fn(&T, &T) -> bool) {
+            for m in more {
+                if !into.iter().any(|x| same(x, &m)) {
+                    into.push(m);
+                }
+            }
+        }
+        add(&mut self.deletes, other.deletes, |a, b| a == b);
+        add(&mut self.lesson_deletes, other.lesson_deletes, |a, b| a == b);
+        add(&mut self.edits, other.edits, |a, b| a.name == b.name);
+        add(&mut self.merges, other.merges, |a, b| a.keep == b.keep);
+        add(&mut self.promotes, other.promotes, |a, b| a.name == b.name);
+        add(&mut self.contests, other.contests, |a, b| a == b);
+    }
+
+    /// `Not this one`: take a single row out. `kind` is the row's kind and `key` its
+    /// name (a contest's key is its names joined with `|`). Returns whether a row went.
+    pub fn remove_row(&mut self, kind: &str, key: &str) -> bool {
+        let before = self.rows();
+        match kind {
+            "drop" => self.deletes.retain(|n| n != key),
+            "let-go" => self.lesson_deletes.retain(|n| n != key),
+            "edit" => self.edits.retain(|e| e.name != key),
+            "merge" => self.merges.retain(|m| m.keep != key),
+            "promote" => self.promotes.retain(|p| p.name != key),
+            "contest" => self.contests.retain(|c| c.join("|") != key),
+            _ => {}
+        }
+        self.rows() != before
+    }
+}
+
+/// Make the changes of a proposal on disk and count what really happened. The
+/// caller wraps this in a snapshot and the golden check.
+pub(crate) fn apply_proposal(db: &Db, mem: &MemoryStore, proposal: &Consolidation) -> Applied {
+    let mut done = Applied::default();
+    for edit in &proposal.edits {
+        if mem.update(db, &edit.name, None, &edit.text).is_ok() {
+            done.edited += 1;
+            let _ = db.log_activity(None, "memory", &format!("tidied {}", edit.name));
+        }
+    }
+    for merge in &proposal.merges {
+        let collection = merge.collection.as_deref().unwrap_or(FACTS);
+        // Only drop the sources once the target has actually absorbed them. A model
+        // that names a keep that doesn't exist must not delete facts into a merge that
+        // never happened.
+        if mem.update_in(db, collection, &merge.keep, None, &merge.text).is_err() {
+            continue;
+        }
+        let _ = db.log_activity(None, "memory", &format!("merged into {}", merge.keep));
+        for name in &merge.drop {
+            if name == &merge.keep {
+                continue; // never trash the entry we just merged into
+            }
+            // The sources of what is folded in stay with what remains.
+            if let Some(dropped) = mem.read_in(collection, name) {
+                for source in &dropped.evidence {
+                    let _ = mem.add_evidence(db, collection, &merge.keep, source);
+                }
+            }
+            if mem.forget_in(db, collection, name).is_ok() {
+                done.merged += 1;
+                let _ = db.log_activity(None, "memory", &format!("merged away {name}"));
+            }
+        }
+    }
+    for name in &proposal.deletes {
+        if mem.forget(db, name).is_ok() {
+            done.let_go += 1;
+            let _ = db.log_activity(None, "memory", &format!("dropped {name}"));
+        }
+    }
+    for name in &proposal.lesson_deletes {
+        if mem.forget_lesson(db, name).is_ok() {
+            done.let_go += 1;
+            let _ = db.log_activity(None, "reflect", &format!("pruned an old lesson: {name}"));
+        }
+    }
+    for p in &proposal.promotes {
+        match &p.into {
+            Some(into) => {
+                let had = mem.read_in(LESSONS, into).map(|l| l.evidence.len());
+                for source in &p.evidence {
+                    let _ = mem.add_evidence(db, LESSONS, into, source);
+                }
+                let grew = matches!((had, mem.read_in(LESSONS, into)), (Some(a), Some(l)) if l.evidence.len() > a);
+                if grew {
+                    done.noted += 1;
+                }
+                if had.is_some() {
+                    crate::commands::tidy::mark_candidates(db, &p.members, "promoted");
+                }
+            }
+            None => {
+                let lesson = Fact {
+                    name: p.name.clone(),
+                    description: p.description.clone(),
+                    kind: "lesson".into(),
+                    source_conversation: p.evidence.first().cloned(),
+                    body: p.body.clone(),
+                    cue: p.cue.clone().filter(|c| !c.is_empty()),
+                    evidence: p.evidence.clone(),
+                    ..Default::default()
+                };
+                if mem.save_lesson(db, &lesson).is_ok() {
+                    done.promoted += 1;
+                    crate::commands::tidy::mark_candidates(db, &p.members, "promoted");
+                    let _ = db.log_activity(None, "reflect", &format!("learned {}", p.name));
+                }
+            }
+        }
+    }
+    for names in &proposal.contests {
+        let marked = mem.mark_contested(db, names);
+        if marked > 0 {
+            done.contested += 1;
+            let _ = db.log_activity(None, "memory", &format!("contest {}", names.join(" and ")));
+        }
+    }
+    done
+}
+
+/// The model's part of a tidy-up: tighten wording, merge duplicates it can tell
+/// apart by meaning, and name notes that disagree. It reads every fact and lesson,
+/// so it only runs when the person asks (Tidy up, `/tidy`), never in the daily pass.
+async fn model_proposal(
+    mgr: &RuntimeManager,
+    db: &Db,
+    mem: &MemoryStore,
     target: Option<ChatTarget>,
 ) -> Cmd<Consolidation> {
-    // AUT-1: tidying up rewrites and drops entries wholesale, so `off` has to
-    // stop it at the source — not merely hide the button.
-    if crate::autonomy::autonomy_gate(&db, "consolidate") == crate::autonomy::Rung::Off {
-        return Err(PoiesisError::Message(
-            "Tidying up my memory is turned off in my Self panel.".into(),
-        ));
-    }
     let target = target.unwrap_or_default();
-    let endpoint = match build_remote_endpoint(&db, &target).map_err(PoiesisError::Message)? {
+    let endpoint = match build_remote_endpoint(db, &target).map_err(PoiesisError::Message)? {
         Some(ep) => ep,
         None => {
             let Some((base_url, token)) = mgr.engine_endpoint().await else {
@@ -1278,8 +1472,10 @@ pub async fn consolidate_memory_cmd(
     let prompt = format!(
         "You maintain a personal memory file set. Propose a cleanup as JSON only:\n\
          {{\"deletes\":[\"name\"],\"edits\":[{{\"name\":\"...\",\"text\":\"...\"}}],\
-         \"merges\":[{{\"keep\":\"name\",\"drop\":[\"name\"],\"text\":\"merged body\"}}]}}\n\
-         Merge duplicates, drop facts superseded by newer ones, tighten wording.\n\
+         \"merges\":[{{\"keep\":\"name\",\"drop\":[\"name\"],\"text\":\"merged body\"}}],\
+         \"contests\":[[\"name\",\"name\"]]}}\n\
+         Merge duplicates, drop facts superseded by newer ones, tighten wording. \
+         List in contests every set of notes that cannot both be true.\n\
          Propose nothing you are unsure about.\nFacts:\n{listing}"
     );
     let msgs = vec![
@@ -1299,13 +1495,66 @@ pub async fn consolidate_memory_cmd(
     };
 
     // Parse strictly. A model that returns something we can't read proposes
-    // nothing — guessing at its intent is exactly the wrong move here.
-    let proposal: Consolidation =
-        serde_json::from_str(strip_fence(&raw)).unwrap_or_default();
-
-    let json = serde_json::to_string(&proposal).map_err(err)?;
-    db.set_setting(PENDING_CONSOLIDATION, &json).map_err(err)?;
+    // nothing — guessing at its intent is exactly the wrong move here. Names the
+    // model made up are dropped: a row about nothing on disk could not be applied.
+    let mut proposal: Consolidation = serde_json::from_str(strip_fence(&raw)).unwrap_or_default();
+    let known: std::collections::HashSet<&str> = entries.iter().map(|f| f.name.as_str()).collect();
+    proposal.promotes.clear();
+    proposal.lesson_deletes.clear();
+    proposal.contests.retain(|c| c.len() >= 2 && c.iter().all(|n| known.contains(n.as_str())));
     Ok(proposal)
+}
+
+/// `SLP-1`: Tidy up and `/tidy`. The same pass the daily job runs, over everything
+/// instead of only the new conversations, plus the model's own look at the notes.
+/// Returns the proposal and keeps it pending; **nothing is changed on disk here**
+/// (`apply_consolidation_cmd` does that, after a yes). Skills worth keeping are
+/// proposed on the Lessons tab as they are in the daily pass.
+#[tauri::command]
+pub async fn consolidate_memory_cmd(
+    mgr: State<'_, RuntimeManager>,
+    db: State<'_, Db>,
+    mem: State<'_, MemoryStore>,
+    app: tauri::AppHandle,
+    target: Option<ChatTarget>,
+) -> Cmd<Consolidation> {
+    use tauri::Emitter;
+
+    // AUT-1: tidying up rewrites and drops entries wholesale, so `off` has to
+    // stop it at the source — not merely hide the button.
+    if crate::autonomy::autonomy_gate(&db, "consolidate") == crate::autonomy::Rung::Off {
+        return Err(PoiesisError::Message(
+            "Tidying up my memory is turned off in my Self panel.".into(),
+        ));
+    }
+    let _ = app.emit("poiesis-tending", serde_json::json!({ "on": true }));
+    let result = tidy_everything(&mgr, &db, &mem, target).await;
+    let _ = app.emit("poiesis-tending", serde_json::json!({ "on": false }));
+    result
+}
+
+async fn tidy_everything(
+    mgr: &RuntimeManager,
+    db: &Db,
+    mem: &MemoryStore,
+    target: Option<ChatTarget>,
+) -> Cmd<Consolidation> {
+    let mut proposal = crate::commands::tidy::rules_proposal(db, mem, crate::commands::tidy::Reach::Everything);
+    match model_proposal(mgr, db, mem, target).await {
+        Ok(model) => proposal.absorb(model),
+        // The rules found something: the person still gets it, without the model's look.
+        Err(_) if !proposal.is_empty() => {}
+        Err(e) => return Err(e),
+    }
+    crate::commands::tidy::propose_skills(mgr, db, mgr.engine_endpoint().await).await;
+    crate::commands::tidy::keep_pending(db, &proposal);
+    Ok(db_pending(db).unwrap_or(proposal))
+}
+
+/// The pending proposal, if there is one.
+pub(crate) fn db_pending(db: &Db) -> Option<Consolidation> {
+    let raw = db.get_setting(PENDING_CONSOLIDATION).ok().flatten()?;
+    serde_json::from_str(&raw).ok()
 }
 
 /// Strip a ```json fence if the model wrapped its answer in one.
@@ -1324,21 +1573,69 @@ pub fn get_pending_consolidation_cmd(db: State<'_, Db>) -> Cmd<Option<Consolidat
     Ok(serde_json::from_str(&raw).ok())
 }
 
-/// Apply or discard the pending consolidation. Applying snapshots the whole
-/// memory folder first, so a bad tidy-up is always recoverable — and
-/// (`GLD-2`) is checked against the golden set immediately after; a
-/// confirmed regression reverts to that same snapshot automatically.
+/// Apply a proposal to the self: snapshot first, then the changes, then (`GLD-2`)
+/// a check against the golden set that reverts to the snapshot on a confirmed
+/// regression. Returns what was done and how many golden checks it made worse.
+/// The snapshot's name is kept so the digest's Undo can put it back.
+pub(crate) async fn apply_guarded(
+    app: &tauri::AppHandle,
+    proposal: &Consolidation,
+    target: Option<&ChatTarget>,
+) -> Result<(Applied, Option<usize>), String> {
+    use tauri::{Emitter, Manager};
+    let db = app.state::<Db>();
+    let mem = app.state::<MemoryStore>();
+    let mgr = app.state::<RuntimeManager>();
+    let snapshot_name: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    let applied: std::sync::Mutex<Applied> = std::sync::Mutex::new(Applied::default());
+
+    let regressed = crate::agent::golden::guard_self_change(
+        &mgr.client,
+        &mgr,
+        &db,
+        &mem,
+        target,
+        || {
+            let name = mem.snapshot()?;
+            *snapshot_name.lock().unwrap() = name;
+            *applied.lock().unwrap() = apply_proposal(&db, &mem, proposal);
+            Ok(())
+        },
+        || {
+            let name = snapshot_name.lock().unwrap().clone();
+            mem.restore_snapshot(&db, &name)
+        },
+    )
+    .await?;
+
+    if let Some(n) = regressed {
+        let _ = db.log_activity(
+            None,
+            "memory",
+            &format!("a tidy-up made me worse at {n} thing(s) — I put it back"),
+        );
+        let _ = app.emit("poiesis-golden-reverted", serde_json::json!({ "count": n }));
+        return Ok((Applied::default(), Some(n)));
+    }
+    let name = snapshot_name.lock().unwrap().clone();
+    if !name.is_empty() {
+        let _ = db.set_setting(LAST_TIDY_SNAPSHOT, &name);
+    }
+    let done = *applied.lock().unwrap();
+    Ok((done, None))
+}
+
+/// The snapshot taken before the last applied tidy-up, for the digest's Undo.
+pub(crate) const LAST_TIDY_SNAPSHOT: &str = "tidy.last_snapshot";
+
+/// Apply or discard the pending consolidation.
 #[tauri::command]
 pub async fn apply_consolidation_cmd(
     db: State<'_, Db>,
-    mem: State<'_, MemoryStore>,
-    mgr: State<'_, RuntimeManager>,
     app: tauri::AppHandle,
     accept: bool,
     target: Option<ChatTarget>,
 ) -> Cmd<()> {
-    use tauri::Emitter;
-
     let Some(raw) = db.get_setting(PENDING_CONSOLIDATION).map_err(err)? else {
         return Ok(());
     };
@@ -1357,64 +1654,31 @@ pub async fn apply_consolidation_cmd(
     }
 
     let proposal: Consolidation = serde_json::from_str(&raw).map_err(err)?;
-    let snapshot_name: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
-
-    let regressed = crate::agent::golden::guard_self_change(
-        &mgr.client,
-        &mgr,
-        &db,
-        &mem,
-        target.as_ref(),
-        || {
-            let name = mem.snapshot()?;
-            *snapshot_name.lock().unwrap() = name;
-
-            for edit in &proposal.edits {
-                if mem.update(&db, &edit.name, None, &edit.text).is_ok() {
-                    let _ = db.log_activity(None, "memory", &format!("tidied {}", edit.name));
-                }
-            }
-            for merge in &proposal.merges {
-                // Only drop the sources once the target has actually absorbed
-                // them. A model that names a keep that doesn't exist must not
-                // delete facts into a merge that never happened.
-                if mem.update(&db, &merge.keep, None, &merge.text).is_ok() {
-                    let _ = db.log_activity(None, "memory", &format!("merged into {}", merge.keep));
-                    for name in &merge.drop {
-                        if name == &merge.keep {
-                            continue; // never trash the entry we just merged into
-                        }
-                        if mem.forget(&db, name).is_ok() {
-                            let _ = db.log_activity(None, "memory", &format!("merged away {name}"));
-                        }
-                    }
-                }
-            }
-            for name in &proposal.deletes {
-                if mem.forget(&db, name).is_ok() {
-                    let _ = db.log_activity(None, "memory", &format!("dropped {name}"));
-                }
-            }
-            Ok(())
-        },
-        || {
-            let name = snapshot_name.lock().unwrap().clone();
-            mem.restore_snapshot(&db, &name)
-        },
-    )
-    .await
-    .map_err(PoiesisError::Message)?;
-
-    if let Some(n) = regressed {
-        let _ = db.log_activity(
-            None,
-            "memory",
-            &format!("a tidy-up made me worse at {n} thing(s) — I put it back"),
-        );
-        let _ = app.emit("poiesis-golden-reverted", serde_json::json!({ "count": n }));
-    }
-
+    apply_guarded(&app, &proposal, target.as_ref()).await.map_err(PoiesisError::Message)?;
     db.set_setting(PENDING_CONSOLIDATION, "").map_err(err)?;
+    Ok(())
+}
+
+/// `Not this one`: take one row out of the pending proposal.
+#[tauri::command]
+pub fn drop_pending_row_cmd(db: State<'_, Db>, kind: String, key: String) -> Cmd<Option<Consolidation>> {
+    let Some(mut pending) = db_pending(&db) else { return Ok(None) };
+    pending.remove_row(&kind, &key);
+    crate::commands::tidy::store_pending(&db, &pending);
+    Ok(db_pending(&db))
+}
+
+/// The digest's Undo: put the memory back as it was before the last applied tidy-up.
+#[tauri::command]
+pub fn undo_last_tidy_cmd(db: State<'_, Db>, mem: State<'_, MemoryStore>) -> Cmd<()> {
+    let name = db.get_setting(LAST_TIDY_SNAPSHOT).map_err(err)?.unwrap_or_default();
+    if name.is_empty() {
+        return Err(PoiesisError::Message("There is no tidy-up to take back.".into()));
+    }
+    mem.restore_snapshot(&db, &name).map_err(PoiesisError::Message)?;
+    db.set_setting(LAST_TIDY_SNAPSHOT, "").map_err(err)?;
+    crate::commands::tidy::clear_undo(&db);
+    let _ = db.log_activity(None, "memory", "took back the last tidy-up");
     Ok(())
 }
 

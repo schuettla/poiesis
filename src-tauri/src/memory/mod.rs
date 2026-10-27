@@ -83,7 +83,7 @@ const SEM_FACT_K: usize = 5;
 const SEM_FACT_OVERFETCH: usize = 4;
 
 /// A lesson that has not reached an answer for this long has had no chance to help.
-const PRUNE_IDLE_DAYS: i64 = 120;
+pub(crate) const PRUNE_IDLE_DAYS: i64 = 120;
 /// Chances before a record is trusted enough to let a lesson go for it.
 const PRUNE_MIN_CHANCES: i64 = 5;
 
