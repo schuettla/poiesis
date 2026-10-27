@@ -5869,7 +5869,7 @@ async function recallForPrompt(
 /** WHY-2: the compact per-message record built from what this turn actually
  * used — persona id, soul presence, and the exact fact/lesson names
  * that reached the prompt (never the prompt text itself). */
-function buildContextRefs(opts: {
+export function buildContextRefs(opts: {
   personaId: string | null;
   memory: api.MemoryContext | undefined;
   injectedFacts: string[];
@@ -5882,6 +5882,10 @@ function buildContextRefs(opts: {
     facts: opts.injectedFacts,
     lessons: opts.matches.filter((m) => m.kind === "lesson").map((m) => m.title),
     files: [],
+    // `CRD-1`: the reason recall gave for each entry that came by relevance.
+    why: Object.fromEntries(
+      opts.matches.filter((m) => m.source === "memory" && m.why).map((m) => [m.title, m.why as string])
+    ),
   };
 }
 
@@ -7328,6 +7332,11 @@ function projectBlock(name: string | undefined, instructions: string | undefined
   return `## Project: ${n} (instructions for this project; the persona/system prompt above still governs voice, format and depth)\n${text}`;
 }
 
+/** `CUE-3`: said once, and only when a line of the index carries the marker
+ * (`Fact::hedge_marker` in Rust). Word for word `HEDGE_NOTE` in `agent/context.rs`. */
+const HEDGE_NOTE =
+  " A note marked [unsure] or [contested] may be wrong: say so, and give its date, when you rely on it.";
+
 /** The durable memory index, with a caveat when tools (and so `memory` reads) are off. */
 function memoryIndexBlock(index: string | undefined, toolsEnabled: boolean): string {
   const i = index?.trim();
@@ -7335,7 +7344,8 @@ function memoryIndexBlock(index: string | undefined, toolsEnabled: boolean): str
   const detail = toolsEnabled
     ? ""
     : " Tools are off — treat descriptions as the only available detail.";
-  return `## Your notes about the user (durable facts)\n${i}\n(Read a note's full text with memory(op:"read", name:…) before relying on its details.${detail})`;
+  const hedge = i.includes(" [unsure, noted ") || i.includes(" [contested, noted ") ? HEDGE_NOTE : "";
+  return `## Your notes about the user (durable facts)\n${i}\n(Read a note's full text with memory(op:"read", name:…) before relying on its details.${detail}${hedge})`;
 }
 
 /** A compact rendering of durable session state. */

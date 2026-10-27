@@ -90,9 +90,10 @@ pub struct LearningNumbers {
     /// Characters of memory carried into every message with no query
     /// (`recall_for(None)`).
     pub always_on_chars: usize,
-    /// Helped over helped plus hurt. `None` until credit exists (`CRD-2`).
+    /// Of the facts and lessons that reached an answer, the share nobody pressed
+    /// Outdated or Not relevant on. `None` under 10 recalled entries in the window.
     pub recall_precision: Option<f32>,
-    /// Outdated clicks per 100 recalls. `None` until the click exists (`CUE-UI-1`).
+    /// Outdated presses per 100 recalled facts. `None` under 10 recalled facts.
     pub stale_per_100: Option<f32>,
 }
 
@@ -150,13 +151,47 @@ pub fn learning_numbers(db: &Db, mem: &MemoryStore, from: i64, to: i64) -> Learn
     }
     let told_twice = subjects.values().map(|n| n.saturating_sub(1)).sum();
 
+    let (recall_precision, stale_per_100) = recall_quality(db, from, to);
     LearningNumbers {
         repeat_mistakes,
         told_twice,
         always_on_chars: mem.recall_for(db, None).index.chars().count(),
-        recall_precision: None,
-        stale_per_100: None,
+        recall_precision,
+        stale_per_100,
     }
+}
+
+/// Recalled entries needed in a window before the two recall numbers mean anything.
+const MIN_RECALLED: usize = 10;
+
+/// `(recall precision, stale per 100)` for a window. What reached each answer is
+/// in `context_json` (`CRD-1`); what the person said about it is the Outdated
+/// and Not relevant traces (`CUE-UI-1`). Counts only: no entry's text is read.
+fn recall_quality(db: &Db, from: i64, to: i64) -> (Option<f32>, Option<f32>) {
+    let (mut facts, mut lessons) = (0usize, 0usize);
+    for raw in db.context_records_between(from, to).unwrap_or_default() {
+        if let Ok(refs) = serde_json::from_str::<crate::commands::memory::ContextRefs>(&raw) {
+            facts += refs.facts.len();
+            lessons += refs.lessons.len();
+        }
+    }
+    let (mut outdated, mut not_relevant) = (0usize, 0usize);
+    for row in db.session_events_of_kind_between(COMMAND_KIND, from, to).unwrap_or_default() {
+        let Ok(t) = serde_json::from_str::<CommandTrace>(&row.payload_json) else { continue };
+        if t.by != "user" {
+            continue;
+        }
+        if t.name == crate::agent::credit::OUTDATED {
+            outdated += 1;
+        } else if t.name == crate::agent::credit::NOT_RELEVANT {
+            not_relevant += 1;
+        }
+    }
+    let recalled = facts + lessons;
+    let precision = (recalled >= MIN_RECALLED)
+        .then(|| 1.0 - ((outdated + not_relevant).min(recalled) as f32 / recalled as f32));
+    let stale = (facts >= MIN_RECALLED).then(|| 100.0 * outdated as f32 / facts as f32);
+    (precision, stale)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -379,6 +414,10 @@ mod tests {
             expires_at: None,
             origin: None,
             cue: None,
+            confidence: None,
+            status: None,
+            supersedes: None,
+            superseded_by: None,
             project: None,
         }
     }
@@ -490,12 +529,71 @@ mod tests {
         assert!(learning_numbers(&db, &mem, ALL.0, ALL.1).always_on_chars > 20);
     }
 
+    /// An answer that carried `facts` and `lessons` entries, and the user's presses.
+    fn answer_with(db: &Db, conv: &str, facts: usize, lessons: usize) {
+        let msg = db
+            .append_message(
+                conv,
+                &crate::db::NewMessage {
+                    role: "assistant".into(),
+                    content: "ok".into(),
+                    model_name: None,
+                    model_provenance: None,
+                    steps_json: None,
+                    attachments: Vec::new(),
+                },
+            )
+            .unwrap();
+        let refs = crate::commands::memory::ContextRefs {
+            facts: (0..facts).map(|i| format!("f{i}")).collect(),
+            lessons: (0..lessons).map(|i| format!("l{i}")).collect(),
+            ..Default::default()
+        };
+        db.finalize_message(&msg.id, "ok", None, Some(&serde_json::to_string(&refs).unwrap()), None, None).unwrap();
+    }
+
+    fn press(db: &Db, conv: &str, name: &str) {
+        record_command(
+            db,
+            conv,
+            None,
+            &CommandTrace {
+                name: name.into(),
+                args: "f0".into(),
+                by: "user".into(),
+                outcome: "done".into(),
+                note: None,
+                message_id: None,
+            },
+        );
+    }
+
     #[test]
-    fn credit_dependent_numbers_stay_empty_until_credit_exists() {
+    fn the_recall_numbers_stay_empty_until_enough_has_been_recalled() {
         let (mem, db, _tmp) = store();
         let n = learning_numbers(&db, &mem, ALL.0, ALL.1);
         assert_eq!(n.recall_precision, None);
         assert_eq!(n.stale_per_100, None);
+        let c = conv(&db);
+        answer_with(&db, &c, 3, 2);
+        let n = learning_numbers(&db, &mem, ALL.0, ALL.1);
+        assert_eq!((n.recall_precision, n.stale_per_100), (None, None), "five entries are too few to say");
+    }
+
+    #[test]
+    fn precision_and_stale_rate_come_from_what_reached_answers_and_what_was_pressed() {
+        let (mem, db, _tmp) = store();
+        let c = conv(&db);
+        answer_with(&db, &c, 8, 2);
+        answer_with(&db, &c, 8, 2);
+        // 20 recalled entries, 16 of them facts.
+        assert_eq!(learning_numbers(&db, &mem, ALL.0, ALL.1).recall_precision, Some(1.0));
+        press(&db, &c, crate::agent::credit::OUTDATED);
+        press(&db, &c, crate::agent::credit::OUTDATED);
+        press(&db, &c, crate::agent::credit::NOT_RELEVANT);
+        let n = learning_numbers(&db, &mem, ALL.0, ALL.1);
+        assert!((n.recall_precision.unwrap() - 0.85).abs() < 1e-6, "{:?}", n.recall_precision);
+        assert!((n.stale_per_100.unwrap() - 12.5).abs() < 1e-4, "2 of 16 facts: {:?}", n.stale_per_100);
     }
 
     #[test]

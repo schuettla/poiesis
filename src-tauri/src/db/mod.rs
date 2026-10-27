@@ -723,6 +723,10 @@ pub struct SearchHit {
     /// conversation, the way `conversation_id` does for a chat hit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// `CUE-2`: why a recalled memory came, in words. Set only on what `recall_for`
+    /// brought into a turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 /// Quote every term so arbitrary user text can't break FTS5 MATCH syntax.
@@ -3085,6 +3089,7 @@ impl Db {
                     snippet: r.get(3)?,
                     kind: None,
                     path: None,
+                    why: None,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -3117,6 +3122,7 @@ impl Db {
                     snippet: if snippet.trim().is_empty() { description } else { snippet },
                     kind: r.get(3)?,
                     path: None,
+                    why: None,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

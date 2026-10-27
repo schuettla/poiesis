@@ -118,6 +118,11 @@ fn count_findings(claims_json: &str) -> (usize, usize) {
     (count("supported"), count("refuted"))
 }
 
+/// The entity names the session state holds (up to 8).
+pub(crate) fn state_entities(state_json: &str) -> Vec<String> {
+    read_state(state_json).0
+}
+
 /// Entity names (up to 8), and the number of constraints and decisions, from the
 /// session state as the `remember` tool wrote it.
 fn read_state(state_json: &str) -> (Vec<String>, usize, usize) {

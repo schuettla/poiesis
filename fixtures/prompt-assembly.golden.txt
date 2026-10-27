@@ -13,8 +13,8 @@ Quotes are in EUR and include VAT. The flat is a 1930s build, so assume no strai
 
 ## Your notes about the user (durable facts)
 - [Coffee](coffee.md) â€” takes it black
-- [Editor](editor.md) â€” uses Neovim
-(Read a note's full text with memory(op:"read", name:…) before relying on its details.)
+- [Editor](editor.md) â€” uses Neovim [unsure, noted 2026-10-27]
+(Read a note's full text with memory(op:"read", name:…) before relying on its details. A note marked [unsure] or [contested] may be wrong: say so, and give its date, when you rely on it.)
 
 Skills available (read one with the `skill` tool before doing the work it covers):
 - pdf-forms: Fill in PDF forms — when the user attaches a form

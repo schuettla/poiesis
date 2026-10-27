@@ -556,6 +556,7 @@ async fn search_folder(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Resul
                 snippet: clip(&s.hit.text, 220),
                 kind: None,
                 path: Some(s.hit.ref_key.clone()),
+                why: None,
             }
         })
         .collect();

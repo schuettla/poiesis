@@ -5,7 +5,7 @@
   "soul": "Never write to disk without asking.",
   "project_name": "Kitchen rebuild",
   "project_instructions": "Quotes are in EUR and include VAT. The flat is a 1930s build, so assume no straight walls and check every measurement twice.",
-  "memory_index": "- [Coffee](coffee.md) â€” takes it black\n- [Editor](editor.md) â€” uses Neovim",
+  "memory_index": "- [Coffee](coffee.md) â€” takes it black\n- [Editor](editor.md) â€” uses Neovim [unsure, noted 2026-10-27]",
   "fact_count": 2,
   "tools_enabled": true,
   "memory_enabled": true,

@@ -683,6 +683,10 @@ mod tests {
                 expires_at: None,
                 origin: None,
                 cue: None,
+                confidence: None,
+                status: None,
+                supersedes: None,
+                superseded_by: None,
             },
         )
         .unwrap();

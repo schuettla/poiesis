@@ -265,6 +265,10 @@ async fn memory_op(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<St
                     expires_at,
                     origin: None,
                     cue: None,
+                    confidence: None,
+                    status: None,
+                    supersedes: None,
+                    superseded_by: None,
                     // `PRJ-8`: a memory saved inside a project belongs to it.
                     // Nothing is asked of the model — the tag follows from
                     // where the turn is happening, the same way the working

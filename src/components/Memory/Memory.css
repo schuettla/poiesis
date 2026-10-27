@@ -235,3 +235,21 @@
 .recall-offer {
   bottom: 160px;
 }
+
+/* ---- beliefs a newer answer replaced (CUE-UI-1) ---- */
+.memory-earlier {
+  margin-top: 16px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.memory-earlier > summary {
+  cursor: pointer;
+}
+.memory-earlier-note {
+  margin: 6px 0 8px;
+  color: var(--ink-faint);
+}
+.memory-card-earlier {
+  opacity: 0.75;
+}

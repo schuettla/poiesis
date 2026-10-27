@@ -3,6 +3,7 @@ import type { AgentStep } from "../../lib/types";
 import { saveKeptResult, type SearchHit } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import DiagnosticsList, { locateDiagnostic } from "./Diagnostics";
+import RecallMemoryRow from "./RecallMemoryRow";
 import { ChevronIcon } from "../Icons/Icons";
 
 /** Screen-reader sentence for a step (§5.5: "searched project files, 3 matches"). */
@@ -39,6 +40,10 @@ function Provenance({ matches }: { matches: SearchHit[] }) {
   return (
     <div className="recall-matches">
       {matches.map((m, i) => {
+        // `CUE-UI-1`: what I remembered or learned says why it came and can be corrected.
+        if (m.source === "memory") {
+          return <RecallMemoryRow key={`${m.source}-${i}`} hit={m} label={chipLabel(m)} date={asDate(m.created_at)} />;
+        }
         const body = (
           <>
             <span className={`recall-chip ${m.source}`}>{chipLabel(m)}</span>

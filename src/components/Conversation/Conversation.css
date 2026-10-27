@@ -1067,6 +1067,66 @@
   white-space: nowrap;
 }
 
+/* ---- why a memory came, and the two ways to correct it (CUE-UI-1) ---- */
+.recall-memory {
+  display: flex;
+  flex-direction: column;
+}
+.recall-why-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 0 0 3px 10px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.recall-act {
+  padding: 0;
+  font: inherit;
+  color: var(--ink-muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.recall-act:hover,
+.recall-act:focus-visible {
+  color: var(--ink);
+}
+.recall-act:disabled {
+  color: var(--ink-faint);
+  cursor: default;
+}
+.recall-ask {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 0 4px 10px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.recall-ask-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.recall-ask-input {
+  min-width: 14em;
+  font: inherit;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--paper-edge-2);
+}
+.recall-error {
+  padding-left: 10px;
+  color: var(--ink-muted);
+}
+
 /* ---- code disclosure (DAT-UI-1) ---- */
 .code-disclosure {
   flex-basis: 100%;

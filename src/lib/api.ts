@@ -638,6 +638,9 @@ export interface SearchHit {
   /** Absolute file path, set only for `source: "file"` (RET-UI-1) — lets a
    * match open in the Workbench viewer instead of switching conversation. */
   path?: string | null;
+  /** `CUE-2`: why a recalled memory came, in words ("same project", "you named
+   * Anna"). Set only on what recall brought into a turn. */
+  why?: string | null;
 }
 
 export interface PermissionRequest {
@@ -1268,6 +1271,15 @@ export interface Fact {
   /** `CPX-5`: where a lesson came from. `rewind` means the user went back on
    * work, and the Lessons tab says so. */
   origin?: string | null;
+  /** `CUE-3`: the lesson's cue, `tool:<name>` or a few words. */
+  cue?: string | null;
+  /** `CUE-3`: `low | medium | high`; `null` reads as medium. */
+  confidence?: string | null;
+  /** `CUE-3`: `active | contested | superseded`; `null` reads as active. */
+  status?: string | null;
+  /** The entry this one replaced, and the one that replaced this one. */
+  supersedes?: string | null;
+  superseded_by?: string | null;
 }
 
 /** What gets prepended to every conversation (MEM-3). */
@@ -1384,6 +1396,18 @@ export const setFactScope = (name: string, scope: "global" | "topical") =>
 /** Moves the fact to trash and returns the trash filename, for undo. */
 export const forgetMemoryFact = (name: string) =>
   invoke<string>("forget_memory_fact_cmd", { name });
+
+/** `CUE-UI-1`, Outdated: what is right now replaces the fact, which stays as an
+ * earlier version. Resolves with the new fact's name. */
+export const outdateMemoryFact = (name: string, rightNow: string, conversationId: string | null) =>
+  invoke<string>("outdate_memory_fact_cmd", { name, rightNow, conversationId });
+
+/** `CUE-UI-1`, Not relevant here: counts against the entry for this answer. */
+export const notRelevantMemory = (name: string, conversationId: string | null) =>
+  invoke<void>("not_relevant_memory_cmd", { name, conversationId });
+
+/** Facts a newer one replaced, newest first. */
+export const listEarlierVersions = () => invoke<Fact[]>("list_earlier_versions_cmd");
 
 export const restoreMemoryFact = (file: string) =>
   invoke<void>("restore_memory_fact_cmd", { file });
@@ -1581,9 +1605,10 @@ export interface LearningNumbers {
   repeat_mistakes: number;
   told_twice: number;
   always_on_chars: number;
-  /** `null` until credit exists. */
+  /** Of the entries that reached an answer, the share nobody pressed Outdated or Not
+   * relevant on. `null` under 10 recalled entries in the window. */
   recall_precision: number | null;
-  /** `null` until the Outdated click exists. */
+  /** Outdated presses per 100 recalled facts. `null` under 10 recalled facts. */
   stale_per_100: number | null;
 }
 

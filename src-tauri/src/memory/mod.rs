@@ -24,6 +24,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+use crate::db::episodes::Credit;
 use crate::db::Db;
 
 /// Recipes, and the one-shot conversion of them into Agent Skills (`SKL-5`).
@@ -80,7 +81,7 @@ const SEM_FACT_OVERFETCH: usize = 4;
 
 /// One durable entry — a fact or a lesson. Backed 1:1 by a markdown
 /// file with a frontmatter header.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Fact {
     /// Slug; also the file stem.
     pub name: String,
@@ -126,6 +127,44 @@ pub struct Fact {
     /// Facts never set this.
     #[serde(default)]
     pub cue: Option<String>,
+    /// `CUE-3`: how sure the entry is, `low | medium | high`. `None` reads as
+    /// medium. A `low` belief is marked in the index so the model hedges.
+    #[serde(default)]
+    pub confidence: Option<String>,
+    /// `CUE-3`: `active | contested | superseded`. `None` reads as active. A
+    /// superseded entry stays in its folder and is left out of every list that
+    /// builds a prompt (`list_in`); `list_superseded` finds it.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// The entry this one replaced, and the one that replaced this one.
+    #[serde(default)]
+    pub supersedes: Option<String>,
+    #[serde(default)]
+    pub superseded_by: Option<String>,
+}
+
+impl Fact {
+    pub fn is_superseded(&self) -> bool {
+        self.status.as_deref() == Some("superseded")
+    }
+
+    /// Does the model get told about this entry in the memory index? Intentions
+    /// are kept in the folder but reach a turn only when their trigger fires.
+    pub fn in_prompt(&self) -> bool {
+        !self.is_superseded() && self.kind != "intention"
+    }
+
+    /// The marker the index line carries when the entry should be hedged.
+    pub fn hedge_marker(&self) -> Option<String> {
+        let word = if self.status.as_deref() == Some("contested") {
+            "contested"
+        } else if self.confidence.as_deref() == Some("low") {
+            "unsure"
+        } else {
+            return None;
+        };
+        Some(format!("[{word}, noted {}]", self.created))
+    }
 }
 
 /// One lesson surfaced by relevance rather than always-injected
@@ -139,6 +178,86 @@ pub struct RecalledEntry {
     /// "lesson" (SEM-UI-1's `SearchHit.kind`).
     pub kind: String,
     pub score: f32,
+    /// `CUE-2`: why this entry came, in words ("same project", "you named Anna").
+    /// Empty when nothing more specific than the question itself is known.
+    pub why: String,
+    /// Where it was learned, and when (YYYY-MM-DD), so the timeline can link to it.
+    pub source_conversation: Option<String>,
+    pub created: String,
+}
+
+/// What a turn names, for `recall_with_cues`: people and things in the message,
+/// and the entities the session notes hold (the `remember` tool).
+#[derive(Debug, Clone, Default)]
+pub struct Cues {
+    pub message_names: Vec<String>,
+    pub session_names: Vec<String>,
+}
+
+impl Cues {
+    pub fn from_turn(message: &str, session_entities: Vec<String>) -> Cues {
+        Cues { message_names: names_in(message), session_names: session_entities }
+    }
+
+    /// If this fact is about something the turn names, why, in words.
+    fn names(&self, f: &Fact) -> Option<String> {
+        if let Some(n) = self.message_names.iter().find(|n| mentions(f, n)) {
+            return Some(format!("you named {n}"));
+        }
+        self.session_names.iter().find(|n| mentions(f, n)).map(|n| format!("{n} is in this chat's notes"))
+    }
+}
+
+/// Capitalised words of a message: the names a person or place would have. A
+/// word at the start of a sentence is included; a fact has to carry the same
+/// word in its own name or description for it to count, which keeps the noise
+/// down.
+pub fn names_in(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for word in text.split(|c: char| !c.is_alphanumeric()) {
+        let mut chars = word.chars();
+        let Some(first) = chars.next() else { continue };
+        if first.is_uppercase() && word.chars().count() >= 3 && !out.iter().any(|w| w.eq_ignore_ascii_case(word)) {
+            out.push(word.to_string());
+        }
+    }
+    out
+}
+
+/// Does the fact's own name or description carry this word (or, for several
+/// words, this phrase)?
+fn mentions(f: &Fact, name: &str) -> bool {
+    let name = name.trim().to_lowercase();
+    if name.chars().count() < 3 {
+        return false;
+    }
+    let description = f.description.to_lowercase();
+    if name.contains(char::is_whitespace) {
+        return description.contains(&name);
+    }
+    let is_word = |hay: &str| hay.split(|c: char| !c.is_alphanumeric()).any(|w| w == name);
+    is_word(&f.name.to_lowercase()) || is_word(&description)
+}
+
+/// Why an entry was recalled, most specific first.
+fn why_of(f: &Fact, project: Option<&str>, cues: &Cues) -> String {
+    if let Some(named) = cues.names(f) {
+        return named;
+    }
+    if project.is_some() && f.project.as_deref() == project {
+        return "same project".to_string();
+    }
+    format!("about {}", f.name.replace('-', " "))
+}
+
+/// How much to trust an item's record when ranking: 1 for one that is not
+/// judged yet (under three chances), otherwise twice its usefulness, so a
+/// neutral record changes nothing and a good or bad one moves it up or down.
+fn usefulness_factor(credit: Option<&Credit>) -> f32 {
+    match credit {
+        Some(c) if c.judged() => (2.0 * c.usefulness()) as f32,
+        _ => 1.0,
+    }
 }
 
 /// What `recall_for` injects into one turn's prompt (SEM-3).
@@ -280,6 +399,10 @@ fn parse_entry(name: &str, text: &str) -> Fact {
     let mut project = None;
     let mut origin = None;
     let mut cue = None;
+    let mut confidence = None;
+    let mut status = None;
+    let mut supersedes = None;
+    let mut superseded_by = None;
 
     for line in header.lines() {
         let Some((key, value)) = line.split_once(':') else { continue };
@@ -309,6 +432,12 @@ fn parse_entry(name: &str, text: &str) -> Fact {
             "project" => project = Some(value),
             "origin" => origin = Some(value),
             "cue" => cue = Some(value),
+            // An unrecognized value reads as absent, like `scope`: a typo must
+            // not hide an entry (a bad `status`) or hedge it for ever.
+            "confidence" if matches!(value.as_str(), "low" | "medium" | "high") => confidence = Some(value),
+            "status" if matches!(value.as_str(), "active" | "contested" | "superseded") => status = Some(value),
+            "supersedes" => supersedes = Some(value),
+            "superseded_by" => superseded_by = Some(value),
             _ => {}
         }
     }
@@ -332,6 +461,10 @@ fn parse_entry(name: &str, text: &str) -> Fact {
         project,
         origin,
         cue,
+        confidence,
+        status,
+        supersedes,
+        superseded_by,
     }
 }
 
@@ -430,6 +563,17 @@ fn render_entry(f: &Fact) -> String {
     if let Some(cue) = &f.cue {
         out.push_str(&format!("cue: {}\n", one_line(cue)));
     }
+    // Written only when set, so a file nobody touched does not change on disk.
+    for (key, value) in [
+        ("confidence", &f.confidence),
+        ("status", &f.status),
+        ("supersedes", &f.supersedes),
+        ("superseded_by", &f.superseded_by),
+    ] {
+        if let Some(value) = value {
+            out.push_str(&format!("{key}: {}\n", one_line(value)));
+        }
+    }
     out.push_str("---\n");
     out.push_str(f.body.trim());
     out.push('\n');
@@ -497,6 +641,20 @@ impl MemoryStore {
     /// rather than silently skipped or deleted. One damaged file must never
     /// break the whole self, and must never vanish either.
     pub fn list_in(&self, collection: &str) -> Vec<Fact> {
+        let mut all = self.list_all_in(collection);
+        all.retain(|f| !f.is_superseded());
+        all
+    }
+
+    /// Entries a newer one replaced, newest first. Kept on disk and out of every
+    /// prompt; the Memory tab shows them as earlier versions.
+    pub fn list_superseded(&self, collection: &str) -> Vec<Fact> {
+        let mut all = self.list_all_in(collection);
+        all.retain(|f| f.is_superseded());
+        all
+    }
+
+    fn list_all_in(&self, collection: &str) -> Vec<Fact> {
         let Ok(entries) = std::fs::read_dir(self.dir_for(collection)) else {
             return Vec::new();
         };
@@ -674,6 +832,77 @@ impl MemoryStore {
         body: &str,
     ) -> Result<(), String> {
         self.update_in(db, FACTS, name, description, body)
+    }
+
+    /// `CUE-UI-1`: the user pressed Outdated on a fact and said what is right now.
+    /// The answer is saved as a new fact that says what it replaced, and the old
+    /// file stays where it is, marked superseded and out of every prompt. Nothing
+    /// is deleted: the Memory tab lists it as an earlier version.
+    ///
+    /// Returns the new fact's name. If the old one cannot be marked, the new one is
+    /// taken back, so a failure never leaves two active answers.
+    pub fn supersede_fact(
+        &self,
+        db: &Db,
+        old: &str,
+        right_now: &str,
+        conversation_id: Option<&str>,
+    ) -> Result<String, String> {
+        let right_now = one_line(right_now);
+        if right_now.is_empty() {
+            return Err("tell me what is right now".into());
+        }
+        let old = slugify(old)?;
+        let before = self.read(&old).ok_or_else(|| format!("no memory named {old}"))?;
+        if before.is_superseded() {
+            return Err(format!("{old} was already replaced"));
+        }
+        // The new name comes from the words, and never collides with a file: a
+        // superseded one keeps its name for good.
+        let stem: String = right_now.split_whitespace().take(8).collect::<Vec<_>>().join(" ");
+        let base = slugify(&stem).unwrap_or_else(|_| format!("{old}-update"));
+        let mut name = base.clone();
+        let mut n = 2;
+        while self.path_for(FACTS, &name).exists() {
+            name = format!("{base}-{n}");
+            n += 1;
+        }
+        let description: String = right_now.chars().take(120).collect();
+        let saved = self.save(
+            db,
+            &Fact {
+                name,
+                description,
+                kind: before.kind.clone(),
+                created: String::new(),
+                source_conversation: conversation_id.map(str::to_string),
+                body: right_now,
+                scope: before.scope.clone(),
+                project: before.project.clone(),
+                supersedes: Some(old.clone()),
+                ..Default::default()
+            },
+        )?;
+
+        let marked = (|| {
+            let _guard = self.lock.lock().unwrap();
+            let path = self.path_for(FACTS, &old);
+            let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+            let mut entry = parse_entry(&old, &text);
+            entry.status = Some("superseded".into());
+            entry.superseded_by = Some(saved.clone());
+            std::fs::write(&path, render_entry(&entry)).map_err(|e| e.to_string())
+        })();
+        if let Err(e) = marked {
+            let _ = self.forget_in(db, FACTS, &saved);
+            return Err(e);
+        }
+        // A replaced belief must stop matching: its vector goes, and it is no
+        // longer listed, so it will not be embedded again.
+        let _ = db.delete_vectors_for_ref("memory", FACTS, &old);
+        self.write_index();
+        self.sync_fts(db);
+        Ok(saved)
     }
 
     /// Set a fact's `global`/`topical` scope (`SCP-1`/`SCP-UI-1`) — the
@@ -868,7 +1097,9 @@ impl MemoryStore {
         let mut used = 0usize;
         let mut dropped = 0usize;
         for f in entries {
-            let line = format!("- [{}] ({}) {}\n", f.name, f.kind, f.description);
+            // `CUE-3`: an entry that is unsure or disputed says so in its own line.
+            let marker = f.hedge_marker().map(|m| format!(" {m}")).unwrap_or_default();
+            let line = format!("- [{}] ({}) {}{marker}\n", f.name, f.kind, f.description);
             // Count in chars, like BODY_CAP/SOUL_CAP — the caps are a budget on
             // prompt length, not on UTF-8 byte size.
             let cost = line.chars().count();
@@ -900,12 +1131,14 @@ impl MemoryStore {
     pub fn index_markdown(&self) -> String {
         let mut out = String::new();
 
-        let facts = self.list_in(FACTS);
+        let mut facts = self.list_in(FACTS);
+        facts.retain(Fact::in_prompt);
         if !facts.is_empty() {
             out.push_str(&Self::index_section(&facts, INDEX_CAP_FACTS).0);
         }
 
-        let lessons = self.list_in(LESSONS);
+        let mut lessons = self.list_in(LESSONS);
+        lessons.retain(Fact::in_prompt);
         if !lessons.is_empty() {
             out.push_str(LESSONS_HEADER);
             out.push_str(&Self::index_section(&lessons, INDEX_CAP_LESSONS).0);
@@ -959,12 +1192,18 @@ impl MemoryStore {
                 .filter(|h| h.score >= SEM_FLOOR)
                 .filter_map(|h| {
                     let entry = self.read_in(collection, &h.ref_key)?;
+                    if !entry.in_prompt() {
+                        return None;
+                    }
                     Some(RecalledEntry {
                         collection: collection.to_string(),
                         name: entry.name,
                         description: entry.description,
                         kind: kind.to_string(),
                         score: h.score,
+                        why: String::new(),
+                        source_conversation: entry.source_conversation,
+                        created: entry.created,
                     })
                 })
                 .collect(),
@@ -1002,11 +1241,46 @@ impl MemoryStore {
         query: Option<(&[f32], &str, i64)>,
         project: Option<&str>,
     ) -> RecallSet {
-        let eligible = |f: &Fact| match f.project.as_deref() {
-            None => true,
-            Some(tag) => Some(tag) == project,
+        self.recall_with_cues(db, query, project, &Cues::default())
+    }
+
+    /// `CUE-1`/`CUE-2`: `recall_for_project`, with more to go on than similarity.
+    ///
+    /// - **Ranking.** A topical fact or lesson is ranked by similarity times how
+    ///   useful it has been (`usefulness_factor`); the similarity floor still
+    ///   decides what is eligible. Global facts stay wholesale and the cap keeps
+    ///   the most useful of them.
+    /// - **More cues.** A topical fact that names someone the message or the
+    ///   session notes name is brought in, even when its words are far from the
+    ///   question.
+    /// - **Left out.** What `Fact::in_prompt` says is not for the prompt.
+    /// - **Why.** Each retrieved entry says why it came, in words.
+    pub fn recall_with_cues(
+        &self,
+        db: &Db,
+        query: Option<(&[f32], &str, i64)>,
+        project: Option<&str>,
+        cues: &Cues,
+    ) -> RecallSet {
+        let eligible = |f: &Fact| {
+            f.in_prompt()
+                && match f.project.as_deref() {
+                    None => true,
+                    Some(tag) => Some(tag) == project,
+                }
         };
-        let all_facts: Vec<Fact> = self.list_in(FACTS).into_iter().filter(&eligible).collect();
+        let fact_credit = db.memory_credit_map(FACTS).unwrap_or_default();
+        let lesson_credit = db.memory_credit_map(LESSONS).unwrap_or_default();
+        // Stable: entries of equal usefulness keep their newest-first order.
+        let most_useful_first = |entries: &mut Vec<Fact>, credit: &std::collections::HashMap<String, Credit>| {
+            entries.sort_by(|a, b| {
+                usefulness_factor(credit.get(&b.name))
+                    .partial_cmp(&usefulness_factor(credit.get(&a.name)))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        };
+        let mut all_facts: Vec<Fact> = self.list_in(FACTS).into_iter().filter(&eligible).collect();
+        most_useful_first(&mut all_facts, &fact_credit);
 
         let Some((query_vec, model, dim)) = query else {
             let mut index = String::new();
@@ -1016,7 +1290,8 @@ impl MemoryStore {
                 index.push_str(&block);
                 injected_facts = kept;
             }
-            let lessons: Vec<Fact> = self.list_in(LESSONS).into_iter().filter(&eligible).collect();
+            let mut lessons: Vec<Fact> = self.list_in(LESSONS).into_iter().filter(&eligible).collect();
+            most_useful_first(&mut lessons, &lesson_credit);
             if !lessons.is_empty() {
                 index.push_str(LESSONS_HEADER);
                 index.push_str(&Self::index_section(&lessons, INDEX_CAP_LESSONS).0);
@@ -1027,8 +1302,8 @@ impl MemoryStore {
         // SCP: only global-scoped (or not-yet-classified) facts stay
         // always-injected; a topical fact must earn its place by relevance,
         // same as a lesson.
-        let global_facts: Vec<Fact> =
-            all_facts.into_iter().filter(|f| f.scope.as_deref() != Some("topical")).collect();
+        let (topical, global_facts): (Vec<Fact>, Vec<Fact>) =
+            all_facts.into_iter().partition(|f| f.scope.as_deref() == Some("topical"));
 
         let mut index = String::new();
         let mut injected_facts = Vec::new();
@@ -1044,23 +1319,48 @@ impl MemoryStore {
         // above. Truncating to `k` first and filtering after would let a set of
         // ordinary global facts starve out the one topical fact the question is
         // actually about, leaving it *less* reachable than before scoping
-        // existed. Over-fetch, drop the globals, then take the `k` we wanted.
-        let mut retrieved_facts: Vec<RecalledEntry> = Vec::new();
-        // Rendered with the fact's real kind (preference/decision/…), not the
-        // generic "fact" retrieval tag — the model must not be able to tell a
-        // retrieved fact from a wholesale one.
-        let mut retrieved_fact_entries: Vec<Fact> = Vec::new();
-        for hit in self.retrieve(db, FACTS, "fact", query_vec, model, dim, SEM_FACT_K * SEM_FACT_OVERFETCH) {
+        // existed. Over-fetch, drop the globals, rank what is left, then take
+        // the `k` we wanted.
+        let mut ranked: Vec<(f32, RecalledEntry, Fact)> = Vec::new();
+        for mut hit in self.retrieve(db, FACTS, "fact", query_vec, model, dim, SEM_FACT_K * SEM_FACT_OVERFETCH) {
             let Some(entry) = self.read(&hit.name) else { continue };
             if entry.scope.as_deref() != Some("topical") || !eligible(&entry) {
                 continue;
             }
-            retrieved_facts.push(hit);
-            retrieved_fact_entries.push(entry);
-            if retrieved_facts.len() == SEM_FACT_K {
-                break;
+            hit.why = why_of(&entry, project, cues);
+            let rank = hit.score * usefulness_factor(fact_credit.get(&entry.name));
+            ranked.push((rank, hit, entry));
+        }
+        ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        ranked.truncate(SEM_FACT_K);
+        // A name the message or the notes use brings a topical fact in on its
+        // own, behind the ones that matched by meaning.
+        for entry in &topical {
+            if ranked.len() >= SEM_FACT_K || ranked.iter().any(|(_, r, _)| r.name == entry.name) {
+                continue;
+            }
+            if let Some(named) = cues.names(entry) {
+                ranked.push((
+                    0.0,
+                    RecalledEntry {
+                        collection: FACTS.to_string(),
+                        name: entry.name.clone(),
+                        description: entry.description.clone(),
+                        kind: "fact".to_string(),
+                        score: 0.0,
+                        why: named,
+                        source_conversation: entry.source_conversation.clone(),
+                        created: entry.created.clone(),
+                    },
+                    entry.clone(),
+                ));
             }
         }
+        // Rendered with the fact's real kind (preference/decision/…), not the
+        // generic "fact" retrieval tag — the model must not be able to tell a
+        // retrieved fact from a wholesale one.
+        let retrieved_fact_entries: Vec<Fact> = ranked.iter().map(|(_, _, f)| f.clone()).collect();
+        let retrieved_facts: Vec<RecalledEntry> = ranked.into_iter().map(|(_, r, _)| r).collect();
 
         // Both fact blocks share the one budget. Handing each a full
         // `INDEX_CAP_FACTS` would let the fact section reach twice its cap and
@@ -1076,11 +1376,18 @@ impl MemoryStore {
         // `PRJ-8`: the vector index carries every lesson, tagged or not, so the
         // filter has to happen on the way out. Read-back is the same cost the
         // fact path above already pays.
-        retrieved.extend(
-            self.retrieve(db, LESSONS, "lesson", query_vec, model, dim, SEM_LESSON_K)
-                .into_iter()
-                .filter(|hit| self.read_in(LESSONS, &hit.name).is_none_or(|e| eligible(&e))),
-        );
+        let mut lessons: Vec<(f32, RecalledEntry)> = Vec::new();
+        for mut hit in self.retrieve(db, LESSONS, "lesson", query_vec, model, dim, SEM_LESSON_K * SEM_FACT_OVERFETCH) {
+            let Some(entry) = self.read_in(LESSONS, &hit.name) else { continue };
+            if !eligible(&entry) {
+                continue;
+            }
+            hit.why = why_of(&entry, project, cues);
+            lessons.push((hit.score * usefulness_factor(lesson_credit.get(&entry.name)), hit));
+        }
+        lessons.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        lessons.truncate(SEM_LESSON_K);
+        retrieved.extend(lessons.into_iter().map(|(_, r)| r));
 
         // Retrieval selects; it does not deliver. What came back still has to be
         // written into the block that becomes the prompt — otherwise installing
@@ -1090,7 +1397,12 @@ impl MemoryStore {
         if !picked.is_empty() {
             index.push_str(LESSONS_HEADER);
             for r in picked {
-                index.push_str(&format!("- [{}] ({}) {}\n", r.name, r.kind, r.description));
+                let marker = self
+                    .read_in(LESSONS, &r.name)
+                    .and_then(|f| f.hedge_marker())
+                    .map(|m| format!(" {m}"))
+                    .unwrap_or_default();
+                index.push_str(&format!("- [{}] ({}) {}{marker}\n", r.name, r.kind, r.description));
             }
         }
 
@@ -1269,8 +1581,148 @@ mod tests {
             expires_at: None,
             origin: None,
             cue: None,
+            confidence: None,
+            status: None,
+            supersedes: None,
+            superseded_by: None,
             project: None,
         }
+    }
+
+    /// A unit vector at `deg` degrees from (1, 0): its cosine with the query (1, 0)
+    /// is `cos(deg)`.
+    fn at(deg: f32) -> Vec<f32> {
+        let r = deg.to_radians();
+        vec![r.cos(), r.sin()]
+    }
+
+    fn lesson_vec(s: &MemoryStore, db: &Db, name: &str, deg: f32) {
+        s.save_lesson(db, &fact(name, "applies")).unwrap();
+        db.insert_vectors(&[vector(LESSONS, name, "m1", at(deg))]).unwrap();
+    }
+
+    #[test]
+    fn a_lesson_that_keeps_hurting_gives_its_place_to_a_less_close_useful_one() {
+        let (s, db, _tmp) = store();
+        // Closest first: l1 is nearly the question itself.
+        for (name, deg) in [("l1", 0.0), ("l2", 25.0), ("l3", 35.0), ("l4", 45.0)] {
+            lesson_vec(&s, &db, name, deg);
+        }
+        let query = vec![1.0, 0.0];
+        let names = |set: &RecallSet| set.retrieved.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
+
+        assert_eq!(names(&s.recall_for(&db, Some((&query, "m1", 2)))), ["l1", "l2", "l3"], "no record: by closeness");
+
+        db.add_memory_credit(LESSONS, "l1", 5, 0, 5, 1).unwrap();
+        assert_eq!(
+            names(&s.recall_for(&db, Some((&query, "m1", 2)))),
+            ["l2", "l3", "l4"],
+            "five chances, five times hurt: it falls behind"
+        );
+    }
+
+    #[test]
+    fn a_record_of_under_three_chances_does_not_move_a_lesson() {
+        let (s, db, _tmp) = store();
+        for (name, deg) in [("l1", 0.0), ("l2", 25.0), ("l3", 35.0), ("l4", 45.0)] {
+            lesson_vec(&s, &db, name, deg);
+        }
+        db.add_memory_credit(LESSONS, "l1", 2, 0, 2, 1).unwrap();
+        let query = vec![1.0, 0.0];
+        let set = s.recall_for(&db, Some((&query, "m1", 2)));
+        assert_eq!(set.retrieved[0].name, "l1", "two chances are not a judgement");
+    }
+
+    #[test]
+    fn a_name_in_the_message_brings_in_a_topical_fact_the_words_do_not() {
+        let (s, db, _tmp) = store();
+        s.save(&db, &Fact { description: "Anna prefers email over calls".into(), ..fact("anna-contact", "Email.") })
+            .unwrap();
+        s.set_fact_scope(&db, "anna-contact", "topical").unwrap();
+        db.insert_vectors(&[vector(FACTS, "anna-contact", "m1", vec![0.0, 1.0])]).unwrap();
+        let query = vec![1.0, 0.0]; // nowhere near the fact
+        let nothing = s.recall_for(&db, Some((&query, "m1", 2)));
+        assert!(nothing.retrieved.is_empty());
+
+        let cues = Cues::from_turn("Write to Anna about the invoice", Vec::new());
+        let set = s.recall_with_cues(&db, Some((&query, "m1", 2)), None, &cues);
+        assert_eq!(set.retrieved.len(), 1);
+        assert_eq!(set.retrieved[0].name, "anna-contact");
+        assert_eq!(set.retrieved[0].why, "you named Anna");
+        assert!(set.index.contains("anna-contact"), "it reaches the prompt, not only the list");
+        assert!(set.injected_facts.contains(&"anna-contact".to_string()));
+    }
+
+    #[test]
+    fn the_session_notes_name_things_too() {
+        let (s, db, _tmp) = store();
+        s.save(&db, &Fact { description: "Sparkasse exports are semicolon separated".into(), ..fact("bank-csv", "x") })
+            .unwrap();
+        s.set_fact_scope(&db, "bank-csv", "topical").unwrap();
+        db.insert_vectors(&[vector(FACTS, "bank-csv", "m1", vec![0.0, 1.0])]).unwrap();
+        let query = vec![1.0, 0.0];
+        let cues = Cues::from_turn("summarise it", vec!["Sparkasse".to_string()]);
+        let set = s.recall_with_cues(&db, Some((&query, "m1", 2)), None, &cues);
+        assert_eq!(set.retrieved[0].why, "Sparkasse is in this chat's notes");
+    }
+
+    #[test]
+    fn every_recalled_entry_says_why() {
+        let (s, db, _tmp) = store();
+        lesson_vec(&s, &db, "check-header", 0.0);
+        s.save_lesson(&db, &Fact { project: Some("p-1".into()), ..fact("kitchen-units", "applies") }).unwrap();
+        db.insert_vectors(&[vector(LESSONS, "kitchen-units", "m1", at(10.0))]).unwrap();
+        let query = vec![1.0, 0.0];
+        let set = s.recall_with_cues(&db, Some((&query, "m1", 2)), Some("p-1"), &Cues::default());
+        let why = |n: &str| set.retrieved.iter().find(|r| r.name == n).unwrap().why.clone();
+        assert_eq!(why("check-header"), "about check header");
+        assert_eq!(why("kitchen-units"), "same project");
+    }
+
+    #[test]
+    fn what_is_not_for_the_prompt_is_left_out_of_every_path() {
+        let (s, db, _tmp) = store();
+        s.save(&db, &fact("keeps", "A normal fact.")).unwrap();
+        s.save(&db, &Fact { kind: "intention".into(), ..fact("remind-me-about-tax", "Remind me about tax.") })
+            .unwrap();
+        let wholesale = s.recall_for(&db, None);
+        assert!(wholesale.index.contains("keeps") && !wholesale.index.contains("remind-me-about-tax"));
+        assert!(!s.index_markdown().contains("remind-me-about-tax"));
+        // The file is still there for the person who wrote it.
+        assert!(s.read("remind-me-about-tax").is_some());
+    }
+
+    #[test]
+    fn a_global_fact_that_was_hurt_moves_behind_the_others_and_is_the_first_to_go_under_the_cap() {
+        let (s, db, _tmp) = store();
+        // Same date, so the name decides: the hurt one would come first.
+        s.save(&db, &fact("aaa-hurt", "Was wrong.")).unwrap();
+        s.save(&db, &fact("zzz-fine", "Is fine.")).unwrap();
+        let before = s.recall_for(&db, None).index;
+        assert!(before.find("aaa-hurt") < before.find("zzz-fine"));
+        db.add_memory_credit(FACTS, "aaa-hurt", 6, 0, 6, 1).unwrap();
+        let after = s.recall_for(&db, None).index;
+        assert!(after.find("zzz-fine") < after.find("aaa-hurt"), "{after}");
+    }
+
+    #[test]
+    fn an_unsure_or_contested_entry_says_so_in_its_index_line() {
+        let (s, db, _tmp) = store();
+        s.save(&db, &Fact { confidence: Some("low".into()), ..fact("maybe-berlin", "Might live in Berlin.") }).unwrap();
+        s.save(&db, &Fact { status: Some("contested".into()), ..fact("tea-or-coffee", "Tea? Coffee?") }).unwrap();
+        s.save(&db, &fact("solid", "Solid.")).unwrap();
+        let index = s.index_markdown();
+        let line = |n: &str| index.lines().find(|l| l.contains(n)).unwrap().to_string();
+        assert!(line("maybe-berlin").ends_with("[unsure, noted 2026-07-16]"), "{}", line("maybe-berlin"));
+        assert!(line("tea-or-coffee").ends_with("[contested, noted 2026-07-16]"));
+        assert!(!line("solid").contains("noted"));
+    }
+
+    #[test]
+    fn names_are_the_capitalised_words() {
+        assert_eq!(names_in("Write to Anna about the Sparkasse export"), ["Write", "Anna", "Sparkasse"]);
+        assert!(names_in("all lower case, no names").is_empty());
+        assert_eq!(names_in("Anna and anna and ANNA"), ["Anna"], "one spelling is enough");
     }
 
     #[test]
@@ -1301,6 +1753,62 @@ mod tests {
         let bumped = s.read_in(LESSONS, "check-header").unwrap();
         assert_eq!(bumped.cue.as_deref(), Some("tool:read_file"));
         assert_eq!(bumped.origin.as_deref(), Some("rewind"));
+    }
+
+    #[test]
+    fn a_belief_the_user_called_outdated_is_replaced_not_deleted() {
+        let (s, db, _tmp) = store();
+        s.save(&db, &Fact { description: "Lives in Hamburg".into(), ..fact("lives-in-hamburg", "Lives in Hamburg.") })
+            .unwrap();
+        let new = s.supersede_fact(&db, "lives-in-hamburg", "Lives in Berlin", Some("conv-9")).unwrap();
+
+        let live: Vec<String> = s.list().into_iter().map(|f| f.name).collect();
+        assert_eq!(live, vec![new.clone()], "only the new answer is listed");
+        assert!(!s.index_markdown().contains("Hamburg"), "the old one is out of the prompt index");
+        let earlier = s.list_superseded(FACTS);
+        assert_eq!(earlier.len(), 1);
+        assert_eq!(earlier[0].name, "lives-in-hamburg");
+        assert_eq!(earlier[0].superseded_by.as_deref(), Some(new.as_str()));
+        let fresh = s.read(&new).unwrap();
+        assert_eq!(fresh.supersedes.as_deref(), Some("lives-in-hamburg"));
+        assert_eq!(fresh.source_conversation.as_deref(), Some("conv-9"));
+        assert_eq!(fresh.kind, "preference", "the kind carries over");
+        // The file is still there for the person to read.
+        assert!(s.read("lives-in-hamburg").unwrap().body.contains("Hamburg"));
+    }
+
+    #[test]
+    fn a_replaced_belief_cannot_be_replaced_again_and_an_empty_answer_is_refused() {
+        let (s, db, _tmp) = store();
+        s.save(&db, &fact("lives-in-hamburg", "Lives in Hamburg.")).unwrap();
+        assert!(s.supersede_fact(&db, "lives-in-hamburg", "   ", None).is_err());
+        s.supersede_fact(&db, "lives-in-hamburg", "Lives in Berlin", None).unwrap();
+        assert!(s.supersede_fact(&db, "lives-in-hamburg", "Lives in Munich", None).is_err());
+        assert!(s.supersede_fact(&db, "nothing-here", "x", None).is_err());
+        // Two answers with the same words do not collide.
+        s.save(&db, &fact("other", "Other.")).unwrap();
+        let again = s.supersede_fact(&db, "other", "Lives in Berlin", None).unwrap();
+        assert!(again.ends_with("-2"), "{again}");
+    }
+
+    #[test]
+    fn belief_fields_are_written_only_when_set() {
+        let plain = render_entry(&fact("plain", "Body."));
+        assert!(!plain.contains("status") && !plain.contains("confidence") && !plain.contains("supersedes"));
+        let marked = Fact { confidence: Some("low".into()), status: Some("contested".into()), ..fact("m", "Body.") };
+        let back = parse_entry("m", &render_entry(&marked));
+        assert_eq!((back.confidence.as_deref(), back.status.as_deref()), (Some("low"), Some("contested")));
+        let typo = parse_entry("t", "---\nname: t\ndescription: d\ntype: fact\nstatus: gone\nconfidence: sure\n---\nBody.");
+        assert!(typo.status.is_none() && typo.confidence.is_none(), "a typo reads as absent");
+    }
+
+    #[test]
+    fn a_low_or_contested_belief_is_marked_with_its_date() {
+        let low = Fact { confidence: Some("low".into()), ..fact("a", "x") };
+        assert_eq!(low.hedge_marker().as_deref(), Some("[unsure, noted 2026-07-16]"));
+        let contested = Fact { status: Some("contested".into()), ..fact("b", "x") };
+        assert_eq!(contested.hedge_marker().as_deref(), Some("[contested, noted 2026-07-16]"));
+        assert!(fact("c", "x").hedge_marker().is_none());
     }
 
     #[test]

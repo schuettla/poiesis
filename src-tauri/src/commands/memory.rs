@@ -126,9 +126,10 @@ pub async fn recall_for_cmd(
     // caller may legitimately have none — a manual search of memory is not
     // happening anywhere in particular.
     let project = conversation_id
-        .and_then(|id| db.conversation_project(&id).ok().flatten())
+        .as_deref()
+        .and_then(|id| db.conversation_project(id).ok().flatten())
         .map(|p| p.id);
-    Ok(recall_for(&mgr, &embed_mgr, &db, &mem, &query, project.as_deref()).await)
+    Ok(recall_for(&mgr, &embed_mgr, &db, &mem, &query, project.as_deref(), conversation_id.as_deref()).await)
 }
 
 /// The body of `recall_for_cmd`, callable without a Tauri `State`.
@@ -145,6 +146,8 @@ pub async fn recall_for(
     mem: &MemoryStore,
     query: &str,
     project: Option<&str>,
+    // `CUE-1`: the chat the turn is in, for the names its notes hold.
+    conversation_id: Option<&str>,
 ) -> RecallResult {
     backfill_scope(mgr, db, mem).await;
 
@@ -154,7 +157,7 @@ pub async fn recall_for(
     let query = query.to_string();
 
     let missing = mem.missing_vector_texts(db, &model.name);
-    let mut texts = vec![query];
+    let mut texts = vec![query.clone()];
     texts.extend(missing.iter().map(|(_, _, t)| t.clone()));
 
     let Some((vectors, model_name, dim)) = embed_texts_or_none(mgr, embed_mgr, db, &texts).await
@@ -181,22 +184,42 @@ pub async fn recall_for(
         let _ = db.insert_vectors(&rows);
     }
 
-    let set = mem.recall_for_project(db, Some((&vectors[0], &model_name, dim)), project);
+    let session_names = conversation_id
+        .and_then(|id| db.get_session_state(id).ok().flatten())
+        .map(|state| crate::agent::episode::state_entities(&state))
+        .unwrap_or_default();
+    let cues = crate::memory::Cues::from_turn(&query, session_names);
+    let set = mem.recall_with_cues(db, Some((&vectors[0], &model_name, dim)), project, &cues);
     let _ = db.touch_memory_usage(FACTS, &set.injected_facts);
     let matches = set
         .retrieved
         .iter()
         .map(|r| SearchHit {
             source: "memory".to_string(),
-            conversation_id: None,
+            // The chat it was learned in, when that chat still exists: the
+            // timeline links to it (`CUE-UI-1`).
+            conversation_id: r
+                .source_conversation
+                .clone()
+                .filter(|id| db.get_conversation(id).ok().flatten().is_some()),
             title: r.name.clone(),
-            created_at: 0,
+            created_at: date_ms(&r.created),
             snippet: r.description.clone(),
             kind: Some(r.kind.clone()),
             path: None,
+            why: Some(r.why.clone()).filter(|w| !w.is_empty()),
         })
         .collect();
     RecallResult { index: set.index, matches, injected_facts: set.injected_facts }
+}
+
+/// A `YYYY-MM-DD` memory date as milliseconds, or 0 when it does not read.
+fn date_ms(date: &str) -> i64 {
+    chrono::NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d")
+        .ok()
+        .and_then(|d| d.and_hms_opt(12, 0, 0))
+        .map(|dt| dt.and_utc().timestamp_millis())
+        .unwrap_or(0)
 }
 
 // ---- context manifest (WHY-1/2): explaining what shaped an answer ----
@@ -250,6 +273,10 @@ impl ContextRefs {
             about_you_present,
             facts: injected_facts.to_vec(),
             lessons: matches.iter().filter(|m| m.kind.as_deref() == Some("lesson")).map(|m| m.title.clone()).collect(),
+            why: matches
+                .iter()
+                .filter_map(|m| m.why.clone().map(|w| (m.title.clone(), w)))
+                .collect(),
             ..Default::default()
         }
     }
@@ -280,11 +307,17 @@ pub struct ContextManifest {
 /// One index-style line per named entry still on disk; a name the caller
 /// listed that no longer exists (forgotten since) is silently dropped rather
 /// than guessed at.
-fn rehydrate(mem: &MemoryStore, collection: &str, names: &[String]) -> String {
+///
+/// `why` (`CUE-UI-1`) is the reason recall gave for an entry, by name; an entry
+/// that has one carries it at the end of its line.
+fn rehydrate(mem: &MemoryStore, collection: &str, names: &[String], why: &std::collections::BTreeMap<String, String>) -> String {
     names
         .iter()
         .filter_map(|n| mem.read_in(collection, n))
-        .map(|f| format!("- [{}] ({}) {}\n", f.name, f.kind, f.description))
+        .map(|f| match why.get(&f.name) {
+            Some(w) => format!("- [{}] ({}) {} \u{2014} {w}\n", f.name, f.kind, f.description),
+            None => format!("- [{}] ({}) {}\n", f.name, f.kind, f.description),
+        })
         .collect()
 }
 
@@ -295,7 +328,7 @@ fn rehydrate(mem: &MemoryStore, collection: &str, names: &[String]) -> String {
 /// "in every answer" would make the one surface that explains the prompt the
 /// one surface that overstates it. A name with no file left is dropped from
 /// both, the same as `rehydrate` does.
-fn fact_layers(mem: &MemoryStore, names: &[String]) -> [ContextLayer; 2] {
+fn fact_layers(mem: &MemoryStore, names: &[String], why: &std::collections::BTreeMap<String, String>) -> [ContextLayer; 2] {
     let (mut global, mut topical) = (Vec::new(), Vec::new());
     for n in names {
         let Some(f) = mem.read_in(FACTS, n) else { continue };
@@ -308,13 +341,13 @@ fn fact_layers(mem: &MemoryStore, names: &[String]) -> [ContextLayer; 2] {
     [
         ContextLayer {
             label: "Remembered (notes)".into(),
-            text: rehydrate(mem, FACTS, &global),
+            text: rehydrate(mem, FACTS, &global, why),
             sources: global,
             always_on: true,
         },
         ContextLayer {
             label: "Remembered (when relevant)".into(),
-            text: rehydrate(mem, FACTS, &topical),
+            text: rehydrate(mem, FACTS, &topical, why),
             sources: topical,
             always_on: false,
         },
@@ -341,7 +374,8 @@ fn live_manifest(db: &Db, mem: &MemoryStore, conversation_id: &str) -> Vec<Conte
     // built, so it is scoped exactly as recall is.
     let project = conv.as_ref().and_then(|c| c.project_id.clone());
     let set = mem.recall_for_project(db, None, project.as_deref());
-    let [notes, when_relevant] = fact_layers(mem, &set.injected_facts);
+    let none = std::collections::BTreeMap::new();
+    let [notes, when_relevant] = fact_layers(mem, &set.injected_facts, &none);
     let lessons = mem.list_in(LESSONS).into_iter().map(|f| f.name).collect::<Vec<_>>();
     vec![
         ContextLayer {
@@ -361,7 +395,7 @@ fn live_manifest(db: &Db, mem: &MemoryStore, conversation_id: &str) -> Vec<Conte
         when_relevant,
         ContextLayer {
             label: "Learned (lessons)".into(),
-            text: rehydrate(mem, LESSONS, &lessons),
+            text: rehydrate(mem, LESSONS, &lessons, &none),
             sources: lessons,
             always_on: false,
         },
@@ -387,7 +421,7 @@ fn historical_manifest(db: &Db, mem: &MemoryStore, conversation_id: &str, refs: 
     let conv = db.get_conversation(conversation_id).ok().flatten();
     // Split on what those facts say *now*, matching how this function already
     // rehydrates their wording from the current file rather than a frozen copy.
-    let [notes, when_relevant] = fact_layers(mem, &refs.facts);
+    let [notes, when_relevant] = fact_layers(mem, &refs.facts, &refs.why);
     vec![
         ContextLayer {
             label: "Soul (standing instructions)".into(),
@@ -406,7 +440,7 @@ fn historical_manifest(db: &Db, mem: &MemoryStore, conversation_id: &str, refs: 
         when_relevant,
         ContextLayer {
             label: "Learned (lessons)".into(),
-            text: rehydrate(mem, LESSONS, &refs.lessons),
+            text: rehydrate(mem, LESSONS, &refs.lessons, &refs.why),
             sources: refs.lessons.clone(),
             always_on: false,
         },
@@ -532,6 +566,10 @@ pub fn remember_fact_cmd(
             expires_at: None,
             origin: None,
             cue: None,
+            confidence: None,
+            status: None,
+            supersedes: None,
+            superseded_by: None,
             project: project.clone(),
         };
         match mem.save(&db, &fact) {
@@ -571,6 +609,71 @@ pub fn forget_memory_fact_cmd(
     let file = mem.forget(&db, &name).map_err(PoiesisError::Message)?;
     let _ = db.log_activity(None, "memory", &format!("forgot {name}"));
     Ok(file)
+}
+
+/// A button on a recalled entry, as a command trace in the chat's session log: the
+/// same place `/forget` is written, so `user_signals` and credit read it without
+/// a new channel (`CUE-UI-1`).
+fn trace_press(db: &Db, conversation_id: Option<&str>, name: &str, entry: &str, note: &str) {
+    let Some(conversation_id) = conversation_id else { return };
+    crate::agent::log::record_command(
+        db,
+        conversation_id,
+        None,
+        &crate::agent::log::CommandTrace {
+            name: name.to_string(),
+            args: entry.to_string(),
+            by: "user".to_string(),
+            outcome: "done".to_string(),
+            note: Some(note.to_string()),
+            message_id: None,
+        },
+    );
+}
+
+/// `CUE-UI-1`, Outdated: the person said a recalled fact is out of date and what
+/// is right now. The answer becomes the new fact, the old one stays as an earlier
+/// version (`MemoryStore::supersede_fact`). Returns the new fact's name.
+#[tauri::command]
+pub fn outdate_memory_fact_cmd(
+    mem: State<'_, MemoryStore>,
+    db: State<'_, Db>,
+    name: String,
+    right_now: String,
+    conversation_id: Option<String>,
+) -> Cmd<String> {
+    let saved = mem
+        .supersede_fact(&db, &name, &right_now, conversation_id.as_deref())
+        .map_err(PoiesisError::Message)?;
+    trace_press(
+        &db,
+        conversation_id.as_deref(),
+        crate::agent::credit::OUTDATED,
+        &name,
+        &format!("{name} is out of date; it is now {saved}"),
+    );
+    let _ = db.log_activity(conversation_id.as_deref(), "memory", &format!("replaced {name} with {saved}"));
+    Ok(saved)
+}
+
+/// `CUE-UI-1`, Not relevant here: it counts against the entry for this answer
+/// and changes nothing else.
+#[tauri::command]
+pub fn not_relevant_memory_cmd(db: State<'_, Db>, name: String, conversation_id: Option<String>) -> Cmd<()> {
+    trace_press(
+        &db,
+        conversation_id.as_deref(),
+        crate::agent::credit::NOT_RELEVANT,
+        &name,
+        &format!("{name} was not relevant here"),
+    );
+    Ok(())
+}
+
+/// Facts a newer one replaced, newest first: the Memory tab's "Earlier versions".
+#[tauri::command]
+pub fn list_earlier_versions_cmd(mem: State<'_, MemoryStore>) -> Vec<Fact> {
+    mem.list_superseded(FACTS)
 }
 
 #[tauri::command]
@@ -898,6 +1001,10 @@ pub async fn resolve_change_proposal_cmd(
                     expires_at: None,
                     origin: None,
                     cue: None,
+                    confidence: None,
+                    status: None,
+                    supersedes: None,
+                    superseded_by: None,
                     // A lesson the user accepted from the review queue is not
                     // fenced to a project: they were shown it out of context
                     // and said yes to it as a standing lesson.
@@ -1239,6 +1346,10 @@ mod tests {
             expires_at: None,
             origin: None,
             cue: None,
+            confidence: None,
+            status: None,
+            supersedes: None,
+            superseded_by: None,
             project: None,
         }
     }
@@ -1294,6 +1405,60 @@ mod tests {
         let gated = layers.iter().find(|l| l.label == "Remembered (when relevant)").unwrap();
         assert!(!gated.always_on, "a topical fact must not claim it rides every answer");
         assert_eq!(gated.sources, vec!["pricing-currency".to_string()]);
+    }
+
+    #[test]
+    fn the_historical_manifest_carries_the_reason_recall_gave() {
+        let (mem, db, _tmp) = store();
+        mem.save(&db, &fact("anna-contact", "preference")).unwrap();
+        let refs = ContextRefs {
+            facts: vec!["anna-contact".into()],
+            why: [("anna-contact".to_string(), "you named Anna".to_string())].into(),
+            ..Default::default()
+        };
+        let conv = db.create_conversation("test", None, false).unwrap();
+        let layers = historical_manifest(&db, &mem, &conv.id, &refs);
+        let all: String = layers.iter().map(|l| l.text.clone()).collect();
+        assert!(all.contains("anna-contact") && all.contains("you named Anna"), "{all}");
+        // An answer recorded before recall could say why reads as before.
+        let old = historical_manifest(&db, &mem, &conv.id, &ContextRefs { facts: vec!["anna-contact".into()], ..Default::default() });
+        assert!(!old.iter().any(|l| l.text.contains("you named")));
+    }
+
+    /// `CUE-UI-1`: Outdated replaces the belief and is counted against it; the
+    /// next recall has only the new answer.
+    #[test]
+    fn pressing_outdated_replaces_the_fact_and_counts_against_it() {
+        let (mem, db, _tmp) = store();
+        mem.save(&db, &fact("lives-in-hamburg", "preference")).unwrap();
+        let conv = db.create_conversation("test", None, false).unwrap().id;
+        let answer = db
+            .append_message(
+                &conv,
+                &crate::db::NewMessage {
+                    role: "assistant".into(),
+                    content: "Hello from Hamburg".into(),
+                    model_name: None,
+                    model_provenance: None,
+                    steps_json: None,
+                    attachments: Vec::new(),
+                },
+            )
+            .unwrap();
+        let refs = ContextRefs { facts: vec!["lives-in-hamburg".into()], ..Default::default() };
+        db.finalize_message(&answer.id, "Hello from Hamburg", None, Some(&serde_json::to_string(&refs).unwrap()), None, None)
+            .unwrap();
+
+        let new = mem.supersede_fact(&db, "lives-in-hamburg", "Lives in Berlin", Some(&conv)).unwrap();
+        trace_press(&db, Some(&conv), crate::agent::credit::OUTDATED, "lives-in-hamburg", "out of date");
+
+        let index = mem.recall_for(&db, None).index;
+        assert!(index.contains(&new) && !index.contains("lives-in-hamburg"), "{index}");
+        assert!(crate::agent::log::user_signals(&db, &conv)[0].contains("out of date"));
+        // The old entry is gone from the prompt but still on disk, so credit has nothing to read:
+        // it is the answer's record that is credited, and the name is no longer a live entry.
+        crate::agent::credit::credit_conversation(&db, &mem, &conv);
+        assert!(db.memory_credit_map("facts").unwrap().get("lives-in-hamburg").is_some_and(|c| c.hurt == 1));
     }
 
     #[test]

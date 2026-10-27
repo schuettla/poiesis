@@ -23,6 +23,8 @@ function ago(ts: number): string {
  */
 export default function MemoryPanel() {
   const [facts, setFacts] = useState<api.Fact[]>([]);
+  // `CUE-UI-1`: beliefs a newer answer replaced. Kept on disk, out of every prompt.
+  const [earlier, setEarlier] = useState<api.Fact[]>([]);
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -48,6 +50,7 @@ export default function MemoryPanel() {
   async function refresh() {
     try {
       setFacts(await api.listMemoryFacts());
+      setEarlier(await api.listEarlierVersions().catch(() => []));
       setPending(await api.getPendingConsolidation());
       setProfile(await api.getProfile());
     } catch {
@@ -385,6 +388,25 @@ export default function MemoryPanel() {
           )}
         </div>
       ))}
+
+      {earlier.length > 0 && (
+        <details className="memory-earlier">
+          <summary>Earlier versions ({earlier.length})</summary>
+          <p className="memory-earlier-note">
+            You told me these were out of date. I no longer use them, and I keep them here.
+          </p>
+          {earlier.map((f) => (
+            <div className="memory-card memory-card-earlier" key={f.name}>
+              <div className="memory-card-head">
+                <span className="memory-name">{f.name}</span>
+                <span className="memory-created">{f.created}</span>
+              </div>
+              <p className="memory-body">{f.body}</p>
+              {f.superseded_by && <p className="memory-last-used">replaced by {f.superseded_by}</p>}
+            </div>
+          ))}
+        </details>
+      )}
     </div>
   );
 }

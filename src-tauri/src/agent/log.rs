@@ -222,6 +222,10 @@ pub fn user_signals(db: &Db, conversation_id: &str) -> Vec<String> {
             } else if t.name == "forget" && t.by == "user" {
                 let what = t.note.as_deref().unwrap_or(&t.args);
                 out.push(format!("The user told me to {what}."));
+            } else if t.name == super::credit::OUTDATED && t.by == "user" {
+                out.push(format!("The user said what I remembered as {} was out of date.", t.args));
+            } else if t.name == super::credit::NOT_RELEVANT && t.by == "user" {
+                out.push(format!("The user said what I remembered as {} did not belong here.", t.args));
             }
         }
     }
@@ -649,6 +653,19 @@ mod tests {
         assert_eq!(said[2], "The user said not now to switching to Workspace.");
         assert!(said[3].starts_with("The user told me to"));
         assert!(was_rewound(&db, &c));
+    }
+
+    /// `CUE-UI-1`: the two buttons on a recalled entry are corrections too.
+    #[test]
+    fn pressing_outdated_or_not_relevant_reaches_reflection_as_a_sentence() {
+        let db = db();
+        let c = conv(&db);
+        record_command(&db, &c, None, &answered(super::super::credit::OUTDATED, "lives-in-hamburg", "done", None));
+        record_command(&db, &c, None, &answered(super::super::credit::NOT_RELEVANT, "check-header", "done", None));
+        let said = user_signals(&db, &c);
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(said[0].contains("lives-in-hamburg") && said[0].contains("out of date"));
+        assert!(said[1].contains("check-header") && said[1].contains("did not belong here"));
     }
 
     /// `CPX-5`: two no's, in any conversations, and it stops being suggested.

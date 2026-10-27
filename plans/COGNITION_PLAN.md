@@ -11,7 +11,7 @@ commit per phase.
 |---|---|---|
 | 0 - Fix what exists, and measure | done (see notes) | 2026-10-27 |
 | 1 - The conversation becomes the episode | done (see notes) | 2026-10-27 |
-| 2 - Recall you can see | not started | |
+| 2 - Recall you can see | done (see notes) | 2026-10-27 |
 | 3 - Beliefs with evidence | not started | |
 | 4 - The daily tidy-up | not started | |
 | 5 - Lessons that fire, and rehearsal | not started | |
@@ -148,6 +148,76 @@ commit per phase.
 - **Felt checks not run here.** The accept item "do a report task, finish it,
   start the same kind of task a day later in a new chat: the hint appears" needs
   the app, a chat model and an embed model. It was not run in this environment.
+
+### Phase 2 notes
+
+- **Pulled forward from Phase 3 (BLF-1, minimum).** The Outdated accept item
+  needs a replaced belief to leave the prompt and still be readable, so `Fact`
+  gained `confidence`, `status` (`active | contested | superseded`),
+  `supersedes` and `superseded_by` now. `render_entry` writes them only when
+  set. `list_in` hides superseded entries, so every list that builds a prompt,
+  the vector backfill, scope backfill, FTS and the counts skip them with no
+  other change; `list_superseded` reads them. `MemoryStore::supersede_fact`
+  saves the new answer (with `supersedes`), marks the old file, drops its vector,
+  and takes the new one back if the old cannot be marked. Left for Phase 3:
+  `evidence`, `valid_from`, the relation check at the write sites (BLF-2),
+  usefulness in `prune_lessons` (BLF-3), the Memory and Lessons tab sections
+  (BLF-UI-1), and `Vitality` counting only active (it does, through `list_in`;
+  the growth-stage rule on the frontend still needs a look).
+- **CUE-1.** `recall_with_cues` (`recall_for_project` is now a wrapper). Topical
+  facts and lessons are over-fetched four times, ranked by similarity times a
+  usefulness factor, and cut to the old limits (5 facts, 3 lessons); the
+  similarity floor still decides who is eligible. The factor is 1 for an item
+  with under 3 chances and twice its usefulness otherwise, so a neutral record
+  changes nothing. Global facts keep their wholesale place and, under the cap,
+  the most useful come first (also on the no-embedder path). A topical fact
+  whose name or description carries a capitalised word from the message, or an
+  entity from the chat's session notes, is added behind the ones that matched by
+  meaning (`Cues`, `names_in`). `recall_for` takes the conversation id for the
+  notes. Exclusion: `Fact::in_prompt` (not superseded, not kind `intention`) in
+  recall and `index_markdown`.
+  **Deviations:** the plan's third cue, the task kind of the conversation, is not
+  used: no memory entry carries a task kind to match it against. `fires_on`
+  lessons are not excluded yet: the field arrives in Phase 5. A name at the
+  start of a sentence counts as a name; the fact must carry the same word, which
+  keeps false hits rare.
+- **CUE-2.** `RecalledEntry.why`, `SearchHit.why`, `ContextRefs.why` (both prompt
+  paths: the backend `gather` through `ContextRefs::for_turn`, the chat window
+  through `buildContextRefs`). Reasons: "you named Anna", "X is in this chat's
+  notes", "same project", else "about check header" (the entry's name). Matches
+  also carry the source conversation (when it still exists) and the date.
+  "What I'm working from" shows the reason at the end of the entry's line for a
+  recorded answer.
+- **CUE-3.** An entry with `confidence: low` or `status: contested` gets
+  `[unsure, noted DATE]` or `[contested, noted DATE]` at the end of its index
+  line, and the memory block gets one sentence ("A note marked [unsure] or
+  [contested] may be wrong: say so, and give its date, when you rely on it.")
+  only when a line has the marker. `context.rs`, `store.ts`, the fixture and the
+  golden moved together; both gates pass. Nothing sets `low` or `contested` yet
+  (Phase 3, BLF-2), so no real prompt changes today.
+- **CUE-UI-1.** In the recall chip each remembered or learned entry shows its
+  reason, a link to the chat it came from, and two text buttons.
+  **Outdated** (facts only) asks "What is right now?", then
+  `outdate_memory_fact_cmd` replaces the fact (above) and writes an `outdated`
+  command trace. **Not relevant here** writes a `not-relevant` trace. Both
+  traces are read by `user_signals` (so reflection sees them) and by credit
+  (hurt on the last answer that carried the entry). The Memory tab lists replaced
+  facts under "Earlier versions" (`list_earlier_versions_cmd`).
+- **Gate.** `recall_precision` and `stale_per_100` in `LearningNumbers` are
+  computed now: precision is the share of recalled entries nobody pressed
+  Outdated or Not relevant on; stale is Outdated presses per 100 recalled facts;
+  both are `None` under 10 recalled entries in the window. The Phase 0 snapshot
+  has `None` for both, so "precision must have risen against Phase 0" can only be
+  judged against the first snapshot taken from now on, after some weeks of use.
+- **Checks.** `vitest`: all pass except the old `ThoughtStrip` failure. `tsc`:
+  only the old `AgentRun.tsx` error. `cargo test --lib`: the same 7 stable
+  failures and the flaky `db` fork tests; every new test passes; clippy shows
+  nothing in the touched files.
+- **Felt check not run here.** "Say I live in Hamburg, press Outdated on the
+  recalled fact, type Berlin: the next recall says Berlin and the Memory tab
+  shows Hamburg under Earlier versions" needs the app. The backend half is
+  covered by `pressing_outdated_replaces_the_fact_and_counts_against_it` and
+  `a_belief_the_user_called_outdated_is_replaced_not_deleted`.
 
 **What v2 changes.** v1 described a second memory system beside the one that
 exists: a new `episodes` table, a new `memory_uses` table, a new

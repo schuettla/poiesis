@@ -41,6 +41,18 @@ impl Db {
         Ok(())
     }
 
+    /// The `context_json` of every assistant answer written in `[from, to)`: what
+    /// reached each answer, for the recall numbers.
+    pub fn context_records_between(&self, from: i64, to: i64) -> Result<Vec<String>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT context_json FROM messages
+             WHERE role = 'assistant' AND context_json IS NOT NULL AND created_at >= ?1 AND created_at < ?2",
+        )?;
+        let rows = stmt.query_map(params![from, to], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// `(ok, failed)` calls of one tool in a conversation between two times.
     /// `to` is exclusive; `None` means no end.
     pub fn tool_results_between(

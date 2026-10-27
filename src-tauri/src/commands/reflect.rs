@@ -545,6 +545,10 @@ async fn reflect_pass(
                         .flatten()
                         .map(|p| p.id),
                     cue: Some(draft.cue.trim().to_string()).filter(|c| !c.is_empty()),
+                    confidence: None,
+                    status: None,
+                    supersedes: None,
+                    superseded_by: None,
                 };
                 if mem.save_lesson(&db, &fact).is_err() {
                     continue;
@@ -1026,6 +1030,10 @@ mod tests {
             origin: None,
             project: None,
             cue: Some("tool:read_file".into()),
+            confidence: None,
+            status: None,
+            supersedes: None,
+            superseded_by: None,
         };
         mem.save_lesson(&db, &lesson).unwrap();
         let refs = crate::commands::memory::ContextRefs { lessons: vec!["check-header".into()], ..Default::default() };

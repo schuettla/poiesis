@@ -312,6 +312,15 @@ fn project_block(name: Option<&str>, instructions: Option<&str>) -> String {
     format!("## Project: {name} (instructions for this project; the persona/system prompt above still governs voice, format and depth)\n{text}")
 }
 
+/// `CUE-3`: said once, and only when a line of the index carries the marker
+/// (`Fact::hedge_marker`). Word for word `HEDGE_NOTE` in `store.ts`.
+const HEDGE_NOTE: &str = " A note marked [unsure] or [contested] may be wrong: say so, and give its date, when you rely on it.";
+
+/// Does any line of the index carry a hedge marker?
+fn has_hedge_marker(index: &str) -> bool {
+    index.contains(" [unsure, noted ") || index.contains(" [contested, noted ")
+}
+
 /// The durable memory index, with a caveat when tools (and so `memory` reads)
 /// are off.
 fn memory_index_block(index: Option<&str>, tools_enabled: bool) -> String {
@@ -324,7 +333,8 @@ fn memory_index_block(index: Option<&str>, tools_enabled: bool) -> String {
     } else {
         " Tools are off — treat descriptions as the only available detail."
     };
-    format!("## Your notes about the user (durable facts)\n{i}\n(Read a note's full text with memory(op:\"read\", name:…) before relying on its details.{detail})")
+    let hedge = if has_hedge_marker(i) { HEDGE_NOTE } else { "" };
+    format!("## Your notes about the user (durable facts)\n{i}\n(Read a note's full text with memory(op:\"read\", name:…) before relying on its details.{detail}{hedge})")
 }
 
 /// A compact rendering of durable session state, passed through as stored.
@@ -546,6 +556,7 @@ pub async fn gather(
                     .flatten()
                     .map(|p| p.id)
                     .as_deref(),
+                Some(opts.conversation_id),
             )
             .await;
         inputs.memory_index = Some(recalled.index);
@@ -779,6 +790,21 @@ mod tests {
         assert!(out.contains("- pdf:"));
         assert!(!out.contains("review"), "{out}");
         assert!(!out.contains("more)"), "{out}");
+    }
+
+    /// `CUE-3`: the sentence appears only with a marked line, so a memory with
+    /// nothing unsure in it builds the same prompt as before.
+    #[test]
+    fn the_hedge_sentence_comes_only_with_a_marked_note() {
+        let plain = memory_index_block(Some("- [a] (fact) Likes tea"), true);
+        assert!(!plain.contains("may be wrong"));
+        assert!(plain.ends_with("before relying on its details.)"));
+        let unsure = memory_index_block(Some("- [a] (fact) Likes tea [unsure, noted 2026-10-27]"), true);
+        assert!(unsure.contains(HEDGE_NOTE.trim_start()), "{unsure}");
+        let contested = memory_index_block(Some("- [a] (fact) Tea? [contested, noted 2026-10-27]"), false);
+        assert!(contested.contains("Tools are off") && contested.contains("may be wrong"));
+        // A description that merely mentions the word does not trigger it.
+        assert!(!memory_index_block(Some("- [a] (fact) Says he is unsure"), true).contains("may be wrong"));
     }
 
     fn base() -> PromptInputs {

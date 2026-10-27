@@ -168,6 +168,10 @@ mod tests {
                     origin: None,
                     project: None,
                     cue: cue.map(str::to_string),
+                    confidence: None,
+                    status: None,
+                    supersedes: None,
+                    superseded_by: None,
                 },
             )
             .unwrap();
@@ -308,6 +312,10 @@ mod tests {
                     origin: None,
                     project: None,
                     cue: None,
+                    confidence: None,
+                    status: None,
+                    supersedes: None,
+                    superseded_by: None,
                 },
             )
             .unwrap();
