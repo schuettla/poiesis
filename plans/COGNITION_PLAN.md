@@ -1,1101 +1,1004 @@
-# Cognition plan: memory and self-learning for Poiesis
+# Cognition plan: grow the memory and self-learning Poiesis already has
 
-Status: concept and plan, not built. Written 2026-10-27.
+Status: plan, not built. v1 written 2026-10-27; **v2 rewritten 2026-10-27**.
 
-This plan replaces the idea that "self-learning" means "reflection writes
-lessons". It has two halves that only work together:
+**What v2 changes.** v1 described a second memory system beside the one that
+exists: a new `episodes` table, a new `memory_uses` table, a new
+`memory/habits/` store, a new `intentions` table, a new `improvements` table, a
+new rehearsal sandbox and a new "Memory page". All of these already have a home
+in the code. v2 is an **extension plan**: every piece below names the existing
+function, table, file or component it extends, and Part 0 is the map of what
+exists. **No new store** is added unless the table in Part II says why no
+existing one can carry it. Today the answer is: none needs to be added.
 
-1. **Memory** (Parts II and III.1 to III.8): what the harness keeps, taken
-   from how human memory works, with the known flaws of human memory
-   designed out.
-2. **The self-improvement loop** (Part III.9 to III.12): how the harness
-   changes its own setup, tests the change, keeps what works, and learns
-   which kinds of change work. This half is built on Google's Harness²,
-   adapted so that no live user task is ever run twice.
+Unchanged from v1: the goal (real self-learning, not "reflection writes
+lessons"), the human-memory model, the flaws we design out, the Harness²
+improvement loop, and measurement before building.
 
-It also takes what is useful from HyperSkill (see Part I.4), and leaves out
-what does not fit a user-facing assistant.
+Rules for every task here:
 
-Rules for every task here (unchanged from earlier plans):
-
-- The self is plain markdown the user owns. SQLite holds only derived data
-  (episodes, usage, scores), never something the user wrote.
-- Nothing is destroyed. Forget means archive or trash. Every self-write is
-  visible and reversible.
-- The autonomy rungs (`Off` / `Ask` / `Auto`) gate every self-change class.
-- UI copy is first person (`PRES-0`), dialogs have a fixed size, shared
-  components are reused. No "dream" or "brain" words in the UI.
-- Background thinking is local by default and is cancelled by any user input.
+- The self is plain markdown the user owns (`memory/`, `MemoryStore`). SQLite
+  holds only derived data (outcomes, counts, scores), never something the user
+  wrote.
+- Nothing is destroyed. Forget means `.trash/` (`forget_in`), consolidation
+  snapshots first (`snapshot`), unreadable files go to `.quarantine/`. Every
+  self-write is visible and reversible.
+- The existing autonomy classes (`AUTONOMY_CLASSES` in `store.ts`, `autonomy.rs`)
+  gate every self-change. **No new class** is added; two existing classes gain
+  a rung (Part II).
+- UI copy is first person (`PRES-0`), dialogs keep a fixed size, shared
+  components are reused, no "dream" or "brain" words.
+- The chat stream stays quiet: an answer plus at most one plain line. Anything
+  new in a conversation goes inside an existing collapsed step or chip, never a
+  new row type.
+- Background work is local by default and is cancelled by user input.
+- Any change to prompt text goes through the prompt golden gate
+  (`context_golden.rs`) and its mirror in `store.ts`.
 
 ## What this plan uses from the Dual-process plan
 
 This plan uses the **decision model** (the `agent/decide` seam), never the
-`fast-slow` experiment. Nothing here needs **Fast & slow thinking** switched
-on.
+`fast-slow` experiment. Nothing here needs **Fast & slow thinking** switched on.
 
 - **No experiment flag.** Every purpose this plan adds is its own row in
-  `policy.rs` with no `experiment` named, like the five `DEC-6` sites. The
-  `ask_with` gate only refuses a purpose whose row names an experiment, so
-  these run whatever the Experiments page says. The autonomy rungs are this
-  plan's only switches.
-- **All three question kinds are used**, not only yes/no:
+  `policy.rs` with no `experiment` named, like the `DEC-6` sites that already
+  run (`MemScope` in `memory_skill.rs`, `skip_reflection` in `reflect.rs`). The
+  autonomy classes are this plan's only switches.
+- **The purposes, all background, all with a fallback:**
 
-  | Purpose | Kind | Options / levels | Used by |
-  |---|---|---|---|
-  | `TaskKind` | `Choice` | a fixed list (`report`, `code`, `mail`, `files`, `research`, `writing`, `chat`, ...) plus `unsure` | `EPI-2`, `CUE-1`, `EPI-UI-1`, `BND-2`, `MET-1` |
-  | `BeliefRelation` | `Choice` | `same`, `refines`, `contradicts`, `unrelated`, `unsure` | `BLF-2`, `SLP-1` |
-  | `CandidateGroup` | `Choice` | the ids of existing beliefs and other episodes' candidates, plus `new` | `SLP-1` step 2 |
-  | `RehearsalMatch` | `Score` | `repeats the mistake` .. `matches the fix` (5 levels) | `RHS-2`, `IMP-3`, when the args can't be compared exactly |
-  | `RecallUseful` | `Noul` | "Did the answer use this item?" | `CRD-2`, the fact row |
+  | Purpose | Kind | Options / levels | Extends | Without a decision model, `unsure`, or confidence under 0.6 |
+  |---|---|---|---|---|
+  | `TaskKind` | `Choice` | `report`, `code`, `mail`, `files`, `research`, `writing`, `chat`, ... plus `unsure` | the reflection pass (`reflect_conversation_cmd`) | Rules from what the run used: mail tools → `mail`; code tools or a folder → `code`; a document artifact → `report`; else `unknown`. `unknown` is never shown as "Last time" |
+  | `BeliefRelation` | `Choice` | `same`, `refines`, `contradicts`, `unrelated`, `unsure` | the three write sites (III.4) and `lessons_look_alike` | Today's `lessons_look_alike` for lessons; similarity over `SEM_FLOOR` for facts marks both `contested`, never two silent actives |
+  | `CandidateGroup` | `Choice` | ids of existing beliefs and other conversations' candidates, plus `new` | `consolidate_memory_cmd` | Similarity over `SEM_FLOOR` groups; under it, `new` |
+  | `RehearsalMatch` | `Score` | `repeats the mistake` .. `matches the fix` (5 levels) | the GLD check loop (`golden.rs`) | Only the exact args comparison; the rest is `not_run` |
+  | `RecallUseful` | `Noul` | "Did the answer use this item?" | credit at reflection (III.3) | `unknown` |
 
-- **All of them are background purposes**: they wait for the engine to start,
-  run on the processor too, and go to the cloud only on their own override
-  (decision 12 of the Dual-process plan). None is on the hot path, so none
-  needs a warm engine on the graphics card.
-- **Every one has a fallback without a decision model**, as `DEC-6` requires
-  ("users without the model lose nothing"):
-
-  | Purpose | Without a decision model, or `unsure`, or confidence under 0.6 |
-  |---|---|
-  | `TaskKind` | Rules: the toolsets the run used (mail tools: `mail`; code tools or a repo: `code`; an artifact of kind document: `report`); else `unknown`. `unknown` episodes are kept but never shown as "Last time" and never counted for bundles |
-  | `BeliefRelation` | Similarity over the SEM floor: both `contested`, never two silent actives. Under it: `unrelated` |
-  | `CandidateGroup` | Similarity over the SEM floor groups; under it, `new` |
-  | `RehearsalMatch` | Only the exact args comparison; candidates that need more get `not_run` and stay `confidence: medium` |
-  | `RecallUseful` | `unknown` (not judged, as with no chances) |
-
-- **UI pieces are reused, not their gates.** "Last time" (`EPI-UI-1`) uses
-  the `SEE-3` hint line component, but its own trigger: a similarity lookup
-  at conversation start, with no decision model and no experiment.
-  `composer_hint_cmd` and its gate stay as they are. `sureWord` (`SEE-4`) is
-  a plain formatter and is used directly.
-- **Data, not behaviour.** `MET-1` and III.7 read the decisions table and
-  `CTL-3` outcomes. With `fast-slow` off there are fewer decision rows (only
-  this plan's purposes and the `DEC-6` sites), so the self-model is built
-  from episodes first and calibration is extra when present.
+- They run on the processor, wait for the engine, and go to the cloud only on
+  their own override (decision 12 of the Dual-process plan).
+- **UI pieces are reused, not their gates.** "Last time" uses the `SEE-3`
+  composer hint component with its own trigger. `sureWord` (`SEE-4`) is used
+  as a plain formatter.
 - **Unproven seam.** No real model has answered a decision yet (Dual-process
-  step 20). Each purpose above ships with a seed set under
-  `tests/eval/decide/` so "Calibrate now" picks it up, and is used
-  uncalibrated only with the stricter bar, like every other purpose.
+  step 20). Each purpose ships with a seed set under `tests/eval/decide/` and is
+  used uncalibrated only with the stricter bar.
+
+---
+
+# Part 0 - What exists today (the map this plan extends)
+
+Everything in this part is in the code now. File names are relative to
+`src-tauri/src/` for Rust and `src/` for the frontend.
+
+## 0.1 Stores
+
+| Store | Where | What it holds | Notes |
+|---|---|---|---|
+| Facts | `memory/facts/*.md`, `MemoryStore` (`memory/mod.rs`) | `Fact`: name, description, kind (`preference`/`fact`/`decision`/`project`), created, `source_conversation`, body, `scope` (global/topical, `SCP`), `expires_at` (`TTL`), `project` (`PRJ-8`) | Optional frontmatter with `#[serde(default)]`: new fields are cheap |
+| Lessons | `memory/lessons/*.md`, same struct, kind `lesson` | plus `recurrence`, `last_seen` (`RPT-1`), `origin: rewind` (`CPX-5`) | `LESSON_CAP` 40, `prune_lessons` trashes the **oldest** |
+| Standing instructions | `memory/SOUL.md` | user-owned, agent only proposes | `SOUL_CAP` 1500 |
+| Profile | `memory/PROFILE.md` | the agent's synthesis of how you like to be talked to (`PRO`) | untitled prose on the Memory tab (`SMP-5`) |
+| Index | `memory/MEMORY.md` | generated, `index_markdown` | wholesale fallback when no embedder |
+| Trash / quarantine / snapshots | `memory/.trash/`, `.quarantine/`, `.snapshots/` | `forget_in`/`restore_trash`, `quarantine_scan`, `snapshot`/`restore_snapshot` | trash has no browsing UI, only the undo toast |
+| Memory FTS | `memory_fts` | rebuilt wholesale on every write (`sync_fts`) | |
+| Memory vectors | `vectors`, scope `memory`, collection facts/lessons | name + description embedded (`missing_vector_texts`) | |
+| Last surfaced | `memory_usage(collection, ref_key, last_used_at)` | when a fact last reached a prompt (`SEM-UI-4`) | **only a timestamp**, written by `touch_memory_usage` |
+| Per-answer context | `messages.context_json` (`ContextRefs`) | persona, soul present, profile present, **facts and lessons that reached this answer**, files | read only by the "What I'm working from" panel today |
+| Conversation | `conversations`: `summary` (rolling, compaction), `session_state_json` (entities / constraints / decisions, written by the `remember` tool in `present.rs`), `reflected_at`, `project_id`, `persona_id`, `parent_conversation_id` | | already most of an episode |
+| Session log | `session_events` (`agent/log.rs`) | every message a run saw, rewinds, command traces; `replay(db, run_id)` rebuilds the message array | `user_signals` and `was_rewound` read it |
+| Tool evidence | `tool_stats` (per model and tool, ok/fail, conversation), `tool_fixes` (failed args, error, fixed args) | | `FIX-2`, `HEAL-2` |
+| Skill outcomes | `skill_runs(skill_name, conversation_id, tool_failures, corrected)` | written by `record_skill_run` in `skillpack.rs` | read by `propose_skill_revisions` (`OUT-2`) |
+| Proposals | `change_proposals(target, slug, proposed_text, rationale, description, status)` | targets: `soul`, `lesson`, `lesson-critic`, `skill`, `skill-revision`, `project_instructions`, `engine-memory`, `email`, `app` | the one queue for every self-change |
+| Decisions | `decisions`, `decision_outcomes` (`CTL-3`) | prediction before outcome | |
+| Verifications | `verifications` (`USE-10`) | per answer: claims and verdicts | |
+| Activity | `activity_log` | one line per self-change (`reflect`, `memory`, `scheduler`) | |
+| Pending tidy-up | setting `PENDING_CONSOLIDATION` | the last `Consolidation` proposal | |
+| Project memory | `projects.instructions` (`PRJ-7`), `propose_project_instructions` | | the existing "workspace facts" |
+| Persona skills | `personas.skills_json` (`SKL-6`) | a persona narrows the advertised skills | the existing "setup per kind of work" |
+| CLI agent learning | `engine_rules`, `engine_signals` (`RTE-6`), `engine-memory` proposals | | out of scope here, but its proposals land in the Lessons tab |
+
+## 0.2 Who writes memory
+
+| Writer | Code | Gate |
+|---|---|---|
+| `memory` tool (save / update / forget / read) | `agent/memory_skill.rs` `memory_op`; scope by `decide_scope` (`MemScope`) or `classify_scope` | `facts` (auto / off) |
+| `propose_soul_edit` tool | `memory_skill.rs` | `soul` (ask / off) |
+| `propose_skill`, `propose_project_instructions` | `agent/skillpack.rs` | `skills` (ask / off) |
+| `/remember`, `/forget`, `/always` | `remember_fact_cmd`, `forget_memory_fact_cmd`, `set_soul_cmd` (`commands/memory.rs`) | user |
+| Memory tab edit / delete / scope | `update_memory_fact_cmd`, `forget_memory_fact_cmd`, `set_fact_scope_cmd` | user |
+| Reflection | `reflect_conversation_cmd` (`commands/reflect.rs`): draft ≤3 lessons → critic (`CRT-1`) → recurrence bump (`RPT-1`) → soul escalation at 3 (`RPT-2`) → save or propose; then `propose_skill_revisions` (`OUT-2`) | `lessons` (auto / ask / off), `soul`, `skills` |
+| Tidy up | `consolidate_memory_cmd` → pending proposal → `apply_consolidation_cmd` (snapshot + `GLD-2`) | `consolidate` (ask / off) |
+| Profile | `rebuild_profile_cmd`, `edit_profile_cmd` | |
+| Expiry | `sweep_expired` (at launch and in the daily job) | |
+| CLI agents | `engines/tools.rs` → `engine-memory` proposal | user |
+
+## 0.3 Where memory reaches a turn
+
+| Reader | Code | Notes |
+|---|---|---|
+| Prompt assembly (backend) | `agent/context.rs` `gather` → `commands::memory::recall_for` → `MemoryStore::recall_for_project` | global facts wholesale, topical facts top 5 and lessons top 3 over `SEM_FLOOR`, project-fenced |
+| Prompt assembly (frontend, `agent_chat_cmd`) | `store.ts` `recallForPrompt` → `api.recallFor` → same `recall_for` | the one path still assembled on the frontend |
+| Recall chip in the timeline | `matches` on the step, `Timeline.tsx` `chipLabel` ("◆ remembered", "◆ learned"), `Provenance` | collapsed, `SEM-5`/`SEM-UI-2` |
+| "What I'm working from" | `ContextPanel.tsx`, `context_manifest_cmd` (`live_manifest`/`historical_manifest` from `context_json`), `/why`, `/context`, the Self page link | layers: Soul, Persona, About you, Remembered, Learned, Procedures, From your files, Session |
+| `search_history`, `read_conversation` | `agent/recall.rs` | raw messages only |
+| `memory` op read | `memory_skill.rs` | |
+
+## 0.4 Every place the user sees memory or self-learning
+
+| Place | Component | Shows |
+|---|---|---|
+| The living mark | `Mark/PoiesisMark.tsx`, `Orb/orbState.ts` | `presence`: idle, active, **reflecting** ("reflecting on a past conversation", orb `weaving`), healing, **tending** ("tidying my head", orb `shaping`), listening; growth `stage` from facts + lessons + skills (5 / 20 / 50); slow pulse when a digest is unread (`SCH-UI-2`) |
+| The big orb in an empty chat | `routes/Chat.tsx` | same presence |
+| Rail chat row | `Rail.tsx` `ChatRow` | ◆ while reflecting (`reflectingIds`), ◆ after something was learned (`digestedIds`), "Reflect now" in the ⋯ menu |
+| New conversation | `Conversation/Introduction.tsx` | first-run card (`PRES-6`), then one ambient line "◆ Recently learned: ..." from lessons of the last 7 days (`PRES-5`) |
+| Toast | `Memory/MemoryToast.tsx` | save, forget, always, profile; undo (`poiesis-memory-write`) |
+| Self page header | `routes/Self.tsx` | first-person narrative, the strip "N facts · N lessons · N skills · N pending", `GrowthRings` |
+| Self page tabs | `Self/SelfPanel.tsx` | **Memory** (`MemoryPanel`: profile prose, Tidy up, Open folder, Export zip, search, fact cards with scope, "last surfaced", "Where this came from"), **Lessons** (pending proposals incl. critic and engine-memory, lesson cards with "learned N×", "learned when you went back"), **Health** (runtime restarts, last reflection, Reflect now, auto-reflect toggle, golden checks, tool health, quarantined files), **Autonomy** (one row per class) |
+| Tasks page | `routes/Tasks.tsx` | the built-in `nightly-reflection` job, its toggle, and the digest |
+| Slash commands | `shared/commands.json` | `/remember`, `/forget`, `/always`, `/reflect`, `/tidy`, `/self`, `/why`, `/context`, `/skillify`, `/checkup`, `/autonomy`, `/compact`, `/rewind` |
+| Checkup | `agent/checkup.rs`, `/checkup` | first-person lines with one action each; the mark is `tending` while it runs |
+
+## 0.5 The learning loops that already run
+
+1. **Reflection** has five triggers, all into `reflect_conversation_cmd`:
+   leaving a chat (`reflectOnLeaving`, 8+ messages, auto-reflect on); "Reflect
+   now" on the Health tab and in the Rail menu; `/reflect`; launch catch-up
+   (`scheduleCatchUpReflection` → `catch_up_reflection_cmd`, 2 per launch, 8+
+   messages); the daily job (`run_nightly_reflection_digest`, up to 8).
+2. **Critic** (`CRT-1..3`): a failed draft becomes a `lesson-critic` proposal.
+3. **Recurrence** (`RPT-1/2`): the same lesson again bumps `recurrence`; at 3
+   it proposes a SOUL line.
+4. **Skill revision** (`OUT-1/2`): 3 of the last 5 runs rough → a revised
+   `SKILL.md` proposal, written as an App-source copy.
+5. **Tidy up** (`consolidate_memory_cmd`): one model call over the whole set →
+   merges, edits, drops → user applies all, `GLD-2` around it.
+6. **Golden checks** (`GLD`, `agent/golden.rs`): fixed behaviour contracts run
+   through the model **without dispatching any tool**, around every
+   self-change.
+7. **Profile rebuild** (`PRO`), **expiry** (`TTL`), **scope backfill** (`SCP-3`),
+   **lesson cap** (oldest out).
+
+## 0.6 What the scan found that is wrong or missing today
+
+These are fixed in Phase 0 because later phases build on them.
+
+| # | Finding | Where |
+|---|---|---|
+| G1 | **The mark never shows background reflection.** `presence: "reflecting"` and the Rail ◆ are set only by the frontend `reflectConversation`. Launch catch-up and the daily job reflect with the mark idle and no Rail ◆ | `store.ts` `reflectConversation` vs `scheduleCatchUpReflection`, `scheduler.rs` |
+| G2 | **The daily job does not use the 8-message floor.** It reflects any unreflected chat, including one-liners, and stamps them, while the other two paths skip them | `run_nightly_reflection_digest` vs `CATCH_UP_MIN_MESSAGES` / `REFLECT_MIN_MESSAGES` |
+| G3 | **The digest always says "Last night"**, also when it ran at 3 pm after launch | `compose_digest` |
+| G4 | **The Self narrative is broken**: "...and I keep I can follow N skills." | `routes/Self.tsx` `narrative` |
+| G5 | **Lessons are forgotten by age.** `prune_lessons` trashes the oldest past 40, whatever their use | `memory/mod.rs` |
+| G6 | **`context_json` is never used for learning.** It already records which facts and lessons reached each answer; nothing reads it except the panel | `ContextRefs` |
+| G7 | **Lessons reach the timeline only as "◆ learned".** A retrieved lesson has no "why", and the user cannot say "not relevant" | `Timeline.tsx` `Provenance` |
+| G8 | **Two tidy-ups that do not know each other**: the daily job reflects but never consolidates; Tidy up consolidates but never looks at conversations | `scheduler.rs`, `consolidate_memory_cmd` |
+| G9 | **The trash cannot be browsed.** A forgotten or pruned entry comes back only through the 5-second undo or the folder | `MemoryPanel.tsx` |
+| G10 | **Growth stage counts everything on disk**, so once superseded versions exist (Phase 3) the mark would grow from corrections | `PoiesisMark.tsx` `growthStage`, `organism.rs` `Vitality` |
+| G11 | **"Recently learned" only knows lessons.** A merged or corrected fact never shows | `Introduction.tsx` |
 
 ---
 
 # Part I - Why
 
-## I.1 What we have today, honestly
+## I.1 In one sentence
 
-| Part | What it does | Main weakness |
+Poiesis stores a lot, but it does not remember how a piece of work went, it
+does not know which of its memories help, it forgets lessons by age, and it
+learns only from failure.
+
+## I.2 The human model, mapped onto what exists
+
+The key idea is **complementary learning systems**: a fast store that records
+single experiences, and a slow store that only takes on what repeats. Poiesis
+today skips the fast store: reflection writes straight into `lessons/` from one
+conversation, so one bad moment can become a rule.
+
+| Human system | Poiesis today | After this plan |
 |---|---|---|
-| Session log (`agent/log.rs`) | Every message a run saw, append-only, replayable | Nothing learns from it except reflection |
-| Messages FTS + `search_history` | The agent can search old chats by keyword | Raw text only. No digest of what happened or how it ended |
-| Facts (`memory/facts/`) | Durable notes about the user, global or topical scope, TTL | Flat. No evidence link, no "this replaced that", no contradiction check |
-| Lessons (`memory/lessons/`) | Reflection draws up to 3 from a finished chat, critic checks them | Learned only from mistakes. Never scored after use. Cap 40, oldest go first |
-| SOUL, profile | Standing instructions, style summary | A lesson that does not stick becomes more prose in SOUL |
-| Skills | `propose_skill` during a run, revision when 3 of 5 runs are rough | Text only, no scripts. Nothing proposes a skill from work that went well |
-| Golden set (`GLD`) | Checks generic cases before and after a self-change | Checks for damage, never for benefit |
-| Decisions and outcomes (`CTL-3`) | Small-model predictions with what happened next | Used for calibration only, not for memory |
-| Scheduler (`SCH`) and its built-in job | 60 s ticker while the app is open, headless runs, writes refused. The built-in `nightly-reflection` job (Tasks page) sweeps expired facts and reflects on up to 8 unreflected conversations, once a day | Off by default. Not night-bound but named as if it were. Starts even while the user is typing |
+| Sensory buffer | Session log (`session_events`) | unchanged |
+| Working memory | the turn's prompt; `session_state_json` (entities, constraints, decisions) | unchanged; the session state feeds the episode |
+| Episodic memory | `conversations.summary` (only for compaction), `reflected_at` | **the conversation row becomes the episode** (new columns, III.1) |
+| Semantic memory | `facts/`, `lessons/` | same files, with evidence and status (III.4) |
+| Procedural memory | skills | skills, plus **lessons that fire in the tool loop** (III.5) |
+| Prospective memory | scheduled tasks (`/schedule`) | plus **facts of kind `intention`** (III.8) |
+| Metacognition | `tool_stats`, decision calibration | **self-model** in `Vitality` (III.7) |
+| Sleep consolidation | the built-in daily job (reflection only) | the daily job also runs Tidy up (III.6) |
+| Prediction error | `decisions` + `decision_outcomes` | weights credit (III.7) |
 
-In one sentence: Poiesis stores a lot, but it does not remember episodes, it
-does not know which of its memories help, and it learns only from failure.
+## I.3 The flaws of human memory, and the existing part that answers each
 
-## I.2 The human model we take
-
-Cognitive science splits memory into systems that work together. We take the
-split because each part solves a different problem.
-
-| Human system | What it does | Poiesis part |
-|---|---|---|
-| Sensory buffer | Raw input, kept briefly | Session log (exists) |
-| Working memory | The few things held in mind right now | The turn's context, assembled to a budget |
-| Episodic memory (hippocampus) | "What happened, when, where, how it ended" | **New: episodes** |
-| Semantic memory (neocortex) | Facts and concepts, cut loose from the episode | Beliefs: facts and lessons, with evidence |
-| Procedural memory (basal ganglia) | Skills and habits that run without thinking | Skills with scripts, and **new: habits** |
-| Prospective memory | "Remember to do X when Y" | **New: intentions** |
-| Metacognition | Knowing what you know, and how sure you are | **New: self-model** from outcomes |
-| Sleep consolidation | Replay of the day, patterns move from episodic to semantic | **New: consolidation in the daily tidy-up** |
-| Prediction error (dopamine) | Learning is strongest when the outcome surprises | Outcome signals weighted by surprise |
-
-The key idea from the human model is **complementary learning systems**: a
-fast store that records single experiences (episodes), and a slow store that
-only takes on what repeats across experiences (beliefs, habits). Poiesis today
-skips the fast store and writes straight into the slow one from one
-conversation. That is why one bad moment can become a permanent rule.
-
-## I.3 The flaws of human memory, and what we do instead
-
-This is the part where the harness can be better than a person.
-
-| # | Human flaw | Design response |
-|---|---|---|
-| F1 | **Source amnesia.** You remember a fact but not where it came from | Every belief links to the episodes that support it. "Where did you get that?" always has an answer |
-| F2 | **Recall rewrites the memory** (reconsolidation) | Episodes are immutable. A belief changes only by a new version that supersedes the old one, and the old one stays readable |
-| F3 | **Confabulation.** Gaps get filled with plausible inventions, with full confidence | A belief carries a confidence that is checked against outcomes. Low or contested beliefs are said as "I think", with a date |
-| F4 | **Forgetting by decay.** Useful things fade just because they are old | Forgetting is by usefulness and by contradiction, never by age alone. Forgotten means archived, and the archive is searchable |
-| F5 | **Cannot forget on purpose.** One painful event dominates | One episode never creates a durable rule (except a hard fail-then-fix). The user can forget anything in one click |
-| F6 | **Confirmation bias** | A new note is checked against what is already believed. Contradictions are surfaced, not merged away |
-| F7 | **Over-generalising from few cases** | Promotion ladder: a pattern must show up in 2+ episodes before it becomes a belief, 3+ before it becomes a habit |
-| F8 | **Hindsight bias.** "I knew it all along" | The prediction is stored before the outcome (the decisions table already does this). Learning compares the two |
-| F9 | **Recency and availability bias** | Recall ranks by relevance times usefulness, not by what is newest |
-| F10 | **Forgetting to remember** (prospective failure) | Intentions are stored with explicit triggers and fired by the scheduler or the recall pass, not by luck |
-| F11 | **Bad habits stick** | Every habit and skill is scored on every use and can be unlearned |
-| F12 | **Tip of the tongue.** The memory is there but the cue is wrong | Recall uses several cues at once: words, meaning, people and projects, task type, time |
-| F13 | **Contexts bleed into each other** | Memory is scoped by project and persona, and a recall says which scope it came from |
-| F14 | **Cannot look inside your own mind** | Every recall is visible in the turn, with why it was recalled. The user can correct it right there |
-| F15 | **Cannot test a belief safely before acting** | Rehearsal: replay the old situation with the new belief, with no tool executed, and see if behaviour changes |
-| F16 | **Sleep cannot be scheduled, and is not optional** | Consolidation runs when idle, is bounded, and the user sees what it did |
+| # | Human flaw | Design response | Lands in |
+|---|---|---|---|
+| F1 | Source amnesia | Every belief lists the conversations that support it | `Fact.evidence`; "Where this came from" grows to a list |
+| F2 | Recall rewrites the memory | A belief changes only by a new version; the old one stays readable | `Fact.status: superseded`, `superseded_by` |
+| F3 | Confabulation | Low or contested beliefs are said as "I think", with a date | `recall_for` index line marker |
+| F4 | Forgetting by decay | Forget by usefulness and contradiction, never by age alone | `prune_lessons` rule (G5) |
+| F5 | Cannot forget on purpose | One conversation never makes a durable rule (except a hard fail-then-fix); one click forgets | candidates on the conversation row; existing Delete |
+| F6 | Confirmation bias | New notes are checked against what is believed; contradictions are surfaced | `BeliefRelation` at the three write sites |
+| F7 | Over-generalising | 2+ conversations before a belief, 3+ before a habit | promotion ladder in Tidy up |
+| F8 | Hindsight bias | Prediction stored before the outcome | `decisions` (exists) |
+| F9 | Recency bias | Rank by relevance times usefulness | `recall_for_project` ranking |
+| F10 | Forgetting to remember | Intentions with explicit triggers | intention facts + scheduler |
+| F11 | Bad habits stick | Every lesson and skill is scored on use and can be unlearned | `memory_usage` counters, `skill_runs` |
+| F12 | Tip of the tongue | Several cues: words, meaning, entities, project, task kind | `recall_for_project` |
+| F13 | Contexts bleed | Memory is scoped by project and says where it came from | `PRJ-8` (exists) + why line |
+| F14 | Cannot look inside | Every recall visible with why; correct it right there | recall chip + "What I'm working from" |
+| F15 | Cannot test a belief safely | Rehearsal: replay with the change, no tool runs | `GLD` runner + `log::replay` |
+| F16 | Sleep is not schedulable | The daily job runs when idle, bounded, visible | `nightly-reflection` job |
 
 ## I.4 What we take from Harness² and HyperSkill
 
-From **Harness²** (Google, Oct 2026):
+From **Harness²** (Google, Oct 2026): evidence verdicts (`helped`, `hurt`,
+`no observed effect`, `confounded`; "nothing to learn" is a valid result); a
+lesson carries a `cue` (the shape of the situation); prefer a mechanism over
+prose (a check beats a sentence in every prompt); workspace facts are separate
+from procedure; test a change by running it; and **two loops**: improve the
+setup for the task (task level) and improve the process that makes the
+improvements (improver level), via **Propose, Probe, Compose**.
 
-- Evidence discipline for any learned change: verdicts `helped`, `hurt`,
-  `no observed effect`, `confounded`. "Nothing to learn" is a valid result.
-  Being adopted is not evidence that a change helped.
-- A lesson has a `cue`: the shape of situation it applies to, not this
-  conversation's facts.
-- Prefer a mechanism over prose. A script or a triggered check beats a
-  sentence in the always-on prompt. If you add always-on text, cut some.
-- Workspace facts (verified, labelled as such) are separate from procedure.
-- Test a change by running it, not by reading it. We cannot rerun live tasks,
-  so we rehearse without side effects (Part III.6).
-- **Two loops, not one.** Harness² improves the setup for the task in front
-  of it (task level), and it also improves the process that makes those
-  improvements (improver level). Poiesis today has neither: it writes notes.
-  Part III.9 to III.12 builds both:
-  - Task level: before a task starts, the harness assembles the best setup
-    it has for this kind of task (III.10).
-  - Improvement step: Propose, Probe, Compose. Several candidate changes
-    compete in rehearsal and only the evidence picks the winner (III.9).
-  - Improver level: an improvement record of which kinds of change helped
-    for which kinds of problem, read before every new proposal (III.11).
-  - The editable surface: the explicit list of what the harness may change
-    about itself, and the gate on each (III.12).
+From **HyperSkill** (Aug 2026): every memory item has a usefulness score from
+its own track record and is pruned on it; learn from success and from failure;
+retrieve few items (their best setting was 2); unmaintained memory is worse
+than none.
 
-From **HyperSkill** (Aug 2026):
-
-- Every memory item has a usefulness score from its own track record, and is
-  pruned on that score.
-- Learn from success (skills) and from failure (mistakes), both.
-- Retrieve few items. Their best setting was 2.
-- Unmaintained memory is worse than no memory.
-
-Not taken: rerunning the user's task (side effects), ground-truth labels (we
-have none), hypergraph co-occurrence merging (needs hundreds of similar
-tasks; a personal assistant's stream is too sparse and too varied).
+Not taken: rerunning the user's task, ground-truth labels, hypergraph merging.
 
 ---
 
-# Part II - The architecture
+# Part II - The extension map
 
-```text
-            ┌───────────────── awake (during a run) ─────────────────┐
-  input ──▶ │ Working memory  ◀── Recall (cues, budget, why) ◀── stores │
-            │      │                                                  │
-            │      ▼                                                  │
-            │   act ──▶ outcome signals ──▶ Session log (raw record)  │
-            └──────────────────────────────┬─────────────────────────┘
-                                           │ end of conversation
-                                           ▼
-                                 Encode: one Episode
-                                           │
-            ┌──────── idle (built-in daily job, Tasks page) ─────────┐
-            │ Consolidate: replay episodes ─▶ promote / merge /       │
-            │ contradict / score / archive                            │
-            │                                                         │
-            │ Improve: problem ─▶ Propose 2-3 candidates ─▶ Probe     │
-            │ (rehearse, no tools run) ─▶ Compose ─▶ gate ─▶ ship     │
-            │        ▲                                   │            │
-            │        └──── Improvement record ◀──────────┘            │
-            └─────────────────────────────────────────────────────────┘
-   next task: Prepare = load the setup bundle for this project / task kind
-   stores: Episodes · Beliefs (facts, lessons) · Procedures (skills,
-           habits) · Intentions · Self-model · Bundles · Improvement record
-```
+This is the core of the plan. Left: what v1 wanted. Middle: the existing part
+that carries it. Right: what is added to that part. Nothing in the left column
+gets its own new store.
 
-## II.1 The stores
+| v1 concept | Extends | What is added |
+|---|---|---|
+| `episodes` table | **`conversations` row** + reflection pass | columns `goal`, `outcome`, `task_kind`, `digest` (≤600), `worked`, `went_wrong`, `signals_json`, `candidates_json`, `encode_version`, `consolidated_at`. Entities come from `session_state_json`, artifacts from `artifacts`, the narrative from `summary` when there is one. Vector in `vectors` (scope `episode`, ref_key = conversation id). Deleting a chat deletes it, by construction |
+| `memory_uses` table | **`messages.context_json`** (what reached each answer) + **`memory_usage`** (per item) | `ContextRefs` gains `why` (name → cue in words) and `fired` (lessons fired at a tool); `memory_usage` gains `chances`, `helped`, `hurt`, `last_outcome_at` |
+| Skill credit | **`skill_runs`** | nothing new: `tool_failures` and `corrected` plus the conversation's `outcome` are the credit |
+| Belief evidence, status, versions | **`Fact` frontmatter** | `evidence` (conversation ids), `confidence`, `status` (`active` / `contested` / `superseded`), `supersedes`, `superseded_by`, `valid_from`, `cue` (lessons). Superseded files stay in their folder with `status: superseded`; `list_in` callers that build prompts skip them |
+| "Archive" | **`.trash/`** | a "Let go" list on the Memory tab reading `.trash/` with the existing `restore_trash` (G9) |
+| Contradiction check on write | **the three write sites**: `memory_op` save (next to `decide_scope`), `remember_fact_cmd`, and reflection's recurrence check (`lessons_look_alike`) | `BeliefRelation` over the top 5 by vector; fallback is today's behaviour |
+| Night consolidation | **`run_nightly_reflection_digest`** + **`consolidate_memory_cmd`** | the daily job calls the same propose step as Tidy up, fed with unconsolidated conversations; one `Consolidation` shape gains `promotes` and `contests`; one pending proposal on the Memory tab |
+| `memory/habits/` store | **`lessons/`** | a lesson with `fires_on: <tool>` (and optionally `check: <id>`) is left out of the prompt index and put into that tool call just in time. Same file, same tab, same `lessons` rung |
+| `habits` autonomy class | **`lessons`** class | none; a `check` needs the `lessons` rung at Ask or Auto, a `rule` always needs the user |
+| RPT-2 soul escalation | **`reflect.rs` recurrence ≥ 3** | proposes "check this before <tool>" (a `lesson` proposal with `fires_on`) first; the SOUL line becomes the second choice on the same card |
+| Rehearsal sandbox | **`agent/golden.rs`** (never dispatches) + **`log::replay`** | a case built from a conversation: the replayed messages up to the failed call, and a check derived from `tool_fixes` (`CallsTool` with the fixed args). Runs the same loop |
+| `improvements` table | **`change_proposals`** | columns `problem_cue`, `form`, `group_id` (competing candidates share it), `rehearsal_json`, `live_outcome`; status gains `dropped` and `kept_base`. Losers stay as rows nobody is shown |
+| Rules of thumb | **settings** (derived) | key `improve.rules`, at most 5 lines, shown on the Lessons tab, deletable |
+| `intentions` table | **facts** + **scheduled tasks** | `kind: intention` with `trigger: project:<id> | topic:<words> | mail:<from>` and `status`; time triggers become a scheduled task through the existing `schedule` path. Never in the prompt index; fired by `recall_for` |
+| `remember_to` tool | **`memory` tool** | `type: intention` in its enum, plus a `trigger` field |
+| Self-model | **`Vitality`** (`organism.rs`) | per task kind: done / failed / abandoned counts, from conversation outcomes |
+| Setup bundles | **project instructions + project-tagged memory (`PRJ-8`) + `personas.skills_json`** | a derived view (no table): which skills and lessons were active in the project's `done` conversations |
+| "Memory page" with six sections | **Self page tabs** | Memory tab and Lessons tab gain sections (IV.5); no new page, no new tab |
+| Health lines | **Health tab** | one block "Whether I'm learning" |
+| "Remembered 2 things" row | **recall chip + `Provenance`** in `Timeline.tsx` | the why line and two buttons inside the expanded chip; no new row |
+| "While you were away" | **the daily job digest** (`save_digest`, Tasks page, mark pulse) | wording (G3) and the counts the job now has |
+| Background thinking visible | **`presence`** | backend events so every reflection and tidy-up moves the mark (G1) |
 
-### Episodes (new, SQLite, derived)
+**Autonomy rungs that change** (in `AUTONOMY_CLASSES` and `autonomy.rs`):
 
-One row per finished conversation (or per background run). Immutable. It is
-the bridge between the raw log and everything learned.
-
-```sql
-CREATE TABLE IF NOT EXISTS episodes (
-  id              TEXT PRIMARY KEY,
-  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  project_id      TEXT,
-  persona_id      TEXT,
-  task_kind       TEXT,              -- TaskKind purpose (or its rule fallback): 'report', 'code', 'mail', ..., 'unknown'
-  goal            TEXT NOT NULL,     -- one line: what the user wanted
-  outcome         TEXT NOT NULL,     -- done | partial | abandoned | failed | unknown
-  signals_json    TEXT NOT NULL,     -- deterministic: failures, fixes, rewinds, verify verdicts, user reactions
-  summary         TEXT NOT NULL,     -- <= 600 chars: what happened
-  worked          TEXT,              -- <= 3 lines: what went well, concretely
-  went_wrong      TEXT,              -- <= 3 lines
-  entities_json   TEXT,              -- people, files, accounts, projects named
-  artifacts_json  TEXT,              -- artifact ids, scripts that ran successfully
-  candidates_json TEXT,              -- observations NOT yet promoted (Part III.4)
-  digest_version  INTEGER NOT NULL,
-  consolidated_at INTEGER,           -- NULL until the daily tidy-up has read it
-  created_at      INTEGER NOT NULL
-);
-```
-
-Episodes get FTS and a vector, like messages. Deleting a conversation
-deletes its episode. Evidence links in beliefs that point to a deleted
-episode stay, marked "source deleted".
-
-### Beliefs (facts and lessons, markdown, user-owned)
-
-Same files as today. New optional frontmatter, backwards compatible:
-
-```yaml
-evidence: [ep_3f2a, ep_91c0]   # episodes that support it
-confidence: medium             # low | medium | high
-status: active                 # active | contested | superseded | archived
-supersedes: lives-in-hamburg   # the version this one replaced
-valid_from: 2026-09-12
-cue: "reading a spreadsheet export from a bank"   # lessons only
-```
-
-A superseded belief moves to `memory/archive/` with `superseded_by` set. It
-is not in any prompt, but `search_history` and the Memory page can show it
-("You used to live in Hamburg, until 12 Sep").
-
-### Procedures
-
-- **Skills** (exist): gain bundled scripts when the agent proposes them
-  (Part III.5).
-- **Habits** (new): a check that runs by itself at a fixed point in the tool
-  loop, instead of a sentence the model may ignore. Stored as
-  `memory/habits/<slug>.md`, frontmatter plus a short rule. Three kinds,
-  smallest first:
-  1. `note`: when tool X is about to be called and the cue matches, the
-     note is put into that tool call's context just in time. Not always-on.
-  2. `check`: after tool X returns, a deterministic check runs (for example
-     "the CSV has a header row where the habit says"). A failed check is
-     handed to the model as a tool note.
-  3. `rule`: a deterministic argument rule (for example "paths under
-     Downloads/exports: read with header_row=3"). Only the user can turn
-     a habit into a `rule`.
-
-### Intentions (new)
-
-```sql
-CREATE TABLE IF NOT EXISTS intentions (
-  id              TEXT PRIMARY KEY,
-  text            TEXT NOT NULL,      -- what to do, first person
-  trigger_kind    TEXT NOT NULL,      -- time | project_open | topic | mail_from | task_kind
-  trigger_value   TEXT NOT NULL,
-  source_conv     TEXT,
-  status          TEXT NOT NULL,      -- waiting | fired | done | dropped
-  expires_at      INTEGER,
-  created_at      INTEGER NOT NULL
-);
-```
-
-### Self-model (new, derived)
-
-Per `task_kind` and model: how many episodes ended `done` versus `failed` or
-`abandoned`, and the decision-model calibration that already exists. It is
-read, not written by hand. It drives Part III.7.
-
-### Usage and credit (new, SQLite)
-
-The piece that makes everything else measurable.
-
-```sql
-CREATE TABLE IF NOT EXISTS memory_uses (
-  id              TEXT PRIMARY KEY,
-  item_kind       TEXT NOT NULL,      -- fact | lesson | habit | skill | episode
-  item_ref        TEXT NOT NULL,
-  conversation_id TEXT NOT NULL,
-  run_id          TEXT,
-  how             TEXT NOT NULL,      -- always | recalled | fired | tool | bundle
-  why             TEXT,               -- the cue that matched, in words
-  outcome         TEXT,               -- helped | hurt | no_effect | unknown
-  outcome_source  TEXT,
-  at              INTEGER NOT NULL
-);
-```
-
-`skill_runs` and `memory_usage` fold into this over time. Old readers keep
-working until they are moved.
+- `consolidate`: `ask / off` → `auto / ask / off`. Auto is safe because every
+  apply is snapshotted (`snapshot`) and golden-checked (`GLD-2`); the digest
+  carries Undo (`restore_snapshot`).
+- `skills`: stays `ask / off`. The improvement step never ships a skill alone.
+- No new class.
 
 ---
 
-# Part III - The processes
+# Part III - The processes, as changes to existing code
 
-## III.1 Encode (end of every conversation)
+Each section says what runs today, then what it does after.
 
-Replaces the start of today's reflection, at about the same cost, and runs
-exactly where reflection runs today (`reflect_conversation_cmd`):
+## III.1 Encode = the reflection pass, extended
 
-- when the user leaves a chat with auto-reflect on (`reflectOnLeaving` in
-  `store.ts`), fire-and-forget;
-- by hand (Rail, Self panel, the `/` command);
-- as catch-up in the built-in daily job (III.4) for every finished
-  conversation that was never reflected on.
+**Today** `reflect_conversation_cmd` stamps `reflected_at`, reads 30 turns,
+`tool_failures_in`, `tool_fixes_in`, `user_signals`, `was_rewound`, may skip on
+`skip_reflection` (`USE-8`), drafts ≤3 lessons, runs the critic, bumps
+recurrence, saves or proposes, then `propose_skill_revisions`.
 
-No new trigger. A conversation is encoded once; `reflected_at` stays the
-marker.
+**After**, in the same function and the same five triggers, no new trigger:
 
-1. **Deterministic first, no model.** Collect signals: tool failures,
-   fail-then-fix pairs, rewinds, edits of the agent's output, verify
-   verdicts, decisions with outcomes, "thanks"/"no" style reactions already
-   caught by `user_signals`, artifacts kept, scripts that ran clean.
-2. **Outcome.** `done` if the last user turn accepts or moves on with no
-   correction and nothing failed at the end. `abandoned` if rewound or left
-   mid-task. `failed` if the last tool or verify step failed. Else
-   `partial` or `unknown`. Rules, not a model.
-3. **One local model call** writes `goal`, `summary`, `worked`,
-   `went_wrong`, `entities`, and up to 3 `candidates`. The prompt uses the
-   Harness² contract: every candidate names its evidence (a signal or a
-   turn), `cue` is the shape of the situation, `NO_ENTRY` is fine.
-4. Candidates stay in the episode. They are not beliefs yet (F5, F7).
-   One exception keeps today's behaviour: a hard fail-then-fix pair may
-   promote at once, because it is direct evidence.
+1. **Signals, no model** (before the draft): add to what it already reads
+   `verifications` verdicts, decisions with outcomes, artifacts kept, scripts
+   that ran clean, and `session_state_json`. Write them to `signals_json`.
+2. **Outcome, by rules**: `done` if the last user turn accepts or moves on
+   with no correction and nothing failed at the end; `abandoned` if rewound or
+   left mid-task; `failed` if the last tool or verify step failed; else
+   `partial` / `unknown`.
+3. **Task kind**: `TaskKind` purpose or its rules.
+4. **The draft call changes shape, not count.** The same single call now
+   returns `goal`, `digest`, `worked`, `went_wrong` and up to 3 `candidates`
+   (each with its evidence and a `cue`) instead of up to 3 lessons. `NO_ENTRY`
+   is fine. The critic still reviews.
+5. **Candidates stay on the row** (`candidates_json`). They are not lessons
+   yet. Exceptions, to keep today's behaviour: a hard fail-then-fix pair
+   (`tool_fixes`) and an explicit user correction still save or propose at
+   once, through today's rung logic. So with nothing else built, the user gets
+   the same lessons as now.
+6. **Credit** (III.3) runs at the end.
+7. `skip_reflection` still skips the draft, but steps 1 to 3 and credit always
+   run: they cost no model call except `TaskKind`.
 
-## III.2 Recall (before and during each turn)
+The 8-message floor applies on every path (G2).
 
-1. **Cues.** Words (FTS), meaning (vector), entities named in the message
-   (people, projects, files), current project and persona, task kind (the
-   `TaskKind` purpose), time words ("last week").
-2. **Fusion.** Reciprocal-rank fusion over the cues, then multiply by
-   usefulness (Part III.3). Small budgets: at most 3 lessons, 5 topical
-   facts, 1 episode. Always-on stays small: SOUL, profile, global facts
-   ranked by usefulness under the existing cap.
-3. **Why.** Each recalled item carries the cue that matched, in words
-   ("same project", "you named Anna", "last time you made a report").
-4. **Log.** Each recalled item writes a `memory_uses` row.
-5. **Habits are not recalled into the prompt.** They fire in the tool loop.
-6. **Source and certainty in the answer.** If the reply relies on a belief
-   with `confidence: low` or `status: contested`, the prompt says so, and
-   the model says "I think" with the date (F3).
+## III.2 Recall = `recall_for_project`, extended
 
-## III.3 Credit (after each conversation)
+**Today**: global facts wholesale, topical facts top 5, lessons top 3 over
+`SEM_FLOOR`, project-fenced, `touch_memory_usage` on the facts that fit.
+Both prompt paths call it, so one change covers both.
 
-Every `memory_uses` row gets an outcome, by rules, weak labels allowed:
+**After**:
 
-| Item | helped | hurt | no_effect |
+1. **Ranking**: similarity times usefulness (III.3) for topical facts and
+   lessons. Global facts stay wholesale, ordered by usefulness under the cap.
+2. **More cues, same function**: entities named in the message (matched
+   against fact names and the session state), the project (exists), the task
+   kind of the conversation once known.
+3. **Leave out** superseded entries, intention facts, and lessons with
+   `fires_on` (they reach the turn at the tool, III.5).
+4. **Why**: each recalled entry carries its cue in words ("same project",
+   "you named Anna", "about bank exports"). It goes into `RecalledEntry`, the
+   `matches` sent to the timeline, and `ContextRefs.why`.
+5. **Certainty**: a `low` or `contested` belief gets a marker in its index line
+   that makes the model hedge and give the date. This changes prompt bytes:
+   update `context_golden.rs` and the `store.ts` mirror in the same task.
+6. **Intentions** whose trigger matches add one line to the turn ("You asked
+   me to remind you about ... when ...").
+7. **Episodes**: at most 1 past conversation digest, only for "Last time"
+   (IV.1), never silently.
+
+## III.3 Credit = `context_json` and `memory_usage`, extended
+
+**Today** `context_json` records what reached each answer, and `memory_usage`
+records only `last_used_at`. `skill_runs` records failures and corrections.
+
+**After**, at the end of encoding, for every assistant message in the
+conversation: read its `context_json`, and for each fact, lesson and fired
+lesson apply the rules below, then update that item's `memory_usage` row.
+
+| Item | helped | hurt | no effect |
 |---|---|---|---|
-| Lesson with a tool cue | The cued tool ran and the failure it warns about did not happen | The same failure happened anyway, or the user rewound the turn | The cued situation did not come up |
-| Fact | Used in the answer, no correction | The user corrected it ("no, I moved") | Not used |
-| Habit | Fired, and the check caught something the model then fixed | Fired, and the user undid the result | Fired, nothing to catch |
-| Skill | Run, episode `done` | Run, episode `failed` or `abandoned` | - |
-| Episode ("last time") | User chose "same way" and episode `done` | User chose "start fresh" | Not shown |
+| Lesson with a tool cue | the cued tool ran and the failure it warns about did not happen | the same failure happened anyway, or the turn was rewound | the cued situation did not come up |
+| Fact | used in the answer (`RecallUseful`), no correction | the user corrected it, or pressed **Outdated** | not used |
+| Fired lesson (check) | the check caught something the model then fixed | the user undid the result | nothing to catch |
+| Skill | (from `skill_runs`) conversation `done`, not `corrected` | `failed` / `abandoned` or `corrected` | - |
+| "Last time" offer | "Same way" and conversation `done` | "Start fresh" | not shown |
 
-Usefulness = (helped + 1) / (helped + hurt + 2), with the count of real
-chances beside it. An item with no chances yet sits at 0.5 and is not judged.
+Usefulness = (helped + 1) / (helped + hurt + 2), shown with its count of
+chances. Under 3 chances an item is not judged.
 
-## III.4 Consolidate (the built-in daily job)
+**Not relevant here** and **Outdated** clicks are written as command traces in
+the session log, the same way `/forget` already is, so `user_signals` reads
+them without a new channel.
 
-Poiesis is a desktop app, not a server: nothing runs while it is closed. So
-there is no separate night job. Consolidation goes **into the job that already
-holds today's reflection**: the built-in `nightly-reflection` job
-(`commands/scheduler.rs`, `run_nightly_reflection_digest`), shown at the top
-of the Tasks page (`routes/Tasks.tsx`).
+## III.4 Beliefs with evidence, at the existing write sites
 
-What that job already gives us, unchanged:
+- `Fact` gains the fields in Part II. Old files read as `active`,
+  `confidence: medium`, no evidence. `render_entry` writes the new keys only
+  when set, so untouched files do not change on disk.
+- At each of the three write sites, before writing, `BeliefRelation` against
+  the top 5 similar entries:
+  - `same`: add the evidence to the existing entry; nothing new is written.
+    For lessons this is today's recurrence bump.
+  - `refines`: update in place, old text kept as a superseded version.
+  - `contradicts` with the user as the newer source (`/remember`, Memory tab,
+    or the `memory` tool right after a user statement): supersede.
+  - `contradicts` otherwise: both `contested`.
+  - `unrelated`: write as today.
+- **Usefulness replaces age** in `prune_lessons` (G5): past the cap, trash the
+  lowest usefulness with 5+ chances first, then lessons with no chance in 120
+  days, and only then the oldest.
 
-- The 60-second ticker runs only while the app is open. A job is due when
-  `next_run_at` is in the past, so after a closed night it runs about a
-  minute after the app opens. Catch-up is free.
-- Concurrency 1, a Stop button, a stop check between items, a digest
-  (`scheduler.digest`) and an Activity line.
-- It already sweeps expired facts (TTL-2) and reflects on up to 8
-  unreflected conversations.
+## III.5 Lessons that fire (what v1 called habits)
 
-What the job does after this plan, in order, all in one pass:
+- A lesson with `fires_on: <tool>` (and an optional `cue`) is left out of the
+  index. When the tool loop is about to run that tool and the cue matches the
+  arguments, the lesson's body goes in as a tool note for that call
+  (`run.rs`, at dispatch). `ContextRefs.fired` records it.
+- `check: <id>` adds a deterministic post-tool check from a small fixed set
+  (header row, path exists, file non-empty, JSON parses, row count matches). A
+  failed check is a tool note. No model-written code runs as a check.
+- `rule` (a deterministic argument rewrite) only by the user, from the lesson
+  card.
+- **Recurrence 3** (`reflect.rs`, today's soul escalation) first proposes
+  "check this before <tool>" when the lesson has a tool and a `tool_fixes`
+  pair behind it. The SOUL line is the second button on the same card ("Make
+  it a standing instruction instead"), still gated by `soul`.
+- `propose_skill` gains optional `files` (`scripts/` only, size cap, content
+  must match a script that ran clean in this conversation).
+
+## III.6 The daily tidy-up = the built-in job and Tidy up, merged
+
+**Today** `run_nightly_reflection_digest`: expired facts, reflect up to 8,
+digest. `consolidate_memory_cmd`: one model call over every fact and lesson,
+pending proposal, apply all.
+
+**After**, one pass in the built-in job, in order:
 
 1. Expired facts (as today).
-2. Encode the unreflected conversations (III.1, the cap of 8 stays).
-3. Consolidate: steps 1 to 8 below, at most 5 episodes per pass.
-4. From Phase 6: the improvement step (III.9), at most 2 problems per pass.
-5. One digest for all of it (IV.4).
+2. Encode unreflected conversations with 8+ messages (cap 8, G2).
+3. **Consolidate**, with the same `Consolidation` proposal and apply path as
+   Tidy up, now fed with up to 5 conversations where `consolidated_at` is null:
+   - group candidates with each other and with existing entries
+     (`CandidateGroup`, `BeliefRelation`);
+   - **promotion ladder**: a candidate seen in 2+ conversations, or a hard
+     fail-then-fix, or the user said it → a belief (`promotes`); 3+ and
+     rehearsal passed → a lesson that fires (III.5); SOUL only by the user;
+   - contradictions → `contests`; duplicates → `merges` with evidence joined;
+   - forget (to `.trash/`): 5+ chances and usefulness under 0.3, or 120 days
+     with no chance;
+   - **skills from success**: 2+ `done` conversations of one task kind with
+     similar `worked` lines → a skill draft through the same drafting code as
+     `/skillify`, as a `skill` proposal.
+4. From Phase 6: the improvement step (III.9), at most 2 problems.
+5. One digest (IV.4).
 
-What the job lacks today and this plan adds (`SLP-1`):
+What `consolidate` allows decides the landing: `ask` leaves one pending
+proposal on the Memory tab (the existing block) and the digest says so; `auto`
+applies with snapshot and `GLD-2` and the digest carries Undo. **Tidy up** and
+`/tidy` run step 3 on demand, over everything instead of only the new
+conversations, so there is one tidy-up, not two (G8).
 
-- **Idle start.** A due pass starts only after 2 minutes without input in
-  the app, and not while a chat turn is streaming. Until then it stays due.
-- **Stop on input.** Any key press or click in the app raises the job's
-  cancel flag. The pass finishes the item in flight and stops; the rest
-  stays due (`consolidated_at IS NULL`) for the next pass.
-- **Words that are true.** It runs once a day when due, not at night. The
-  name becomes **Daily tidy-up**, the toggle "Do this once a day", the
+Added to the job:
+
+- **Idle start**: a due pass starts after 2 minutes without input and not
+  while a turn streams.
+- **Stop on input**: any key or click raises the job's existing cancel flag;
+  the item in flight finishes, the rest stays due.
+- **True words**: name "Daily tidy-up", toggle "Do this once a day",
   description "Once a day, while you're not using me, I go over finished
   conversations, keep what I learned, merge duplicate notes and let unused
-  ones go." The digest opens "While you were away" or "Earlier today", never
-  "Last night". The job id `nightly-reflection` stays, so saved settings
-  carry over.
-- **On by default** once this plan's memory ships (today it is off, SCH-5).
-  Without it memory never tidies itself. What it may write is still decided
-  by the autonomy rungs, so with `Ask` it only leaves proposals. **Decision
-  for Erich** before `SLP-1` is built.
-
-Local engine only unless the user chose a cloud target for background work.
-
-1. **Replay.** Read episodes with `consolidated_at IS NULL`.
-2. **Group candidates.** Match each candidate against other episodes'
-   candidates and against existing beliefs (vector plus the decision model
-   choosing `same` / `refines` / `contradicts` / `unrelated`).
-3. **Promotion ladder.**
-
-   | Level | Needs | Lives in | In the prompt? |
-   |---|---|---|---|
-   | Observation | 1 episode | `episodes.candidates_json` | No |
-   | Belief | 2+ episodes, or 1 hard fail-then-fix, or the user said it | `facts/`, `lessons/` | When recalled |
-   | Habit / skill | 3+ episodes, or recurrence 3 of a lesson, and rehearsal passed | `habits/`, `skills/` | Fires in the loop |
-   | Standing instruction | The user only | `SOUL.md` | Always |
-
-4. **Contradiction.** `contradicts` with a user statement as the newer
-   evidence: supersede. Otherwise mark both `contested` and put them in the
-   Memory page's "Unsure" section. Never merge a contradiction away (F6).
-5. **Merge duplicates.** `same` adds evidence to the existing belief, one
-   file stays. Snapshot first, as today.
-6. **Forget.** Archive a belief when it has 5+ chances and usefulness under
-   0.3, or 120 days with no chance. Archived items are searchable. Expired
-   TTL facts go as today.
-7. **Skills from success.** 2+ `done` episodes of the same task kind, with
-   similar `worked` lines: draft a skill (steps from `worked`, scripts from
-   `artifacts_json` that ran clean). Goes through the `skills` rung.
-8. **Journal and digest.** One first-person line per change, collected for
-   the return moment (Part IV.4).
-
-All writes go through the existing autonomy rungs: `lessons`, `skills`,
-`consolidate`, and a new `habits` class (default `Ask`).
-
-## III.5 Procedures grow up
-
-- `propose_skill` takes optional `files` (path to content, `scripts/` only,
-  size cap). A script is accepted only if the same content ran without error
-  in this conversation (from `artifacts_json` or the code-run log).
-- The RPT-2 escalation changes. At recurrence 3 the agent proposes a
-  **habit** (note or check) instead of a SOUL line. SOUL escalation stays
-  possible, but only as the user's choice in the proposal ("make it a
-  standing instruction instead").
-- Habits of kind `note` replace most tool-related lessons in the prompt.
-  They cost nothing until the tool is called (Harness²: always-on text is
-  paid on every run).
-
-## III.6 Rehearse (the safe version of Harness² probing)
-
-The question: does a candidate lesson or habit actually change behaviour in
-the situation it came from? Rehearsal answers it without side effects.
-
-1. The source episode's session log replays the exact message array up to
-   the point of the mistake (`log.rs` replay exists).
-2. Run the model on it twice per arm, without and with the candidate, in a
-   **rehearsal sandbox**: no tool executes. The model's first tool call or
-   answer is captured and the run stops.
-3. Compare. For a fail-then-fix candidate: does the with-arm's call move
-   toward `fixed_args` and away from `failed_args`? Deterministic where the
-   args allow it, decision model otherwise.
-4. Verdict: `helped` if the with-arm is right in 2 of 2 and the without-arm
-   is wrong in at least 1. `no_effect` if both arms behave the same: the
-   candidate is not needed, or not strong enough as prose (a sign to make it
-   a habit). `hurt` if the with-arm gets worse.
-5. Only `helped` candidates may reach the habit level. Beliefs without
-   rehearsal are kept with `confidence: medium` at most.
-6. The golden set still runs before and after (`GLD-2`), so a change that
-   helps here but breaks something else is caught.
-
-Cost: about 4 short local calls per candidate, in the daily tidy-up, capped
-per pass.
+  ones go." The id `nightly-reflection` stays.
+- **On by default** once Phase 4 ships. **Decision for Erich.**
 
 ## III.7 Know what you know
 
-- **Self-model in the loop.** For a task kind where the self-model shows
-  many `failed` or `abandoned` episodes, the agent verifies more (the
-  existing `verify` and auto-check paths) and asks a clarifying question
-  earlier. For strong areas it does not add checks.
-- **Prediction before outcome** (F8). The decisions table already stores
-  the prediction. Episodes link to it, so consolidation can compare what
-  was expected with what happened.
-- **Surprise weights learning.** A failure where the agent was sure counts
-  more than one where it was unsure. A success where it was unsure counts
-  more than an expected one.
+- `Vitality` gains, per task kind, the counts of `done`, `failed` and
+  `abandoned` conversations, and the calibration that exists.
+- A task kind with many failed or abandoned conversations gets the existing
+  verify / auto-check path and an earlier clarifying question; a strong one
+  gets no extra checks.
+- Surprise weights credit: a failure where the decision model was sure counts
+  double, as does a success where it was unsure.
 
-## III.8 Intentions
+## III.8 Intentions = facts of kind `intention`
 
-- Created by a `remember_to` tool (gated by a new `intentions` class, `Ask`
-  by default) or by the user from the `/` menu (`shared/commands.json`, no
-  new composer syntax).
-- Fired by: the scheduler (time), the recall pass (topic, project open,
-  task kind), mail sync (mail from).
-- A fired intention appears as a short first-person message in the right
-  conversation, or opens a new one for time triggers.
+- Written by the `memory` tool with `type: intention` and a `trigger`, by
+  `/remember` ("remind me to ... when ..."), or from the Memory tab. Gated by
+  `facts` like any fact. A time trigger is handed to the existing schedule
+  path (the `schedule` rung, `/schedule`), not stored twice.
+- Fired by `recall_for` (topic, project), by `mail_sync` (from), shown as the
+  one line in the turn (III.2 step 6). Fired once, then `status: done`.
 
-## III.9 The improvement step: Propose, Probe, Compose
+## III.9 The improvement step: Propose, Probe, Compose, on `change_proposals`
 
-This is Harness²'s core step, moved from "during a live task" to "while
-idle, on a replayed episode". It runs in the daily tidy-up (III.4, step 4 of
-the pass) for every problem
-that qualifies: a repeated mistake (recurrence 2+), a told-twice correction,
-a task kind with 2+ `failed` or `abandoned` episodes, or a skill whose
-usefulness dropped under 0.4.
+Runs in the daily tidy-up for each problem that qualifies: a lesson at
+recurrence 2+, a told-twice correction, a task kind with 2+ failed or abandoned
+conversations, a skill whose `skill_runs` usefulness dropped under 0.4.
 
-1. **Propose: competing candidates.** For one problem, draft up to three
-   changes on different parts of the setup:
-   - **How I work** (Harness² INV): a habit `note` or `check`, a tool-use
-     fix, a step added to a skill.
-   - **What I know** (Harness² DOM): a belief, a domain rule inside a
-     skill, a verified workspace fact for this project ("in this project,
-     invoices are in `/Belege/2026`").
-   - **What already worked**: copy a component from the improvement record
-     (III.11) or from another project's bundle (III.10) that fixed a similar
-     problem before. Its workspace facts are re-checked, never trusted.
+1. **Propose** up to three candidates on different parts of the setup, each
+   naming the conversation moment it targets:
+   - *How I work*: a lesson that fires, a check, a step added to a skill;
+   - *What I know*: a belief, or a project instruction line
+     (`propose_project_instructions`);
+   - *What already worked*: something that fixed a similar problem before
+     (read from earlier proposal rows with the same `problem_cue`, or another
+     project's instructions; facts re-checked, never trusted).
+   Each is a `change_proposals` row with the same `group_id`.
+2. **Probe**: every candidate and the unchanged setup through the GLD runner
+   on up to 3 replayed conversations, 2 samples each (III.10). No tool runs.
+   Results in `rehearsal_json`.
+3. **Compose**: adopt one, merge two (rehearsed once more), or keep as is.
+   One evidence line per row: `kept|merged|dropped -> <candidate> -> <what
+   the replays showed>`. Losers get status `dropped`, a keep-as-is gets one
+   `kept_base` row.
+4. **Gate and ship**: the winner goes through `GLD-2` and the rung of its
+   target (`lessons`, `skills`, `soul`, project instructions = ask). It stays
+   `pending` on the Lessons tab under Ask.
+5. **Learn the improver**: before proposing, read earlier rows with a similar
+   `problem_cue` or the same tool; draft the form that keeps winning first.
+   Credit fills `live_outcome` later. Once a month, at most 5 rules of thumb
+   into `improve.rules`, used only in the propose and compose prompts. If
+   rehearsal and live outcome agree 5 times in a row for an area, the area may
+   ship without asking when the class rung is Auto; if they disagree, the area
+   drops to Ask.
 
-   Each candidate must name the episode moment it is aimed at. A candidate
-   with no evidence is not drafted.
-2. **Probe: rehearse all of them.** Each candidate and the unchanged setup
-   run in the rehearsal sandbox (RHS-1) on the source episodes: up to 3
-   episodes, 2 samples each. No tool executes.
-3. **Compose: let the evidence decide.** A compose call reads the
-   rehearsal results and picks one of:
-   - **Adopt one** candidate.
-   - **Merge** two that each fixed a different part. The merge is rehearsed
-     once more before it counts.
-   - **Keep as is** (Harness² `KEEP_BASE`). A real answer, not a failure.
+## III.10 Rehearsal = the GLD runner on a replayed conversation
 
-   Every decision is one line with its evidence, in the Harness² shape:
-   `kept|merged|dropped -> <candidate> -> <what the rehearsal showed>`.
-4. **Gate and ship.** The winner goes through the golden guard (`GLD-2`)
-   and the autonomy rung of its class. The proposal card shows the
-   competition ("I tried 3 fixes. The check worked in 4 of 4 replays, the
-   written lesson in 1 of 4, so I'm proposing the check.").
-5. **Record.** The result, including losing candidates, goes into the
-   improvement record (III.11). Losers are evidence too.
+- `golden.rs` already runs a message array through `drive_turn` with no tool
+  dispatched and checks the first answer or tool call (`CallsTool`,
+  `CallsNoTool`, `Contains`, ...).
+- A rehearsal case is built, not stored: `log::replay` up to the failed call,
+  plus a check from the `tool_fixes` pair (the call must move toward
+  `fixed_args`, away from `failed_args`; exact where the args allow it,
+  `RehearsalMatch` otherwise).
+- Arms: without the candidate and with it (the candidate is put in the
+  rebuilt prompt or as the tool note it would be).
+- Verdict: `helped` if the with-arm is right in 2 of 2 and the without-arm
+  wrong in at least 1; `no_effect` if both behave the same; `hurt` if the
+  with-arm is worse.
+- The golden set still runs before and after any ship (`GLD-2`).
 
-Bounds: at most 2 problems per pass, at most 3 candidates each, local
-engine, cancelled by user input.
+## III.11 The editable surface
 
-## III.10 Task-level setup: assemble before acting
-
-Harness² starts each task by adapting the best setup it has. Poiesis does
-the same at the start of a conversation, cheaply and without extra runs.
-
-1. **Setup bundle.** For each project, and for each task kind seen 3+
-   times, the harness keeps a bundle: the project instructions, the skills,
-   habits, beliefs and persona that were active in its `done` episodes,
-   with usefulness. A bundle is a list of references, not a copy.
-2. **Prepare.** When a conversation starts and the task kind is known
-   (`TaskKind`) or the project is known, the bundle's skills and habits are
-   switched on for this run. Beliefs from the bundle get a recall boost.
-   Cost: no model call, only a lookup.
-3. **Adapt on the fly.** If the self-model (III.7) marks this task kind as
-   weak, the run also gets the verify path and an early clarifying question.
-4. **Carry over to new projects.** When a new project looks like an
-   existing one (name, folder contents, first task kind), offer its bundle.
-   Workspace facts are left out; only procedure and skills travel
-   (Harness² rule: facts are per workspace, procedure is per domain).
-
-## III.11 The improver learns: the improvement record
-
-Harness²'s second loop: the process that makes changes also improves. In
-Poiesis this is a record of every self-change attempt and what it did, read
-before every new proposal.
-
-```sql
-CREATE TABLE IF NOT EXISTS improvements (
-  id              TEXT PRIMARY KEY,
-  problem_kind    TEXT NOT NULL,     -- repeat_mistake | told_twice | weak_task_kind | rough_skill
-  problem_cue     TEXT NOT NULL,     -- the shape of the situation, Harness² 'cue'
-  tool_or_area    TEXT,              -- e.g. 'read_file', 'mail', 'report'
-  candidate_form  TEXT NOT NULL,     -- lesson | habit_note | habit_check | skill_step | belief | workspace_fact | copied
-  candidate_ref   TEXT,
-  rehearsal       TEXT,              -- helped | hurt | no_effect | confounded | not_run
-  decision        TEXT NOT NULL,     -- adopted | merged | dropped | kept_base
-  live_outcome    TEXT,              -- filled later from memory_uses: helped | hurt | no_effect
-  evidence        TEXT NOT NULL,     -- one line, the Harness² notes shape
-  created_at      INTEGER NOT NULL
-);
-```
-
-How it is used:
-
-1. **Before proposing** (III.9 step 1): read the records with a similar
-   `problem_cue` or the same `tool_or_area`. If one form keeps winning
-   ("for `read_file` problems, `habit_check` helped 5 of 5, `lesson` 1 of
-   4"), draft that form first and skip forms that keep losing.
-2. **After going live:** CRD-2 fills `live_outcome`. A change that helped in
-   rehearsal but not live lowers trust in rehearsal for that area, and the
-   next proposal in that area needs more replays.
-3. **Rules of thumb.** Once a month the daily tidy-up turns the record into at
-   most 5 one-line rules for itself ("written lessons rarely fix tool
-   argument mistakes; use a check"). These rules go into the propose and
-   compose prompts only, never into the chat prompt. They are listed on the
-   Memory page under "How I improve", and the user can delete any of them.
-4. **Calibrating the gates.** If rehearsal verdicts and live outcomes agree
-   for an area 5 times in a row, that area may promote to `Auto` when the
-   user's rung for the class is `Auto`. If they disagree, the area drops to
-   `Ask`.
-
-This is what makes the system learn how to learn: the first fix for a new
-kind of problem is a guess, the tenth is informed by nine results.
-
-## III.12 The editable surface
-
-What the harness may change about itself, mapped to Harness²'s eight parts.
-Anything not in this table it may not change.
+What the harness may change about itself. Anything not in this table it may
+not change.
 
 | Harness² part | Poiesis part | Changed by | Gate |
 |---|---|---|---|
-| System prompt | `SOUL.md` | Proposal only | User accepts, always |
-| Guardrails | Habits `check` and `rule` | Improvement step | `habits` rung; `rule` needs the user |
-| Memory | Beliefs, profile, workspace facts | Encode, consolidate, improvement step | `lessons`, `consolidate` rungs |
-| Tool guidance | Habits `note` (just in time per tool) | Improvement step | `habits` rung. Built-in tool descriptions stay fixed (prompt golden gate) |
-| Skills | Skills, App-source copies | Improvement step, success path | `skills` rung. User files never edited in place |
-| Scripts | `scripts/` inside skills | Only scripts that ran clean | `skills` rung |
-| Subagents | Persona per task kind in a bundle (III.10) | Bundle choice only, never persona text | User picks |
-| Plugins / middleware | Habit firing points in the tool loop | Fixed set of points in code | Not editable by the harness |
+| System prompt | `SOUL.md` | proposal only | `soul`, the user accepts |
+| Guardrails | lesson `check`, `rule` | improvement step | `lessons`; `rule` by the user |
+| Memory | facts, lessons, profile | encode, tidy-up, improvement step | `facts`, `lessons`, `consolidate` |
+| Tool guidance | lessons with `fires_on` | improvement step | `lessons`. Built-in tool descriptions stay fixed (prompt golden gate) |
+| Skills | skills, App-source copies | improvement step, skills from success | `skills`. User files never edited in place (`OUT-2` rule) |
+| Scripts | `scripts/` in skills | only scripts that ran clean | `skills` |
+| Workspace facts | project instructions | improvement step | proposal, the user accepts |
+| Subagents | persona choice per project | the user | not editable by the harness |
+| Middleware | the dispatch point where lessons fire | fixed in code | not editable |
+
+## III.12 Project setup (what v1 called bundles)
+
+Light, last, and derived:
+
+- When a conversation starts in a project, the skills and firing lessons that
+  were active in that project's `done` conversations get a recall boost. No
+  model call, no table.
+- When a new project is created and looks like an existing one (name, folder,
+  first task kind), its empty state offers to copy the other project's
+  instructions and persona; facts never travel.
 
 ---
 
-# Part IV - What the user feels
+# Part IV - What the user feels, and where
 
-Each of these is a concrete moment. If a phase does not produce its moment,
-the phase is not done.
+Each moment names the component it lives in. If a phase does not produce its
+moment, the phase is not done.
 
-## IV.1 "Last time" (episodes)
+## IV.0 The mark shows when I'm working on myself
 
-Start a conversation that matches a past `done` episode of the same task
-kind. Above the composer, in the composer-hint slot (reuse the `SEE-3`
-component):
+- **Every reflection moves the mark**, wherever it was started (G1).
+  `reflect_conversation_cmd` itself emits `poiesis-reflecting
+  {conversation_id, on, learned}` at start and end; the store's existing
+  `reflectingIds` / `digestedIds` / `presence` logic consumes it. So launch
+  catch-up, the daily job, the Rail menu, the Health tab and `/reflect` all
+  give the orb its `weaving` state ("reflecting on a past conversation") and
+  the Rail row its ◆.
+- **Tidy-up and rehearsal** set `tending` ("tidying my head", orb
+  `shaping`) through one `poiesis-tending {on}` event from the daily job and
+  from `consolidate_memory_cmd`.
+- **Stop on input** drops the mark back to whatever is underneath, through the
+  same fall-back rule `tendBriefly` uses.
+- **Growth stage** counts only active entries (G10): superseded and trashed
+  ones never grow the mark. Lessons that fire count as lessons.
+- **The digest pulse** (`SCH-UI-2`) is the one sign that the tidy-up has
+  something to say. No new badge.
+- A lesson firing during a run changes nothing on the mark: the run is
+  already `active`.
+
+## IV.1 "Last time"
+
+In the `SEE-3` composer hint slot, while typing the first message of a
+conversation, when a past `done` conversation of the same task kind matches
+over the threshold and is under 180 days old:
 
 > Last time (12 Oct) I made the expense summary per category from your
 > Sparkasse CSV. **Do it the same way** · **Start fresh**
 
-"Same way" adds the episode digest and its skill (if any) to the turn.
+"Same way" adds that conversation's digest and its skill (if any) to the turn.
+At most once per conversation. When it shows, the Introduction's ambient line
+does not (one line rule).
 
-## IV.2 "You only have to tell me once" (habits)
+## IV.2 "You only have to tell me once"
 
-The user corrected the header row in October. In November, during a run, the
-timeline shows one quiet step:
+A lesson fired inside an existing tool step, as one plain line in that
+step's expanded detail, nothing in the stream itself:
 
 > Checked the header row first. You showed me on 4 Oct.
 
-## IV.3 "Why did you think that?" (visible recall)
+## IV.3 "Why did you think that?"
 
-Every turn that used memory has a collapsed row in the timeline:
+Inside the existing recall chip ("◆ remembered" / "◆ learned"), expanded
+`Provenance`:
 
-> Remembered 2 things
+- each entry with its why ("same project", "you named Anna"), its source
+  conversation and date as a link;
+- two text buttons: **Outdated** opens one inline line "What is right now?"
+  and the answer supersedes the belief; **Not relevant here** counts as hurt
+  for this item.
 
-Open it: each item shows its line, why it was recalled, its source
-conversation and date as a link, and two buttons: **Outdated** and **Not
-relevant here**. "Outdated" opens one inline line: "What is right now?". The
-answer supersedes the belief. No dialog.
+"What I'm working from" (`ContextPanel`) shows the same why on the Remembered
+and Learned layers' sources.
 
-## IV.4 "While you were away" (consolidation)
+## IV.4 "While you were away"
 
-In the return-moment slot (`PRES-5`):
+The daily job's digest, in the Tasks page and through the mark pulse, worded
+by when it ran (G3):
 
-> While you were away I went over 3 conversations. I learned 1 thing,
-> merged 2 notes, and let 1 old one go. **Show me**
+> While you were away I went over 3 conversations. I learned 1 thing, merged
+> 2 notes, and let 1 old one go. **Show me**
 
-"Show me" opens the Memory page on "Recent changes", each change undoable.
+"Show me" opens Self → Memory on "Recent changes". With `consolidate` at
+Auto, each change has **Undo**.
 
-## IV.5 The Memory page as a self, not a list
+## IV.5 The Self page grows, it does not get replaced
 
-Sections, in this order:
+**Header** (`Self.tsx`): the narrative is fixed (G4) and gains one sentence
+from the self-model (IV.6). The strip stays "facts · lessons · skills ·
+pending", plus "· N I'm unsure about" when there are contested beliefs.
 
-1. **About you**: global facts, profile.
-2. **Your projects and people**: topical facts grouped by entity.
-3. **How I work**: habits, lessons, skills I made.
-4. **Things I'll do**: waiting intentions.
-5. **Unsure**: contested beliefs, each with both sides and "Which is right?".
-6. **Archive**: superseded and let-go items, searchable.
+**Memory tab** (`MemoryPanel.tsx`), top to bottom:
 
-Each card: the statement; "from <conversation title>, <date>" as a link;
-"helped 4 times, last 3 days ago" or "not tested yet"; certainty in words
-(`sureWord`); "Earlier versions" when superseded versions exist.
+1. The profile prose, untitled, as today (`SMP-5`).
+2. The existing pending tidy-up block, now also holding the daily job's
+   proposal, with "Not this one" per row next to Apply all.
+3. **Recent changes**: what the last tidy-up and the last reflections did,
+   one first-person line each, Undo where it applies.
+4. **Unsure**: contested pairs, both sides with their source, one button per
+   side, plus "Both, in different situations" (sets scope).
+5. The fact cards, as today, grouped by project and then "everywhere". Each
+   card gains: "from <conversation>, <date>" for each piece of evidence (the
+   existing "Where this came from" becomes this list), "helped 4 times" or
+   "not tested yet" next to "last surfaced", certainty in words (`sureWord`),
+   "Earlier versions" when superseded ones exist.
+6. **Things I'll do**: waiting intentions, each with its trigger in words and
+   Drop.
+7. **Let go**: the `.trash/` entries, searchable, Restore (G9).
 
-## IV.6 "How I work" self-portrait
+**Lessons tab**:
 
-At the top of "How I work", generated from the self-model, in words not
-numbers:
+1. Pending proposals, as today. A proposal from the improvement step gains
+   the IV.8 block.
+2. Lesson cards, as today, plus: "I check this before <tool>" for lessons that
+   fire, usefulness, evidence list.
+3. **Skills I made**: skills from success and accepted skill proposals.
+4. **How I improve**: the rules of thumb (IV.10).
+
+**Health tab**: one new block "Whether I'm learning" (IV.7). "Reflect now"
+says what encoding found ("I noted 2 things to watch and learned 1").
+
+**Autonomy tab**: `consolidate` shows three choices; the `lessons` blurb says
+it covers checks too.
+
+All lists keep a fixed card height with "More" for long bodies.
+
+## IV.6 Self-portrait
+
+One sentence in the Self header, from the self-model, words not numbers,
+rebuilt weekly:
 
 > I'm reliable with reports and file clean-up. I often get spreadsheet
 > imports wrong on the first try, so I check them before I go on.
 
-## IV.7 Health line
-
-In Settings > Health (existing tab), four lines, month over month:
+## IV.7 Whether I'm learning (Health tab)
 
 > Mistakes I repeated: 2 (last month 5)
 > Things you had to tell me twice: 1 (last month 3)
 > Memory I carry in every message: 1.1k characters (last month 2.4k)
 > Fixes I made that held up: 7 of 8 (last month 3 of 6)
 
-## IV.8 "I tried 3 fixes" (the improvement step)
+"No data yet" under two weeks.
 
-A proposal from the improvement step uses the existing proposal card, with
-one added block, fixed height, collapsed to its first line:
+## IV.8 "I tried 3 fixes"
+
+On the existing proposal card, one block, fixed height, collapsed to its first
+line:
 
 > I kept reading your bank exports wrong. I tried 3 fixes on the
 > conversations where it happened:
 > - a check before reading: right in 4 of 4 replays
 > - a written reminder: right in 1 of 4
-> - the import skill from your *Taxes* project: right in 3 of 4
+> - the import steps from your *Taxes* project: right in 3 of 4
 >
 > I'm proposing the check. **Use it** · **Not now** · **Show replays**
 
-"Show replays" lists the replayed conversations as links with the first
-action each candidate took. With `Auto` on for the class, the same text
-appears in the return digest (IV.4) with **Undo** instead of **Use it**.
+## IV.9 Toast and the new-chat line
 
-## IV.9 "Start with what worked there" (bundles)
+- `MemoryToast` gains two leads: "I replaced what I knew; the old one is under
+  Earlier versions" (supersede) and "I'm not sure which is right, it's under
+  Unsure" (contested). Undo as today.
+- The Introduction's "◆ Recently learned" line (`PRES-5`) reads the newest
+  promoted belief, firing lesson or lesson of the week, not only lessons (G11).
 
-When a new project looks like an existing one, the project's empty state
-shows:
+## IV.10 How I improve
 
-> This looks like your *Client website* project. I can start with what
-> worked there: 2 skills, 3 checks, the *Web dev* persona.
-> **Start with that** · **Start empty** · **Show what's in it**
-
-When a conversation starts with a known bundle, the timeline's first step
-says, collapsed: "Set up for reports: 1 skill, 2 checks." Expand shows the
-list, each item with an off switch for this conversation.
-
-## IV.10 "How I improve"
-
-A section on the Memory page, after "How I work": the rules of thumb from
-III.11 as plain sentences, each with its evidence count and a delete
-button:
+On the Lessons tab, the rules of thumb as plain sentences with their count and
+a delete button. A deleted rule is not regenerated from the same rows:
 
 > Written reminders rarely fix how I call a tool. I use checks for that
 > now. (5 of 5 times)
+
+## IV.11 Slash commands (no new command)
+
+| Command | After this plan |
+|---|---|
+| `/remember` | also takes intentions ("remind me ... when ..."); runs the relation check |
+| `/forget` | unchanged; counts as a correction for credit |
+| `/always` | unchanged |
+| `/reflect` | runs the extended encode; moves the mark |
+| `/tidy` | the merged tidy-up (III.6), on everything |
+| `/why`, `/context` | the panel shows the why |
+| `/skillify` | unchanged; its drafting code is reused by skills from success |
+| `/checkup` | one more line: "I'm unsure about 2 things" → Self, Memory |
+| `/self` | unchanged; `openSelf` gains nothing new, sections are inside tabs |
 
 ---
 
 # Part V - Measuring it (do this first)
 
-Self-learning that is not measured is a story. These numbers decide whether
-each phase stays. The first five exist from Phase 0; the last three start
-with Phase 6.
-
-| Metric | Definition | Goal |
+| Metric | Read from | Goal |
 |---|---|---|
-| Repeat-mistake rate | Same tool + same error class in a later conversation, after a lesson or habit about it exists | Goes down |
-| Told-twice rate | A correction by the user that matches an existing belief or one already corrected | Goes down |
-| Always-on memory size | Characters of memory in every prompt | Goes down while the store grows |
-| Recall precision | Recalled items with outcome `helped` or `no_effect`, versus `hurt` and "Not relevant here" clicks | Goes up |
-| Stale belief rate | "Outdated" clicks per 100 recalls | Goes down |
-| Fix hold rate | Shipped self-changes whose `live_outcome` is `helped`, out of all with a live outcome | Goes up |
-| Rehearsal agreement | Rehearsal verdict matches live outcome | Goes up; if it stays under 60%, rehearsal is not trusted for that area |
-| First-fix rate | Problems fixed by the first shipped change, per quarter | Goes up over time: this is the "learns how to learn" number |
+| Repeat-mistake rate | `tool_fixes` / `tool_stats`: same tool and error class in a later conversation while a lesson about it exists | down |
+| Told-twice rate | `user_signals`, `/forget`, Outdated clicks matching an existing belief | down |
+| Always-on memory size | `recall_for(None)` index length | down while the store grows |
+| Recall precision | `memory_usage` helped / no effect vs hurt and Not relevant | up |
+| Stale belief rate | Outdated clicks per 100 recalls | down |
+| Fix hold rate | `change_proposals.live_outcome` | up |
+| Rehearsal agreement | `rehearsal_json` vs `live_outcome` | up; under 60% means rehearsal is not trusted for that area |
+| First-fix rate | problems fixed by the first shipped change, per quarter | up |
+
+A monthly snapshot in `settings`. The first five exist from Phase 0.
 
 ---
 
 # Part VI - Tasks
 
-Prefixes: `MEV` measure, `EPI` episodes, `CRD` credit, `CUE` recall, `BLF`
-beliefs, `SLP` consolidation, `HAB` procedures and habits, `RHS` rehearsal,
-`IMP` improvement loop, `BND` setup bundles, `INT` intentions, `MET`
-self-model.
+Prefixes: `FIX` scan findings, `MEV` measure, `EPI` encode, `CRD` credit,
+`CUE` recall, `BLF` beliefs, `SLP` daily tidy-up, `HAB` firing lessons, `RHS`
+rehearsal, `IMP` improvement loop, `INT` intentions, `MET` self-model, `PRJ`
+project setup. Each task names the files it touches.
 
-## Phase 0 - Baseline
+## Phase 0 - Fix what exists, and measure
+
+### FIX-1 - Every reflection moves the mark (G1)
+
+`reflect_conversation_cmd` emits `poiesis-reflecting` at start and end (with
+`learned`). `store.ts` listens and updates `reflectingIds`, `digestedIds`,
+`presence` with today's rules; the frontend `reflectConversation` stops setting
+them itself so there is one source. **Accept:** launch with an unreflected
+chat: the mark weaves and its Rail row shows ◆ while catch-up runs, then
+idles; same for the daily job run from the Tasks page.
+
+### FIX-2 - One message floor (G2)
+
+The daily job filters on `CATCH_UP_MIN_MESSAGES`. **Accept:** a 2-message chat
+is not stamped by the daily job.
+
+### FIX-3 - Digest words (G3)
+
+`compose_digest` gets the run's time and says "While you were away" or
+"Earlier today", never "Last night". Tests for both.
+
+### FIX-4 - Self narrative (G4)
+
+Fix the broken sentence in `Self.tsx` `narrative`. Test.
 
 ### MEV-1 - The numbers
 
-Compute the five metrics of Part V from existing data (`tool_fixes`,
-`tool_stats`, `user_signals`, rewinds, memory sizes). One function, a test
-per metric with synthetic rows. Store a monthly snapshot in `settings`.
+One function in `organism.rs` for the five Phase 0 metrics from existing
+tables, a test per metric with planted rows, monthly snapshot in settings.
 
-**Accept:** the function returns all five numbers on the dev database, and a
-test with planted repeats counts them correctly.
+### MEV-UI-1 - Whether I'm learning
 
-### MEV-UI-1 - Health lines
+The IV.7 block on the Health tab, four lines (the fourth says "not yet" until
+Phase 6).
 
-The three lines of IV.7 in the Health tab. "No data yet" when under 2 weeks.
+## Phase 1 - The conversation becomes the episode
 
-## Phase 1 - Episodes and credit (the foundation)
+### EPI-1 - Columns
 
-### EPI-1 - Schema and store
-
-`episodes` table, FTS, vector job (reuse the embed queue). Delete cascades.
+Schema migration on `conversations` (Part II columns), `vectors` scope
+`episode` through the existing embed queue (`missing_vector_texts`
+counterpart).
 
 ### EPI-2 - Encode
 
-Deterministic signals and outcome rules (III.1 steps 1 and 2), then the
-model call (step 3). Runs where reflection runs today; reflection's draft
-call is replaced by this call, so the cost stays the same. Keep the critic
-and the fail-then-fix fast path.
+III.1 inside `reflect_conversation_cmd`: signals, outcome rules, `TaskKind`,
+the reshaped draft call, candidates on the row, the fail-then-fix and
+user-correction fast paths unchanged. **Accept:** a conversation with one
+fail-then-fix and an accepting last turn gets `outcome = done`, the fix in
+`signals_json`, the same lesson as today, and a candidate that cites it; a
+rewound one gets `abandoned`; lesson output on today's eval fixtures does not
+drop.
 
-**Accept:** a conversation with one fail-then-fix and an accepting last turn
-produces an episode with `outcome = done`, the fix in `signals_json`, and a
-candidate that cites it. A rewound conversation produces `abandoned`.
+### CRD-1 - What reached each answer
 
-### CRD-1 - Usage rows
+`ContextRefs` gains `why` and `fired`; check that the backend-run path
+(scheduled and resumed runs, `context.rs` `gather`) writes `context_json` too,
+not only the frontend finalize path, and fix it if not.
 
-`memory_uses` table. `recall_for` and the always-on index write rows. Skill
-activations write rows (keep `skill_runs` until CRD-3).
+### CRD-2 - Credit
 
-### CRD-2 - Outcome attribution
-
-The rules of III.3, run at the end of encoding. Usefulness computed on read.
-
-**Accept:** a lesson cued to `read_file`, a later conversation where
-`read_file` runs clean: one `helped` row. Same lesson, same failure again:
-one `hurt` row.
-
-### CRD-3 - Fold old tables
-
-`skill_runs` and `memory_usage` readers move to `memory_uses`. Old tables
-stay until a later migration removes them.
+III.3 at the end of encoding; `memory_usage` gains its columns;
+`skill_runs` is read as is. **Accept:** a lesson cued to `read_file`, a later
+conversation where `read_file` runs clean: helped +1; the same failure again:
+hurt +1.
 
 ### EPI-UI-1 - "Last time"
 
-The IV.1 hint. Shown when episode similarity is over a threshold (measured,
-start at the SEM floor), same task kind, outcome `done`, less than 180 days
-old. Max once per conversation. "Same way" logs `helped`/`hurt` via CRD-2.
-
+IV.1 in the `SEE-3` hint slot; one line rule with `Introduction.tsx`.
 **Accept (felt):** do a report task, finish it, start the same kind of task a
 day later in a new chat: the hint appears with the right date and goal.
 
 ## Phase 2 - Recall you can see
 
-### CUE-1 - Multi-cue recall
+### CUE-1 - Ranking and cues
 
-Entity, task-kind and time cues added to the existing FTS and vector
-retrieval, fused by RRF, ranked by usefulness. Budgets from III.2.
+III.2 steps 1 to 3 in `recall_for_project`. Existing `recall_for_*` tests stay
+green; new ones for usefulness ranking and exclusions.
 
 ### CUE-2 - Why
 
-Every recalled item carries its cue in words. Sent with the existing
-retrieval event (`SEM-5`).
+III.2 step 4 into `RecalledEntry`, `matches`, `ContextRefs.why`.
 
-### CUE-3 - Uncertain beliefs said as uncertain
+### CUE-3 - Hedged beliefs
 
-Low-confidence or contested beliefs reach the prompt with a marker that
-makes the model hedge and give the date.
+III.2 step 5, with `context_golden.rs` and the `store.ts` mirror updated in
+the same task.
 
-### CUE-UI-1 - "Remembered" row
+### CUE-UI-1 - Why and correction in the chip
 
-The IV.3 row in the timeline, collapsed by default. "Outdated" and "Not
-relevant here" as described. Reuse the timeline step component.
+IV.3 in `Timeline.tsx` `Provenance` and `ContextPanel.tsx`. Outdated and Not
+relevant write session-log traces (III.3). **Accept (felt):** say "I live in
+Hamburg", later press Outdated on the recalled fact and type Berlin: the next
+recall says Berlin, the Memory tab shows Hamburg under Earlier versions.
 
-**Accept (felt):** state "I live in Hamburg", later say "I moved to Berlin"
-via "Outdated" on the recalled fact: the next recall says Berlin, the Memory
-page shows Hamburg under "Earlier versions".
-
-**Gate after Phase 2:** compare MEV numbers with Phase 0. If recall precision
-did not rise, fix recall before building Phase 3.
+**Gate after Phase 2:** recall precision must have risen against Phase 0.
 
 ## Phase 3 - Beliefs with evidence
 
-### BLF-1 - Frontmatter and archive
+### BLF-1 - Frontmatter
 
-New fields (II.1), `memory/archive/`, supersede and restore functions. Old
-files without fields read as `active`, `confidence: medium`, no evidence.
+`Fact` fields, `parse_entry` / `render_entry`, prompt-building callers skip
+superseded, `Vitality` counts only active (G10). Old files unchanged on disk.
 
-### BLF-2 - Relation check on write
+### BLF-2 - Relation check at the write sites
 
-Every write of a fact or lesson checks the top 5 similar beliefs with the
-decision model: `same` / `refines` / `contradicts` / `unrelated`. Applies
-III.4 step 4 and 5 at write time, not only in the daily tidy-up.
+III.4 in `memory_op` (next to `decide_scope`), `remember_fact_cmd`, and the
+recurrence check in `reflect.rs`. **Accept:** save "prefers tea", then
+"prefers coffee": a supersede (user said it) or both `contested`, never two
+silent actives.
 
-**Accept:** save "prefers tea" then "prefers coffee": the second is either a
-supersede (user said it) or both become `contested`. Never two silent
-actives.
+### BLF-3 - Prune by usefulness
 
-### BLF-UI-1 - Memory page sections
+III.4 last bullet in `prune_lessons` (G5).
 
-The six sections of IV.5. Card layout as described. Reuse the existing
-Memory page shell; fixed card height with "More" for long bodies.
+### BLF-UI-1 - Memory and Lessons tab sections
 
-### BLF-UI-2 - "Unsure" resolution
+IV.5 for both tabs: Recent changes, Unsure, evidence on cards, Earlier
+versions, Let go (G9). IV.9 toast leads and the Introduction line (G11).
 
-Each contested pair shows both sides, the source of each, and two buttons
-(one per side) plus "Both, in different contexts" (sets scope).
+## Phase 4 - The daily tidy-up
 
-## Phase 4 - Consolidation
+### SLP-1 - One tidy-up
 
-### SLP-1 - Consolidation in the built-in daily job
-
-No new job. Extend `run_nightly_reflection_digest` (`commands/scheduler.rs`)
-with III.4 steps 1 to 6, after encoding, with the bounds given there. Add the
-idle start and the stop on input (III.4), rename the job and its copy in
-`routes/Tasks.tsx`, keep the id. Default on is Erich's decision (III.4).
-
-**Accept:** with the app open and untouched for 2 minutes, a due pass runs;
-a key press during it stops it after the current item, and the next pass
-picks up the rest. Closed overnight, the pass runs within a minute or two of
-opening once the app is idle.
+III.6: the job calls the consolidate step with conversations;
+`Consolidation` gains `promotes` and `contests`; Tidy up and `/tidy` share the
+code; `consolidate` gains `auto` (`AUTONOMY_CLASSES`, `autonomy.rs`); idle
+start, stop on input, the new words in `Tasks.tsx`. Default on is Erich's
+decision. **Accept:** with the app idle for 2 minutes a due pass runs and the
+mark is `tending`; a key press stops it after the current item; the next pass
+picks up the rest.
 
 ### SLP-2 - Skills from success
 
-III.4 step 7. Uses HAB-1 for scripts.
+III.6 step 3, reusing the `/skillify` drafting code, landing as a `skill`
+proposal.
 
-### SLP-3 - Journal and return digest
+### SLP-3 - Digest and Recent changes
 
-III.4 step 8 and the IV.4 moment. Extends the job's existing digest
-(`scheduler.digest`, `compose_digest`) instead of adding a second one, with
-the same rule: never claim more than was done. Reuses `OPT-12`'s journal
-file format if it exists, otherwise defines it here.
+IV.4 from the job's own counts, with the rule that the digest never claims
+more than was done. **Accept (felt):** three conversations with the same small
+correction, leave the app idle: the digest says one thing was learned, and the
+Memory tab shows one belief with 3 evidence links.
 
-**Accept (felt):** three conversations with the same small correction, leave
-the app idle: on return the digest says one thing was learned, and the
-Memory page shows one belief with 3 evidence links.
+## Phase 5 - Lessons that fire, and rehearsal
 
-## Phase 5 - Procedures and rehearsal
+### HAB-1 - Firing at dispatch
 
-### HAB-1 - Scripts in proposed skills
+III.5 in `run.rs`: `fires_on`, cue match, tool note, `ContextRefs.fired`;
+excluded from the index (golden gate updated).
 
-`propose_skill` gains `files` (III.5). Validation: `scripts/` only, size
-cap, content must match a script that ran clean in this conversation.
+### HAB-2 - Checks
 
-### HAB-2 - Habits store and the `note` kind
+The fixed check set after the tool returns.
 
-`memory/habits/`, the `note` kind fired just in time at tool dispatch.
-Autonomy class `habits`, default `Ask`.
+### HAB-3 - New escalation
 
-### HAB-3 - `check` kind
+Recurrence 3 in `reflect.rs` proposes a firing lesson first, SOUL second on
+the same card.
 
-Deterministic post-tool checks from a small fixed set (header row, path
-exists, file non-empty, JSON parses, row count matches). No model-written
-code runs as a check.
+### HAB-4 - Scripts in proposed skills
 
-### HAB-4 - New escalation
+`propose_skill` `files`, validated against scripts that ran clean.
 
-RPT-2 proposes a habit instead of a SOUL line. The proposal card offers
-"Make it a standing instruction instead".
+### RHS-1 - Rehearsal on the GLD runner
 
-### RHS-1 - Rehearsal sandbox
+III.10 in `golden.rs` + `log::replay`. **Accept:** a planted fail-then-fix
+conversation and a candidate check: the with-arm matches `fixed_args` 2 of 2,
+the without-arm repeats the failure, verdict `helped`; no tool dispatched
+(assert on the dispatch counter).
 
-A run mode where no tool executes and the run stops at the first tool call
-or answer. Built on the session-log replay. Every side-effect tool,
-including connectors and mail, is stubbed, not just file writes.
+### HAB-UI-1 - The fired line
 
-### RHS-2 - Rehearsal of one candidate
+IV.2 inside the tool step's expanded detail; the Lessons tab line "I check
+this before <tool>".
 
-III.6 for each candidate that wants the habit level, against the unchanged
-setup. This is the single-candidate case of the improvement step; Phase 6
-widens it to competing candidates.
-
-**Accept:** a planted fail-then-fix episode, a candidate `check` for it: the
-with-arm matches `fixed_args` in 2 of 2, the without-arm repeats the
-failure, the verdict is `helped`.
-
-### HAB-UI-1 - Habit step
-
-The IV.2 step in the timeline when a habit fires.
-
-**Gate after Phase 5:** repeat-mistake rate must have dropped against Phase
-0. If it did not, stop and find out why before Phase 6.
+**Gate after Phase 5:** repeat-mistake rate must have dropped against Phase 0.
 
 ## Phase 6 - The self-improvement loop
 
 ### IMP-1 - Problem queue
 
-The daily tidy-up collects problems (III.9 opening list) from episodes,
-`memory_uses` and recurrence counts, deduplicated by cue, ranked by how
-often they hurt the user (told-twice first, then repeat mistakes, then weak
-task kinds, then rough skills).
+III.9 opening list, in the daily job, deduplicated by cue, told-twice first.
 
-### IMP-2 - Propose
+### IMP-2 - Propose, on `change_proposals`
 
-III.9 step 1: up to 3 candidates on different parts of the editable surface
-(III.12), each naming its target episode moment. Reads the improvement
-record first (IMP-5). Prompt in the Harness² shape: evidence required,
-`KEEP_BASE` allowed, workspace facts labelled.
+The columns of Part II; up to 3 candidates per problem, one `group_id`; reads
+earlier rows first.
 
 ### IMP-3 - Probe
 
-III.9 step 2 on RHS-1: every candidate and the unchanged setup, up to 3
-source episodes, 2 samples each. Results stored per candidate.
+Each candidate and the unchanged setup through RHS-1.
 
 ### IMP-4 - Compose and ship
 
-III.9 steps 3 and 4: adopt, merge (rehearsed again) or keep as is, one
-evidence line per decision. Winner through `GLD-2` and the class rung.
-
-**Accept:** a planted problem with three candidates where only the `check`
-fixes the replay: the `check` is proposed, the other two are recorded as
-`dropped` with their rehearsal results. A planted problem where no
-candidate beats the unchanged setup: nothing is proposed, one `kept_base`
+Adopt / merge / keep as is; losers `dropped`; winner through `GLD-2` and its
+rung. **Accept:** a planted problem where only the check fixes the replay: the
+check is proposed, the other two are `dropped` with their results; a problem
+where nothing beats the unchanged setup: nothing proposed, one `kept_base`
 row.
 
-### IMP-5 - Improvement record
+### IMP-5 - Improver learning
 
-The `improvements` table (III.11), written by IMP-4 including losers.
-`live_outcome` filled by CRD-2. Read by IMP-2 to order candidate forms.
+`live_outcome` from credit, rules of thumb in `improve.rules`, per-area
+Ask/Auto by agreement. **Accept:** seed 5 rows where a check helped and a
+lesson did not for `read_file`: the next `read_file` problem drafts the check
+first, and the rules contain a sentence saying so.
 
-### IMP-6 - Rules of thumb and gate calibration
+### IMP-UI-1 - "I tried 3 fixes" and "How I improve"
 
-III.11 steps 3 and 4: monthly, at most 5 one-line rules into the propose and
-compose prompts only. Per-area agreement between rehearsal and live outcome
-moves that area between `Ask` and `Auto` (never above the user's rung).
+IV.8 on the proposal card (Lessons tab) and in the digest; IV.10 on the
+Lessons tab.
 
-**Accept:** seed 5 records where `habit_check` helped and `lesson` did not
-for `read_file`: the next `read_file` problem drafts the check first, and
-the rules list contains a sentence saying so.
-
-### BND-1 - Setup bundles
-
-III.10 step 1: per project and per task kind with 3+ episodes, a list of
-references to the skills, habits, beliefs and persona active in `done`
-episodes, with usefulness. Rebuilt by the daily tidy-up.
-
-### BND-2 - Prepare
-
-III.10 steps 2 and 3 at conversation start: no model call, a lookup. Each
-item switched on writes a `memory_uses` row with `how = 'bundle'`. Step 3
-(weak task kinds) needs MET-1; until Phase 8 it uses the raw count of
-`failed` and `abandoned` episodes for the task kind.
-
-### BND-3 - Carry over
-
-III.10 step 4: similarity between a new project and existing ones, bundle
-offered without workspace facts.
-
-### IMP-UI-1 - "I tried 3 fixes"
-
-The IV.8 block on the proposal card, and its digest version.
-
-### BND-UI-1 - Bundle moments
-
-The IV.9 empty-state offer and the "Set up for ..." timeline step with
-per-item off switches.
-
-### IMP-UI-2 - "How I improve"
-
-The IV.10 section. Deleting a rule records it so it is not regenerated from
-the same records.
-
-**Gate after Phase 6:** fix hold rate must be above 60% and rehearsal
-agreement above 60% in at least one area. If not, ship Phase 6 changes only
-under `Ask` and fix rehearsal before Phase 7.
+**Gate after Phase 6:** fix hold rate above 60% and rehearsal agreement above
+60% in at least one area, or Phase 6 ships only under Ask.
 
 ## Phase 7 - Intentions
 
-### INT-1 - Store, tool, `/` entry
+### INT-1 - Intention facts
 
-Table, `remember_to` tool, `/remind` in `shared/commands.json`.
+`type: intention` and `trigger` in the `memory` tool, `/remember` parsing,
+time triggers to the schedule path.
 
-### INT-2 - Triggers
+### INT-2 - Firing
 
-Scheduler (time), recall pass (topic, project, task kind), mail sync (from).
+`recall_for` (topic, project) and `mail_sync` (from).
 
-### INT-UI-1 - Chips and list
+### INT-UI-1 - Things I'll do
 
-"I'll remember to ..." chip when created, "Things I'll do" section, the fired
-message.
+The Memory tab section and the one line in the turn.
 
 ## Phase 8 - Self-model
 
-### MET-1 - Self-model
+### MET-1 - Vitality per task kind
 
-Per task kind and model, from episodes and decision calibration.
+III.7 in `organism.rs`.
 
 ### MET-2 - Behaviour
 
-Weak area: more verify, earlier clarifying question. Strong area: no extra
-checks. Surprise weighting in CRD-2 and SLP-1.
+Weak kinds get verify and an earlier question; surprise weighting in credit.
 
 ### MET-UI-1 - Self-portrait
 
-The IV.6 paragraph, regenerated weekly, in words.
+IV.6 in the Self header.
+
+## Phase 9 - Project setup
+
+### PRJ-S1 - Boost and offer
+
+III.12: recall boost from the project's `done` conversations; the new-project
+offer in the project empty state.
 
 ---
 
@@ -1103,20 +1006,30 @@ The IV.6 paragraph, regenerated weekly, in words.
 
 | Risk | Answer |
 |---|---|
-| Local model cost | Encoding replaces the reflection call. The daily tidy-up is capped, starts only when idle and stops on input. Rehearsal only for habit candidates |
-| Weak, noisy credit labels | Usefulness needs real chances before it acts. Archive needs 5+ |
-| Over-building | Phase 0 numbers first, two hard gates. A phase that moves no number is cut |
-| Privacy | Episodes are local, deleted with their conversation, never sent unless the user picked a cloud target for background work |
-| Users confused by more memory UI | Everything new is either in the timeline (collapsed) or on the Memory page. No new panels |
-| The loop drifts: many small self-changes that each pass but together make it worse | Every shipped change goes through `GLD-2`. The improvement record links each change to its live outcome, and a monthly check archives changes whose live outcome is `hurt` or `no_effect` after 5 chances |
-| Rehearsal says "helped" but live use does not | Rehearsal agreement is measured per area (Part V). Low agreement moves the area to `Ask` and asks for more replays |
-| The improver learns wrong rules of thumb | At most 5, visible, deletable, used only in improvement prompts, never in the chat prompt |
-| Contested beliefs pile up | "Unsure" shows a count in the Memory nav; older than 30 days without an answer, the newer one wins and the older is archived |
+| Local model cost | The draft call is reshaped, not added; `skip_reflection` still skips it. The tidy-up is capped, idle-only, stops on input. Rehearsal only for promotion and improvement candidates |
+| Breaking today's lessons | Fail-then-fix and user corrections keep the current fast path; EPI-2's accept compares lesson output with today |
+| Prompt drift | Every prompt-byte change goes through `context_golden.rs` and the `store.ts` mirror in the same task |
+| Noisy credit | Not judged under 3 chances, nothing trashed under 5 |
+| Users confused by more memory UI | Nothing new in the chat stream except inside existing steps and chips; everything else is in existing Self tabs |
+| Drift from many small self-changes | Every ship through `GLD-2`; `live_outcome` on every proposal; monthly: changes with `hurt` or `no_effect` after 5 chances are proposed for removal |
+| Rehearsal says helped, live use does not | agreement measured per area; low agreement moves the area to Ask |
+| Contested beliefs pile up | the count in the Self strip; after 30 days without an answer the newer wins and the older goes to `.trash/` |
 
-# Part VIII - Not in this plan
+# Part VIII - Decisions for Erich
+
+1. The daily tidy-up on by default once Phase 4 ships (today it is off,
+   `SCH-5`).
+2. `consolidate` gains an Auto rung (snapshot + golden check + Undo in the
+   digest).
+3. Firing lessons and checks live under the `lessons` class, no `habits` class.
+4. Delegated child conversations (`parent_conversation_id`): encoded on their
+   own, or folded into the parent's signals. The plan assumes folded.
+
+# Part IX - Not in this plan
 
 - Training model weights.
 - Rerunning live user tasks.
-- Hypergraph or graph-database storage.
-- Sharing memory between users or devices (export exists; sync is a
-  separate decision).
+- Graph storage.
+- Sharing memory between users or devices.
+- The CLI agents' own rule learning (`engine_rules`, `RTE-6`); their
+  `engine-memory` proposals simply land as beliefs with evidence.
