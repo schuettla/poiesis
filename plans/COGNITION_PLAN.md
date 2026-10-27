@@ -14,7 +14,7 @@ commit per phase.
 | 2 - Recall you can see | done (see notes) | 2026-10-27 |
 | 3 - Beliefs with evidence | done (see notes) | 2026-10-27 |
 | 4 - The daily tidy-up | done (see notes) | 2026-10-27 |
-| 5 - Lessons that fire, and rehearsal | not started | |
+| 5 - Lessons that fire, and rehearsal | done (see notes) | 2026-10-27 |
 | 6 - The self-improvement loop | not started | |
 | 7 - Intentions | not started | |
 | 8 - Self-model | not started | |
@@ -376,6 +376,89 @@ commit per phase.
   candidates become one lesson with three sources, a duplicate folds in, nothing is
   left to say the next night). The idle gate, stop on input and the ticker are
   covered at the unit level (`SchedulerState`), not with a running app.
+
+### Phase 5 notes
+
+- **HAB-1, firing.** A lesson file may carry `fires_on: <tool>`, `fires_when:
+  <words>` and `check: <id>` (`memory::Fires`, one optional field on `Fact`). Such
+  a lesson is out of the index and out of relevance recall (`Fact::in_prompt`), so
+  it speaks at its tool and nowhere else. New `agent/habit.rs`: `TurnCtx.firing`
+  reads the firing lessons once when a run starts; after each call `dispatch_batch`
+  asks `habit::speak`, which adds the lesson body (cut to 600 characters) to the
+  result the model reads, for a failed call as well as a good one. The words in
+  `fires_when` must be in the call's arguments (any case). A run records each
+  lesson that spoke once (`RunHandle.fired`); the chat path sends the names with the
+  answer's `context_json` (`ContextRefs.fired`, collected from the new `fired` event
+  in `store.ts`) and a scheduled run writes them from the handle. Credit counts a
+  fired lesson as a chance on that answer and judges it by the tool it fires on
+  (`agent/credit.rs`).
+- **HAB-2, checks.** Five checks, fixed: `header_row`, `path_exists`,
+  `file_nonempty`, `json_parses`, `row_count`. They run after a good call, on the
+  file the call named (`path`, `file_path`, `file` or `filename`; a relative path
+  hangs off the working folder as the file tools do, and with no folder the check
+  is skipped). A failed check adds one line to the result ("Check failed: ... Fix
+  this before you go on.") and says so in the step line. No model-written code runs.
+- **HAB-3, the escalation.** At recurrence 3 (`commands/reflect.rs`), when the
+  lesson's cue is `tool:<name>` and this conversation fixed a mistake with that
+  tool, reflection files a `habit` proposal instead of the standing-instruction one.
+  The card (`HabitProposal` in chat, the same card on the Lessons tab) has three
+  buttons: **Check it first** (sets `fires`, and a check chosen from the error text
+  by `habit::check_for`), **Make it a standing instruction instead**
+  (`make_standing_instead_cmd`: adds the lesson's one line to SOUL through the same
+  `GLD-2` guard as any soul edit, and is refused when `soul` is off or the SOUL is
+  full) and **Not now**. The soul branch of `resolve_change_proposal_cmd` moved into
+  `apply_soul` so both paths share it. A lesson that was offered once does not get a
+  second habit offer; if it recurs again the old standing-instruction proposal comes
+  as before (unless a habit card is still waiting).
+- **HAB-4, scripts in proposed skills.** `propose_skill` takes `files` (at most 3,
+  `scripts/<name>.py` or `.js`, 20 000 characters each). A file is kept only if it
+  is, word for word (line endings and trailing space aside), the `code` of a
+  `run_code` call in this conversation that finished clean (`log::clean_scripts`:
+  no error, no non-zero exit, not stopped for time). The files wait in the setting
+  `proposal_files:<proposal id>` and are written beside `SKILL.md` when the person
+  says yes; a no removes them. The path is checked again at the write.
+- **RHS-1, rehearsal.** In `agent/golden.rs`: `build_rehearsal` finds the run that
+  made a failed call (`Db::run_ids_in`) and rebuilds the messages with `log::replay`
+  up to, not including, that call. `rehearse` asks twice per arm (temperatures 0.2
+  and 0.6), without the candidate and with it in the system prompt, reads the first
+  tool call and never runs it. `is_right` is exact against `fixed_args`, false
+  against `failed_args`, and otherwise `RehearsalMatch`: right when it agrees with
+  the fixed call on more of the arguments that differ between the two. Verdict:
+  `helped` (right 2 of 2 with it, wrong at least once without), `hurt` (right less
+  often with it), else `no_effect`. `rehearse_with_model` runs it against the loaded
+  or chosen model through the tool table the golden set uses.
+- **HAB-UI-1.** A step that fired a lesson opens to one plain line, "Checked the
+  header row. You showed me on 4 Oct." (`fired` on `AgentStep`; the step is
+  expandable, and nothing shows in the stream). The Lessons tab says "I check this
+  before read file, and afterwards I look at the header row." on a lesson that
+  fires.
+- **Deviations.** (a) The words a call must carry are `fires_when`, not `cue`: the
+  existing `cue` already means "tool:<name>" or situation words for credit, and
+  reusing it would make the two clash. (b) The note reaches the model with the
+  result, so after the call it is about; it helps the retry and the next call, not
+  the first one. Changing the arguments of a call (`rule`) is not built: the plan
+  leaves it to the person on the lesson card, and no card edits it yet. (c) Nothing
+  sets `fires_when` today; it is read from the file (hand edit). The habit card sets
+  the tool and the check only. (d) Only `run_code` counts as a script that ran
+  clean; a script written with `write_file` and run another way does not. Skills
+  drafted by the tidy-up (`SLP-2`) carry no scripts. (e) **Nothing calls
+  `rehearse` yet.** The plan uses it in IMP-3 (Phase 6). It is tested with a
+  stand-in model; `rehearse_with_model` has not run against a real one. (f) The
+  habit offer follows the `lessons` rung (off = not offered) and is always a
+  proposal, never applied by itself.
+- **Checks.** `cargo test --lib`: 1635 pass; the 7 stable failures (checkup engine
+  line, acp x2, approve, codex x3) and the flaky `db` fork test fail as before. `vitest`: all pass except the old
+  `ThoughtStrip` failure. `tsc`: only the old `AgentRun.tsx` error. Clippy shows
+  nothing new in the touched files. I also marked `save_digest` and
+  `compose_digest` in `scheduler.rs` as test-only: Phase 4 left them unused in the
+  real build.
+- **Gate not measurable here.** "Repeat-mistake rate must have dropped against
+  Phase 0" needs weeks of real use. The number is on the Health tab ("Mistakes I
+  repeated"). Read it before Phase 6 starts.
+- **Felt check not run here** (the plan gives none for this phase beyond RHS-1,
+  which the unit test covers). To try it by hand: let a CSV step fail and get
+  fixed in three chats, accept "Check it first", then open the step of the next
+  CSV call and read its line.
 
 **What v2 changes.** v1 described a second memory system beside the one that
 exists: a new `episodes` table, a new `memory_uses` table, a new

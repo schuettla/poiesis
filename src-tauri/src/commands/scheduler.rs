@@ -178,6 +178,7 @@ fn load_digest(db: &Db) -> Option<Digest> {
     db.get_setting(DIGEST_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok())
 }
 
+#[cfg(test)]
 fn save_digest(db: &Db, text: &str) {
     save_digest_with(db, text, false);
 }
@@ -494,6 +495,7 @@ struct TidyBits {
     reverted: bool,
 }
 
+#[cfg(test)]
 fn compose_digest(read: usize, total: usize, learned: usize, proposed: usize, when: DigestWhen) -> String {
     compose_digest_with(read, total, learned, proposed, &TidyBits::default(), when)
 }
@@ -749,7 +751,10 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
     fleet.close(&run.id);
     let text = outcome.text;
     if let Some(answer_id) = &answer_id {
-        close_run_turn(&db, answer_id, &text, &inputs.context_refs);
+        // `HAB-1`: the lessons that spoke up at a tool call are part of what reached it.
+        let mut refs = inputs.context_refs.clone();
+        refs.fired = run.fired.lock().unwrap().clone();
+        close_run_turn(&db, answer_id, &text, &refs);
     }
 
     let _ = db.log_activity(

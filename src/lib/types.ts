@@ -76,6 +76,9 @@ export interface AgentStep {
      * after the text went to the model, so it marks the step and blocks nothing. */
     readsAsInstructions?: number;
   }[];
+  /** `HAB-UI-1`: lessons that spoke up at this step, as one plain line each. Shown
+   * only in the step's expanded detail, never in the stream. */
+  fired?: { lesson: string; line: string }[];
   /** `HRN-UI-2`: the batch of steps this one is running alongside. Steps that
    * share a group are drawn as one "3 things at once" band, because that is
    * what actually happened — a stack that fills one row at a time would show

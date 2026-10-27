@@ -490,6 +490,85 @@ pub fn enabled_names_for_persona(db: &Db, packs: &[SkillPack], skills_json: Opti
 /// shouldn't produce an unreadable proposal.
 const SKILL_BODY_CAP: usize = 8000;
 
+/// `HAB-4`: what a proposed skill may carry besides its text. Scripts only, a few,
+/// small.
+const SKILL_FILES_MAX: usize = 3;
+const SKILL_FILE_CAP: usize = 20_000;
+
+/// Where the files of a pending `skill` proposal wait, by proposal id, as a JSON
+/// object of path to content. Removed when the proposal is answered.
+pub fn proposal_files_key(proposal_id: &str) -> String {
+    format!("proposal_files:{proposal_id}")
+}
+
+/// A script path a skill may carry: `scripts/<name>.py|js`, one level, plain name.
+pub fn script_path_ok(path: &str) -> bool {
+    let Some(name) = path.strip_prefix("scripts/") else { return false };
+    !name.is_empty()
+        && !name.contains(['/', '\\', ':'])
+        && !name.starts_with('.')
+        && (name.ends_with(".py") || name.ends_with(".js"))
+}
+
+/// Line endings and trailing space do not make two scripts different.
+fn same_script(a: &str, b: &str) -> bool {
+    let norm = |t: &str| t.replace("\r\n", "\n").trim_end().to_string();
+    norm(a) == norm(b)
+}
+
+/// `HAB-4`: the `files` of a `propose_skill` call, checked. Each is a script path,
+/// within the size cap, and word for word a script that ran clean in this
+/// conversation (`log::clean_scripts`). Nothing else is ever written beside a skill.
+pub fn checked_files(db: &Db, conversation_id: &str, files: Option<&serde_json::Value>) -> Result<Vec<(String, String)>, String> {
+    let Some(list) = files.and_then(|f| f.as_array()).filter(|l| !l.is_empty()) else { return Ok(Vec::new()) };
+    if list.len() > SKILL_FILES_MAX {
+        return Err(format!("keep to {SKILL_FILES_MAX} scripts at most"));
+    }
+    let clean = super::log::clean_scripts(db, conversation_id);
+    let mut out: Vec<(String, String)> = Vec::new();
+    for item in list {
+        let path = item["path"].as_str().unwrap_or_default().trim();
+        let content = item["content"].as_str().unwrap_or_default();
+        if !script_path_ok(path) {
+            return Err(format!("\"{path}\" is not a script path: use scripts/<name>.py or scripts/<name>.js"));
+        }
+        if out.iter().any(|(p, _)| p == path) {
+            return Err(format!("\"{path}\" is listed twice"));
+        }
+        if content.chars().count() > SKILL_FILE_CAP {
+            return Err(format!("keep each script under {SKILL_FILE_CAP} characters"));
+        }
+        if !clean.iter().any(|ran| same_script(ran, content)) {
+            return Err(format!(
+                "\"{path}\" is not code that ran clean with run_code in this conversation. Run it first, then propose it word for word"
+            ));
+        }
+        out.push((path.to_string(), content.to_string()));
+    }
+    Ok(out)
+}
+
+/// Write the files a pending proposal kept aside next to its `SKILL.md`. Paths are
+/// checked again here: this is the sink that turns text into files.
+pub fn write_proposal_files(db: &Db, proposal_id: &str, dir: &Path) -> Result<usize, String> {
+    let Some(raw) = db.get_setting(&proposal_files_key(proposal_id)).map_err(|e| e.to_string())? else { return Ok(0) };
+    let files: std::collections::BTreeMap<String, String> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let mut written = 0;
+    for (path, content) in files {
+        if !script_path_ok(&path) || content.chars().count() > SKILL_FILE_CAP {
+            continue;
+        }
+        let target = dir.join(&path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&target, content).map_err(|e| e.to_string())?;
+        written += 1;
+    }
+    let _ = db.delete_setting(&proposal_files_key(proposal_id));
+    Ok(written)
+}
+
 pub fn tool_specs() -> serde_json::Value {
     serde_json::json!([
         {
@@ -530,7 +609,19 @@ pub fn tool_specs() -> serde_json::Value {
                         "name": { "type": "string", "description": "short-kebab-case-slug" },
                         "description": { "type": "string", "description": "one line" },
                         "when_to_use": { "type": "string", "description": "one line: when to use this skill" },
-                        "body": { "type": "string", "description": "the full markdown instructions, under 8000 chars" }
+                        "body": { "type": "string", "description": "the full markdown instructions, under 8000 chars" },
+                        "files": {
+                            "type": "array",
+                            "description": "optional scripts to keep with the skill. Each must be code you ran with run_code in this conversation that finished clean, word for word. Reach one from the body as ${POIESIS_SKILL_DIR}/scripts/<name>.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "path": { "type": "string", "description": "scripts/<name>.py or scripts/<name>.js" },
+                                    "content": { "type": "string", "description": "the script, exactly as it ran" }
+                                },
+                                "required": ["path", "content"]
+                            }
+                        }
                     },
                     "required": ["name", "description", "when_to_use", "body"]
                 }
@@ -768,15 +859,30 @@ fn propose_skill(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Stri
     // say `I learned this on …` once the user has accepted it.
     let file = render_skill_md_with(&name, description, when_to_use, body, Some("poiesis"));
 
+    // `HAB-4`: scripts ride along only when they are code that already ran clean here.
+    let files = checked_files(ctx.db, ctx.conversation_id, args.get("files"))?;
+    let rationale = if files.is_empty() {
+        description.to_string()
+    } else {
+        let names: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
+        format!("{description} It keeps {} with it.", names.join(", "))
+    };
+
     let proposal = ctx
         .db
-        .add_change_proposal("skill", Some(&name), &file, description, Some(description))
+        .add_change_proposal("skill", Some(&name), &file, &rationale, Some(description))
         .map_err(|e| e.to_string())?;
+    if !files.is_empty() {
+        let map: std::collections::BTreeMap<&str, &str> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+        ctx.db
+            .set_setting(&proposal_files_key(&proposal.id), &serde_json::to_string(&map).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    }
 
     ctx.sink.emit(AgentEvent::Proposal {
         id: proposal.id,
         target: "skill".to_string(),
-        rationale: description.to_string(),
+        rationale,
     });
     let _ = ctx
         .db
@@ -828,6 +934,89 @@ fn yaml_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::db::Db;
+
+    /// One `run_code` call and its result, as the session log keeps them.
+    fn ran(db: &Db, conv: &str, id: &str, code: &str, result: &str) {
+        let call = serde_json::json!({
+            "role": "assistant",
+            "tool_calls": [{ "id": id, "function": { "name": "run_code", "arguments": serde_json::json!({ "language": "python", "code": code }).to_string() } }]
+        });
+        db.append_session_event(conv, Some("run"), "tool_call", &call).unwrap();
+        let out = serde_json::json!({ "role": "tool", "tool_call_id": id, "content": result });
+        db.append_session_event(conv, Some("run"), "tool_result", &out).unwrap();
+    }
+
+    fn file(path: &str, content: &str) -> serde_json::Value {
+        serde_json::json!([{ "path": path, "content": content }])
+    }
+
+    /// `HAB-4`: a script rides with a skill only if it ran clean here, word for word.
+    #[test]
+    fn a_skill_keeps_only_scripts_that_ran_clean_in_this_conversation() {
+        let db = Db::open_in_memory().unwrap();
+        let conv = db.create_conversation("A chat", None, false).unwrap().id;
+        ran(&db, &conv, "c1", "print(sum(range(10)))\n", "stdout:\n45\n");
+        ran(&db, &conv, "c2", "raise SystemExit(2)", "stdout:\n(exited with code 2)\n");
+        ran(&db, &conv, "c3", "import nothing", "Error: no such module");
+
+        let ok = checked_files(&db, &conv, Some(&file("scripts/total.py", "print(sum(range(10)))\r\n"))).unwrap();
+        assert_eq!(ok.len(), 1, "line endings and a trailing newline do not matter");
+
+        for (path, code, why) in [
+            ("scripts/total.py", "print(sum(range(11)))", "edited after it ran"),
+            ("scripts/fail.py", "raise SystemExit(2)", "exited non-zero"),
+            ("scripts/err.py", "import nothing", "errored"),
+            ("scripts/never.py", "print('new')", "never ran"),
+        ] {
+            let err = checked_files(&db, &conv, Some(&file(path, code))).unwrap_err();
+            assert!(err.contains("ran clean"), "{why}: {err}");
+        }
+        assert!(checked_files(&db, &conv, None).unwrap().is_empty());
+        assert!(checked_files(&db, &conv, Some(&serde_json::json!([]))).unwrap().is_empty());
+        // Another conversation's clean run does not count here.
+        let other = db.create_conversation("Another", None, false).unwrap().id;
+        assert!(checked_files(&db, &other, Some(&file("scripts/total.py", "print(sum(range(10)))"))).is_err());
+    }
+
+    #[test]
+    fn only_a_plain_script_name_under_scripts_is_a_path() {
+        for good in ["scripts/a.py", "scripts/my-tool.js"] {
+            assert!(script_path_ok(good), "{good}");
+        }
+        for bad in ["a.py", "scripts/", "scripts/a.sh", "scripts/../a.py", "scripts/x/a.py", "/scripts/a.py", "scripts/.hid.py", "scripts\\a.py", "SKILL.md"] {
+            assert!(!script_path_ok(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn too_many_or_too_big_scripts_are_refused() {
+        let db = Db::open_in_memory().unwrap();
+        let conv = db.create_conversation("A chat", None, false).unwrap().id;
+        let big = "x = 1\n".repeat(SKILL_FILE_CAP);
+        ran(&db, &conv, "c1", &big, "stdout:\n");
+        assert!(checked_files(&db, &conv, Some(&file("scripts/big.py", &big))).unwrap_err().contains("under"));
+        let many = serde_json::json!((0..4).map(|i| serde_json::json!({ "path": format!("scripts/{i}.py"), "content": "x" })).collect::<Vec<_>>());
+        assert!(checked_files(&db, &conv, Some(&many)).unwrap_err().contains("at most"));
+    }
+
+    /// `HAB-4`: accepting writes the scripts beside `SKILL.md`; the aside copy is
+    /// removed, and a path that should not be there is never written.
+    #[test]
+    fn accepting_writes_the_scripts_beside_the_skill() {
+        let db = Db::open_in_memory().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        db.set_setting(
+            &proposal_files_key("p1"),
+            r#"{"scripts/total.py":"print(1)","../escape.py":"bad","scripts/run.sh":"bad"}"#,
+        )
+        .unwrap();
+        assert_eq!(write_proposal_files(&db, "p1", tmp.path()).unwrap(), 1);
+        assert_eq!(std::fs::read_to_string(tmp.path().join("scripts/total.py")).unwrap(), "print(1)");
+        assert!(!tmp.path().join("scripts/run.sh").exists());
+        assert!(!tmp.path().parent().unwrap().join("escape.py").exists());
+        assert_eq!(db.get_setting(&proposal_files_key("p1")).unwrap(), None);
+        assert_eq!(write_proposal_files(&db, "none", tmp.path()).unwrap(), 0);
+    }
 
     fn write_skill(dir: &Path, frontmatter: &str, body: &str) {
         std::fs::create_dir_all(dir).unwrap();

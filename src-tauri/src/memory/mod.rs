@@ -201,6 +201,24 @@ pub struct Fact {
     /// `created`.
     #[serde(default)]
     pub valid_from: Option<String>,
+    /// `HAB-1`: a lesson that fires at one tool instead of living in the index.
+    /// Lessons only.
+    #[serde(default)]
+    pub fires: Option<Fires>,
+}
+
+/// `HAB-1`/`HAB-2`: when a lesson speaks up, and what it checks afterwards.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Fires {
+    /// The tool it is about, by name.
+    pub on: String,
+    /// Words that must appear in the call's arguments (any case). Empty means
+    /// every call of the tool.
+    #[serde(default)]
+    pub when: Option<String>,
+    /// One id from the fixed set in `agent::habit`. Run after the tool returns.
+    #[serde(default)]
+    pub check: Option<String>,
 }
 
 /// More than this many sources adds nothing a person would read.
@@ -223,9 +241,10 @@ impl Fact {
     }
 
     /// Does the model get told about this entry in the memory index? Intentions
-    /// are kept in the folder but reach a turn only when their trigger fires.
+    /// are kept in the folder but reach a turn only when their trigger fires; a
+    /// lesson that fires at a tool (`HAB-1`) speaks at that call and nowhere else.
     pub fn in_prompt(&self) -> bool {
-        !self.is_superseded() && self.kind != "intention"
+        !self.is_superseded() && self.kind != "intention" && self.fires.is_none()
     }
 
     /// The marker the index line carries when the entry should be hedged.
@@ -491,6 +510,7 @@ fn parse_entry(name: &str, text: &str) -> Fact {
     let mut superseded_by = None;
     let mut evidence: Vec<String> = Vec::new();
     let mut valid_from = None;
+    let (mut fires_on, mut fires_when, mut check) = (None, None, None);
 
     for line in header.lines() {
         let Some((key, value)) = line.split_once(':') else { continue };
@@ -530,6 +550,9 @@ fn parse_entry(name: &str, text: &str) -> Fact {
                 evidence = value.split(',').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect();
             }
             "valid_from" => valid_from = Some(value),
+            "fires_on" => fires_on = Some(value),
+            "fires_when" => fires_when = Some(value),
+            "check" => check = Some(value),
             _ => {}
         }
     }
@@ -559,6 +582,8 @@ fn parse_entry(name: &str, text: &str) -> Fact {
         superseded_by,
         evidence,
         valid_from,
+        // `check` and `fires_when` mean nothing without a tool to fire on.
+        fires: fires_on.map(|on| Fires { on, when: fires_when, check }),
     }
 }
 
@@ -670,6 +695,14 @@ fn render_entry(f: &Fact) -> String {
     }
     if let Some(valid_from) = &f.valid_from {
         out.push_str(&format!("valid_from: {}\n", one_line(valid_from)));
+    }
+    if let Some(fires) = &f.fires {
+        out.push_str(&format!("fires_on: {}\n", one_line(&fires.on)));
+        for (key, value) in [("fires_when", &fires.when), ("check", &fires.check)] {
+            if let Some(value) = value {
+                out.push_str(&format!("{key}: {}\n", one_line(value)));
+            }
+        }
     }
     if !f.evidence.is_empty() {
         out.push_str(&format!("evidence: {}\n", f.evidence.iter().map(|e| one_line(e).replace(',', "")).collect::<Vec<_>>().join(", ")));
@@ -1171,6 +1204,21 @@ impl MemoryStore {
         self.write_index();
         self.sync_fts(db);
         Ok(recurrence)
+    }
+
+    /// `HAB-1`: make a lesson fire at a tool, or stop. Nothing else about it changes.
+    pub fn set_fires(&self, db: &Db, name: &str, fires: Option<Fires>) -> Result<(), String> {
+        let name = slugify(name)?;
+        let _guard = self.lock.lock().unwrap();
+        let path = self.path_for(LESSONS, &name);
+        let text = std::fs::read_to_string(&path).map_err(|_| format!("no lesson named {name}"))?;
+        let mut entry = parse_entry(&name, &text);
+        entry.fires = fires;
+        std::fs::write(&path, render_entry(&entry)).map_err(|e| e.to_string())?;
+        drop(_guard);
+        self.write_index();
+        self.sync_fts(db);
+        Ok(())
     }
 
     /// Trash everything past `LESSON_CAP`, by what each lesson has earned (`BLF-3`,
@@ -1690,6 +1738,7 @@ mod tests {
             superseded_by: None,
             evidence: Vec::new(),
             valid_from: None,
+            fires: None,
             project: None,
         }
     }
@@ -1858,6 +1907,31 @@ mod tests {
         let bumped = s.read_in(LESSONS, "check-header").unwrap();
         assert_eq!(bumped.cue.as_deref(), Some("tool:read_file"));
         assert_eq!(bumped.origin.as_deref(), Some("rewind"));
+    }
+
+    /// `HAB-1`: a lesson that fires at a tool keeps its tool, its words and its check
+    /// on disk, and stays out of the index and out of relevance recall.
+    #[test]
+    fn a_firing_lesson_round_trips_and_stays_out_of_the_index() {
+        let (s, db, _tmp) = store();
+        let firing = Fact {
+            fires: Some(Fires { on: "write_file".into(), when: Some(".csv".into()), check: Some("header_row".into()) }),
+            ..fact("check-header", "Check the header row.")
+        };
+        s.save_lesson(&db, &firing).unwrap();
+        s.save_lesson(&db, &fact("be-brief", "Be brief.")).unwrap();
+        let back = s.read_in(LESSONS, "check-header").unwrap();
+        assert_eq!(back.fires, firing.fires);
+        assert_eq!(s.read_in(LESSONS, "be-brief").unwrap().fires, None);
+
+        let index = s.index_markdown();
+        assert!(index.contains("be-brief"), "an ordinary lesson is still listed");
+        assert!(!index.contains("check-header"), "a lesson that fires is not");
+        // A word on the file with no tool to fire on reads as absent.
+        let file = s.dir_for(LESSONS).join("check-header.md");
+        let text = std::fs::read_to_string(&file).unwrap().replace("fires_on: write_file\n", "");
+        std::fs::write(&file, text).unwrap();
+        assert_eq!(s.read_in(LESSONS, "check-header").unwrap().fires, None);
     }
 
     #[test]

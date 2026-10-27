@@ -473,7 +473,32 @@ async fn reflect_pass(
             // `soul` rung like every other one — a user who closed off
             // standing-instruction changes must not receive these either —
             // and it is proposed exactly once, however often it recurs after.
+            //
+            // `HAB-3`: when the lesson is about one tool and a mistake with that tool
+            // was fixed in this very conversation, the first offer is to check it
+            // before that tool, which needs no standing instruction at all. The
+            // standing instruction is the second button on the same card.
+            let habit_state = db.habit_proposal_status(&name).unwrap_or(None);
+            let lesson = existing_lessons.iter().find(|l| l.name == name);
             if recurrence >= 3
+                && habit_state.is_none()
+                && autonomy_gate(&db, "lessons") != Rung::Off
+                && lesson.is_some_and(|l| l.fires.is_none())
+            {
+                if let Some((tool, check)) = lesson.and_then(|l| habit_for(l, &fixes)) {
+                    let fires = serde_json::json!({ "on": tool, "check": check });
+                    let _ = db.add_change_proposal(
+                        "habit",
+                        Some(&name),
+                        &fires.to_string(),
+                        "I've learned this three times. I could check it before I use the tool instead.",
+                        Some(&description),
+                    );
+                    continue;
+                }
+            }
+            if recurrence >= 3
+                && habit_state.as_deref() != Some("pending")
                 && autonomy_gate(&db, "soul") != Rung::Off
                 && !db.has_soul_escalation(&name).unwrap_or(true)
             {
@@ -553,6 +578,7 @@ async fn reflect_pass(
                     superseded_by: None,
                     evidence: Vec::new(),
                     valid_from: None,
+                    fires: None,
                 };
                 if mem.save_lesson(&db, &fact).is_err() {
                     continue;
@@ -870,6 +896,14 @@ fn parse_critic(raw: &str) -> CriticVerdict {
     }
 }
 
+/// `HAB-3`: the tool a lesson is about and the check that would have caught the
+/// mistake, when this conversation holds a fixed mistake with that tool.
+fn habit_for(lesson: &Fact, fixes: &[crate::db::ToolFix]) -> Option<(String, Option<&'static str>)> {
+    let tool = lesson.cue.as_deref()?.trim().strip_prefix("tool:")?.trim();
+    let fix = fixes.iter().find(|f| f.tool_name == tool)?;
+    Some((tool.to_string(), crate::agent::habit::check_for(&fix.error)))
+}
+
 /// `RPT-1`: a dependency-free stand-in for semantic similarity — word-set
 /// overlap (Jaccard) between "name description" pairs. Good enough to catch
 /// "the same lesson, phrased differently" without needing an embedder loaded,
@@ -1040,6 +1074,7 @@ mod tests {
             superseded_by: None,
             evidence: Vec::new(),
             valid_from: None,
+            fires: None,
         };
         mem.save_lesson(&db, &lesson).unwrap();
         let refs = crate::commands::memory::ContextRefs { lessons: vec!["check-header".into()], ..Default::default() };
@@ -1057,6 +1092,25 @@ mod tests {
         // Asking again refreshes the rules and does not count the answer twice.
         encode_by_rules(&db, &mem, &conv);
         assert_eq!(db.memory_credit_map("lessons").unwrap()["check-header"].chances, 1);
+    }
+
+    /// `HAB-3`: a lesson about one tool, with a mistake of that tool fixed in the
+    /// conversation, can be offered as a check before the tool.
+    #[test]
+    fn a_lesson_with_a_tool_and_a_fixed_mistake_can_become_a_check() {
+        let fix = |tool: &str, error: &str| crate::db::ToolFix {
+            tool_name: tool.into(),
+            failed_args: "{}".into(),
+            error: error.into(),
+            fixed_args: "{}".into(),
+        };
+        let lesson = |cue: Option<&str>| Fact { cue: cue.map(str::to_string), ..Default::default() };
+        let fixes = [fix("write_file", "No such file or directory"), fix("read_file", "missing header row")];
+        assert_eq!(habit_for(&lesson(Some("tool:read_file")), &fixes), Some(("read_file".to_string(), Some("header_row"))));
+        assert_eq!(habit_for(&lesson(Some("tool:write_file")), &fixes), Some(("write_file".to_string(), Some("path_exists"))));
+        assert_eq!(habit_for(&lesson(Some("tool:web_search")), &fixes), None, "no fixed mistake with that tool");
+        assert_eq!(habit_for(&lesson(Some("a few words")), &fixes), None, "no tool to check before");
+        assert_eq!(habit_for(&lesson(None), &fixes), None);
     }
 
     /// `RPT-1`: the same lesson, reworded, should still be recognized as a

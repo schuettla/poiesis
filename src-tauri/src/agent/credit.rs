@@ -7,7 +7,8 @@
 //!
 //! What counts, with the evidence this build has:
 //!
-//! - **A lesson cued to a tool** (`cue: tool:<name>`). The tool ran after the
+//! - **A lesson cued to a tool** (`cue: tool:<name>`), or one that fires at a tool
+//!   (`fires_on`, `HAB-1`). The tool ran after the
 //!   answer and did not fail: helped. It failed: hurt. The turn was gone back
 //!   on: hurt. The tool did not run: no effect.
 //! - **Anything the user pressed Outdated or Not relevant on** (a command trace
@@ -76,7 +77,10 @@ pub fn credit_conversation(db: &Db, mem: &MemoryStore, conversation_id: &str) ->
             .facts
             .iter()
             .map(|name| (FACTS, name))
-            .chain(refs.lessons.iter().map(|name| (LESSONS, name)));
+            .chain(refs.lessons.iter().map(|name| (LESSONS, name)))
+            // `HAB-1`: a lesson that fired at a tool call reached the answer as surely
+            // as one in the index. It is listed once even if both say so.
+            .chain(refs.fired.iter().filter(|name| !refs.lessons.contains(name)).map(|name| (LESSONS, name)));
         for (collection, name) in items {
             let Some(entry) = mem.read_in(collection, name) else { continue };
             let t = tallies.entry((collection, name.clone())).or_default();
@@ -84,7 +88,8 @@ pub fn credit_conversation(db: &Db, mem: &MemoryStore, conversation_id: &str) ->
             t.last_at = t.last_at.max(msg.created_at);
 
             if collection == LESSONS {
-                if let Some(tool) = tool_cue(entry.cue.as_deref()) {
+                let tool = tool_cue(entry.cue.as_deref()).or(entry.fires.as_ref().map(|f| f.on.as_str()));
+                if let Some(tool) = tool {
                     let (ok, failed) =
                         db.tool_results_between(conversation_id, tool, msg.created_at, until).unwrap_or((0, 0));
                     let gone_back = rewound_from.is_some_and(|from| *i > from);
@@ -100,7 +105,7 @@ pub fn credit_conversation(db: &Db, mem: &MemoryStore, conversation_id: &str) ->
             let carried_after = answers
                 .iter()
                 .skip(n + 1)
-                .any(|(_, later)| later.facts.contains(name) || later.lessons.contains(name));
+                .any(|(_, later)| later.facts.contains(name) || later.lessons.contains(name) || later.fired.contains(name));
             let hurt_by_press = pressed
                 .iter()
                 .any(|(arg, at)| arg == name && *at >= msg.created_at && until.is_none_or(|u| *at < u) && !carried_after);
@@ -174,6 +179,7 @@ mod tests {
                     superseded_by: None,
                     evidence: Vec::new(),
                     valid_from: None,
+                    fires: None,
                 },
             )
             .unwrap();
@@ -224,6 +230,42 @@ mod tests {
         answer(&w, &["check-header"], &[], 100);
         tool(&w, "read_file", true, 120);
         assert_eq!(credit_conversation(&w.db, &w.mem, &w.conv), 1);
+        let c = credit_of(&w, "lessons", "check-header");
+        assert_eq!((c.chances, c.helped, c.hurt), (1, 1, 0));
+    }
+
+    /// `HAB-1`: a lesson that fires is not in the index, so only `fired` carries it. It
+    /// is credited by the tool it fires on.
+    #[test]
+    fn a_lesson_that_fired_at_a_tool_is_credited_by_that_tool() {
+        use crate::memory::Fires;
+        let w = world();
+        let mut l = w.mem.read_in(LESSONS, "x").unwrap_or_default();
+        l.name = "check-header".into();
+        l.description = "check the header".into();
+        l.kind = "lesson".into();
+        l.body = "Look at the first row.".into();
+        l.fires = Some(Fires { on: "read_file".into(), when: None, check: None });
+        w.mem.save_lesson(&w.db, &l).unwrap();
+        let msg = w
+            .db
+            .append_message(
+                &w.conv,
+                &NewMessage {
+                    role: "assistant".into(),
+                    content: String::new(),
+                    model_name: None,
+                    model_provenance: None,
+                    steps_json: None,
+                    attachments: Vec::new(),
+                },
+            )
+            .unwrap();
+        let refs = ContextRefs { fired: vec!["check-header".into()], ..Default::default() };
+        w.db.finalize_message(&msg.id, "ok", None, Some(&serde_json::to_string(&refs).unwrap()), None, None).unwrap();
+        w.db.exec_for_tests("UPDATE messages SET created_at = ?2 WHERE id = ?1", rusqlite::params![msg.id, 100]);
+        tool(&w, "read_file", true, 120);
+        credit_conversation(&w.db, &w.mem, &w.conv);
         let c = credit_of(&w, "lessons", "check-header");
         assert_eq!((c.chances, c.helped, c.hurt), (1, 1, 0));
     }
@@ -320,6 +362,7 @@ mod tests {
                     superseded_by: None,
                     evidence: Vec::new(),
                     valid_from: None,
+                    fires: None,
                 },
             )
             .unwrap();

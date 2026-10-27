@@ -28,6 +28,7 @@ pub mod filesystem;
 pub mod fleet;
 pub mod goal;
 pub mod golden;
+pub mod habit;
 pub mod imagegen;
 pub mod index;
 pub mod ledger;
@@ -170,6 +171,9 @@ pub enum AgentEvent {
         id: String,
         matches: Vec<crate::db::SearchHit>,
     },
+    /// `HAB-UI-1`: a lesson spoke up at this tool step. One plain line for the
+    /// step's expanded detail, nothing in the stream itself.
+    Fired { id: String, lesson: String, line: String },
     /// The Code Execution toolset ran a snippet (`DAT-UI-1`): the source, for the
     /// timeline step's on-demand disclosure — the same `⌄` control `Recall`
     /// uses, so the code is available without ever being dumped into the

@@ -453,6 +453,7 @@ export type AgentEvent =
   | { type: "permission"; request: PermissionRequest }
   | { type: "memory_write"; op: string; name: string; description: string; collection: string; undo_token: string }
   | { type: "recall"; id: string; matches: SearchHit[] }
+  | { type: "fired"; id: string; lesson: string; line: string }
   | { type: "code"; id: string; language: string; code: string }
   /** `COD-UI-2`: a project task started, finished, or printed a line. */
   | {
@@ -1247,6 +1248,13 @@ export const conversationSummaries = (conversationId: string) =>
 // ---- durable memory (MEM) ----
 
 /** A durable entry — a fact or lesson — as stored on disk. */
+/** `HAB-1`/`HAB-2`: the tool a lesson speaks at, words the call must carry, and a check. */
+export interface LessonFires {
+  on: string;
+  when?: string | null;
+  check?: string | null;
+}
+
 export interface Fact {
   name: string;
   description: string;
@@ -1284,6 +1292,8 @@ export interface Fact {
   evidence?: string[];
   /** `BLF-1`: YYYY-MM-DD from which it holds, when that is not `created`. */
   valid_from?: string | null;
+  /** `HAB-1`: set on a lesson that fires at one tool instead of living in the index. */
+  fires?: LessonFires | null;
 }
 
 /** What gets prepended to every conversation (MEM-3). */
@@ -1513,6 +1523,11 @@ export const listChangeProposals = () => invoke<ChangeProposal[]>("list_change_p
  * routed, so a cloud-only setup is still guarded. */
 export const resolveChangeProposal = (id: string, accept: boolean, target?: ChatTarget) =>
   invoke<void>("resolve_change_proposal_cmd", { id, accept, target });
+
+/** `HAB-3`: the second button on a "check this before a tool" card. The lesson becomes
+ * a standing instruction instead. */
+export const makeStandingInstead = (id: string, target?: ChatTarget) =>
+  invoke<void>("make_standing_instead_cmd", { id, target });
 
 /** `MAIL-UI-2`'s `Edit`: rewrite a pending proposal's text before accepting it. */
 export const updateChangeProposalText = (id: string, proposedText: string) =>

@@ -239,6 +239,9 @@ pub struct RunHandle {
     /// `SEE-1`: where the answer's text goes as it grows, so each sentence is checked once
     /// the stream has moved past it. `None` when this run's answer is not checked.
     pub check: Mutex<Option<super::autocheck::Stream>>,
+    /// `HAB-1`: the lessons that spoke up at a tool call in this run, once each, for
+    /// the record of what reached the answer.
+    pub fired: Mutex<Vec<String>>,
 }
 
 impl RunHandle {
@@ -347,6 +350,7 @@ impl Fleet {
             held: Mutex::new(Default::default()),
             thought: Mutex::new(Default::default()),
             check: Mutex::new(None),
+            fired: Mutex::new(Vec::new()),
             prematch: Mutex::new(None),
         });
         if let Ok(mut runs) = self.runs.lock() {

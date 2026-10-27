@@ -2799,6 +2799,18 @@ impl Db {
         Ok(rows)
     }
 
+    /// The runs that wrote to a conversation's log, in the order they began. Rehearsal
+    /// (`RHS-1`) looks for the run a failed call happened in.
+    pub fn run_ids_in(&self, conversation_id: &str) -> Result<Vec<String>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT run_id FROM session_events WHERE conversation_id = ?1 AND run_id IS NOT NULL
+             GROUP BY run_id ORDER BY MIN(seq)",
+        )?;
+        let rows = stmt.query_map([conversation_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// The rows one run wrote after sequence number `after`, oldest first. The automatic
     /// check of an answer reads the turn's tool results as the log grows (`SEE-1`).
     pub fn session_events_for_run_after(&self, run_id: &str, after: i64) -> Result<Vec<SessionEvent>, DbError> {
@@ -3058,6 +3070,20 @@ impl Db {
             |r| r.get(0),
         )?;
         Ok(n > 0)
+    }
+
+    /// `HAB-3`: where the "check this before a tool" proposal for a lesson stands, if
+    /// one was ever made. The newest answer wins.
+    pub fn habit_proposal_status(&self, slug: &str) -> Result<Option<String>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT status FROM change_proposals WHERE target = 'habit' AND slug = ?1 ORDER BY created_at DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![slug])?;
+        Ok(match rows.next()? {
+            Some(r) => Some(r.get(0)?),
+            None => None,
+        })
     }
 
     // ---- the agent's search over its own past (RCL-1) ----

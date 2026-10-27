@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import * as api from "../../lib/api";
 import { AUTONOMY_CLASSES, useAppStore } from "../../lib/store";
-import { learningLines } from "../../lib/learning";
+import { firesLine, habitLine, learningLines } from "../../lib/learning";
 import { Evidence, LetGo, RecentChanges } from "../Memory/BeliefSections";
 import MemoryPanel from "../Memory/MemoryPanel";
 import "../../routes/Models.css";
@@ -95,8 +95,20 @@ function LessonsTab() {
   useEffect(() => setVersion((v) => v + 1), [lessons]);
 
   const pending = proposals.filter(
-    (p) => p.target === "lesson" || p.target === "lesson-critic" || p.target === "engine-memory"
+    (p) => p.target === "lesson" || p.target === "lesson-critic" || p.target === "engine-memory" || p.target === "habit"
   );
+  const standing = useAppStore((s) => s.makeStandingInstead);
+  const [proposalError, setProposalError] = useState("");
+
+  async function standingInstead(id: string) {
+    setProposalError("");
+    try {
+      await standing(id);
+      await refreshSelf();
+    } catch (e) {
+      setProposalError(String(e));
+    }
+  }
 
   async function answer(id: string, accept: boolean) {
     await resolve(id, accept);
@@ -117,22 +129,41 @@ function LessonsTab() {
 
   return (
     <div className="self-list">
-      {pending.map((p) => (
-        <div className="memory-proposal" key={p.id}>
-          <p className="memory-proposal-head">
-            {p.target === "engine-memory" ? `${p.rationale} Keep this?` : `I'd like to learn this: ${p.rationale}`}
-          </p>
-          <pre className="self-steps">{p.proposed_text}</pre>
-          <div className="setting-actions">
-            <button className="btn-primary" onClick={() => answer(p.id, true)}>
-              {p.target === "engine-memory" ? "Keep it" : "Learn it"}
-            </button>
-            <button className="btn-text" onClick={() => answer(p.id, false)}>
-              Not now
-            </button>
+      {pending.map((p) =>
+        p.target === "habit" ? (
+          <div className="memory-proposal" key={p.id}>
+            <p className="memory-proposal-head">I keep relearning {p.slug ?? "this one"}. {p.rationale}</p>
+            <p className="memory-desc">{habitLine(p.proposed_text) ?? ""}</p>
+            {proposalError && <p className="memory-error">{proposalError}</p>}
+            <div className="setting-actions">
+              <button className="btn-primary" onClick={() => answer(p.id, true)}>
+                Check it first
+              </button>
+              <button className="btn-text" onClick={() => standingInstead(p.id)}>
+                Make it a standing instruction instead
+              </button>
+              <button className="btn-text" onClick={() => answer(p.id, false)}>
+                Not now
+              </button>
+            </div>
           </div>
-        </div>
-      ))}
+        ) : (
+          <div className="memory-proposal" key={p.id}>
+            <p className="memory-proposal-head">
+              {p.target === "engine-memory" ? `${p.rationale} Keep this?` : `I'd like to learn this: ${p.rationale}`}
+            </p>
+            <pre className="self-steps">{p.proposed_text}</pre>
+            <div className="setting-actions">
+              <button className="btn-primary" onClick={() => answer(p.id, true)}>
+                {p.target === "engine-memory" ? "Keep it" : "Learn it"}
+              </button>
+              <button className="btn-text" onClick={() => answer(p.id, false)}>
+                Not now
+              </button>
+            </div>
+          </div>
+        )
+      )}
 
       <RecentChanges collection="lessons" version={version} />
 
@@ -153,6 +184,8 @@ function LessonsTab() {
             <p className="memory-created">learned when you went back{l.created ? ` on ${l.created}` : ""}</p>
           )}
           <p className="memory-desc">{l.description}</p>
+          {/* `HAB-UI-1`: a lesson that fires at a tool says so, in plain words. */}
+          {l.fires && <p className="memory-created">{firesLine(l.fires)}</p>}
           {expanded === l.name && <p className="memory-body">{l.body}</p>}
           <Evidence ids={l.evidence} />
           <div className="memory-card-actions">

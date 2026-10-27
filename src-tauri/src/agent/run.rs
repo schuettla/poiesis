@@ -1726,6 +1726,8 @@ struct TurnCtx<'a> {
     /// `USE-12`: what the user asked this turn (for a child run, the task it was
     /// given), which a tool call is compared with. Taken once, like `plan_mode`.
     request: String,
+    /// `HAB-1`: the lessons that fire at a tool call, read once when the run starts.
+    firing: Vec<crate::memory::Fact>,
 }
 
 /// `HRN-6`: everything that changes from one turn to the next.
@@ -2214,6 +2216,7 @@ async fn run_agent_inner(
         compact_asked: Default::default(),
         waiting_on_person: Default::default(),
         request: super::decide::tools::last_exchange(&messages).0,
+        firing: super::habit::firing(memory.list_in(crate::memory::LESSONS)),
     };
 
     // `SEE-1`: a top-level answer in a chat checks itself as it streams, against what the
@@ -3092,6 +3095,11 @@ async fn dispatch_batch(&self, st: &mut RunState, calls: &[ToolCallReq]) {
         }
     };
 
+    // `HAB-2`: a check looks at a file, so it needs the folder the call's path hangs off.
+    let folder = (!self.firing.is_empty())
+        .then(|| db.conversation_folder(conversation_id).ok().and_then(|(f, _)| f).map(std::path::PathBuf::from))
+        .flatten();
+
     // Results land in the order the model asked for them, whatever order they
     // finished in, so the transcript is the same every time.
     for (i, call) in calls.iter().enumerate() {
@@ -3106,6 +3114,7 @@ async fn dispatch_batch(&self, st: &mut RunState, calls: &[ToolCallReq]) {
         db.add_tool_stat(model_name, &call.name, conversation_id, result.is_ok());
         match result {
             Ok((output, note)) => {
+                let spoken = self.habit(&call.id, &call.name, &parsed[i], Some(&output), folder.as_deref());
                 // FIX-1: this tool just succeeded — if its last call in this
                 // run had failed, that pair is exactly "wrong approach, then
                 // right approach". Nothing is written if it never failed.
@@ -3126,18 +3135,19 @@ async fn dispatch_batch(&self, st: &mut RunState, calls: &[ToolCallReq]) {
                             &call.id,
                             Some(format!("\u{2014} {}, kept", super::results::human_size(output.len()))),
                         );
-                        st.messages.push(tool_result_message(&call.id, &shown));
+                        st.messages.push(tool_result_message(&call.id, &format!("{shown}{spoken}")));
                     }
                     None => {
                         sink.step_done(&call.id, note.or_else(|| summarize(&output)));
-                        st.messages.push(tool_result_message(&call.id, &output));
+                        st.messages.push(tool_result_message(&call.id, &format!("{output}{spoken}")));
                     }
                 }
             }
             Err(e) => {
+                let spoken = self.habit(&call.id, &call.name, &parsed[i], None, folder.as_deref());
                 st.last_failure.failed(&call.name, &call.arguments, &e);
                 sink.step_error(&call.id, &e);
-                st.messages.push(tool_result_message(&call.id, &format!("Error: {e}")));
+                st.messages.push(tool_result_message(&call.id, &format!("Error: {e}{spoken}")));
                 // GRM-3: give a failed *built-in* call one guided retry. MCP
                 // errors take the LOOP-UI-2 path, not this nudge.
                 if registry.builtin_for(&call.name).is_some() && st.retried.insert(call.id.clone()) {
@@ -3592,6 +3602,25 @@ async fn dispatch(
 
 impl TurnCtx<'_> {
     /// `USE-12`: everything a look at a tool call needs from this run.
+    /// `HAB-1`/`HAB-2`: what the lessons that fire at this tool have to say about the
+    /// call that just finished. The text goes on the result the model reads; the
+    /// lines go to the step's detail and the run's record of what reached the answer.
+    fn habit(&self, call_id: &str, tool: &str, args: &serde_json::Value, output: Option<&str>, folder: Option<&std::path::Path>) -> String {
+        if self.firing.is_empty() {
+            return String::new();
+        }
+        let spoken = super::habit::speak(&self.firing, tool, args, output, folder);
+        for (lesson, line) in spoken.lines {
+            let mut fired = self.rc.run.fired.lock().unwrap();
+            if !fired.contains(&lesson) {
+                fired.push(lesson.clone());
+            }
+            drop(fired);
+            self.sink.emit(AgentEvent::Fired { id: call_id.to_string(), lesson, line });
+        }
+        spoken.text
+    }
+
     fn gate_site(&self) -> toolgate::Site<'_> {
         toolgate::Site {
             db: self.db,

@@ -423,6 +423,7 @@ mod tests {
             superseded_by: None,
             evidence: Vec::new(),
             valid_from: None,
+            fires: None,
             project: None,
         }
     }

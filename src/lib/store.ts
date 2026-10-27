@@ -640,6 +640,8 @@ export interface AppState {
   changeProposals: api.ChangeProposal[];
   refreshChangeProposals: () => Promise<void>;
   resolveChangeProposal: (id: string, accept: boolean) => Promise<void>;
+  /** `HAB-3`: make the lesson behind a "check before a tool" card a standing instruction. */
+  makeStandingInstead: (id: string) => Promise<void>;
   /** `MAIL-UI-2`'s `Edit`: rewrite a pending proposal's text before accepting. */
   updateChangeProposalText: (id: string, text: string) => Promise<void>;
   /** A tidy-up the user hasn't answered — feeds the Settings badge (SOUL-UI-3). */
@@ -2638,6 +2640,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       await get().refreshMemoryContext();
       await get().refreshSelf();
     }
+  },
+  makeStandingInstead: async (id) => {
+    await api.makeStandingInstead(id, cloudTarget());
+    await get().refreshChangeProposals();
+    await get().refreshMemoryContext();
+    await get().refreshSelf();
   },
   updateChangeProposalText: async (id, text) => {
     await api.updateChangeProposalText(id, text);
@@ -6297,6 +6305,7 @@ async function streamAssistantTurn(
   if (steps.length) patchAssistant(set, convId, assistantId, { steps: [...steps] });
   const blocks: BlockView[] = [];
   const proposalIds: string[] = [];
+  const firedNames: string[] = [];
   const artifactIds: string[] = [];
   /** Media artifacts this turn produced, rendered inline (`STR-1`). */
   const mediaAttachments: Attachment[] = [];
@@ -6915,6 +6924,15 @@ async function streamAssistantTurn(
             }
             break;
           }
+          case "fired": {
+            // `HAB-UI-1`: a lesson spoke up at this step. The line goes in the step's
+            // detail; the name goes in the record of what reached the answer.
+            const s = steps.find((x) => x.id === e.id);
+            if (s) s.fired = [...(s.fired ?? []), { lesson: e.lesson, line: e.line }];
+            if (!firedNames.includes(e.lesson)) firedNames.push(e.lesson);
+            patchAssistant(set, convId, assistantId, { steps: [...steps] });
+            break;
+          }
           case "code": {
             // `DAT-UI-1`: same idea as "recall" — the snippet hangs off its
             // step so the `⌄` disclosure can reveal it on demand.
@@ -7017,7 +7035,9 @@ async function streamAssistantTurn(
     }));
     try {
       const stepsJson = api.stepsJsonFor(steps, unspoken);
-      const contextJson = opts.contextRefs ? JSON.stringify(opts.contextRefs) : undefined;
+      const contextJson = opts.contextRefs
+        ? JSON.stringify(firedNames.length ? { ...opts.contextRefs, fired: firedNames } : opts.contextRefs)
+        : undefined;
       const planJson = plan?.items.length ? JSON.stringify(plan) : undefined;
       await api.finalizeMessage(
         persistedAssistantId,

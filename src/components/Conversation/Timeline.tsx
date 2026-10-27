@@ -246,8 +246,9 @@ function Step({ step }: { step: AgentStep }) {
   const kept = step.kept;
   const task = step.task;
   const untrusted = step.untrusted ?? [];
+  const fired = step.fired ?? [];
   const taskHasDetail = !!task && (!!task.tail || (task.diagnostics?.length ?? 0) > 0);
-  const expandable = matches.length > 0 || !!code || !!kept || untrusted.length > 0 || taskHasDetail;
+  const expandable = matches.length > 0 || !!code || !!kept || untrusted.length > 0 || fired.length > 0 || taskHasDetail;
   const expandLabel = taskHasDetail
     ? "what the task reported"
     : code
@@ -256,7 +257,9 @@ function Step({ step }: { step: AgentStep }) {
       ? "the full result I kept"
       : matches.length > 0
         ? `the ${matches.length} sources for this recall`
-        : "what this step read from outside";
+        : fired.length > 0 && untrusted.length === 0
+          ? "what I checked here"
+          : "what this step read from outside";
   const toggle = () => setOpen((v) => !v);
 
   // One grid row: status dot, verb, target, then the readings. Nothing in the
@@ -309,6 +312,13 @@ function Step({ step }: { step: AgentStep }) {
           {kept && <KeptDisclosure kept={kept} />}
           {!code && matches.length > 0 && <Provenance matches={matches} />}
           {untrusted.length > 0 && <UntrustedDisclosure sources={untrusted} />}
+          {fired.length > 0 && (
+            <div className="fired-disclosure">
+              {fired.map((f) => (
+                <p key={f.lesson}>{f.line}</p>
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>

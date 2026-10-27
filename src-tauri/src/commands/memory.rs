@@ -982,6 +982,94 @@ pub fn update_change_proposal_text_cmd(db: State<'_, Db>, id: String, proposed_t
     db.update_change_proposal_text(&id, &proposed_text).map_err(err)
 }
 
+/// `GLD-2`: a standing instruction changes every future prompt, so it is checked
+/// against the golden set right after, and the prior text goes back on a
+/// confirmed regression. Closes the proposal it came from either way.
+async fn apply_soul(
+    app: &tauri::AppHandle,
+    db: &Db,
+    mem: &MemoryStore,
+    mgr: &RuntimeManager,
+    target: Option<&ChatTarget>,
+    proposal_id: &str,
+    text: &str,
+) -> Cmd<()> {
+    use tauri::Emitter;
+    let prior = mem.soul();
+    let regressed = crate::agent::golden::guard_self_change(
+        &mgr.client,
+        mgr,
+        db,
+        mem,
+        target,
+        || mem.set_soul(text),
+        || mem.set_soul(&prior),
+    )
+    .await
+    .map_err(PoiesisError::Message)?;
+    db.resolve_change_proposal(proposal_id, "applied").map_err(err)?;
+    match regressed {
+        None => {
+            let _ = db.log_activity(None, "memory", "accepted a standing instruction");
+        }
+        Some(n) => {
+            let _ = db.log_activity(
+                None,
+                "memory",
+                &format!("that standing instruction made me worse at {n} thing(s) \u{2014} I put it back"),
+            );
+            let _ = app.emit("poiesis-golden-reverted", serde_json::json!({ "count": n }));
+        }
+    }
+    Ok(())
+}
+
+/// The `habit` proposal's text is `{"on": tool, "check": id or null}`.
+fn parse_fires(text: &str) -> Result<crate::memory::Fires, String> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|_| "That proposal is not readable.".to_string())?;
+    let on = v["on"].as_str().map(str::trim).filter(|t| !t.is_empty()).ok_or("That proposal names no tool.")?;
+    let check = v["check"].as_str().filter(|c| crate::agent::habit::is_check(c)).map(str::to_string);
+    Ok(crate::memory::Fires { on: on.to_string(), when: None, check })
+}
+
+/// `HAB-3`: the second button on a "check this before a tool" card. The lesson
+/// becomes a standing instruction instead; still gated by `soul`.
+#[tauri::command]
+pub async fn make_standing_instead_cmd(
+    db: State<'_, Db>,
+    mem: State<'_, MemoryStore>,
+    mgr: State<'_, RuntimeManager>,
+    app: tauri::AppHandle,
+    id: String,
+    target: Option<ChatTarget>,
+) -> Cmd<()> {
+    let proposal = db
+        .get_change_proposal(&id)
+        .map_err(err)?
+        .ok_or_else(|| PoiesisError::Message("That proposal no longer exists.".into()))?;
+    if proposal.status != "pending" || proposal.target != "habit" {
+        return Err(PoiesisError::Message("That proposal was already answered.".into()));
+    }
+    if crate::autonomy::autonomy_gate(&db, "soul") == crate::autonomy::Rung::Off {
+        return Err(PoiesisError::Message("Standing instructions are switched off.".into()));
+    }
+    let description = proposal
+        .description
+        .clone()
+        .filter(|d| !d.trim().is_empty())
+        .ok_or_else(|| PoiesisError::Message("That lesson has no summary to make standing.".into()))?;
+    let soul = mem.soul();
+    let addition = if soul.trim().is_empty() {
+        format!("- {description}")
+    } else {
+        format!("{}\n- {description}", soul.trim_end())
+    };
+    if addition.chars().count() > crate::memory::SOUL_CAP {
+        return Err(PoiesisError::Message("My standing instructions are already full.".into()));
+    }
+    apply_soul(&app, &db, &mem, &mgr, target.as_ref(), &id, &addition).await
+}
+
 /// Answer a proposal. Accepting a `soul` proposal is the only path by which
 /// standing instructions ever change on the agent's initiative — and it runs
 /// here, on an explicit user action, never inside the agent loop.
@@ -1011,42 +1099,23 @@ pub async fn resolve_change_proposal_cmd(
 
     if !accept {
         db.resolve_change_proposal(&id, "dismissed").map_err(err)?;
+        let _ = db.delete_setting(&crate::agent::skillpack::proposal_files_key(&id));
         let _ = db.log_activity(None, "memory", "dismissed a proposed change");
         return Ok(());
     }
 
     match proposal.target.as_str() {
-        "soul" => {
-            use tauri::Emitter;
-            // `GLD-2`: a standing instruction changes every future prompt —
-            // check it against the golden set right after, and put the prior
-            // text back on a confirmed regression.
-            let prior = mem.soul();
-            let regressed = crate::agent::golden::guard_self_change(
-                &mgr.client,
-                &mgr,
-                &db,
-                &mem,
-                target.as_ref(),
-                || mem.set_soul(&proposal.proposed_text),
-                || mem.set_soul(&prior),
-            )
-            .await
-            .map_err(PoiesisError::Message)?;
+        "soul" => apply_soul(&app, &db, &mem, &mgr, target.as_ref(), &id, &proposal.proposed_text).await,
+        // `HAB-3`: check a lesson before a tool instead of carrying it everywhere.
+        "habit" => {
+            let slug = proposal
+                .slug
+                .clone()
+                .ok_or_else(|| PoiesisError::Message("That lesson has no name.".into()))?;
+            let fires = parse_fires(&proposal.proposed_text).map_err(PoiesisError::Message)?;
+            mem.set_fires(&db, &slug, Some(fires.clone())).map_err(PoiesisError::Message)?;
             db.resolve_change_proposal(&id, "applied").map_err(err)?;
-            match regressed {
-                None => {
-                    let _ = db.log_activity(None, "memory", "accepted a standing instruction");
-                }
-                Some(n) => {
-                    let _ = db.log_activity(
-                        None,
-                        "memory",
-                        &format!("that standing instruction made me worse at {n} thing(s) — I put it back"),
-                    );
-                    let _ = app.emit("poiesis-golden-reverted", serde_json::json!({ "count": n }));
-                }
-            }
+            let _ = db.log_activity(None, "memory", &format!("I check {slug} before {}", fires.on));
             Ok(())
         }
         "recipe" => {
@@ -1116,6 +1185,7 @@ pub async fn resolve_change_proposal_cmd(
                     superseded_by: None,
                     evidence: Vec::new(),
                     valid_from: None,
+                    fires: None,
                     // A lesson the user accepted from the review queue is not
                     // fenced to a project: they were shown it out of context
                     // and said yes to it as a standing lesson.
@@ -1185,6 +1255,8 @@ pub async fn resolve_change_proposal_cmd(
             let dir = mgr.skills_dir().join(&slug);
             std::fs::create_dir_all(&dir).map_err(err)?;
             std::fs::write(dir.join("SKILL.md"), &proposal.proposed_text).map_err(err)?;
+            // `HAB-4`: the scripts that ran clean and rode along with the proposal.
+            crate::agent::skillpack::write_proposal_files(&db, &id, &dir).map_err(PoiesisError::Message)?;
             // Enable under the name discovery will actually key this pack by
             // (its frontmatter name), which is not necessarily the directory
             // slug — reading it back is the only way to know for sure.
@@ -1686,6 +1758,58 @@ pub fn undo_last_tidy_cmd(db: State<'_, Db>, mem: State<'_, MemoryStore>) -> Cmd
 mod tests {
     use super::*;
 
+    /// `HAB-3`: the habit proposal's text is read back strictly. A tool is needed; a
+    /// check the build does not know is dropped, not run.
+    #[test]
+    fn a_habit_proposal_reads_back_its_tool_and_a_known_check() {
+        let f = parse_fires(r#"{"on":"read_file","check":"header_row"}"#).unwrap();
+        assert_eq!((f.on.as_str(), f.check.as_deref(), f.when), ("read_file", Some("header_row"), None));
+        assert_eq!(parse_fires(r#"{"on":"read_file","check":"rm -rf"}"#).unwrap().check, None);
+        assert_eq!(parse_fires(r#"{"on":"read_file","check":null}"#).unwrap().check, None);
+        assert!(parse_fires(r#"{"check":"header_row"}"#).is_err());
+        assert!(parse_fires("read_file").is_err());
+    }
+
+    /// `HAB-3`: where a habit proposal stands decides what reflection does next. The
+    /// newest one counts, and a lesson that never had one reads as none.
+    #[test]
+    fn the_newest_habit_proposal_decides_where_a_lesson_stands() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(db.habit_proposal_status("check-header").unwrap(), None);
+        let first = db.add_change_proposal("habit", Some("check-header"), "{}", "why", None).unwrap();
+        assert_eq!(db.habit_proposal_status("check-header").unwrap().as_deref(), Some("pending"));
+        db.resolve_change_proposal(&first.id, "dismissed").unwrap();
+        assert_eq!(db.habit_proposal_status("check-header").unwrap().as_deref(), Some("dismissed"));
+        assert_eq!(db.habit_proposal_status("other").unwrap(), None);
+    }
+
+    /// `HAB-1`: accepting the proposal changes only whether the lesson fires.
+    #[test]
+    fn making_a_lesson_fire_leaves_the_rest_of_it_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open_in_memory().unwrap();
+        let mem = MemoryStore::new(dir.path()).unwrap();
+        let lesson = Fact {
+            name: "check-header".into(),
+            description: "Check the header row.".into(),
+            kind: "lesson".into(),
+            body: "Look at the first row.".into(),
+            cue: Some("tool:read_file".into()),
+            recurrence: Some(3),
+            ..Default::default()
+        };
+        mem.save_lesson(&db, &lesson).unwrap();
+        assert!(mem.index_markdown().contains("check-header"));
+        mem.set_fires(&db, "check-header", Some(parse_fires(r#"{"on":"read_file","check":"header_row"}"#).unwrap())).unwrap();
+        let back = mem.read_in(crate::memory::LESSONS, "check-header").unwrap();
+        assert_eq!(back.recurrence, Some(3));
+        assert_eq!(back.body, "Look at the first row.");
+        assert_eq!(back.fires.unwrap().check.as_deref(), Some("header_row"));
+        assert!(!mem.index_markdown().contains("check-header"), "it now speaks at the tool, not in the index");
+        mem.set_fires(&db, "check-header", None).unwrap();
+        assert!(mem.index_markdown().contains("check-header"));
+    }
+
     #[test]
     fn the_activity_log_reads_as_what_i_did() {
         assert_eq!(recent_change("memory", "save prefers-tea").as_deref(), Some("I remembered \"prefers tea\"."));
@@ -1750,6 +1874,7 @@ mod tests {
             superseded_by: None,
             evidence: Vec::new(),
             valid_from: None,
+            fires: None,
             project: None,
         }
     }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LearningNumbers, LearningReport } from "./api";
-import { compactChars, learningLines } from "./learning";
+import { compactChars, firesLine, habitLine, learningLines } from "./learning";
 
 const numbers = (over: Partial<LearningNumbers> = {}): LearningNumbers => ({
   repeat_mistakes: 2,
@@ -42,5 +42,25 @@ describe("compactChars", () => {
     expect(compactChars(640)).toBe("640");
     expect(compactChars(1100)).toBe("1.1k");
     expect(compactChars(2000)).toBe("2k");
+  });
+});
+
+describe("firesLine", () => {
+  it("says which tool the lesson waits for, and what it looks at after", () => {
+    expect(firesLine({ on: "read_file" })).toBe("I check this before read file.");
+    expect(firesLine({ on: "write_file", when: ".csv", check: "header_row" })).toBe(
+      "I check this before write file when it mentions .csv, and afterwards I look at the header row."
+    );
+  });
+});
+
+describe("habitLine", () => {
+  it("reads a habit proposal as a sentence, and a broken one as nothing", () => {
+    expect(habitLine('{"on":"read_file","check":"header_row"}')).toBe(
+      "I check this before read file, and afterwards I look at the header row."
+    );
+    expect(habitLine('{"on":"read_file","check":null}')).toBe("I check this before read file.");
+    expect(habitLine("not json")).toBeNull();
+    expect(habitLine('{"check":"header_row"}')).toBeNull();
   });
 });

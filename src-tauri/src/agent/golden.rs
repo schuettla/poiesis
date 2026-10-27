@@ -575,6 +575,200 @@ where
     Ok(Some(regressed.len()))
 }
 
+// ---- rehearsal (RHS-1, `COGNITION_PLAN` III.10) ----
+//
+// A conversation where a call failed and a later call fixed it is a ready-made
+// test: put the model back at the moment of the failed call, once without a
+// candidate lesson and once with it, and see which call it makes. Nothing is
+// dispatched: only `drive_turn` is asked, and the first tool call it answers with
+// is read, never run. The case is built from the log when it is wanted and is not
+// stored.
+
+/// How many times each arm is asked.
+const REHEARSAL_TRIES: usize = 2;
+/// The sampling temperatures of the tries. The first matches the golden set; a
+/// second, warmer one stops two identical answers passing for agreement.
+const REHEARSAL_TEMPS: [f32; REHEARSAL_TRIES] = [0.2, 0.6];
+
+/// The moment of a failed call, rebuilt from the session log.
+#[derive(Debug, Clone)]
+pub struct Rehearsal {
+    /// Everything the model had been sent up to, and not including, the failed call.
+    pub messages: Vec<serde_json::Value>,
+    pub tool: String,
+    pub failed_args: String,
+    pub fixed_args: String,
+}
+
+/// The first tool call a rehearsed attempt asked for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Attempt {
+    pub tool: String,
+    pub args: String,
+}
+
+/// What a candidate did to the next call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RehearsalVerdict {
+    Helped,
+    NoEffect,
+    Hurt,
+}
+
+/// Both arms, counted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RehearsalResult {
+    pub verdict: RehearsalVerdict,
+    /// Right calls out of `tries`, without the candidate and with it.
+    pub without_right: usize,
+    pub with_right: usize,
+    pub tries: usize,
+}
+
+/// Rebuild the moment the call `fix.failed_args` was made, up to but not including
+/// that call. `None` when the log no longer holds it.
+pub fn build_rehearsal(db: &Db, conversation_id: &str, fix: &crate::db::ToolFix) -> Option<Rehearsal> {
+    let failed: serde_json::Value = serde_json::from_str(&fix.failed_args).ok()?;
+    for run_id in db.run_ids_in(conversation_id).ok()? {
+        let messages = super::log::replay(db, &run_id);
+        let at = messages.iter().position(|m| {
+            m["tool_calls"].as_array().is_some_and(|calls| {
+                calls.iter().any(|c| {
+                    c["function"]["name"].as_str() == Some(fix.tool_name.as_str())
+                        && serde_json::from_str::<serde_json::Value>(c["function"]["arguments"].as_str().unwrap_or("{}"))
+                            .is_ok_and(|a| a == failed)
+                })
+            })
+        });
+        if let Some(at) = at {
+            return Some(Rehearsal {
+                messages: messages[..at].to_vec(),
+                tool: fix.tool_name.clone(),
+                failed_args: fix.failed_args.clone(),
+                fixed_args: fix.fixed_args.clone(),
+            });
+        }
+    }
+    None
+}
+
+/// The messages of the with-arm: the candidate lesson in the system prompt, where it
+/// would be if it were in the index.
+pub fn with_candidate(messages: &[serde_json::Value], lesson: &str) -> Vec<serde_json::Value> {
+    let note = format!("\n\n## A lesson you learned\n- {}", lesson.trim());
+    let mut out = messages.to_vec();
+    match out.iter_mut().find(|m| m["role"] == "system") {
+        Some(first) => {
+            let text = first["content"].as_str().unwrap_or_default().to_string();
+            first["content"] = serde_json::Value::String(format!("{text}{note}"));
+        }
+        None => out.insert(0, serde_json::json!({ "role": "system", "content": note.trim_start() })),
+    }
+    out
+}
+
+/// Is this attempt the fix, or the failure again? Exact where the arguments allow
+/// it. Otherwise (`RehearsalMatch`) the attempt is right when it agrees with the
+/// fixed call on more of the arguments that differ between the two than with the
+/// failed call.
+pub fn is_right(r: &Rehearsal, attempt: &Attempt) -> bool {
+    if attempt.tool != r.tool {
+        return false;
+    }
+    let parse = |t: &str| serde_json::from_str::<serde_json::Value>(t).unwrap_or(serde_json::Value::Null);
+    let (failed, fixed, got) = (parse(&r.failed_args), parse(&r.fixed_args), parse(&attempt.args));
+    if got == fixed {
+        return true;
+    }
+    if got == failed {
+        return false;
+    }
+    let (Some(failed), Some(fixed), Some(got)) = (failed.as_object(), fixed.as_object(), got.as_object()) else {
+        return false;
+    };
+    let same = |a: Option<&serde_json::Value>, b: Option<&serde_json::Value>| match (a, b) {
+        (Some(serde_json::Value::String(x)), Some(serde_json::Value::String(y))) => x.trim() == y.trim(),
+        (a, b) => a == b,
+    };
+    let keys: BTreeSet<&String> = failed.keys().chain(fixed.keys()).collect();
+    let (mut toward, mut away) = (0usize, 0usize);
+    for key in keys {
+        if same(failed.get(key), fixed.get(key)) {
+            continue;
+        }
+        if same(got.get(key), fixed.get(key)) {
+            toward += 1;
+        } else if same(got.get(key), failed.get(key)) {
+            away += 1;
+        }
+    }
+    toward > away
+}
+
+/// The verdict from the two counts (`III.10`): `helped` when the with-arm is right
+/// every time and the without-arm is wrong at least once, `hurt` when the with-arm
+/// is right less often, `no_effect` otherwise.
+pub fn verdict_of(without_right: usize, with_right: usize, tries: usize) -> RehearsalVerdict {
+    if with_right < without_right {
+        RehearsalVerdict::Hurt
+    } else if with_right == tries && without_right < tries {
+        RehearsalVerdict::Helped
+    } else {
+        RehearsalVerdict::NoEffect
+    }
+}
+
+/// Ask both arms and count. `ask` is given the messages and a temperature and
+/// answers with the first tool call, or `None` when the model made none. It is the
+/// only thing that touches a model, and nothing it returns is ever run.
+pub async fn rehearse<F, Fut>(r: &Rehearsal, lesson: &str, mut ask: F) -> RehearsalResult
+where
+    F: FnMut(Vec<serde_json::Value>, f32) -> Fut,
+    Fut: std::future::Future<Output = Option<Attempt>>,
+{
+    let with = with_candidate(&r.messages, lesson);
+    let (mut without_right, mut with_right) = (0, 0);
+    for temp in REHEARSAL_TEMPS {
+        if ask(r.messages.clone(), temp).await.is_some_and(|a| is_right(r, &a)) {
+            without_right += 1;
+        }
+        if ask(with.clone(), temp).await.is_some_and(|a| is_right(r, &a)) {
+            with_right += 1;
+        }
+    }
+    RehearsalResult { verdict: verdict_of(without_right, with_right, REHEARSAL_TRIES), without_right, with_right, tries: REHEARSAL_TRIES }
+}
+
+/// Rehearse against the model that is loaded (or the chosen cloud one), through the
+/// same tool table the golden set uses, so a call means the same thing in both.
+pub async fn rehearse_with_model(
+    client: &reqwest::Client,
+    mgr: &RuntimeManager,
+    db: &Db,
+    target: Option<&ChatTarget>,
+    r: &Rehearsal,
+    lesson: &str,
+) -> Result<RehearsalResult, String> {
+    let endpoint = endpoint_for(mgr, db, target)
+        .await
+        .ok_or_else(|| "No model is loaded, so I can't rehearse right now.".to_string())?;
+    let specs: Vec<serde_json::Value> =
+        super::toolsets::enabled_for_persona(db, None).into_iter().flat_map(|t| t.tool_specs()).collect();
+    Ok(rehearse(r, lesson, |messages, temp| {
+        let (endpoint, specs) = (&endpoint, &specs);
+        async move {
+            match drive_turn(client, endpoint, &messages, specs, temp, crate::cloud::Effort::Off, &CancelFlag::new(), |_| {}).await {
+                Ok(TurnOutcome::ToolCalls { calls, .. }) => {
+                    calls.into_iter().next().map(|c| Attempt { tool: c.name, args: c.arguments })
+                }
+                _ => None,
+            }
+        }
+    })
+    .await)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,6 +883,7 @@ mod tests {
                 superseded_by: None,
                 evidence: Vec::new(),
                 valid_from: None,
+                fires: None,
             },
         )
         .unwrap();
@@ -702,6 +897,29 @@ mod tests {
             after.contains("prefers-metric"),
             "the memory index must reach it too, or consolidation is unguarded"
         );
+    }
+
+    /// `HAB-1`: a lesson that fires at a tool speaks at that call, so the prompt the
+    /// guard measures must not carry it too.
+    #[test]
+    fn the_checked_prompt_leaves_out_a_lesson_that_fires_at_a_tool() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Db::open_in_memory().unwrap();
+        let mem = MemoryStore::new(tmp.path()).unwrap();
+        let lesson = |name: &str, fires: Option<crate::memory::Fires>| crate::memory::Fact {
+            name: name.into(),
+            description: format!("about {name}"),
+            kind: "lesson".into(),
+            body: "Do it.".into(),
+            fires,
+            ..Default::default()
+        };
+        mem.save_lesson(&db, &lesson("be-brief", None)).unwrap();
+        let on = crate::memory::Fires { on: "read_file".into(), when: None, check: None };
+        mem.save_lesson(&db, &lesson("check-header", Some(on))).unwrap();
+        let prompt = golden_system_prompt(&db, &mem, tmp.path());
+        assert!(prompt.contains("be-brief"));
+        assert!(!prompt.contains("check-header"));
     }
 
     #[test]
@@ -729,5 +947,142 @@ mod tests {
         let second = load_cases(tmp.path());
         assert_eq!(second.len(), builtin_cases().len() + 1);
         assert!(second.iter().any(|c| c.id == "my-own-case"));
+    }
+    // ---- rehearsal (RHS-1) ----
+
+    const SKILLED: &str = r#"{"path":"data.csv","has_header":true}"#;
+    const NAIVE: &str = r#"{"path":"data.csv"}"#;
+
+    /// A planted conversation: the model read a CSV without saying it has a header
+    /// row, the tool refused, and the same tool then worked with the header named.
+    fn planted(db: &Db) -> (String, crate::db::ToolFix) {
+        let conv = db.create_conversation("Fail then fix", None, false).unwrap().id;
+        let log = |kind: &str, v: serde_json::Value| {
+            db.append_session_event(&conv, Some("run1"), kind, &v).unwrap();
+        };
+        log(
+            "prompt",
+            serde_json::json!([
+                { "role": "system", "content": "You are Poiesis." },
+                { "role": "user", "content": "Summarise data.csv" }
+            ]),
+        );
+        let call = |id: &str, args: &str| {
+            serde_json::json!({ "role": "assistant", "tool_calls": [{ "id": id, "type": "function", "function": { "name": "read_table", "arguments": args } }] })
+        };
+        log("tool_call", call("c1", NAIVE));
+        log("tool_result", serde_json::json!({ "role": "tool", "tool_call_id": "c1", "content": "Error: the first row is data, say has_header" }));
+        log("tool_call", call("c2", SKILLED));
+        log("tool_result", serde_json::json!({ "role": "tool", "tool_call_id": "c2", "content": "12 rows" }));
+        db.add_tool_fix(&conv, "read_table", NAIVE, "the first row is data, say has_header", SKILLED);
+        let fix = db.tool_fixes_in(&conv).unwrap().remove(0);
+        (conv, fix)
+    }
+
+    /// `RHS-1` accept: with the candidate the model makes the fixed call 2 of 2;
+    /// without it, it repeats the failure. The verdict is `helped`, and no tool is
+    /// dispatched along the way.
+    #[tokio::test]
+    async fn a_candidate_that_fixes_the_call_is_helped_and_nothing_is_dispatched() {
+        let db = Db::open_in_memory().unwrap();
+        let (conv, fix) = planted(&db);
+        let r = build_rehearsal(&db, &conv, &fix).expect("the failed call is in the log");
+
+        // The case stops where the failed call was made.
+        assert_eq!(r.messages.len(), 2);
+        assert!(r.messages.iter().all(|m| m.get("tool_calls").is_none()), "neither call is replayed");
+        assert_eq!(r.messages.last().unwrap()["content"], "Summarise data.csv");
+
+        let asked = std::cell::Cell::new(0usize);
+        let result = rehearse(&r, "Say has_header when a CSV starts with a header row.", |messages, _| {
+            asked.set(asked.get() + 1);
+            let primed = messages[0]["content"].as_str().unwrap().contains("has_header");
+            async move {
+                Some(Attempt { tool: "read_table".into(), args: if primed { SKILLED.into() } else { NAIVE.into() } })
+            }
+        })
+        .await;
+
+        assert_eq!(result, RehearsalResult { verdict: RehearsalVerdict::Helped, without_right: 0, with_right: 2, tries: 2 });
+        assert_eq!(asked.get(), 4, "two tries for each arm, and nothing more");
+        // The dispatch counter: a dispatched call writes a `tool_stats` row.
+        assert_eq!(db.tool_results_between(&conv, "read_table", 0, None).unwrap(), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn a_candidate_that_changes_nothing_has_no_effect_and_one_that_misleads_hurts() {
+        let db = Db::open_in_memory().unwrap();
+        let (conv, fix) = planted(&db);
+        let r = build_rehearsal(&db, &conv, &fix).unwrap();
+        let ask_with = |right_without: bool, right_with: bool| {
+            move |messages: Vec<serde_json::Value>, _t: f32| {
+                let primed = messages[0]["content"].as_str().unwrap().contains("A lesson you learned");
+                let right = if primed { right_with } else { right_without };
+                async move { Some(Attempt { tool: "read_table".into(), args: if right { SKILLED.into() } else { NAIVE.into() } }) }
+            }
+        };
+        assert_eq!(rehearse(&r, "x", ask_with(false, false)).await.verdict, RehearsalVerdict::NoEffect);
+        assert_eq!(rehearse(&r, "x", ask_with(true, true)).await.verdict, RehearsalVerdict::NoEffect, "already right without it");
+        assert_eq!(rehearse(&r, "x", ask_with(true, false)).await.verdict, RehearsalVerdict::Hurt);
+        // No tool call at all is wrong, not an error.
+        let none = rehearse(&r, "x", |_, _| async { None }).await;
+        assert_eq!((none.without_right, none.with_right, none.verdict), (0, 0, RehearsalVerdict::NoEffect));
+    }
+
+    #[test]
+    fn the_verdict_follows_the_two_counts() {
+        use RehearsalVerdict::*;
+        assert_eq!(verdict_of(0, 2, 2), Helped);
+        assert_eq!(verdict_of(1, 2, 2), Helped, "wrong at least once without it");
+        assert_eq!(verdict_of(0, 1, 2), NoEffect, "better, but not right every time");
+        assert_eq!(verdict_of(2, 2, 2), NoEffect);
+        assert_eq!(verdict_of(1, 1, 2), NoEffect);
+        assert_eq!(verdict_of(2, 1, 2), Hurt);
+    }
+
+    /// `RehearsalMatch`: when the arguments are not exactly the fixed ones, the call
+    /// is right if it moved toward the fixed call and away from the failed one.
+    #[test]
+    fn a_call_that_moves_toward_the_fix_counts_when_it_is_not_exact() {
+        let r = Rehearsal {
+            messages: Vec::new(),
+            tool: "read_table".into(),
+            failed_args: r#"{"path":"data.csv","delimiter":","}"#.into(),
+            fixed_args: r#"{"path":"data.csv","delimiter":";","has_header":true}"#.into(),
+        };
+        let at = |args: &str| Attempt { tool: "read_table".into(), args: args.into() };
+        assert!(is_right(&r, &at(r#"{"path":"data.csv","delimiter":";","has_header":true}"#)), "exact");
+        assert!(is_right(&r, &at(r#"{"path":"data.csv","delimiter":";","has_header":true,"limit":5}"#)), "toward, with more");
+        assert!(!is_right(&r, &at(r#"{"path":"data.csv","delimiter":";"}"#)), "a tie: toward on one, still the failure on the other");
+        assert!(is_right(&r, &at(r#"{"path":" data.csv ","delimiter":";","has_header":true,"extra":0}"#)), "extra arguments and spacing do not matter");
+        assert!(!is_right(&r, &at(r#"{"path":"data.csv","delimiter":","}"#)), "the failure again");
+        assert!(!is_right(&r, &at(r#"{"path":"data.csv","delimiter":",","has_header":true}"#)), "one toward, one away");
+        assert!(!is_right(&r, &Attempt { tool: "read_file".into(), args: r.fixed_args.clone() }), "another tool");
+    }
+
+    #[test]
+    fn the_candidate_goes_into_the_system_prompt_and_nowhere_else() {
+        let base = vec![
+            serde_json::json!({ "role": "system", "content": "You are Poiesis." }),
+            serde_json::json!({ "role": "user", "content": "hi" }),
+        ];
+        let with = with_candidate(&base, " Check the header. ");
+        assert_eq!(with.len(), 2);
+        assert!(with[0]["content"].as_str().unwrap().ends_with("## A lesson you learned\n- Check the header."));
+        assert_eq!(with[1], base[1]);
+        assert_eq!(base[0]["content"], "You are Poiesis.", "the without-arm is untouched");
+        let bare = with_candidate(&base[1..], "x");
+        assert_eq!(bare[0]["role"], "system");
+        assert_eq!(bare.len(), 2);
+    }
+
+    #[test]
+    fn a_call_the_log_no_longer_holds_cannot_be_rehearsed() {
+        let db = Db::open_in_memory().unwrap();
+        let (conv, mut fix) = planted(&db);
+        fix.failed_args = r#"{"path":"other.csv"}"#.into();
+        assert!(build_rehearsal(&db, &conv, &fix).is_none());
+        let empty = db.create_conversation("Empty", None, false).unwrap().id;
+        assert!(build_rehearsal(&db, &empty, &fix).is_none());
     }
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { inTauri, scanSkillText } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
+import { habitLine } from "../../lib/learning";
 
 /** `SKL-UI-2`: the install card's `TRU-1` risk line. Renders nothing for a
  * clean skill, which is nearly all of them — the line exists so a skill that
@@ -315,6 +316,43 @@ function RecurrenceEscalationProposal({ id }: { id: string }) {
   );
 }
 
+/** `HAB-3`: a lesson I keep relearning, offered as a check before the tool it is about.
+ * The standing instruction is the second button, not a second card. */
+export function HabitProposal({ id, lesson, proposedText }: { id: string; lesson: string | null; proposedText: string }) {
+  const resolve = useAppStore((s) => s.resolveChangeProposal);
+  const standing = useAppStore((s) => s.makeStandingInstead);
+  const [error, setError] = useState<string | null>(null);
+
+  async function instead() {
+    setError(null);
+    try {
+      await standing(id);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  return (
+    <div className="proposal-card">
+      <p className="proposal-text">
+        I keep relearning {lesson ?? "this one"}. {habitLine(proposedText) ?? "I could check it before I use the tool."}
+      </p>
+      {error && <p className="memory-error">{error}</p>}
+      <div className="proposal-actions">
+        <button className="btn-text" onClick={() => resolve(id, true)}>
+          Check it first
+        </button>
+        <button className="btn-text" onClick={instead}>
+          Make it a standing instruction instead
+        </button>
+        <button className="btn-text" onClick={() => resolve(id, false)}>
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** `MCPS-2`: something an agent app suggested keeping. The words are shown in
  * full before anything is saved, and saying yes writes them as a lesson. */
 function EngineMemoryProposal({ id, rationale, proposedText }: { id: string; rationale: string; proposedText: string }) {
@@ -439,6 +477,9 @@ export default function ProposalCard({ id }: { id: string }) {
         proposedText={proposal.proposed_text}
       />
     );
+  }
+  if (proposal.target === "habit") {
+    return <HabitProposal id={id} lesson={proposal.slug} proposedText={proposal.proposed_text} />;
   }
   if (proposal.target === "skill-revision") {
     return <SkillRevisionProposal id={id} slug={proposal.slug} rationale={proposal.rationale} />;

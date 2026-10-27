@@ -1011,7 +1011,7 @@
 }
 
 /* Everything a step opens, set under its row at the row's text edge. */
-.step > :is(.recall-matches, .code-disclosure, .task-disclosure, .untrusted-disclosure, .kept-disclosure) {
+.step > :is(.recall-matches, .code-disclosure, .task-disclosure, .untrusted-disclosure, .kept-disclosure, .fired-disclosure) {
   margin: 0 12px 10px 28px;
 }
 .step > .task-live-line {
@@ -1217,6 +1217,12 @@
 .untrusted-chip.risk-3 {
   color: var(--ink-muted);
   border-color: var(--ink-muted);
+}
+.fired-disclosure p {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-caption);
+  color: var(--ink-muted);
 }
 .untrusted-disclosure {
   flex-basis: 100%;

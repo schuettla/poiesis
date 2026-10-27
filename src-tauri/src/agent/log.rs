@@ -411,6 +411,43 @@ pub fn outward_done(db: &Db, run_id: &str) -> Option<String> {
         .find_map(|(_, name, args)| outward_of(name, args))
 }
 
+/// `HAB-4`: the code of every `run_code` call in this conversation that finished
+/// clean: no error, no non-zero exit, not stopped for time. A skill may carry a
+/// script only if it is one of these, byte for byte.
+pub fn clean_scripts(db: &Db, conversation_id: &str) -> Vec<String> {
+    use std::collections::HashMap;
+
+    let Ok(rows) = db.session_events(conversation_id) else { return Vec::new() };
+    let mut calls: Vec<(String, String)> = Vec::new();
+    let mut clean: HashMap<String, bool> = HashMap::new();
+    for row in &rows {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&row.payload_json) else { continue };
+        match row.kind.as_str() {
+            "tool_call" => {
+                for c in v["tool_calls"].as_array().into_iter().flatten() {
+                    if c["function"]["name"].as_str() != Some("run_code") {
+                        continue;
+                    }
+                    let args: serde_json::Value =
+                        serde_json::from_str(c["function"]["arguments"].as_str().unwrap_or("{}")).unwrap_or_default();
+                    if let Some(code) = args["code"].as_str() {
+                        calls.push((c["id"].as_str().unwrap_or_default().to_string(), code.to_string()));
+                    }
+                }
+            }
+            "tool_result" => {
+                let text = v["content"].as_str().unwrap_or_default();
+                let bad = text.trim_start().starts_with("Error")
+                    || text.contains("(exited with code")
+                    || text.starts_with("The code ran longer than");
+                clean.insert(v["tool_call_id"].as_str().unwrap_or_default().to_string(), !bad);
+            }
+            _ => {}
+        }
+    }
+    calls.into_iter().filter(|(id, _)| clean.get(id).copied().unwrap_or(false)).map(|(_, code)| code).collect()
+}
+
 /// What one finished call did to the outside world, if it did.
 fn outward_of(name: &str, args: &serde_json::Value) -> Option<String> {
     use super::connector_gate::{classify, CallKind, ToolHints};

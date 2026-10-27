@@ -256,6 +256,7 @@ pub fn run() {
             commands::memory::list_change_proposals_cmd,
             commands::memory::update_change_proposal_text_cmd,
             commands::memory::resolve_change_proposal_cmd,
+            commands::memory::make_standing_instead_cmd,
             commands::memory::consolidate_memory_cmd,
             commands::memory::get_pending_consolidation_cmd,
             commands::memory::drop_pending_row_cmd,
