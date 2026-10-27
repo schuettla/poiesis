@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import * as api from "../../lib/api";
 import { cloudTarget, useAppStore, useExpert } from "../../lib/store";
+import { Evidence, LetGo, RecentChanges, Unsure } from "./BeliefSections";
 import "./Memory.css";
 
 /** How long the undo strip stays after a delete. */
@@ -32,6 +33,8 @@ export default function MemoryPanel() {
   const [pending, setPending] = useState<api.Consolidation | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Bumped on every refresh so the sections that read their own lists reload too.
+  const [version, setVersion] = useState(0);
 
   // PRO-UI: the untitled synthesis at the top of the page (SMP-5).
   const [profile, setProfile] = useState<api.Profile | null>(null);
@@ -56,6 +59,7 @@ export default function MemoryPanel() {
     } catch {
       /* memory folder unreadable */
     }
+    setVersion((v) => v + 1);
     refreshMemoryContext();
     refreshChangeProposals();
   }
@@ -295,6 +299,9 @@ export default function MemoryPanel() {
         )}
       </div>
 
+      <RecentChanges collection="facts" version={version} />
+      <Unsure version={version} onChanged={() => void refresh()} />
+
       {facts.length > 0 && (
         <input
           className="field-input memory-search"
@@ -345,6 +352,8 @@ export default function MemoryPanel() {
           {f.last_used_at ? (
             <p className="memory-last-used">last surfaced {ago(f.last_used_at)}</p>
           ) : null}
+          {f.status === "contested" && <p className="memory-last-used">I am not sure about this one.</p>}
+          <Evidence ids={f.evidence} />
           {editing === f.name ? (
             <>
               <textarea
@@ -375,7 +384,8 @@ export default function MemoryPanel() {
                 >
                   Edit
                 </button>
-                {f.source_conversation && (
+                {/* Old files carry no evidence list: they keep the single link. */}
+                {f.source_conversation && !f.evidence?.length && (
                   <button className="btn-text" onClick={() => openSource(f.source_conversation!)}>
                     Where this came from
                   </button>
@@ -393,7 +403,7 @@ export default function MemoryPanel() {
         <details className="memory-earlier">
           <summary>Earlier versions ({earlier.length})</summary>
           <p className="memory-earlier-note">
-            You told me these were out of date. I no longer use them, and I keep them here.
+            A newer note replaced each of these. I no longer use them, and I keep them here.
           </p>
           {earlier.map((f) => (
             <div className="memory-card memory-card-earlier" key={f.name}>
@@ -407,6 +417,8 @@ export default function MemoryPanel() {
           ))}
         </details>
       )}
+
+      <LetGo collection="facts" version={version} onChanged={() => void refresh()} />
     </div>
   );
 }

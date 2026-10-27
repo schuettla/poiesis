@@ -29,6 +29,8 @@ pub struct Vitality {
     /// Engine restarts the watchdog performed since launch (HEAL-1).
     pub engine_restarts_session: u32,
     pub pending_proposals: usize,
+    /// Facts in dispute (`contested`): the Self header says so (`BLF-UI-1`).
+    pub unsure: usize,
     pub last_reflection: Option<i64>,
     /// 7-day per-tool reliability for the model in play (HEAL-2).
     pub tool_health: Vec<ToolStatRow>,
@@ -62,6 +64,7 @@ pub async fn get_vitality_cmd(
         quarantined: mem.quarantined(),
         engine_restarts_session: mgr.restarts_session(),
         pending_proposals: db.pending_proposal_count().unwrap_or(0),
+        unsure: mem.list().iter().filter(|f| f.status.as_deref() == Some("contested")).count(),
         last_reflection: db.last_reflection().ok().flatten(),
         tool_health,
     })
@@ -418,6 +421,8 @@ mod tests {
             status: None,
             supersedes: None,
             superseded_by: None,
+            evidence: Vec::new(),
+            valid_from: None,
             project: None,
         }
     }

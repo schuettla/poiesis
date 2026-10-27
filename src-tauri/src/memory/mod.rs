@@ -31,6 +31,9 @@ use crate::db::Db;
 /// A read-only remnant: `recipes/` is no longer a live collection.
 pub mod recipe_legacy;
 
+/// Beliefs with evidence: the relation check at the write sites (`BLF-2`).
+pub mod belief;
+
 /// Collections that hold entry files. Procedures used to be a third one; they
 /// are skills now (`SKL-5`), which live outside `memory/` entirely — they are
 /// files the user can hand to another agent, not part of this self.
@@ -78,6 +81,54 @@ const SEM_FACT_K: usize = 5;
 /// the fact vector scope but never need a retrieval slot, so the search has to
 /// reach deep enough that they cannot crowd out a topical hit.
 const SEM_FACT_OVERFETCH: usize = 4;
+
+/// A lesson that has not reached an answer for this long has had no chance to help.
+const PRUNE_IDLE_DAYS: i64 = 120;
+/// Chances before a record is trusted enough to let a lesson go for it.
+const PRUNE_MIN_CHANCES: i64 = 5;
+
+/// The names to trash first, in order (`BLF-3`). `lessons` is newest first.
+/// `idle_before` is the date (YYYY-MM-DD) a lesson must have been surfaced or
+/// written after to count as having had a recent chance.
+fn prune_order(
+    lessons: &[Fact],
+    credit: &std::collections::HashMap<String, Credit>,
+    surfaced: &std::collections::HashMap<String, i64>,
+    idle_before: &str,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+
+    // 1. Tested often and hurt more than it helped: the least useful first.
+    let mut tested: Vec<(&Fact, f64)> = lessons
+        .iter()
+        .filter_map(|l| {
+            let c = credit.get(&l.name)?;
+            (c.chances >= PRUNE_MIN_CHANCES && c.usefulness() < 0.5).then(|| (l, c.usefulness()))
+        })
+        .collect();
+    tested.sort_by(|a, b| a.1.total_cmp(&b.1));
+    out.extend(tested.into_iter().map(|(l, _)| l.name.clone()));
+
+    // 2. No chance in a long time: never surfaced since it was written, or last
+    //    surfaced before the cut-off. The longest idle first.
+    let last_chance = |l: &Fact| -> String {
+        surfaced.get(&l.name).map(|ms| civil_date(ms / 86_400_000)).unwrap_or_else(|| l.created.clone())
+    };
+    let mut idle: Vec<(&Fact, String)> = lessons
+        .iter()
+        .filter(|l| !out.contains(&l.name))
+        .map(|l| (l, last_chance(l)))
+        .filter(|(_, last)| last.as_str() < idle_before)
+        .collect();
+    idle.sort_by(|a, b| a.1.cmp(&b.1));
+    out.extend(idle.into_iter().map(|(l, _)| l.name.clone()));
+
+    // 3. The oldest of what is left, a lesson that has proved itself last.
+    let proven = |l: &Fact| credit.get(&l.name).is_some_and(|c| c.chances >= PRUNE_MIN_CHANCES && c.usefulness() >= 0.5);
+    let rest: Vec<&Fact> = lessons.iter().rev().filter(|l| !out.contains(&l.name)).collect();
+    out.extend(rest.iter().filter(|l| !proven(l)).chain(rest.iter().filter(|l| proven(l))).map(|l| l.name.clone()));
+    out
+}
 
 /// One durable entry — a fact or a lesson. Backed 1:1 by a markdown
 /// file with a frontmatter header.
@@ -141,9 +192,32 @@ pub struct Fact {
     pub supersedes: Option<String>,
     #[serde(default)]
     pub superseded_by: Option<String>,
+    /// `BLF-1`: the conversations that support this belief, oldest first. A belief
+    /// said again in another chat gains that chat here instead of a second file.
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    /// `BLF-1`: YYYY-MM-DD from which this belief holds, when that is not the day
+    /// it was written (an answer that replaced an older one). `None` reads as
+    /// `created`.
+    #[serde(default)]
+    pub valid_from: Option<String>,
 }
 
+/// More than this many sources adds nothing a person would read.
+const EVIDENCE_CAP: usize = 20;
+
 impl Fact {
+    /// Add a conversation to the evidence, once. The newest sources are kept.
+    pub fn add_evidence(&mut self, conversation_id: &str) {
+        if conversation_id.is_empty() || self.evidence.iter().any(|e| e == conversation_id) {
+            return;
+        }
+        self.evidence.push(conversation_id.to_string());
+        if self.evidence.len() > EVIDENCE_CAP {
+            self.evidence.remove(0);
+        }
+    }
+
     pub fn is_superseded(&self) -> bool {
         self.status.as_deref() == Some("superseded")
     }
@@ -295,6 +369,18 @@ pub struct Profile {
     pub body: String,
 }
 
+/// One entry in `.trash/`: what `forget` and the lesson cap set aside.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrashItem {
+    /// The trash filename, which `restore_trash` takes back.
+    pub file: String,
+    pub collection: String,
+    pub name: String,
+    pub description: String,
+    /// When it was set aside, in ms.
+    pub at: i64,
+}
+
 pub struct MemoryStore {
     dir: PathBuf,
     /// Serializes mutations so two concurrent writes can't race on the same
@@ -403,6 +489,8 @@ fn parse_entry(name: &str, text: &str) -> Fact {
     let mut status = None;
     let mut supersedes = None;
     let mut superseded_by = None;
+    let mut evidence: Vec<String> = Vec::new();
+    let mut valid_from = None;
 
     for line in header.lines() {
         let Some((key, value)) = line.split_once(':') else { continue };
@@ -438,6 +526,10 @@ fn parse_entry(name: &str, text: &str) -> Fact {
             "status" if matches!(value.as_str(), "active" | "contested" | "superseded") => status = Some(value),
             "supersedes" => supersedes = Some(value),
             "superseded_by" => superseded_by = Some(value),
+            "evidence" => {
+                evidence = value.split(',').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect();
+            }
+            "valid_from" => valid_from = Some(value),
             _ => {}
         }
     }
@@ -465,6 +557,8 @@ fn parse_entry(name: &str, text: &str) -> Fact {
         status,
         supersedes,
         superseded_by,
+        evidence,
+        valid_from,
     }
 }
 
@@ -573,6 +667,12 @@ fn render_entry(f: &Fact) -> String {
         if let Some(value) = value {
             out.push_str(&format!("{key}: {}\n", one_line(value)));
         }
+    }
+    if let Some(valid_from) = &f.valid_from {
+        out.push_str(&format!("valid_from: {}\n", one_line(valid_from)));
+    }
+    if !f.evidence.is_empty() {
+        out.push_str(&format!("evidence: {}\n", f.evidence.iter().map(|e| one_line(e).replace(',', "")).collect::<Vec<_>>().join(", ")));
     }
     out.push_str("---\n");
     out.push_str(f.body.trim());
@@ -772,11 +872,15 @@ impl MemoryStore {
         if path.exists() {
             return Err(format!("a fact named {name} exists; use op:update"));
         }
-        let entry = Fact {
+        let mut entry = Fact {
             name: name.clone(),
             created: if f.created.is_empty() { today() } else { f.created.clone() },
             ..f.clone()
         };
+        // `BLF-1`: the conversation it was written in is its first evidence.
+        if let Some(source) = f.source_conversation.as_deref() {
+            entry.add_evidence(source);
+        }
         std::fs::write(&path, render_entry(&entry)).map_err(|e| e.to_string())?;
         drop(_guard);
         self.write_index();
@@ -868,41 +972,20 @@ impl MemoryStore {
             n += 1;
         }
         let description: String = right_now.chars().take(120).collect();
-        let saved = self.save(
+        self.replace_fact(
             db,
+            &old,
             &Fact {
                 name,
                 description,
                 kind: before.kind.clone(),
-                created: String::new(),
                 source_conversation: conversation_id.map(str::to_string),
                 body: right_now,
                 scope: before.scope.clone(),
                 project: before.project.clone(),
-                supersedes: Some(old.clone()),
                 ..Default::default()
             },
-        )?;
-
-        let marked = (|| {
-            let _guard = self.lock.lock().unwrap();
-            let path = self.path_for(FACTS, &old);
-            let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            let mut entry = parse_entry(&old, &text);
-            entry.status = Some("superseded".into());
-            entry.superseded_by = Some(saved.clone());
-            std::fs::write(&path, render_entry(&entry)).map_err(|e| e.to_string())
-        })();
-        if let Err(e) = marked {
-            let _ = self.forget_in(db, FACTS, &saved);
-            return Err(e);
-        }
-        // A replaced belief must stop matching: its vector goes, and it is no
-        // longer listed, so it will not be embedded again.
-        let _ = db.delete_vectors_for_ref("memory", FACTS, &old);
-        self.write_index();
-        self.sync_fts(db);
-        Ok(saved)
+        )
     }
 
     /// Set a fact's `global`/`topical` scope (`SCP-1`/`SCP-UI-1`) — the
@@ -1018,6 +1101,27 @@ impl MemoryStore {
         Ok(())
     }
 
+    /// `BLF-UI-1`, "Let go" (G9): what was forgotten or pruned, newest first, still
+    /// recoverable with `restore_trash`.
+    pub fn list_trash(&self) -> Vec<TrashItem> {
+        let Ok(entries) = std::fs::read_dir(self.dir.join(".trash")) else {
+            return Vec::new();
+        };
+        let mut out: Vec<TrashItem> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let file = e.file_name().to_string_lossy().to_string();
+                let (collection, name) = parse_aside_name(&file).ok()?;
+                let at = file.split('-').next()?.parse::<i64>().ok()?;
+                let text = std::fs::read_to_string(e.path()).ok()?;
+                let fact = parse_entry(&name, &text);
+                Some(TrashItem { file, collection, name, description: fact.description, at })
+            })
+            .collect();
+        out.sort_by(|a, b| b.at.cmp(&a.at));
+        out
+    }
+
     // ---- lessons (REF-1): what the agent learned about its own working ----
 
     pub fn list_lessons(&self) -> Vec<Fact> {
@@ -1069,21 +1173,20 @@ impl MemoryStore {
         Ok(recurrence)
     }
 
-    /// Trash everything past `LESSON_CAP`, oldest first. Best-effort: a failed
-    /// prune leaves an over-full collection, which is harmless.
+    /// Trash everything past `LESSON_CAP`, by what each lesson has earned (`BLF-3`,
+    /// III.4): first the ones that tested badly, then the ones that have had no
+    /// chance to help for a long time, and only then the oldest. Best-effort: a
+    /// failed prune leaves an over-full collection, which is harmless.
     fn prune_lessons(&self, db: &Db) {
         let lessons = self.list_in(LESSONS);
         if lessons.len() <= LESSON_CAP {
             return;
         }
-        // `list_in` is newest-first, so the tail is the oldest.
-        for old in &lessons[LESSON_CAP..] {
-            if self.forget_in(db, LESSONS, &old.name).is_ok() {
-                let _ = db.log_activity(
-                    None,
-                    "reflect",
-                    &format!("pruned an old lesson: {}", old.name),
-                );
+        let credit = db.memory_credit_map(LESSONS).unwrap_or_default();
+        let surfaced = db.memory_usage_map(LESSONS).unwrap_or_default();
+        for name in prune_order(&lessons, &credit, &surfaced, &expiry_date(-PRUNE_IDLE_DAYS)).into_iter().take(lessons.len() - LESSON_CAP) {
+            if self.forget_in(db, LESSONS, &name).is_ok() {
+                let _ = db.log_activity(None, "reflect", &format!("pruned an old lesson: {name}"));
             }
         }
     }
@@ -1585,6 +1688,8 @@ mod tests {
             status: None,
             supersedes: None,
             superseded_by: None,
+            evidence: Vec::new(),
+            valid_from: None,
             project: None,
         }
     }
@@ -2128,6 +2233,80 @@ mod tests {
         let mut long = fact("too-long", &"x".repeat(LESSON_BODY_CAP + 1));
         long.created = "2026-06-01".into();
         assert!(s.save_lesson(&db, &long).is_err());
+    }
+
+    #[test]
+    fn what_was_let_go_can_be_listed_and_taken_back() {
+        let (s, db, _tmp) = store();
+        s.save(&db, &fact("prefers-metric", "Always give measurements in metric.")).unwrap();
+        s.save_lesson(&db, &fact("check-the-header", "Read the header row first")).unwrap();
+        s.forget(&db, "prefers-metric").unwrap();
+        s.forget_lesson(&db, "check-the-header").unwrap();
+        let gone = s.list_trash();
+        assert_eq!(gone.len(), 2);
+        let fact_item = gone.iter().find(|t| t.collection == FACTS).unwrap();
+        assert_eq!(fact_item.name, "prefers-metric");
+        assert_eq!(fact_item.description, "a description");
+        assert!(gone.iter().any(|t| t.collection == LESSONS && t.name == "check-the-header"));
+        s.restore_trash(&db, &fact_item.file).unwrap();
+        assert_eq!(s.list_trash().len(), 1);
+        assert_eq!(s.list().len(), 1);
+    }
+
+    fn lesson_on(name: &str, created: &str) -> Fact {
+        let mut f = fact(name, "check the path exists first");
+        f.kind = "lesson".into();
+        f.created = created.into();
+        f
+    }
+
+    fn credit(chances: i64, helped: i64, hurt: i64) -> Credit {
+        Credit { chances, helped, hurt, last_outcome_at: None }
+    }
+
+    #[test]
+    fn pruning_lets_go_of_what_tested_badly_before_what_is_merely_old() {
+        // Newest first, as `list_in` returns them.
+        let lessons = vec![
+            lesson_on("fresh", "2026-10-20"),
+            lesson_on("good-old", "2026-01-02"),
+            lesson_on("bad-tested", "2026-09-01"),
+            lesson_on("worse-tested", "2026-09-02"),
+            lesson_on("idle", "2026-03-01"),
+            lesson_on("oldest", "2026-01-01"),
+        ];
+        let mut credits = std::collections::HashMap::new();
+        credits.insert("good-old".to_string(), credit(10, 9, 0));
+        credits.insert("bad-tested".to_string(), credit(6, 1, 4));
+        credits.insert("worse-tested".to_string(), credit(8, 0, 6));
+        let mut surfaced = std::collections::HashMap::new();
+        // "good-old" and "fresh" reached an answer recently.
+        let day = 86_400_000i64;
+        let recent = 1_793_000_000_000i64; // 2026-10-26
+        surfaced.insert("good-old".to_string(), recent);
+        surfaced.insert("fresh".to_string(), recent - day);
+
+        let order = prune_order(&lessons, &credits, &surfaced, "2026-06-29");
+        assert_eq!(
+            order,
+            ["worse-tested", "bad-tested", "oldest", "idle", "fresh", "good-old"],
+            "tested badly first, then no chance in 120 days, then the oldest, a proven one last"
+        );
+    }
+
+    #[test]
+    fn a_lesson_that_helps_survives_the_cap_even_when_it_is_the_oldest() {
+        let (s, db, _tmp) = store();
+        let mut old = lesson_on("check-the-header", "2026-01-01");
+        old.kind = "lesson".into();
+        s.save_in(&db, LESSONS, &old).unwrap();
+        db.add_memory_credit(LESSONS, "check-the-header", 10, 9, 0, crate::db::now_ms()).unwrap();
+        for i in 0..LESSON_CAP {
+            s.save_lesson(&db, &lesson_on(&format!("lesson-{i:02}"), &today())).unwrap();
+        }
+        let live: Vec<String> = s.list_lessons().into_iter().map(|l| l.name).collect();
+        assert_eq!(live.len(), LESSON_CAP);
+        assert!(live.contains(&"check-the-header".to_string()), "useful and recently surfaced: kept");
     }
 
     #[test]

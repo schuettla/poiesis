@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import * as api from "../../lib/api";
 import { AUTONOMY_CLASSES, useAppStore } from "../../lib/store";
 import { learningLines } from "../../lib/learning";
+import { Evidence, LetGo, RecentChanges } from "../Memory/BeliefSections";
 import MemoryPanel from "../Memory/MemoryPanel";
 import "../../routes/Models.css";
 import "../Context/Context.css";
@@ -89,6 +90,9 @@ function LessonsTab() {
   const resolve = useAppStore((s) => s.resolveChangeProposal);
   const refreshSelf = useAppStore((s) => s.refreshSelf);
   const [expanded, setExpanded] = useState<string | null>(null);
+  // Reloads the lists that read their own source after a lesson is forgotten or brought back.
+  const [version, setVersion] = useState(0);
+  useEffect(() => setVersion((v) => v + 1), [lessons]);
 
   const pending = proposals.filter(
     (p) => p.target === "lesson" || p.target === "lesson-critic" || p.target === "engine-memory"
@@ -101,10 +105,13 @@ function LessonsTab() {
 
   if (!lessons.length && !pending.length) {
     return (
-      <p className="empty-hint">
-        I haven't learned anything yet. When a conversation goes wrong and you put me
-        right, I'll draw a lesson from it once we're done and keep it here.
-      </p>
+      <>
+        <p className="empty-hint">
+          I haven't learned anything yet. When a conversation goes wrong and you put me
+          right, I'll draw a lesson from it once we're done and keep it here.
+        </p>
+        <LetGo collection="lessons" version={version} onChanged={() => void refreshSelf()} />
+      </>
     );
   }
 
@@ -127,6 +134,8 @@ function LessonsTab() {
         </div>
       ))}
 
+      <RecentChanges collection="lessons" version={version} />
+
       {lessons.map((l) => (
         <div className="memory-card" key={l.name}>
           <div className="memory-card-head">
@@ -145,6 +154,7 @@ function LessonsTab() {
           )}
           <p className="memory-desc">{l.description}</p>
           {expanded === l.name && <p className="memory-body">{l.body}</p>}
+          <Evidence ids={l.evidence} />
           <div className="memory-card-actions">
             <button
               className="btn-text"
@@ -152,7 +162,7 @@ function LessonsTab() {
             >
               {expanded === l.name ? "Hide" : "Read it"}
             </button>
-            {l.source_conversation && (
+            {l.source_conversation && !l.evidence?.length && (
               <button
                 className="btn-text"
                 onClick={() => {
@@ -169,6 +179,8 @@ function LessonsTab() {
           </div>
         </div>
       ))}
+
+      <LetGo collection="lessons" version={version} onChanged={() => void refreshSelf()} />
     </div>
   );
 }

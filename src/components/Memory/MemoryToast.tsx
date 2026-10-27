@@ -16,6 +16,9 @@ function leadFor(op: string, collection: string): string {
   if (op === "always") return "I'll always do that now";
   const lesson = collection === "lessons";
   switch (op) {
+    // `BLF-2`: the relation check at the write site, said plainly (IV.9).
+    case "merge":
+      return "I knew that already";
     case "forget":
       return lesson ? "I forgot a lesson" : "I forgot that";
     case "update":
@@ -23,6 +26,13 @@ function leadFor(op: string, collection: string): string {
     default:
       return lesson ? "I learned something" : "I'll remember that";
   }
+}
+
+/** IV.9: the two leads that say a belief changed, with where the old one went. */
+export function beliefSentence(op: string, what: string): string | null {
+  if (op === "replace") return `I replaced what I knew with “${what}”. The old one is under Earlier versions.`;
+  if (op === "contest") return `I'm not sure which is right about “${what}”. It's under Unsure.`;
+  return null;
 }
 
 /** The watchdog speaking for itself (HEAL-1). Same quiet shell as a memory
@@ -226,12 +236,20 @@ export default function MemoryToast() {
 
   const isProfile = toast.op === "profile";
   const lead = leadFor(toast.op, toast.collection);
+  // `BLF-2`/IV.9: a replace and a contest are whole sentences, not a lead for a name.
+  const sentence = beliefSentence(toast.op, toast.description || toast.name);
   // A save is undone by forgetting, a forget by restoring — both clean. An
   // update has no retained prior text to revert to, so it's a receipt only.
   // A profile rebuild is undone by restoring its own pre-rebuild snapshot
   // (PRO-9) — clean the same way a save is.
   const canUndo =
-    toast.op === "save" || toast.op === "forget" || toast.op === "always" || isProfile;
+    toast.op === "save" ||
+    toast.op === "forget" ||
+    toast.op === "always" ||
+    isProfile ||
+    // A replace or a contest is taken back by trashing the new belief and
+    // believing the old one again; the old name rides in `undoToken`.
+    ((toast.op === "replace" || toast.op === "contest") && !!toast.undoToken);
 
   return (
     <div className="memory-toast" role="status">
@@ -243,7 +261,7 @@ export default function MemoryToast() {
           className={`memory-toast-text ${isProfile ? "memory-toast-clickable" : ""}`}
           onClick={isProfile ? () => setView("self") : undefined}
         >
-          {isProfile ? lead : `${lead}: ${toast.description || toast.name}`}
+          {sentence ?? (isProfile ? lead : `${lead}: ${toast.description || toast.name}`)}
         </span>
         {canUndo && (
           <button className="memory-toast-undo" onClick={() => undo()}>

@@ -461,6 +461,8 @@ async fn reflect_pass(
         // count in place rather than writing a duplicate file.
         if let Some((name, description)) = recurrence_of {
             let Ok(recurrence) = mem.bump_lesson_recurrence(&db, &name) else { continue };
+            // `BLF-2`: the same lesson from another chat is one more source for it.
+            let _ = mem.add_evidence(&db, crate::memory::LESSONS, &name, &conversation_id);
             let _ = db.log_activity(
                 Some(&conversation_id),
                 "reflect",
@@ -549,6 +551,8 @@ async fn reflect_pass(
                     status: None,
                     supersedes: None,
                     superseded_by: None,
+                    evidence: Vec::new(),
+                    valid_from: None,
                 };
                 if mem.save_lesson(&db, &fact).is_err() {
                     continue;
@@ -1034,6 +1038,8 @@ mod tests {
             status: None,
             supersedes: None,
             superseded_by: None,
+            evidence: Vec::new(),
+            valid_from: None,
         };
         mem.save_lesson(&db, &lesson).unwrap();
         let refs = crate::commands::memory::ContextRefs { lessons: vec!["check-header".into()], ..Default::default() };

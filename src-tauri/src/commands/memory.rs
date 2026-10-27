@@ -14,6 +14,7 @@ use crate::commands::agent::{build_remote_endpoint, ChatTarget};
 use crate::commands::embedgen::embed_texts_or_none;
 use crate::db::vectors::NewVector;
 use crate::db::{ChangeProposal, Db, SearchHit};
+use crate::memory::belief::Outcome;
 use crate::memory::{Fact, MemoryStore, Profile, FACTS, LESSONS};
 use crate::runtime::proxy::{CancelFlag, TurnOutcome};
 use crate::runtime::{EmbedManager, RuntimeManager};
@@ -521,6 +522,10 @@ pub fn update_memory_fact_cmd(
 pub struct RememberedFact {
     pub name: String,
     pub description: String,
+    /// `new | merged | replaced | contested` (`BLF-2`): what the relation check
+    /// did. `other` is the entry it touched, for the last three.
+    pub outcome: String,
+    pub other: Option<String>,
 }
 
 /// `UCM-5`: `/remember <fact>`. The user is the author, so this is not behind
@@ -557,31 +562,36 @@ pub fn remember_fact_cmd(
             name,
             description: description.clone(),
             kind: "fact".into(),
-            created: String::new(),
             source_conversation: conversation_id.clone(),
             body: body.to_string(),
             scope: Some("global".into()),
-            recurrence: None,
-            last_seen: None,
-            expires_at: None,
-            origin: None,
-            cue: None,
-            confidence: None,
-            status: None,
-            supersedes: None,
-            superseded_by: None,
             project: project.clone(),
+            ..Default::default()
         };
-        match mem.save(&db, &fact) {
-            Ok(name) => break name,
+        // `BLF-2`: the user is the newer source, so an answer that differs from
+        // what I believed replaces it (and the old one stays as an earlier version).
+        match mem.save_checked(&db, &fact, true) {
+            Ok(saved) => break saved,
             // A name already taken is the one error worth retrying; the rest
             // (too long, refused as poisoned) are the user's to hear.
             Err(e) if e.contains("exists") && attempt < 20 => attempt += 1,
             Err(e) => return Err(PoiesisError::Message(e)),
         }
     };
-    let _ = db.log_activity(conversation_id.as_deref(), "memory", &format!("save {saved}"));
-    Ok(RememberedFact { name: saved, description })
+    let (outcome, other) = match &saved.outcome {
+        Outcome::New => ("new", None),
+        Outcome::Merged(o) => ("merged", Some(o.clone())),
+        Outcome::Replaced(o) => ("replaced", Some(o.clone())),
+        Outcome::Contested(o) => ("contested", Some(o.clone())),
+    };
+    let logged = match (&saved.outcome, &other) {
+        (Outcome::Merged(_), Some(old)) => format!("merge {old}"),
+        (Outcome::Replaced(_), _) => format!("replace {}", saved.name),
+        (Outcome::Contested(_), _) => format!("contest {}", saved.name),
+        _ => format!("save {}", saved.name),
+    };
+    let _ = db.log_activity(conversation_id.as_deref(), "memory", &logged);
+    Ok(RememberedFact { name: saved.name, description, outcome: outcome.into(), other })
 }
 
 /// The user overriding a fact's scope by hand (`SCP-UI-1`) — they are the
@@ -674,6 +684,105 @@ pub fn not_relevant_memory_cmd(db: State<'_, Db>, name: String, conversation_id:
 #[tauri::command]
 pub fn list_earlier_versions_cmd(mem: State<'_, MemoryStore>) -> Vec<Fact> {
     mem.list_superseded(FACTS)
+}
+
+/// `BLF-UI-1`, Unsure: contested facts, grouped by who disputes whom. Each group is
+/// two or more sides; a side whose opponent is gone stands alone.
+#[tauri::command]
+pub fn list_unsure_cmd(mem: State<'_, MemoryStore>) -> Vec<Vec<Fact>> {
+    mem.unsure_groups()
+}
+
+/// The person settled a doubt: keep `keep` (and let the other sides become earlier
+/// versions), or with `both` keep every side as true in some situations only.
+#[tauri::command]
+pub fn resolve_unsure_cmd(mem: State<'_, MemoryStore>, db: State<'_, Db>, keep: String, both: bool) -> Cmd<()> {
+    mem.resolve_contest(&db, &keep, both).map_err(PoiesisError::Message)?;
+    let what = if both { "kept both sides of a doubt" } else { "settled a doubt" };
+    let _ = db.log_activity(None, "memory", &format!("{what} about {keep}"));
+    Ok(())
+}
+
+/// Undo of a replace or a contest (the toast's Undo): the new fact goes to the
+/// trash and the old one is believed again.
+#[tauri::command]
+pub fn undo_belief_change_cmd(mem: State<'_, MemoryStore>, db: State<'_, Db>, new: String, old: String) -> Cmd<()> {
+    mem.undo_change(&db, &new, &old).map_err(PoiesisError::Message)?;
+    let _ = db.log_activity(None, "memory", &format!("took back {new}; {old} stands"));
+    Ok(())
+}
+
+/// `BLF-UI-1`, Let go (G9): everything set aside in `.trash/`, newest first.
+#[tauri::command]
+pub fn list_let_go_cmd(mem: State<'_, MemoryStore>) -> Vec<crate::memory::TrashItem> {
+    mem.list_trash()
+}
+
+/// One line of "Recent changes", in the first person.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RecentChange {
+    pub at: i64,
+    pub line: String,
+    /// `facts | lessons`: which tab it belongs on.
+    pub collection: String,
+}
+
+fn spoken(name: &str) -> String {
+    name.replace('-', " ")
+}
+
+/// What the activity log says about memory, in my own words. Log lines that are
+/// not a change to what I believe (a read, a scope tweak) are not listed.
+pub(crate) fn recent_change(kind: &str, detail: &str) -> Option<String> {
+    let detail = detail.trim();
+    match kind {
+        "memory" => {
+            if let Some((old, new)) = detail.strip_prefix("replaced ").and_then(|r| r.split_once(" with ")) {
+                return Some(format!("I replaced \"{}\" with \"{}\"; the old one is under Earlier versions.", spoken(old), spoken(new)));
+            }
+            if let Some(rest) = detail.strip_prefix("took back ") {
+                let new = rest.split(';').next().unwrap_or(rest);
+                return Some(format!("I took back \"{}\".", spoken(new)));
+            }
+            let (verb, name) = detail.split_once(' ')?;
+            let name = spoken(name);
+            match verb {
+                "save" => Some(format!("I remembered \"{name}\".")),
+                "update" | "edited" => Some(format!("I updated \"{name}\".")),
+                "forget" | "forgot" => Some(format!("I forgot \"{name}\".")),
+                "merge" => Some(format!("I already knew \"{name}\"; I noted this chat as another source.")),
+                "replace" => Some(format!("I replaced an older note with \"{name}\"; the old one is under Earlier versions.")),
+                "contest" => Some(format!("I am not sure about \"{name}\": it disagrees with an older note.")),
+                "settled" | "kept" => Some(format!("I {detail}.")),
+                _ => None,
+            }
+        }
+        "reflect" => {
+            if let Some(name) = detail.strip_prefix("learned ") {
+                return Some(format!("I learned \"{}\".", spoken(name)));
+            }
+            if let Some(rest) = detail.strip_prefix("relearned ") {
+                let name = rest.split(':').next().unwrap_or(rest);
+                return Some(format!("I met \"{}\" again.", spoken(name)));
+            }
+            detail.strip_prefix("pruned an old lesson: ").map(|n| format!("I let go of the lesson \"{}\".", spoken(n)))
+        }
+        _ => None,
+    }
+}
+
+/// `BLF-UI-1`, Recent changes: what I last did to what I know, newest first.
+#[tauri::command]
+pub fn list_recent_changes_cmd(db: State<'_, Db>, limit: Option<usize>) -> Cmd<Vec<RecentChange>> {
+    let entries = db.list_activity(300).map_err(err)?;
+    Ok(entries
+        .iter()
+        .filter_map(|a| {
+            let collection = if a.kind == "reflect" { LESSONS } else { FACTS };
+            recent_change(&a.kind, &a.detail).map(|line| RecentChange { at: a.created_at, line, collection: collection.into() })
+        })
+        .take(limit.unwrap_or(12))
+        .collect())
 }
 
 #[tauri::command]
@@ -1005,6 +1114,8 @@ pub async fn resolve_change_proposal_cmd(
                     status: None,
                     supersedes: None,
                     superseded_by: None,
+                    evidence: Vec::new(),
+                    valid_from: None,
                     // A lesson the user accepted from the review queue is not
                     // fenced to a project: they were shown it out of context
                     // and said yes to it as a standing lesson.
@@ -1312,6 +1423,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_activity_log_reads_as_what_i_did() {
+        assert_eq!(recent_change("memory", "save prefers-tea").as_deref(), Some("I remembered \"prefers tea\"."));
+        assert_eq!(
+            recent_change("memory", "replaced prefers-tea with prefers-coffee").as_deref(),
+            Some("I replaced \"prefers tea\" with \"prefers coffee\"; the old one is under Earlier versions.")
+        );
+        assert!(recent_change("memory", "replace prefers-coffee").unwrap().contains("older note"));
+        assert!(recent_change("memory", "contest prefers-coffee").unwrap().contains("not sure"));
+        assert!(recent_change("memory", "merge prefers-tea").unwrap().contains("another source"));
+        assert_eq!(recent_change("memory", "took back x; y stands").as_deref(), Some("I took back \"x\"."));
+        assert_eq!(recent_change("reflect", "learned check-header").as_deref(), Some("I learned \"check header\"."));
+        assert_eq!(
+            recent_change("reflect", "pruned an old lesson: old-one").as_deref(),
+            Some("I let go of the lesson \"old one\".")
+        );
+        assert!(recent_change("reflect", "relearned a-b: now 3\u{d7}").unwrap().contains("again"));
+        // Not a change to what I believe.
+        assert_eq!(recent_change("memory", "read prefers-tea"), None);
+        assert_eq!(recent_change("memory", "set x's scope to topical"), None);
+        assert_eq!(recent_change("heal", "quarantined a"), None);
+    }
+
+    #[test]
     fn parses_a_fenced_proposal() {
         let raw = "```json\n{\"deletes\":[\"a\"],\"edits\":[{\"name\":\"b\",\"text\":\"t\"}]}\n```";
         let p: Consolidation = serde_json::from_str(strip_fence(raw)).unwrap();
@@ -1350,6 +1484,8 @@ mod tests {
             status: None,
             supersedes: None,
             superseded_by: None,
+            evidence: Vec::new(),
+            valid_from: None,
             project: None,
         }
     }

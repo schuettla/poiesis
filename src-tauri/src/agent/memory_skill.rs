@@ -10,6 +10,7 @@
 use super::toolsets::ToolContext;
 use super::AgentEvent;
 use crate::autonomy::{autonomy_gate, Rung};
+use crate::memory::belief::Outcome;
 use crate::memory::{Fact, FACTS};
 
 /// `PRJ-8`: the project this turn is happening in, if any.
@@ -250,39 +251,56 @@ async fn memory_op(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<St
                 _ => (None, String::new()),
             };
 
-            let saved = mem.save(
+            // `BLF-2`: held against what is believed already. A turn the person is in
+            // makes them the newer source; an unattended run does not.
+            let saved = mem.save_checked(
                 ctx.db,
                 &Fact {
                     name: name.to_string(),
                     description: description.to_string(),
                     kind: kind.to_string(),
-                    created: String::new(),
                     source_conversation: Some(ctx.conversation_id.to_string()),
                     body: text.to_string(),
                     scope,
-                    recurrence: None,
-                    last_seen: None,
                     expires_at,
-                    origin: None,
-                    cue: None,
-                    confidence: None,
-                    status: None,
-                    supersedes: None,
-                    superseded_by: None,
                     // `PRJ-8`: a memory saved inside a project belongs to it.
                     // Nothing is asked of the model — the tag follows from
                     // where the turn is happening, the same way the working
                     // folder does.
                     project: project_of(ctx),
+                    ..Default::default()
                 },
+                !ctx.headless,
             )?;
-            announce(ctx, "save", &saved, description, "");
             let where_note = if project_of(ctx).is_some() {
                 " It is in your index in every chat in this project."
             } else {
                 " It is now in your index in every conversation."
             };
-            Ok(format!("Saved memory \"{saved}\".{where_note}{ttl_note}"))
+            Ok(match saved.outcome {
+                Outcome::New => {
+                    announce(ctx, "save", &saved.name, description, "");
+                    format!("Saved memory \"{}\".{where_note}{ttl_note}", saved.name)
+                }
+                Outcome::Merged(old) => {
+                    announce(ctx, "merge", &old, description, "");
+                    format!("\"{old}\" already says this, so nothing new was written; this chat is noted as another source.")
+                }
+                Outcome::Replaced(old) => {
+                    announce(ctx, "replace", &saved.name, description, &old);
+                    format!(
+                        "Saved memory \"{}\". It replaces \"{old}\", which is kept as an earlier version.{where_note}{ttl_note}",
+                        saved.name
+                    )
+                }
+                Outcome::Contested(old) => {
+                    announce(ctx, "contest", &saved.name, description, &old);
+                    format!(
+                        "Saved memory \"{}\", but it disagrees with \"{old}\". Both are marked unsure until the user decides; do not pick one yourself.{ttl_note}",
+                        saved.name
+                    )
+                }
+            })
         }
         "update" => {
             let name = required(args, "name")?;

@@ -12,7 +12,7 @@ commit per phase.
 | 0 - Fix what exists, and measure | done (see notes) | 2026-10-27 |
 | 1 - The conversation becomes the episode | done (see notes) | 2026-10-27 |
 | 2 - Recall you can see | done (see notes) | 2026-10-27 |
-| 3 - Beliefs with evidence | not started | |
+| 3 - Beliefs with evidence | done (see notes) | 2026-10-27 |
 | 4 - The daily tidy-up | not started | |
 | 5 - Lessons that fire, and rehearsal | not started | |
 | 6 - The self-improvement loop | not started | |
@@ -218,6 +218,83 @@ commit per phase.
   shows Hamburg under Earlier versions" needs the app. The backend half is
   covered by `pressing_outdated_replaces_the_fact_and_counts_against_it` and
   `a_belief_the_user_called_outdated_is_replaced_not_deleted`.
+
+### Phase 3 notes
+
+- **BLF-1 (rest).** `Fact` gained `evidence` (conversation ids, oldest first, at
+  most 20, written as one `evidence:` line) and `valid_from` (set on a belief
+  that replaced another). `save_in` seeds `evidence` with the source conversation,
+  so every new entry has its first source. Old files read as no evidence and are
+  not rewritten. Growth stage (G10): `Vitality` counts through `list_in`, which
+  hides superseded entries, and the trash is outside the folders, so the mark
+  never grows from corrections; nothing more was needed on the frontend.
+  `Vitality.unsure` counts contested facts for the Self header strip
+  ("... 2 I'm unsure about").
+- **BLF-2.** New `memory/belief.rs`. `MemoryStore::save_checked(fact, by_user)`
+  holds a new fact against the top 5 related active facts and does one of:
+  `Merged` (same belief: the old entry gains the conversation as evidence, nothing
+  is written), `Replaced` (the new text extends the old one, or the person is the
+  newer source and the answer differs: the old file stays as an earlier version,
+  the new one carries `supersedes`, the old evidence and `valid_from`), `Contested`
+  (the answer differs and the person is not the source: both marked `contested`,
+  both still reach the prompt with the Phase 2 hedge marker) or `New`. A failed
+  mark takes the new entry back, so two silent actives cannot happen. The three
+  write sites: the `memory` tool (`by_user` is true in any turn the person is in,
+  false in an unattended run), `remember_fact_cmd` (always `by_user`; its reply
+  says `outcome` and `other`), and reflection's recurrence check, which adds the
+  conversation to the lesson's evidence next to today's bump. `MemoryStore`
+  also got `unsure_groups`, `resolve_contest` (keep one side, or keep both as
+  `topical`) and `undo_change` (trash the new belief, believe the old one again).
+  **Deviations:** (a) `BeliefRelation` is **not** a decision purpose yet. The
+  rules fallback the plan names runs instead: word overlap over name and
+  description (Jaccard 0.3 or more, same project or either shared) says "about
+  the same thing", and the text says same (equal, or the old one already says
+  more), refines (the new text contains the old) or differs. It does not use
+  vectors: a new entry has no vector at write time and the write site must not
+  wait on the embedder. A decision model would sharpen "differs" into
+  `contradicts` or an addition; until then an addition worded differently is
+  marked contested or, from the person, replaces the old note. Both are one tap
+  to undo (toast Undo, Earlier versions, Unsure). (b) Lessons only get `same`
+  (today's look-alike check) and `unrelated`; there is no contradiction check
+  between lessons.
+- **BLF-3.** `prune_lessons` uses `prune_order`: first lessons with 5 or more
+  chances and usefulness under one half, the least useful first; then lessons with
+  no chance (surfaced or written) in 120 days, the longest idle first; then the
+  oldest. **Refinement:** in the last tier a lesson that has proved itself (5 or
+  more chances, usefulness one half or more) goes last, so a good old lesson is not
+  trashed before a new unproven one. The activity line stays "pruned an old
+  lesson: X".
+- **BLF-UI-1.** Memory tab, top to bottom: the profile, the pending tidy-up block
+  (unchanged; the daily job's rows and "Not this one" are Phase 4), **Recent
+  changes** (the last six memory or lesson lines from the activity log, in the
+  first person, `list_recent_changes_cmd`; no Undo yet, since the tidy-up that
+  needs it is Phase 4), **Unsure** (both sides with their sources, "This one is
+  right" per side, "Both, in different situations"; a lone doubt gets "Still
+  true"), the fact cards, **Earlier versions**, **Let go** (`.trash/`, searchable,
+  "Bring it back", `list_let_go_cmd`). The Lessons tab gets Recent changes and Let
+  go for lessons. `Evidence` replaces "Where this came from" on cards that have a
+  list (3 shown, "and N more"; a chat that is gone says so); old files keep the
+  single link. **Toast (IV.9):** `/remember` and the `memory` tool say "I replaced
+  what I knew with ..., the old one is under Earlier versions" or "I'm not sure
+  which is right about ..., it's under Unsure", with Undo (the old note comes
+  back); a repeat says "I knew that already". **Introduction (G11):** the
+  "Recently learned" line reads lessons and facts, a replaced fact by its
+  `valid_from`, and skips contested ones; the store keeps `facts` for it
+  (loaded with `refreshSelf`). Not built: "helped N times" on cards (facts get no
+  helped credit, see Phase 2 limits), certainty in words (Phase 8), "Things I'll do"
+  (Phase 7).
+- **Checks.** `vitest`: all pass except the old `ThoughtStrip` failure. `tsc`:
+  only the old `AgentRun.tsx` error. `cargo test --lib`: 1592 pass; the same 7
+  stable failures and 2 flaky `db` fork tests fail as before; clippy shows nothing
+  in the touched files. The prompt golden did not move: nothing sets `low`
+  confidence, and contested entries use the Phase 2 marker already in the golden.
+- **Felt check not run here.** "Save 'prefers tea', then 'prefers coffee'" through
+  the real `memory` tool needs a chat model; the store-level behaviour is covered
+  by `a_contradiction_from_the_user_replaces_and_keeps_the_old_version` and
+  `a_contradiction_from_anyone_else_marks_both_contested_never_two_silent_actives`.
+  The write-site wiring itself (the `memory` tool and `remember_fact_cmd`) has no
+  unit test, because both need a full tool context or app state; it compiles and
+  is a thin layer over `save_checked`.
 
 **What v2 changes.** v1 described a second memory system beside the one that
 exists: a new `episodes` table, a new `memory_uses` table, a new

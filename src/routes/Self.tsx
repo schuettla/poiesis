@@ -40,6 +40,7 @@ export default function Self() {
   const lessonCount = vitality?.lessons ?? 0;
   const skillCount = vitality?.skills ?? 0;
   const pending = vitality?.pending_proposals ?? 0;
+  const unsure = vitality?.unsure ?? 0;
   const days = born ? Math.floor((Date.now() - born) / DAY) : 0;
 
   // Rings are drawn from what actually exists on disk, dated by its own
@@ -56,6 +57,7 @@ export default function Self() {
             <p className="lede">{narrative(days, facts, lessonCount, skillCount)}</p>
             <p className="self-strip">
               {facts} facts · {lessonCount} lessons · {skillCount} skills · {pending} pending
+              {unsure > 0 && ` · ${unsure} I'm unsure about`}
             </p>
           </div>
           {born && <GrowthRings entries={entries} born={born} />}

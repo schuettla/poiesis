@@ -10,6 +10,7 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
  * PRES-5 — afterwards, at most one muted line about something learned this
  * week. Ambient, not promotional: no card, no border, absent when there's
  * nothing recent, and absent while the composer offers "Last time" (`EPI-UI-1`).
+ * It reads lessons and facts alike, a corrected fact included (`G11`).
  */
 export default function Introduction() {
   const introduced = useAppStore((s) => s.selfIntroduced);
@@ -19,13 +20,17 @@ export default function Introduction() {
   const lastTimeShown = useAppStore((s) => s.lastTimeOffer !== null);
   const recent = useAppStore((s) => {
     const cutoff = Date.now() - WEEK_MS;
-    const dated = [...s.lessons].filter((l) => {
-      const at = Date.parse(l.created);
-      return !Number.isNaN(at) && at >= cutoff;
-    });
-    // Newest wins; `created` is YYYY-MM-DD, so string order is date order.
-    dated.sort((a, b) => b.created.localeCompare(a.created));
-    return dated[0];
+    // `G11`: a lesson, a fact I learned, or one I replaced or corrected. A disputed
+    // fact is not something I learned yet, so it stays out.
+    const dated = [...s.lessons, ...s.facts.filter((f) => f.status !== "contested")]
+      .map((e) => ({ entry: e, on: e.valid_from || e.created }))
+      .filter(({ on }) => {
+        const at = Date.parse(on);
+        return !Number.isNaN(at) && at >= cutoff;
+      });
+    // Newest wins; the dates are YYYY-MM-DD, so string order is date order.
+    dated.sort((a, b) => b.on.localeCompare(a.on));
+    return dated[0]?.entry;
   });
 
   if (!introduced) {

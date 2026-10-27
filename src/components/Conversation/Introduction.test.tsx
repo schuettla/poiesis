@@ -21,6 +21,7 @@ beforeEach(() => {
   useAppStore.setState({
     selfIntroduced: true,
     lastTimeOffer: null,
+    facts: [],
     lessons: [
       {
         name: "check-header",
@@ -63,5 +64,31 @@ describe("the ambient line", () => {
     expect(container.textContent).toBe("");
     act(() => useAppStore.getState().setLastTimeOffer(null));
     expect(container.textContent).toContain("Recently learned");
+  });
+
+  it("also says a fact I learned or corrected this week, and not a disputed one", () => {
+    const fact = (name: string, description: string, extra: object = {}) => ({
+      name,
+      description,
+      kind: "preference",
+      created: "2020-01-01",
+      source_conversation: null,
+      body: "",
+      scope: null,
+      ...extra,
+    });
+    act(() =>
+      useAppStore.setState({
+        lessons: [],
+        facts: [
+          fact("old", "An old note"),
+          fact("lives-in-berlin", "Lives in Berlin", { valid_from: today() }),
+          fact("unsure", "Prefers coffee", { created: today(), status: "contested" }),
+        ],
+      } as never)
+    );
+    act(() => root.render(<Introduction />));
+    expect(container.textContent).toContain("Recently learned: Lives in Berlin");
+    expect(container.textContent).not.toContain("Prefers coffee");
   });
 });

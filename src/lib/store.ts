@@ -716,6 +716,8 @@ export interface AppState {
   /** Counts + health for the Self view (ORG-1). */
   vitality: api.Vitality | null;
   lessons: api.Fact[];
+  /** Active facts, for the new-chat line (`G11`): what was learned or corrected lately. */
+  facts: api.Fact[];
   refreshSelf: () => Promise<void>;
   forgetLesson: (name: string) => Promise<void>;
   /** 7-day per-tool reliability for the running model; feeds the caution lines
@@ -2659,6 +2661,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         // Undo the actual operation: a forget is undone by restoring from
         // trash, anything else (a save) by forgetting the entry it created.
         await api.restoreMemoryFact(toast.undoToken);
+      } else if ((toast.op === "replace" || toast.op === "contest") && toast.undoToken) {
+        // `BLF-2`: the new belief goes, and the one it replaced or disputed stands.
+        await api.undoBeliefChange(toast.name, toast.undoToken);
       } else {
         await api.forgetMemoryFact(toast.name);
       }
@@ -2829,15 +2834,17 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   vitality: null,
   lessons: [],
+  facts: [],
   refreshSelf: async () => {
     if (!api.inTauri()) return;
     const model = get().models.find((m) => m.id === get().selectedModelId);
-    const [vitality, lessons, goldenStatus] = await Promise.all([
+    const [vitality, lessons, facts, goldenStatus] = await Promise.all([
       api.getVitality(isRemoteModel(model) ? model.cloudModel : undefined).catch(() => null),
       api.listLessons().catch(() => [] as api.Fact[]),
+      api.listMemoryFacts().catch(() => [] as api.Fact[]),
       api.getGoldenStatus().catch(() => null),
     ]);
-    set({ vitality, lessons, goldenStatus });
+    set({ vitality, lessons, facts, goldenStatus });
     await get().refreshSkills();
   },
   forgetLesson: async (name) => {

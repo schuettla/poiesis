@@ -687,6 +687,8 @@ mod tests {
                 status: None,
                 supersedes: None,
                 superseded_by: None,
+                evidence: Vec::new(),
+                valid_from: None,
             },
         )
         .unwrap();

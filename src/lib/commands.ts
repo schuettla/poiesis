@@ -759,13 +759,23 @@ export const HANDLERS: Record<string, Handler> = {
     if (!api.inTauri()) return fail("I can only keep notes in the desktop app.");
     const saved = await api.rememberFact(activeId(s), text);
     // The same toast, and the same Undo, as a fact I saved myself (`MEM-UI-3`).
+    // `BLF-2`: when it replaced or disputed an older note, the toast says so and
+    // its Undo puts the older note back (`other` rides in `undoToken`).
+    const op =
+      saved.outcome === "replaced"
+        ? "replace"
+        : saved.outcome === "contested"
+          ? "contest"
+          : saved.outcome === "merged"
+            ? "merge"
+            : "save";
     useAppStore.setState({
       memoryToast: {
-        op: "save",
+        op,
         name: saved.name,
         description: saved.description,
         collection: "facts",
-        undoToken: "",
+        undoToken: op === "replace" || op === "contest" ? (saved.other ?? "") : "",
       },
     });
     await s.refreshMemoryContext();

@@ -1280,6 +1280,10 @@ export interface Fact {
   /** The entry this one replaced, and the one that replaced this one. */
   supersedes?: string | null;
   superseded_by?: string | null;
+  /** `BLF-1`: the conversations that support this belief, oldest first. */
+  evidence?: string[];
+  /** `BLF-1`: YYYY-MM-DD from which it holds, when that is not `created`. */
+  valid_from?: string | null;
 }
 
 /** What gets prepended to every conversation (MEM-3). */
@@ -1409,15 +1413,50 @@ export const notRelevantMemory = (name: string, conversationId: string | null) =
 /** Facts a newer one replaced, newest first. */
 export const listEarlierVersions = () => invoke<Fact[]>("list_earlier_versions_cmd");
 
+/** `BLF-UI-1`, Unsure: contested facts, grouped by who disputes whom. */
+export const listUnsure = () => invoke<Fact[][]>("list_unsure_cmd");
+
+/** Settle a doubt: keep `keep` and let the others become earlier versions, or with
+ * `both` keep every side as true in some situations only. */
+export const resolveUnsure = (keep: string, both: boolean) =>
+  invoke<void>("resolve_unsure_cmd", { keep, both });
+
+/** The toast's Undo for a replace or a contest: `neu` is trashed, `old` stands. */
+export const undoBeliefChange = (neu: string, old: string) =>
+  invoke<void>("undo_belief_change_cmd", { new: neu, old });
+
+/** One entry set aside in `.trash/` (G9). */
+export interface LetGo {
+  file: string;
+  collection: string;
+  name: string;
+  description: string;
+  at: number;
+}
+export const listLetGo = () => invoke<LetGo[]>("list_let_go_cmd");
+
+/** One line of "Recent changes", already in the first person. */
+export interface RecentChange {
+  at: number;
+  line: string;
+  /** Which tab it belongs on. */
+  collection: "facts" | "lessons";
+}
+export const listRecentChanges = (limit?: number) =>
+  invoke<RecentChange[]>("list_recent_changes_cmd", { limit });
+
 export const restoreMemoryFact = (file: string) =>
   invoke<void>("restore_memory_fact_cmd", { file });
 
 export const setSoul = (text: string) => invoke<void>("set_soul_cmd", { text });
 
-/** What `/remember` saved (`UCM-5`). */
+/** What `/remember` saved (`UCM-5`). `outcome` is what the relation check did
+ * (`BLF-2`): `other` is the older entry it touched, for all but `new`. */
 export interface RememberedFact {
   name: string;
   description: string;
+  outcome: "new" | "merged" | "replaced" | "contested";
+  other: string | null;
 }
 
 /** `UCM-5`: the user writing a fact down themselves. Not behind the `facts`
@@ -1571,6 +1610,8 @@ export interface Vitality {
   quarantined: string[];
   engine_restarts_session: number;
   pending_proposals: number;
+  /** Facts in dispute (`contested`), `BLF-UI-1`. */
+  unsure: number;
   last_reflection: number | null;
   tool_health: ToolHealth[];
 }
