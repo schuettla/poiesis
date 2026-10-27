@@ -515,6 +515,9 @@ export interface TurnModifiers {
   /** `SEE-3`: what I say to the working run is an addition, not a stop. Never a default,
    * and spent by the send to the run, not by a new turn. */
   asAddition?: boolean;
+  /** `EPI-UI-1`: do it the way a finished conversation did it. Its digest and skill go
+   * into this message's copy for the model. Never a default. */
+  lastTime?: { conversationId: string; at: number; digest: string; skill: string | null };
 }
 
 /** `REG-4`: how a traced command ended. Only `done` and `failed` exist until the

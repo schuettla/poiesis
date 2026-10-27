@@ -9,12 +9,14 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
  * voice, before it has done anything.
  * PRES-5 — afterwards, at most one muted line about something learned this
  * week. Ambient, not promotional: no card, no border, absent when there's
- * nothing recent.
+ * nothing recent, and absent while the composer offers "Last time" (`EPI-UI-1`).
  */
 export default function Introduction() {
   const introduced = useAppStore((s) => s.selfIntroduced);
   const dismiss = useAppStore((s) => s.dismissIntroduction);
   const setView = useAppStore((s) => s.setView);
+  // `EPI-UI-1`: while the composer says "Last time ...", this stays quiet. One line.
+  const lastTimeShown = useAppStore((s) => s.lastTimeOffer !== null);
   const recent = useAppStore((s) => {
     const cutoff = Date.now() - WEEK_MS;
     const dated = [...s.lessons].filter((l) => {
@@ -53,7 +55,7 @@ export default function Introduction() {
     );
   }
 
-  if (!recent) return null;
+  if (!recent || lastTimeShown) return null;
 
   return (
     <button className="ambient-line" onClick={() => setView("self")}>

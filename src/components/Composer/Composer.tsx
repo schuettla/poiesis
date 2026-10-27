@@ -12,6 +12,8 @@ import PlusMenu from "./PlusMenu";
 import ModifierChips from "./ModifierChips";
 import ComposerHintLine from "./ComposerHintLine";
 import { useComposerHint } from "./useComposerHint";
+import LastTimeLine from "./LastTimeLine";
+import { useLastTimeHint } from "./useLastTimeHint";
 import { experimentOn } from "../../lib/experiments";
 import ModeChips from "./ModeChips";
 import RunBar from "./RunBar";
@@ -361,6 +363,27 @@ export default function Composer({
     hint && !(hint.kind === "web" && hintWeb) && !(hint.kind === "handover" && hintYourself) && !(hint.kind === "stop" && hintAddition)
       ? hint
       : null;
+  // `EPI-UI-1`: "Last time", in the same slot. The composer's other hint wins the slot:
+  // one line at a time.
+  const freshChat = useAppStore(
+    (s) => (s.conversations.find((c) => c.id === s.activeConversationId)?.messages.length ?? 0) === 0
+  );
+  const lastTimeFx = useLastTimeHint({
+    text: value,
+    convId: activeConversationId,
+    fresh: freshChat,
+    on: inTauri() && mediaTarget === null && chipModality === null && !asking && !planRevising,
+  });
+  const shownLastTime = shownHint ? null : lastTimeFx.offer;
+  const setLastTimeOffer = useAppStore((s) => s.setLastTimeOffer);
+  useEffect(() => setLastTimeOffer(shownLastTime), [shownLastTime, setLastTimeOffer]);
+  function takeLastTime() {
+    const taken = lastTimeFx.take();
+    if (!taken) return;
+    setTurnModifier({
+      lastTime: { conversationId: taken.conversation_id, at: taken.at, digest: taken.digest, skill: taken.skill },
+    });
+  }
   function takeHint() {
     const taken = hintFx.take();
     if (!taken) return;
@@ -707,6 +730,7 @@ export default function Composer({
           </div>
           {/* `SEE-3`: what was read in the message, before the send button. */}
           <ComposerHintLine hint={shownHint} onTake={takeHint} onDismiss={hintFx.dismiss} />
+          <LastTimeLine offer={shownLastTime} onTake={takeLastTime} onDismiss={lastTimeFx.dismiss} />
           {busy && canSteer && value.trim() ? (
             // Typing during a run means you have something to say to it, not
             // that you want it stopped — so the same key sends, and Stop is

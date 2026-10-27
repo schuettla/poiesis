@@ -563,27 +563,27 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
     // standing instructions, no memory, no skills list and no tool guidance —
     // the same agent by name only. There is no history to budget: every run
     // gets a fresh conversation, so the turn is the system prompt and the task.
-    let system = crate::agent::context::compose_system_prompt(
-        &crate::agent::context::gather(
-            &db,
-            &memory,
-            &mgr,
-            &embed_mgr,
-            crate::agent::context::GatherOpts {
-                conversation_id: &conversation_id,
-                tools_enabled: true,
-                model_name: &model_name,
-                query: &job.prompt,
-            },
-        )
-        .await,
-    );
+    let inputs = crate::agent::context::gather(
+        &db,
+        &memory,
+        &mgr,
+        &embed_mgr,
+        crate::agent::context::GatherOpts {
+            conversation_id: &conversation_id,
+            tools_enabled: true,
+            model_name: &model_name,
+            query: &job.prompt,
+        },
+    )
+    .await;
+    let system = crate::agent::context::compose_system_prompt(&inputs);
     let mut messages = vec![
         serde_json::json!({ "role": "system", "content": system }),
         serde_json::json!({ "role": "user", "content": &job.prompt }),
     ];
     crate::agent::context::insert_briefs(&db, &conversation_id, true, true, &mut messages);
     let images_dir = mgr.generated_media_dir();
+    let answer_id = open_run_turn(&db, &conversation_id, &job.prompt, &model_name);
 
     // A scheduled run is unattended, so it gets a clock as well as a step
     // budget — and, like every run, an id nobody has to guess at to stop it.
@@ -630,6 +630,9 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
     .await;
     fleet.close(&run.id);
     let text = outcome.text;
+    if let Some(answer_id) = &answer_id {
+        close_run_turn(&db, answer_id, &text, &inputs.context_refs);
+    }
 
     let _ = db.log_activity(
         Some(&conversation_id),
@@ -640,12 +643,44 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
     // The summary is only the list line now — the full answer lives in the
     // conversation, so clipping it here loses nothing.
     let summary = if text.trim().is_empty() {
-        "Finished with no output.".to_string()
+        NO_OUTPUT.to_string()
     } else {
         text.chars().take(RESULT_CLIP).collect()
     };
     RunOutcome { summary, conversation_id: Some(conversation_id), skipped: None }
 }
+
+/// Open the turn of a headless run in its conversation (`CRD-1`): the prompt,
+/// and an empty answer to finish when the run ends.
+///
+/// A run opened "in the rail" used to hold no messages at all: the answer went
+/// into the job's result line and nowhere else, so a run could not be read back,
+/// searched, or learned from, and nothing recorded what had reached its answer.
+/// Both are written before the run, so the tool calls it makes fall after its
+/// answer in time, which is how credit finds them (`agent::credit`).
+fn open_run_turn(db: &Db, conversation_id: &str, prompt: &str, model_name: &str) -> Option<String> {
+    let message = |role: &str, content: &str| crate::db::NewMessage {
+        role: role.to_string(),
+        content: content.to_string(),
+        model_name: (role == "assistant").then(|| model_name.to_string()),
+        model_provenance: (role == "assistant").then(|| "local".to_string()),
+        steps_json: None,
+        attachments: Vec::new(),
+    };
+    db.append_message(conversation_id, &message("user", prompt)).ok()?;
+    db.append_message(conversation_id, &message("assistant", "")).ok().map(|m| m.id)
+}
+
+/// Finish the answer `open_run_turn` began, with the record of what reached it.
+fn close_run_turn(db: &Db, answer_id: &str, answer: &str, refs: &crate::commands::memory::ContextRefs) {
+    let content = if answer.trim().is_empty() { NO_OUTPUT } else { answer };
+    let refs_json = serde_json::to_string(refs).ok();
+    let _ = db.finalize_message(answer_id, content, None, refs_json.as_deref(), None, None);
+}
+
+/// What a run that said nothing is recorded as, in its conversation and in the
+/// job's result line.
+const NO_OUTPUT: &str = "Finished with no output.";
 
 /// Background 60-second ticker (SCH-1) — the process-wide clock every job's
 /// cadence is measured against. No cron dependency: a job simply becomes due
@@ -801,6 +836,34 @@ pub fn mark_digest_read_cmd(db: State<'_, Db>) -> Result<(), PoiesisError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `CRD-1`: a headless run keeps its prompt and answer, and the answer keeps
+    /// the record of what reached it, so the run can be read and credited.
+    #[test]
+    fn a_headless_run_keeps_its_turn_with_the_record_of_what_reached_it() {
+        let db = Db::open_in_memory().unwrap();
+        let conv = db.create_conversation("Report · run 1", None, false).unwrap().id;
+        let id = open_run_turn(&db, &conv, "Summarise the week", "local-model").unwrap();
+        let refs = crate::commands::memory::ContextRefs {
+            facts: vec!["week-starts-monday".into()],
+            lessons: vec!["check-header".into()],
+            ..Default::default()
+        };
+        close_run_turn(&db, &id, "Here is the week.", &refs);
+
+        let messages = db.list_messages(&conv).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!((messages[0].role.as_str(), messages[0].content.as_str()), ("user", "Summarise the week"));
+        assert_eq!(messages[1].content, "Here is the week.");
+        let stored: crate::commands::memory::ContextRefs =
+            serde_json::from_str(&db.message_context_json(&id).unwrap().unwrap()).unwrap();
+        assert_eq!(stored.lessons, vec!["check-header"]);
+        assert_eq!(stored.facts, vec!["week-starts-monday"]);
+
+        let silent = open_run_turn(&db, &conv, "Again", "local-model").unwrap();
+        close_run_turn(&db, &silent, "  ", &Default::default());
+        assert_eq!(db.list_messages(&conv).unwrap().last().unwrap().content, NO_OUTPUT);
+    }
 
     #[test]
     fn cadence_periods_are_in_milliseconds() {

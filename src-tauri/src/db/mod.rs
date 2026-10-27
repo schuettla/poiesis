@@ -25,9 +25,12 @@ pub mod decisions;
 pub mod mail_seen;
 /// The result of checking an answer against evidence (`USE-10`).
 pub mod verifications;
+/// What a finished conversation turned into, and how far a memory helped (`EPI-1`, `CRD-2`).
+pub mod episodes;
+mod episodes_tools;
 
 const SCHEMA: &str = include_str!("schema.sql");
-pub const SCHEMA_VERSION: i64 = 42;
+pub const SCHEMA_VERSION: i64 = 43;
 
 /// The rationale a skill-revision proposal is written with (`OUT-2`). Only
 /// display text — the proposal is *identified* by its `skill-revision` target,
@@ -851,6 +854,13 @@ impl Db {
         Ok(db)
     }
 
+    /// Run one statement against the test database, to put a row in a state the
+    /// public methods cannot (an old timestamp, say).
+    #[cfg(test)]
+    pub fn exec_for_tests(&self, sql: &str, params: impl rusqlite::Params) -> usize {
+        self.conn.lock().unwrap().execute(sql, params).unwrap()
+    }
+
     fn migrate(&self) -> Result<(), DbError> {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(SCHEMA)?;
@@ -1278,6 +1288,30 @@ impl Db {
         if current < 42 {
             // v42 (`SEE-1`): what an automatic check counted, as JSON, for the trust line.
             Self::add_column(&conn, "verifications", "summary", "TEXT")?;
+        }
+        if current < 43 {
+            // v43 (`EPI-1`, `CRD-2`): a conversation is its own episode, so the
+            // episode is columns on the row. A column left NULL means the chat
+            // was not encoded yet. Credit is three counters on the
+            // `memory_usage` row an item already has.
+            for (column, decl) in [
+                ("goal", "TEXT"),
+                ("outcome", "TEXT"),
+                ("task_kind", "TEXT"),
+                ("digest", "TEXT"),
+                ("worked", "TEXT"),
+                ("went_wrong", "TEXT"),
+                ("signals_json", "TEXT"),
+                ("candidates_json", "TEXT"),
+                ("encode_version", "INTEGER"),
+                ("consolidated_at", "INTEGER"),
+            ] {
+                Self::add_column(&conn, "conversations", column, decl)?;
+            }
+            for column in ["chances", "helped", "hurt"] {
+                Self::add_column(&conn, "memory_usage", column, "INTEGER NOT NULL DEFAULT 0")?;
+            }
+            Self::add_column(&conn, "memory_usage", "last_outcome_at", "INTEGER")?;
         }
         //
         // v24 (`OBS-2`): `run_usage` is created by SCHEMA above and has no
@@ -1784,9 +1818,13 @@ impl Db {
     }
 
     pub fn delete_conversation(&self, id: &str) -> Result<(), DbError> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM conversations WHERE id = ?1", [id])?;
-        Ok(())
+        {
+            let conn = self.conn.lock().unwrap();
+            conn.execute("DELETE FROM conversations WHERE id = ?1", [id])?;
+        }
+        // `EPI-1`: the episode lived on the row; its vector lives beside the
+        // memory ones and goes with it.
+        self.delete_vectors_for_ref("episode", episodes::EPISODE_SCOPE, id)
     }
 
     fn touch_conversation(conn: &Connection, id: &str) -> Result<(), DbError> {
@@ -1881,7 +1919,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE messages
-                SET content = ?2, steps_json = ?3, context_json = ?4,
+                SET content = ?2, steps_json = ?3, context_json = COALESCE(?4, context_json),
                     stop_reason = COALESCE(?5, stop_reason),
                     plan_json = COALESCE(?6, plan_json)
               WHERE id = ?1",
@@ -6245,6 +6283,9 @@ mod tests {
             ("model_library", "role"),
             ("personas", "tools_json"),
             ("messages", "context_json"),
+            ("conversations", "outcome"),
+            ("conversations", "candidates_json"),
+            ("memory_usage", "hurt"),
         ] {
             let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})")).unwrap();
             let names: Vec<String> = stmt

@@ -10,6 +10,7 @@ pub mod composio;
 pub mod connectors;
 pub mod conversations;
 pub mod embedgen;
+pub mod episode;
 pub mod endpoints;
 pub mod engines;
 pub mod experiments;

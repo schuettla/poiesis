@@ -84,6 +84,7 @@ fn build(f: &serde_json::Value) -> PromptInputs {
             })
             .collect(),
         spoken: false,
+        context_refs: Default::default(),
     }
 }
 

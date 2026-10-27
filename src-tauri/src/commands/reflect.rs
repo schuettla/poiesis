@@ -68,12 +68,105 @@ pub struct LessonDraft {
     /// Only believed when the conversation really was rewound.
     #[serde(default)]
     pub from_rewind: bool,
+    /// `EPI-2`: one line on what in the conversation shows it.
+    #[serde(default)]
+    pub evidence: String,
+    /// `EPI-2`: the situation it applies to. `tool:<name>` when it is about one
+    /// tool, which is what credit (`CRD-2`) reads; otherwise a few words.
+    #[serde(default)]
+    pub cue: String,
 }
 
+/// What the one drafting call returns (`EPI-2`): the words of the episode, and
+/// candidate lessons. The old key `lessons` is still read, so a model that
+/// answers in the shape it was asked for before does not lose its lessons.
 #[derive(Debug, Default, Deserialize)]
-struct LessonBatch {
+struct EpisodeDraft {
     #[serde(default)]
-    lessons: Vec<LessonDraft>,
+    goal: String,
+    #[serde(default)]
+    digest: String,
+    #[serde(default)]
+    worked: String,
+    #[serde(default)]
+    went_wrong: String,
+    #[serde(default, alias = "lessons")]
+    candidates: Vec<LessonDraft>,
+}
+
+/// Caps on the episode's words, so one chatty answer cannot fill a column.
+const GOAL_CLIP: usize = 200;
+const DIGEST_CLIP: usize = 600;
+const LINE_CLIP: usize = 300;
+
+fn clip_to(s: &str, max: usize) -> String {
+    let s = s.trim();
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// A candidate acts at once, as a lesson does today, only on hard evidence: a
+/// failed call a later call fixed, something the user did to correct me, or a
+/// rewind. Anything else waits on the row (`COGNITION_PLAN` III.1 step 5).
+fn acts_at_once(fixes: usize, user_signals: usize, rewound: bool) -> bool {
+    fixes > 0 || user_signals > 0 || rewound
+}
+
+/// The candidates as they go on the row, each with where it got to.
+fn candidates_json(candidates: &[LessonDraft], saved: &[LessonDraft], proposed: &[LessonDraft]) -> String {
+    let status = |c: &LessonDraft| {
+        if saved.iter().any(|s| s.name == c.name) {
+            "saved"
+        } else if proposed.iter().any(|p| p.name == c.name) {
+            "proposed"
+        } else {
+            "held"
+        }
+    };
+    let list: Vec<serde_json::Value> = candidates
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "name": c.name,
+                "description": c.description,
+                "body": c.body,
+                "confidence": c.confidence,
+                "evidence": c.evidence,
+                "cue": c.cue,
+                "from_rewind": c.from_rewind,
+                "status": status(c),
+            })
+        })
+        .collect();
+    serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// `EPI-2` steps 1 to 3 and credit: the part of encoding that needs no model.
+/// Credit runs once per conversation and encoding version, so asking for a
+/// reflection again does not count the same answers twice.
+fn encode_by_rules(db: &Db, mem: &MemoryStore, conversation_id: &str) {
+    let first_time = db
+        .episode(conversation_id)
+        .ok()
+        .flatten()
+        .is_some_and(|e| e.encode_version < crate::db::episodes::ENCODE_VERSION);
+    let signals = crate::agent::episode::gather(db, conversation_id);
+    if signals.messages == 0 {
+        return;
+    }
+    let _ = db.save_episode_rules(
+        conversation_id,
+        crate::agent::episode::outcome(&signals),
+        crate::agent::episode::task_kind(&signals),
+        &crate::agent::episode::signals_json(&signals),
+    );
+    if first_time {
+        crate::agent::credit::credit_conversation(db, mem, conversation_id);
+    }
 }
 
 /// The critic's answer for one draft (`CRT-1`). `reason` is only meaningful
@@ -140,6 +233,14 @@ async fn reflect_pass(
     // First thing, before anything can fail: this conversation has had its turn.
     let _ = db.set_conversation_reflected(&conversation_id, crate::db::now_ms());
 
+    // `EPI-2`: what the rules can say about this conversation needs no model, so
+    // it is written before anything that could fail or find no engine. A user
+    // who turned self-teaching off has turned the whole pass off.
+    let rung = autonomy_gate(&db, "lessons");
+    if rung != Rung::Off {
+        encode_by_rules(&db, &mem, &conversation_id);
+    }
+
     // Nothing to route through — bail quietly rather than surfacing an error
     // for a background process the user didn't ask for.
     let target = target.unwrap_or_default();
@@ -161,7 +262,6 @@ async fn reflect_pass(
     // off self-taught lessons hasn't thereby said a skill may never ask to
     // fix itself. It reads `skill_runs`, not the transcript, so it needs
     // none of the work below.
-    let rung = autonomy_gate(&db, "lessons");
     if rung == Rung::Off {
         propose_skill_revisions(&mgr, &endpoint, &db, &conversation_id).await;
         return Ok(Reflection::default());
@@ -239,16 +339,20 @@ async fn reflect_pass(
 
     let prompt = format!(
         "Below is a finished conversation, the assistant's tool-failure counts, and any mistakes \
-         it corrected itself within the conversation. Extract AT MOST {MAX_LESSONS} lessons about \
-         how the assistant should work better next time.\n\
-         A lesson must be: (a) generalizable beyond this one conversation, (b) actionable as a \
+         it corrected itself within the conversation. Describe it, and extract AT MOST {MAX_LESSONS} \
+         candidate lessons about how the assistant should work better next time.\n\
+         goal: what the user wanted, one line. digest: one to three sentences in the first person; the \
+         first says plainly what I did for the user, like \"I made the expense summary per category \
+         from your bank CSV.\" worked and went_wrong: one line each, or an empty string.\n\
+         A candidate lesson must be: (a) generalizable beyond this one conversation, (b) actionable as a \
          behavior change, (c) grounded in an observed mistake, failure, or user correction. \
          Style rules the assistant was merely following are NOT lessons. If nothing qualifies, \
-         return {{\"lessons\":[]}}.\n\
+         return an empty candidates list. If there is nothing to describe at all, return empty strings.\n\
          JSON schema:\n\
-         {{\"lessons\":[{{\"name\":\"kebab-case-slug\",\"description\":\"one line\",\
-         \"body\":\"2-4 sentences, imperative voice\",\"confidence\":\"high|low\",\
-         \"from_rewind\":false}}]}}\n\
+         {{\"goal\":\"\",\"digest\":\"\",\"worked\":\"\",\"went_wrong\":\"\",\"candidates\":[{{\"name\":\"kebab-case-slug\",\
+         \"description\":\"one line\",\"body\":\"2-4 sentences, imperative voice\",\"confidence\":\"high|low\",\
+         \"from_rewind\":false,\"evidence\":\"one line: what in the conversation shows it\",\
+         \"cue\":\"tool:<tool name> when it is about one tool, otherwise 3 to 6 words naming the situation\"}}]}}\n\
          Set from_rewind to true only for a lesson about work the user went back on.\n\
          Tool failures: {failure_text}\n\
          Mistakes you corrected yourself during this conversation: {fixes_text}\n\
@@ -271,7 +375,26 @@ async fn reflect_pass(
     };
 
     // Parse strictly: unreadable output means this conversation taught nothing.
-    let batch: LessonBatch = serde_json::from_str(strip_fence(&content)).unwrap_or_default();
+    let batch: EpisodeDraft = serde_json::from_str(strip_fence(&content)).unwrap_or_default();
+    let candidates: Vec<LessonDraft> = batch.candidates.into_iter().take(MAX_LESSONS).collect();
+    // `EPI-2`: the words of the episode go on the row now; where each candidate
+    // got to is written after the loop below.
+    let wrote_words = !batch.digest.trim().is_empty() || !batch.goal.trim().is_empty();
+    if wrote_words {
+        let _ = db.save_episode_draft(
+            &conversation_id,
+            &clip_to(&batch.goal, GOAL_CLIP),
+            &clip_to(&batch.digest, DIGEST_CLIP),
+            &clip_to(&batch.worked, LINE_CLIP),
+            &clip_to(&batch.went_wrong, LINE_CLIP),
+            &candidates_json(&candidates, &[], &[]),
+        );
+    }
+    let acting: Vec<LessonDraft> = if acts_at_once(fixes.len(), signals.len(), was_rewound) {
+        candidates.clone()
+    } else {
+        Vec::new()
+    };
 
     // Key for tool-reliability stats (CRT-3): mirrors the naming `run_agent`
     // uses so the critic's pass/fail sits next to every other skill's.
@@ -283,7 +406,7 @@ async fn reflect_pass(
 
     let existing_lessons = mem.list_lessons();
     let mut out = Reflection::default();
-    for draft in batch.lessons.into_iter().take(MAX_LESSONS) {
+    for draft in acting {
         if draft.confidence.trim() != "high" {
             continue;
         }
@@ -421,6 +544,7 @@ async fn reflect_pass(
                         .ok()
                         .flatten()
                         .map(|p| p.id),
+                    cue: Some(draft.cue.trim().to_string()).filter(|c| !c.is_empty()),
                 };
                 if mem.save_lesson(&db, &fact).is_err() {
                     continue;
@@ -445,6 +569,10 @@ async fn reflect_pass(
                 out.saved.push(draft);
             }
         }
+    }
+
+    if wrote_words {
+        let _ = db.set_episode_candidates(&conversation_id, &candidates_json(&candidates, &out.saved, &out.proposed));
     }
 
     // `OUT-1`: a lesson (saved, proposed, or demoted-but-proposed — everything
@@ -793,10 +921,10 @@ mod tests {
           {"name":"maybe","description":"unsure","body":"Hmm.","confidence":"low"}
         ]}
         ```"#;
-        let batch: LessonBatch = serde_json::from_str(strip_fence(raw)).unwrap();
-        assert_eq!(batch.lessons.len(), 2);
+        let batch: EpisodeDraft = serde_json::from_str(strip_fence(raw)).unwrap();
+        assert_eq!(batch.candidates.len(), 2, "the old `lessons` key is still read");
         let kept: Vec<_> = batch
-            .lessons
+            .candidates
             .iter()
             .filter(|l| l.confidence == "high")
             .collect();
@@ -806,12 +934,115 @@ mod tests {
 
     #[test]
     fn prose_teaches_nothing_rather_than_erroring() {
-        let batch: LessonBatch =
+        let batch: EpisodeDraft =
             serde_json::from_str(strip_fence("Sure! Here are some lessons:")).unwrap_or_default();
-        assert!(batch.lessons.is_empty());
+        assert!(batch.candidates.is_empty() && batch.digest.is_empty());
         // A well-formed empty answer is also fine.
-        let batch: LessonBatch = serde_json::from_str(r#"{"lessons":[]}"#).unwrap();
-        assert!(batch.lessons.is_empty());
+        let batch: EpisodeDraft = serde_json::from_str(r#"{"lessons":[]}"#).unwrap();
+        assert!(batch.candidates.is_empty());
+    }
+
+    #[test]
+    fn the_reshaped_draft_carries_the_episode_and_candidates_with_evidence_and_cue() {
+        let raw = r#"{"goal":"summarise the bank CSV","digest":"I made the summary per category.",
+          "worked":"reading the header first","went_wrong":"read_file failed on a wrong path",
+          "candidates":[{"name":"check-path","description":"check the path","body":"List the folder first.",
+          "confidence":"high","evidence":"read_file failed, then worked with the listed path","cue":"tool:read_file"}]}"#;
+        let draft: EpisodeDraft = serde_json::from_str(raw).unwrap();
+        assert_eq!(draft.goal, "summarise the bank CSV");
+        assert_eq!(draft.candidates[0].cue, "tool:read_file");
+        assert!(draft.candidates[0].evidence.contains("read_file failed"));
+    }
+
+    #[test]
+    fn a_candidate_acts_at_once_only_on_hard_evidence() {
+        assert!(acts_at_once(1, 0, false), "a fail-then-fix pair");
+        assert!(acts_at_once(0, 2, false), "the user corrected me");
+        assert!(acts_at_once(0, 0, true), "the user went back");
+        assert!(!acts_at_once(0, 0, false), "otherwise it waits on the row");
+    }
+
+    #[test]
+    fn the_row_says_where_each_candidate_got_to() {
+        let draft = |name: &str| LessonDraft {
+            name: name.into(),
+            description: "d".into(),
+            body: "b".into(),
+            confidence: "high".into(),
+            from_rewind: false,
+            evidence: "e".into(),
+            cue: "tool:read_file".into(),
+        };
+        let all = [draft("a"), draft("b"), draft("c")];
+        let json = candidates_json(&all, &[draft("a")], &[draft("b")]);
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let status: Vec<&str> = v.as_array().unwrap().iter().map(|c| c["status"].as_str().unwrap()).collect();
+        assert_eq!(status, ["saved", "proposed", "held"]);
+        assert_eq!(v[0]["cue"], "tool:read_file");
+    }
+
+    #[test]
+    fn long_words_are_clipped_on_a_character_boundary() {
+        assert_eq!(clip_to("  short  ", 10), "short");
+        let long = "é".repeat(700);
+        let clipped = clip_to(&long, DIGEST_CLIP);
+        assert_eq!(clipped.chars().count(), DIGEST_CLIP + 1);
+    }
+
+    #[test]
+    fn the_rules_are_written_without_a_model_and_credit_is_counted_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open_in_memory().unwrap();
+        let mem = MemoryStore::new(dir.path()).unwrap();
+        let conv = db.create_conversation("A chat", None, false).unwrap().id;
+        let say = |role: &str, text: &str| {
+            db.append_message(
+                &conv,
+                &crate::db::NewMessage {
+                    role: role.into(),
+                    content: text.into(),
+                    model_name: None,
+                    model_provenance: None,
+                    steps_json: None,
+                    attachments: Vec::new(),
+                },
+            )
+            .unwrap()
+        };
+        say("user", "Summarise the CSV");
+        let answer = say("assistant", "Here it is.");
+        say("user", "Thanks!");
+        let lesson = Fact {
+            name: "check-header".into(),
+            description: "check the header".into(),
+            kind: "lesson".into(),
+            created: String::new(),
+            source_conversation: None,
+            body: "Read the header first.".into(),
+            scope: None,
+            recurrence: None,
+            last_seen: None,
+            expires_at: None,
+            origin: None,
+            project: None,
+            cue: Some("tool:read_file".into()),
+        };
+        mem.save_lesson(&db, &lesson).unwrap();
+        let refs = crate::commands::memory::ContextRefs { lessons: vec!["check-header".into()], ..Default::default() };
+        db.finalize_message(&answer.id, "Here it is.", None, Some(&serde_json::to_string(&refs).unwrap()), None, None)
+            .unwrap();
+        db.add_tool_stat("m", "read_file", &conv, true);
+
+        encode_by_rules(&db, &mem, &conv);
+        let e = db.episode(&conv).unwrap().unwrap();
+        assert_eq!(e.outcome.as_deref(), Some("done"));
+        assert_eq!(e.encode_version, crate::db::episodes::ENCODE_VERSION);
+        assert!(e.signals_json.unwrap().contains("read_file"));
+        assert_eq!(db.memory_credit_map("lessons").unwrap()["check-header"].chances, 1);
+
+        // Asking again refreshes the rules and does not count the answer twice.
+        encode_by_rules(&db, &mem, &conv);
+        assert_eq!(db.memory_credit_map("lessons").unwrap()["check-header"].chances, 1);
     }
 
     /// `RPT-1`: the same lesson, reworded, should still be recognized as a

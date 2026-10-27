@@ -10,7 +10,7 @@ commit per phase.
 | Phase | State | Date |
 |---|---|---|
 | 0 - Fix what exists, and measure | done (see notes) | 2026-10-27 |
-| 1 - The conversation becomes the episode | not started | |
+| 1 - The conversation becomes the episode | done (see notes) | 2026-10-27 |
 | 2 - Recall you can see | not started | |
 | 3 - Beliefs with evidence | not started | |
 | 4 - The daily tidy-up | not started | |
@@ -60,6 +60,94 @@ commit per phase.
   (`engines::acp`, `engines::approve`, `engines::codex`, `agent::checkup`) and
   2 to 3 flaky `db::tests::*fork*` tests (millisecond timestamp ties), all also
   on untouched master; every new test passes.
+
+### Phase 1 notes
+
+- **EPI-1.** Schema v43. `conversations` gains `goal`, `outcome`, `task_kind`,
+  `digest`, `worked`, `went_wrong`, `signals_json`, `candidates_json`,
+  `encode_version`, `consolidated_at`; `memory_usage` gains `chances`, `helped`,
+  `hurt`, `last_outcome_at`. New `db/episodes.rs` (`Episode`, `Credit`,
+  `save_episode_rules`, `save_episode_draft`, `set_episode_candidates`,
+  `episodes_missing_vector`, `add_memory_credit`, `memory_credit_map`) and
+  `db/episodes_tools.rs` (`last_tool_ok`, `tool_results_between`,
+  `carry_context_to`). The episode vector is a `vectors` row with owner `episode`,
+  ref = conversation id; `delete_conversation` removes it. The "counterpart of
+  `missing_vector_texts`" is `episodes_missing_vector`; it is used by
+  `last_time_cmd`, which embeds the query and up to 16 missing episodes in one
+  call. Nothing embeds episodes in the background.
+- **EPI-2.** New `agent/episode.rs`: `gather` (signals), `outcome`, `task_kind`,
+  `accepts`. `reflect_pass` now: stamps, checks the `lessons` rung, writes the
+  rules and runs credit (`encode_by_rules`, no model) when the rung is not off,
+  then goes on as before. The draft call returns `goal`, `digest`, `worked`,
+  `went_wrong` and `candidates` (each with `evidence` and `cue`); the old
+  `lessons` key is still read. All candidates go on the row with a status
+  (`saved`, `proposed`, `held`). A candidate acts at once, through today's critic
+  and rung code, only when the conversation has a fail-then-fix pair, a user
+  correction signal or a rewind. Saved lessons carry `cue` (new optional `Fact`
+  frontmatter field).
+  **Deviations and limits:**
+  - `TaskKind` is by rules only (no model call), as the plan's table says. Order:
+    mail tools, then code tools, then a document artifact (`report`), then an
+    attached folder (`code`), else `unknown`. The plan lists "code tools or a
+    folder" together; the artifact rule is placed between them so a report made in
+    a project folder is a `report`.
+  - Outcome: a last user turn that is a short thanks is an accept, not an
+    unanswered question. Without one: rewound or unanswered is `abandoned`, last
+    tool or last check failed is `failed`, corrections without a thanks is
+    `partial`, fewer than two messages is `unknown`, else `done`.
+  - Signals do not read "decisions with outcomes" (no per-chat query exists); the
+    other signals in III.1 step 1 are read. Phase 8 can add it.
+  - A conversation with failures but no fix, no correction and no rewind keeps
+    its candidates on the row; before this phase the same conversation could save
+    a lesson. They wait for the daily tidy-up (Phase 4). The repo has no eval
+    fixtures for lesson output, so "does not drop" is covered by unit tests of the
+    gate only.
+  - Credit runs once per conversation and encoding version, so "Reflect now"
+    again does not count answers twice. Answers added after the first reflection
+    are not credited.
+- **CRD-1.** `ContextRefs` has `why` (name to cue) and `fired`, both empty until
+  Phase 2 and 5. Finding: **scheduled runs wrote no messages at all**, so they
+  had no `context_json` and could not be read back in the rail. `run_custom_job`
+  now writes the prompt and the answer before the run (`open_run_turn`) and
+  finishes the answer with its `context_json` after (`close_run_turn`);
+  `PromptInputs.context_refs` carries the record out of `gather`. Resumed runs:
+  the new answer inherits the interrupted answer's record (`carry_context_to`),
+  and `finalize_message` no longer wipes a stored record when it is given none.
+  Also fixed on the way: `render_entry` never wrote `origin`, so "learned when
+  you went back" was lost on disk; it writes `origin` and `cue` now (test).
+- **CRD-2.** New `agent/credit.rs`. Per conversation, each fact and lesson in an
+  answer's `context_json` gets a chance. A lesson with `cue: tool:<name>` is
+  helped if the tool ran after that answer and before the next one without
+  failing, hurt if it failed or the answer was gone back on, no effect if it did
+  not run. An entry named by an `outdated` or `not-relevant` command trace
+  (written by CUE-UI-1, Phase 2) is hurt on the last answer that carried it.
+  Entries since forgotten get no row back.
+  **Limits:** a fact that was only in the prompt is a chance and not a help (no
+  "used in the answer" signal exists, and none is guessed). Lessons are credited
+  only when they were retrieved by meaning (embedder on): without one they are
+  injected wholesale and `context_json` has never recorded them, same as before.
+  Old lessons have no cue, so only lessons written from now on can be helped or
+  hurt by a tool. Skill, fired-lesson and "Last time" credit wait for their
+  phases.
+- **EPI-UI-1.** `last_time_cmd` (new `commands/episode.rs`): first message of a
+  new chat, an episode that ended `done`, known task kind, under 180 days, cosine
+  0.62 or more (the lesson floor is 0.58). The composer shows one line in the
+  hint slot ("Last time (12 Oct) I made ... **Do it the same way** · **Start
+  fresh**"); the existing `SEE-3` hint wins the slot. It is asked after an 800 ms
+  pause, at most three times a conversation, and not again once taken up or put
+  away. "Same way" sets the `lastTime` turn modifier (chip "Same way as 12 Oct"),
+  and `sendMessage` adds the digest, the skill name and the conversation id to
+  that message's copy for the model. The system prompt does not change, so the
+  prompt golden does not move. While the line shows, `Introduction` hides its
+  "Recently learned" line (`lastTimeOffer` in the store). It needs the embedder;
+  without one it shows nothing. "Start fresh" is not yet written as credit.
+- **Checks.** `vitest`: all pass except `ThoughtStrip.test.tsx` (untouched
+  master fails too). `tsc`: only the old `AgentRun.tsx` error. `cargo test --lib`:
+  the same 7 stable failures as before and the flaky `db` fork tests; every new
+  test passes. `cargo clippy` shows nothing in the touched files.
+- **Felt checks not run here.** The accept item "do a report task, finish it,
+  start the same kind of task a day later in a new chat: the hint appears" needs
+  the app, a chat model and an embed model. It was not run in this environment.
 
 **What v2 changes.** v1 described a second memory system beside the one that
 exists: a new `episodes` table, a new `memory_uses` table, a new

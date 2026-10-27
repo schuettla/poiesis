@@ -121,6 +121,11 @@ pub struct Fact {
     /// ordinary lessons never set this.
     #[serde(default)]
     pub origin: Option<String>,
+    /// `EPI-2`: the situation a lesson applies to, in words. `tool:<name>` when it
+    /// is about one tool (credit, `CRD-2`, reads that), otherwise a few words.
+    /// Facts never set this.
+    #[serde(default)]
+    pub cue: Option<String>,
 }
 
 /// One lesson surfaced by relevance rather than always-injected
@@ -274,6 +279,7 @@ fn parse_entry(name: &str, text: &str) -> Fact {
     let mut expires_at = None;
     let mut project = None;
     let mut origin = None;
+    let mut cue = None;
 
     for line in header.lines() {
         let Some((key, value)) = line.split_once(':') else { continue };
@@ -302,6 +308,7 @@ fn parse_entry(name: &str, text: &str) -> Fact {
             // disappearing into a project nobody can name.
             "project" => project = Some(value),
             "origin" => origin = Some(value),
+            "cue" => cue = Some(value),
             _ => {}
         }
     }
@@ -324,6 +331,7 @@ fn parse_entry(name: &str, text: &str) -> Fact {
         expires_at,
         project,
         origin,
+        cue,
     }
 }
 
@@ -415,6 +423,12 @@ fn render_entry(f: &Fact) -> String {
     }
     if let Some(project) = &f.project {
         out.push_str(&format!("project: {}\n", one_line(project)));
+    }
+    if let Some(origin) = &f.origin {
+        out.push_str(&format!("origin: {}\n", one_line(origin)));
+    }
+    if let Some(cue) = &f.cue {
+        out.push_str(&format!("cue: {}\n", one_line(cue)));
     }
     out.push_str("---\n");
     out.push_str(f.body.trim());
@@ -1254,6 +1268,7 @@ mod tests {
             last_seen: None,
             expires_at: None,
             origin: None,
+            cue: None,
             project: None,
         }
     }
@@ -1266,6 +1281,26 @@ mod tests {
         assert_eq!(slugify("a".repeat(200).as_str()).unwrap().len(), SLUG_MAX);
         assert!(slugify("!!!").is_err(), "a name with nothing in it is refused");
         assert!(slugify("").is_err());
+    }
+
+    /// `origin` was read from the file and never written, so a lesson learned
+    /// from a rewind lost that on disk. `cue` (`EPI-2`) travels the same way.
+    #[test]
+    fn a_lessons_origin_and_cue_survive_a_round_trip_through_the_file() {
+        let (s, db, _tmp) = store();
+        let lesson = Fact {
+            origin: Some("rewind".into()),
+            cue: Some("tool:read_file".into()),
+            ..fact("check-header", "Read the header first.")
+        };
+        s.save_lesson(&db, &lesson).unwrap();
+        let back = s.read_in(LESSONS, "check-header").unwrap();
+        assert_eq!(back.origin.as_deref(), Some("rewind"));
+        assert_eq!(back.cue.as_deref(), Some("tool:read_file"));
+        s.bump_lesson_recurrence(&db, "check-header").unwrap();
+        let bumped = s.read_in(LESSONS, "check-header").unwrap();
+        assert_eq!(bumped.cue.as_deref(), Some("tool:read_file"));
+        assert_eq!(bumped.origin.as_deref(), Some("rewind"));
     }
 
     #[test]

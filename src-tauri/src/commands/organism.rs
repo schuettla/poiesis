@@ -378,6 +378,7 @@ mod tests {
             last_seen: None,
             expires_at: None,
             origin: None,
+            cue: None,
             project: None,
         }
     }

@@ -223,6 +223,36 @@ pub struct ContextRefs {
     /// `RET` file paths — always empty until Part III lands (`SMP` deferral).
     #[serde(default)]
     pub files: Vec<String>,
+    /// `CRD-1`: why each retrieved entry reached this answer, in words, by
+    /// name ("same project", "you named Anna"). Empty until recall can say
+    /// (`CUE-2`); history written before then reads as "no reason recorded".
+    #[serde(default)]
+    pub why: std::collections::BTreeMap<String, String>,
+    /// `CRD-1`: lessons that fired at a tool call during this answer (`HAB-1`).
+    #[serde(default)]
+    pub fired: Vec<String>,
+}
+
+impl ContextRefs {
+    /// What one turn used: the same record the chat window builds for its own
+    /// turns (`buildContextRefs` in `store.ts`), for the runs the backend
+    /// assembles itself. Two builders, one shape.
+    pub fn for_turn(
+        persona_id: Option<String>,
+        soul_present: bool,
+        about_you_present: bool,
+        injected_facts: &[String],
+        matches: &[SearchHit],
+    ) -> Self {
+        ContextRefs {
+            persona_id,
+            soul_present,
+            about_you_present,
+            facts: injected_facts.to_vec(),
+            lessons: matches.iter().filter(|m| m.kind.as_deref() == Some("lesson")).map(|m| m.title.clone()).collect(),
+            ..Default::default()
+        }
+    }
 }
 
 /// One labelled slice of what shaped an answer (WHY-1). `always_on` layers
@@ -501,6 +531,7 @@ pub fn remember_fact_cmd(
             last_seen: None,
             expires_at: None,
             origin: None,
+            cue: None,
             project: project.clone(),
         };
         match mem.save(&db, &fact) {
@@ -866,6 +897,7 @@ pub async fn resolve_change_proposal_cmd(
                     last_seen: None,
                     expires_at: None,
                     origin: None,
+                    cue: None,
                     // A lesson the user accepted from the review queue is not
                     // fenced to a project: they were shown it out of context
                     // and said yes to it as a standing lesson.
@@ -1206,6 +1238,7 @@ mod tests {
             last_seen: None,
             expires_at: None,
             origin: None,
+            cue: None,
             project: None,
         }
     }
@@ -1274,6 +1307,7 @@ mod tests {
             facts: vec!["kept-fact".into(), "forgotten-fact".into()],
             lessons: Vec::new(),
             files: Vec::new(),
+            ..Default::default()
         };
         let conv = db.create_conversation("test", None, false).unwrap();
         let layers = historical_manifest(&db, &mem, &conv.id, &refs);

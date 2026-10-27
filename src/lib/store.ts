@@ -31,6 +31,7 @@ import type {
 import { NEW_PROJECT_NAME } from "./types";
 import { mockConversations, mockModels } from "./mockData";
 import * as api from "./api";
+import { lastTimeNote } from "./lastTime";
 import {
   UPDATE_AUTOCHECK_KEY,
   UPDATE_LAST_SEEN_KEY,
@@ -424,6 +425,10 @@ export interface AppState {
    * cleared by `sendMessage` and `resumeLastRun`, so a chip never outlives the
    * message it was for. */
   turnModifiers: TurnModifiers;
+  /** `EPI-UI-1`: the "Last time" line the composer is showing, if any. The empty chat
+   * reads it so the introduction's ambient line yields (one line at a time). */
+  lastTimeOffer: api.LastTime | null;
+  setLastTimeOffer: (offer: api.LastTime | null) => void;
   setTurnModifier: (patch: Partial<TurnModifiers>) => void;
   clearTurnModifier: (key: keyof TurnModifiers) => void;
   /** `DEF-2`: turn a chip into the default. The chip stays for this message. */
@@ -1917,6 +1922,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearSurfaceUnseen: (conversationId) =>
     set((s) => ({ surfaceUnseen: withoutKey(s.surfaceUnseen, conversationId) })),
   turnModifiers: {},
+  lastTimeOffer: null,
+  setLastTimeOffer: (offer) => set((s) => (s.lastTimeOffer === offer ? s : { lastTimeOffer: offer })),
   setTurnModifier: (patch) => set((s) => ({ turnModifiers: { ...s.turnModifiers, ...patch } })),
   clearTurnModifier: (key) =>
     set((s) => {
@@ -3975,6 +3982,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           ? `\n\n[Context: the earlier conversation "${ref.label}" (id ${ref.id}). Read it with read_conversation before answering.]`
           : `\n\n[Context: "${ref.label}" from the library (artifact id ${ref.id}). Read it with read_artifact before answering.]`;
     }
+    // `EPI-UI-1`: "Do it the same way" adds what I recorded of that conversation, here
+    // and nowhere else; the chip is spent with this send.
+    if (state.turnModifiers.lastTime) textForModel += lastTimeNote(state.turnModifiers.lastTime);
     for (const pdf of pdfs) {
       try {
         const extracted = await api.extractPdfText(pdf.path);

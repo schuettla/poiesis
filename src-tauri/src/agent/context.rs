@@ -199,6 +199,9 @@ pub struct PromptInputs {
     pub plan_mode: super::plan::PlanMode,
     /// `VTN-2`: the user is talking by voice and will hear the reply spoken.
     pub spoken: bool,
+    /// `CRD-1`: what reached this turn, as the record stored beside the answer.
+    /// Not part of the prompt: a caller that keeps the answer keeps this with it.
+    pub context_refs: crate::commands::memory::ContextRefs,
 }
 
 /// Per-entry cap (description plus when-to-use) and whole-block cap for the
@@ -546,7 +549,22 @@ pub async fn gather(
             )
             .await;
         inputs.memory_index = Some(recalled.index);
+        inputs.context_refs = crate::commands::memory::ContextRefs::for_turn(
+            None,
+            false,
+            false,
+            &recalled.injected_facts,
+            &recalled.matches,
+        );
     }
+    // The rest of the record is known whether or not recall ran.
+    inputs.context_refs.persona_id = db
+        .get_conversation(opts.conversation_id)
+        .ok()
+        .flatten()
+        .and_then(|c| c.persona_id);
+    inputs.context_refs.soul_present = inputs.soul.as_deref().is_some_and(|s| !s.trim().is_empty());
+    inputs.context_refs.about_you_present = inputs.about_you.as_deref().is_some_and(|s| !s.trim().is_empty());
 
     // A persona may narrow the advertised skills, never widen them (`SKL-6`).
     // Telling the model about a skill the `skill` tool will then refuse burns a

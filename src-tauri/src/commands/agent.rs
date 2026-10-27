@@ -299,6 +299,11 @@ pub async fn resume_run_cmd(
             return Ok(false);
         }
     };
+    // `CRD-1`: the resumed answer was prepared from the interrupted run's log, so
+    // it carries that answer's record of what reached it.
+    if let Some(id) = assistant_message_id.as_deref() {
+        let _ = db.carry_context_to(&conversation_id, id);
+    }
     execute_turn(
         &mgr, &embed_mgr, &rerank_mgr, &db, &perms, &memory, &browser_pool, &fleet, &setup,
         &target, &conversation_id, assistant_message_id.as_deref(), msgs,

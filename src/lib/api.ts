@@ -804,6 +804,24 @@ export function composerHint(conversationId: string, text: string, runId?: strin
   return invoke<ComposerHint | null>("composer_hint_cmd", { conversationId, text, runId: runId ?? null });
 }
 
+/** `EPI-UI-1`: a finished conversation of the same kind of work, offered while the
+ * first message of a new one is typed. */
+export interface LastTime {
+  conversation_id: string;
+  /** When that conversation was last worked on, in ms. */
+  at: number;
+  goal: string;
+  /** The first sentence of the digest: what I did. */
+  line: string;
+  /** The whole digest, for the turn when the user takes it up. */
+  digest: string;
+  skill: string | null;
+}
+
+export function lastTime(conversationId: string, text: string): Promise<LastTime | null> {
+  return invoke<LastTime | null>("last_time_cmd", { conversationId, text });
+}
+
 export function composerHintLabel(decisionId: string, kind: ComposerHint["kind"], taken: boolean): Promise<void> {
   return invoke<void>("composer_hint_label_cmd", { decisionId, kind, taken });
 }
@@ -1322,6 +1340,11 @@ export interface ContextRefs {
   facts: string[];
   lessons: string[];
   files: string[];
+  /** `CRD-1`: why each retrieved entry reached this answer, by name. Empty until
+   * recall can say; the chat window does not write it yet. */
+  why?: Record<string, string>;
+  /** `CRD-1`: lessons that fired at a tool call during this answer. */
+  fired?: string[];
 }
 
 /** One labelled slice of what shaped an answer (WHY-1/3). `always_on` layers

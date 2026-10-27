@@ -1,6 +1,7 @@
 import { useAppStore } from "../../lib/store";
 import type { TurnModifiers } from "../../lib/types";
 import { EFFORTS } from "../../lib/effort";
+import { shortDate } from "../../lib/lastTime";
 import "./ModifierChips.css";
 
 /**
@@ -32,6 +33,9 @@ export default function ModifierChips() {
   if (mods.web) chips.push({ key: "web", label: "Web search on", once: true });
   if (mods.noHandover) chips.push({ key: "noHandover", label: "Do it yourself", once: true });
   if (mods.asAddition) chips.push({ key: "asAddition", label: "As an addition", once: true });
+  if (mods.lastTime) {
+    chips.push({ key: "lastTime", label: `Same way as ${shortDate(mods.lastTime.at)}`, once: true });
+  }
   if (!chips.length) return null;
 
   return (
