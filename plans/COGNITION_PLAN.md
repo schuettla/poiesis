@@ -15,7 +15,7 @@ commit per phase.
 | 3 - Beliefs with evidence | done (see notes) | 2026-10-27 |
 | 4 - The daily tidy-up | done (see notes) | 2026-10-27 |
 | 5 - Lessons that fire, and rehearsal | done (see notes) | 2026-10-27 |
-| 6 - The self-improvement loop | not started | |
+| 6 - The self-improvement loop | done (see notes) | 2026-10-27 |
 | 7 - Intentions | not started | |
 | 8 - Self-model | not started | |
 | 9 - Project setup | not started | |
@@ -459,6 +459,76 @@ commit per phase.
   which the unit test covers). To try it by hand: let a CSV step fail and get
   fixed in three chats, accept "Check it first", then open the step of the next
   CSV call and read its line.
+
+### Phase 6 notes
+
+- **Schema v44.** `change_proposals` gained `problem_cue`, `form`, `group_id`,
+  `rehearsal_json`, `live_outcome`; status gained `dropped` and `kept_base`
+  (`Db::add_improvement`, `list_improvements`, `set_live_outcome`). Pending lists are
+  unchanged: a `dropped` or `kept_base` row never shows as waiting.
+- **IMP-1, the queue.** New `commands/improve.rs`, called at the end of the daily pass
+  (`tidy::run_pass`) after skills. A problem is a lesson learned again (recurrence 2 or
+  more), a correction the person gave twice (a `forget` they made, or a suggestion they
+  declined, twice in 90 days), or a kind of task with 2 or more failed or abandoned
+  conversations. Told-twice first, one per cue; a problem filed or kept in the last 14
+  days, or with a fix still waiting, is skipped; at most 2 per pass. It runs only when
+  the `lessons` rung is not off.
+- **IMP-2, candidates.** Up to 3 fixes of different forms, each a normal proposal row:
+  **reminder** (a lesson, with what failed last time added), **check** (the existing
+  `habit` card: the lesson fires at its tool, with a check chosen from the error text and
+  one sentence saying what worked, which is added to the lesson body when accepted),
+  **instruction** (one line in the project's instructions, when the chat was in a project)
+  and **earlier** (a fix with the same cue that held, taken from the old rows). They share
+  a `group_id`. The order comes from what has held before (IMP-5).
+- **IMP-3, probe.** `probe` runs the unchanged setup and every fix through the rehearsal
+  runner (RHS-1) on up to 3 replayed chats, 2 samples each, and counts right calls. The
+  result is stored on each row (`rehearsal_json`) with its evidence line.
+- **IMP-4, compose.** A fix that beats the unchanged setup is adopted (most right calls;
+  ties go to the one drafted first). If the best was not perfect and the next one is also
+  a written lesson, the two are joined and tried once more, and kept only if together they
+  do better. Otherwise nothing beat what I do: no proposal, one `kept_base` row. Every
+  loser is a `dropped` row with a line such as "dropped -> a written reminder -> right in
+  1 of 4 replays (without it: 1 of 4)". The winner is a normal pending proposal. A problem
+  with no chat to replay gets its first fix, marked untried.
+- **IMP-5, the improver learns.** `fill_live_outcomes` judges an applied fix 14 days on:
+  `held` if its tool did not need fixing again in a later chat, else `failed`.
+  `form_order` drafts first the form that has held most often (for that tool, else
+  overall). `refresh_rules` writes at most 5 sentences once a month into `improve.rules`
+  ("Written reminders rarely fix how I call a tool. I use checks for that now. (5 of 5
+  times)"); a deleted rule comes back only when more rows say it. `agreement` counts, per
+  tool, whether rehearsal and the later outcome agreed; 5 in a row marks an area trusted,
+  one disagreement at the end sends it back to ask.
+- **IMP-UI-1.** The block "check the header row came up again. I tried 3 fixes on the
+  chats where it happened." sits above the card of a tried fix (chat card and Lessons
+  tab), collapsed to that line; opened it lists each fix with "right in 4 of 4 replays"
+  and the setup as it is, and **Show replays** lists the chats. The Lessons tab has
+  **How I improve** with the rules and a Delete on each. The Health line "Fixes I made
+  that held up" shows the share once there is one. The digest says "tried fixes on N
+  problems that keep coming back" and "nothing beat what I already do" for the kept ones;
+  fixes waiting count as changes I would like to make.
+- **Deviations.** (a) Candidates and rules of thumb are drafted by rules, not by a model;
+  the plan's "used only in the propose and compose prompts" therefore applies to the form
+  order only. (b) **Nothing lands by itself.** Every winner waits for a yes; the Auto
+  landing for a trusted area is not built (the gate says to ship only under Ask unless the
+  numbers hold). Trust is computed and kept, not used. (c) The skill source of IMP-1 (a
+  skill whose usefulness fell under 0.4) is left to the existing skill-revision proposals.
+  (d) A check cannot change the first call, only what follows it, so the rehearsal puts
+  the check's words in the prompt (the plan's "or as the tool note it would be"); the
+  words that were rehearsed are the ones shipped. (e) A fix is judged from when its
+  proposal was made, not when it was accepted: there is no accepted-at time yet. (f)
+  A kept lesson is a new lesson (`<name>-again`), not a rewrite of the old one; tidy-up
+  merges look-alikes later. (g) Merging is limited to two written lessons.
+- **Checks.** `cargo test --lib`: 1648 pass; the 7 stable failures and the flaky `db`
+  fork tests (two this time; they also fail on the Phase 5 commit when run alone) fail
+  as before. `vitest`: all pass except the old `ThoughtStrip` failure. `tsc`: only the old
+  `AgentRun.tsx` error. Clippy shows nothing new in `improve.rs`.
+- **Gate not measurable here.** "Fix hold rate above 60% and rehearsal agreement above
+  60% in at least one area" needs fixes that have been accepted and then lived with for 14
+  days. Both numbers are in `improve_summary_cmd` (`hold_rate`, `agreement_rate`). Until
+  they are met, Phase 6 ships only under Ask, which is the only way it ships now.
+- **Felt check not run here.** Needs the app and a model: let a tool call fail and be
+  fixed in two chats until its lesson is learned twice, leave the app idle, and look for a
+  card on the Lessons tab with the "I tried fixes" line above it.
 
 **What v2 changes.** v1 described a second memory system beside the one that
 exists: a new `episodes` table, a new `memory_uses` table, a new

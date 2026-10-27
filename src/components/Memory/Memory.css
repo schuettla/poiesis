@@ -291,3 +291,20 @@
   padding-top: 8px;
   border-top: 1px solid var(--paper-edge-2);
 }
+
+/* `IMP-UI-1`: the block that says which fixes were tried. Collapsed to its first line. */
+.tried-fixes {
+  margin: 0 0 8px;
+  font-size: var(--fs-caption);
+  color: var(--ink-muted);
+}
+.tried-fixes-head {
+  text-align: left;
+  font-size: var(--fs-caption);
+  color: var(--ink-muted);
+  padding: 0;
+}
+.tried-fixes ul {
+  margin: 4px 0 4px 16px;
+  padding: 0;
+}

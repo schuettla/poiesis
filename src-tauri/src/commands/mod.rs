@@ -31,6 +31,7 @@ pub mod runtime;
 pub mod scheduler;
 pub mod skills;
 pub mod subagents;
+pub mod improve;
 pub mod tidy;
 pub mod updater;
 pub mod usage;

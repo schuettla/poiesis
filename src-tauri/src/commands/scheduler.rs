@@ -423,11 +423,13 @@ async fn run_nightly_reflection_digest(app: &AppHandle, cancel: CancelFlag) -> (
         let_go: tidy.applied.let_go,
         noted: tidy.applied.noted,
         reverted: tidy.reverted,
+        tried: tidy.tried,
+        kept_base: tidy.kept_base,
     };
     // A lesson the tidy-up promoted is something I learned; rows waiting for a yes,
     // and skills drafted, are changes I'd like to make.
     let learned_total = learned + tidy.applied.promoted;
-    let proposed_total = proposed + tidy.waiting + tidy.skills;
+    let proposed_total = proposed + tidy.waiting + tidy.skills + tidy.fixes;
     let digest = compose_digest_with(read, due.len(), learned_total, proposed_total, &bits, when);
     let db = app.state::<Db>();
     save_digest_with(&db, &digest, tidy.undoable);
@@ -493,6 +495,10 @@ struct TidyBits {
     noted: usize,
     /// The golden check found a tidy-up made me worse, and I put it back.
     reverted: bool,
+    /// `IMP-1`: problems I tried fixes on, and how many of those had no fix better than
+    /// what I already do.
+    tried: usize,
+    kept_base: usize,
 }
 
 #[cfg(test)]
@@ -501,7 +507,7 @@ fn compose_digest(read: usize, total: usize, learned: usize, proposed: usize, wh
 }
 
 fn compose_digest_with(read: usize, total: usize, learned: usize, proposed: usize, tidy: &TidyBits, when: DigestWhen) -> String {
-    let did_tidy = tidy.merged + tidy.let_go + tidy.noted > 0;
+    let did_tidy = tidy.merged + tidy.let_go + tidy.noted + tidy.tried > 0;
     if read == 0 && !did_tidy && learned == 0 && !tidy.reverted {
         return if total == 0 {
             format!(
@@ -536,6 +542,9 @@ fn compose_digest_with(read: usize, total: usize, learned: usize, proposed: usiz
     if tidy.noted > 0 {
         clauses.push(count(tidy.noted, "found another source for one thing", "found other sources for {n} things"));
     }
+    if tidy.tried > 0 {
+        clauses.push(count(tidy.tried, "tried fixes on one problem that keeps coming back", "tried fixes on {n} problems that keep coming back"));
+    }
     if clauses.is_empty() {
         clauses.push("didn't find anything new to learn".to_string());
     }
@@ -551,6 +560,9 @@ fn compose_digest_with(read: usize, total: usize, learned: usize, proposed: usiz
         1 => format!("{lead}. I {said}, and there's one change I'd like to make."),
         k => format!("{lead}. I {said}, and there are {k} changes I'd like to make."),
     };
+    if tidy.kept_base > 0 {
+        text.push_str(&count(tidy.kept_base, " For one of them nothing beat what I already do.", " For {n} of them nothing beat what I already do."));
+    }
     if tidy.reverted {
         text.push_str(" I tried a tidy-up, but it made me worse at something, so I put it back.");
     }
@@ -1174,6 +1186,10 @@ mod tests {
         let only_tidy = compose_digest_with(0, 0, 0, 0, &TidyBits { merged: 1, ..Default::default() }, away);
         assert_eq!(only_tidy, "While you were away I went over my notes. I merged one note.");
         // Rows waiting for a yes are changes I'd like to make, not changes made.
+        let tried = compose_digest_with(1, 1, 0, 1, &TidyBits { tried: 2, kept_base: 1, ..Default::default() }, away);
+        assert!(tried.contains("tried fixes on 2 problems that keep coming back"), "{tried}");
+        assert!(tried.contains("there's one change I'd like to make"), "{tried}");
+        assert!(tried.ends_with("For one of them nothing beat what I already do."), "{tried}");
         let waiting = compose_digest_with(2, 2, 0, 3, &TidyBits::default(), away);
         assert!(waiting.contains("didn't find anything new to learn") && waiting.contains("3 changes I'd like to make"));
         // A tidy-up the golden check undid is said, and claims no merge.

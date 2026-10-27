@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { inTauri, scanSkillText } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import { habitLine } from "../../lib/learning";
+import TriedFixes from "../Self/TriedFixes";
 
 /** `SKL-UI-2`: the install card's `TRU-1` risk line. Renders nothing for a
  * clean skill, which is nearly all of them — the line exists so a skill that
@@ -449,6 +450,17 @@ function EngineRuleProposal({ id, rationale, proposedText }: { id: string; ratio
  * OUT-2, RPT-2); everything else gets the original generic card.
  */
 export default function ProposalCard({ id }: { id: string }) {
+  const proposal = useAppStore((s) => s.changeProposals.find((p) => p.id === id));
+  // `IMP-UI-1`: a fix that was tried on replayed chats shows what the tries showed, above its card.
+  return (
+    <>
+      {proposal?.group_id && <TriedFixes proposal={proposal} />}
+      <ProposalCardBody id={id} />
+    </>
+  );
+}
+
+function ProposalCardBody({ id }: { id: string }) {
   const proposal = useAppStore((s) => s.changeProposals.find((p) => p.id === id));
   const resolve = useAppStore((s) => s.resolveChangeProposal);
   const setView = useAppStore((s) => s.setView);

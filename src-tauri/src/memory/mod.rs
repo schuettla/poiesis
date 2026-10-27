@@ -1221,6 +1221,26 @@ impl MemoryStore {
         Ok(())
     }
 
+    /// `IMP-4`: add one sentence to the end of a lesson's body, once. Nothing else
+    /// about the lesson changes.
+    pub fn append_to_lesson(&self, db: &Db, name: &str, note: &str) -> Result<(), String> {
+        let name = slugify(name)?;
+        let _guard = self.lock.lock().unwrap();
+        let path = self.path_for(LESSONS, &name);
+        let text = std::fs::read_to_string(&path).map_err(|_| format!("no lesson named {name}"))?;
+        let mut entry = parse_entry(&name, &text);
+        let note = note.trim();
+        if note.is_empty() || entry.body.contains(note) {
+            return Ok(());
+        }
+        entry.body = format!("{}\n{note}", entry.body.trim_end());
+        std::fs::write(&path, render_entry(&entry)).map_err(|e| e.to_string())?;
+        drop(_guard);
+        self.write_index();
+        self.sync_fts(db);
+        Ok(())
+    }
+
     /// Trash everything past `LESSON_CAP`, by what each lesson has earned (`BLF-3`,
     /// III.4): first the ones that tested badly, then the ones that have had no
     /// chance to help for a long time, and only then the oldest. Best-effort: a

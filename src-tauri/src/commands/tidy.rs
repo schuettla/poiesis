@@ -470,6 +470,11 @@ pub struct PassResult {
     pub ran: bool,
     /// Something was applied that Undo can put back.
     pub undoable: bool,
+    /// `IMP-1`: problems I tried fixes on, fixes now waiting for a yes, and problems
+    /// where nothing beat what I already do.
+    pub tried: usize,
+    pub fixes: usize,
+    pub kept_base: usize,
 }
 
 /// Step 3 of the daily job. `cancel` is checked before each stage; the stage in flight
@@ -513,6 +518,17 @@ pub async fn run_pass(app: &AppHandle, cancel: &CancelFlag) -> PassResult {
     }
     if !cancel.is_cancelled() {
         result.skills = propose_skills(&mgr, &db, mgr.engine_endpoint().await).await;
+    } else {
+        result.stopped = true;
+    }
+    // `IMP-1` to `IMP-4`: fixes for what keeps coming back, tried before they are offered.
+    if !cancel.is_cancelled() {
+        let stop = || cancel.is_cancelled();
+        let improved = crate::commands::improve::improve(&mgr, &db, &mem, mgr.engine_endpoint().await, &stop).await;
+        result.tried = improved.problems;
+        result.fixes = improved.proposed;
+        result.kept_base = improved.kept_base;
+        result.stopped |= improved.stopped;
     } else {
         result.stopped = true;
     }

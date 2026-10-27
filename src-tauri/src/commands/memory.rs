@@ -1114,6 +1114,13 @@ pub async fn resolve_change_proposal_cmd(
                 .ok_or_else(|| PoiesisError::Message("That lesson has no name.".into()))?;
             let fires = parse_fires(&proposal.proposed_text).map_err(PoiesisError::Message)?;
             mem.set_fires(&db, &slug, Some(fires.clone())).map_err(PoiesisError::Message)?;
+            // `IMP-4`: an improvement's check carries the sentence it was rehearsed with.
+            if let Some(note) = serde_json::from_str::<serde_json::Value>(&proposal.proposed_text)
+                .ok()
+                .and_then(|v| v["note"].as_str().map(str::to_string))
+            {
+                mem.append_to_lesson(&db, &slug, &note).map_err(PoiesisError::Message)?;
+            }
             db.resolve_change_proposal(&id, "applied").map_err(err)?;
             let _ = db.log_activity(None, "memory", &format!("I check {slug} before {}", fires.on));
             Ok(())

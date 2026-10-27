@@ -30,7 +30,7 @@ pub mod episodes;
 mod episodes_tools;
 
 const SCHEMA: &str = include_str!("schema.sql");
-pub const SCHEMA_VERSION: i64 = 43;
+pub const SCHEMA_VERSION: i64 = 44;
 
 /// The rationale a skill-revision proposal is written with (`OUT-2`). Only
 /// display text — the proposal is *identified* by its `skill-revision` target,
@@ -698,9 +698,43 @@ pub struct ChangeProposal {
     /// `None` for targets that have no separate summary (and for rows written
     /// before schema v8).
     pub description: Option<String>,
-    /// pending | applied | dismissed
+    /// pending | applied | dismissed | dropped | kept_base
     pub status: String,
     pub created_at: i64,
+    /// `IMP-2`: set on an improvement. The problem in words, the form the fix takes
+    /// (`check`, `reminder`, `instruction`, `earlier`), the group of rival fixes for
+    /// the same problem, what the replays showed (JSON), and how it held up later.
+    #[serde(default)]
+    pub problem_cue: Option<String>,
+    #[serde(default)]
+    pub form: Option<String>,
+    #[serde(default)]
+    pub group_id: Option<String>,
+    #[serde(default)]
+    pub rehearsal_json: Option<String>,
+    #[serde(default)]
+    pub live_outcome: Option<String>,
+}
+
+const PROPOSAL_COLS: &str = "id, target, slug, proposed_text, rationale, description, status, created_at,
+     problem_cue, form, group_id, rehearsal_json, live_outcome";
+
+fn proposal_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChangeProposal> {
+    Ok(ChangeProposal {
+        id: r.get(0)?,
+        target: r.get(1)?,
+        slug: r.get(2)?,
+        proposed_text: r.get(3)?,
+        rationale: r.get(4)?,
+        description: r.get(5)?,
+        status: r.get(6)?,
+        created_at: r.get(7)?,
+        problem_cue: r.get(8)?,
+        form: r.get(9)?,
+        group_id: r.get(10)?,
+        rehearsal_json: r.get(11)?,
+        live_outcome: r.get(12)?,
+    })
 }
 
 /// One hit from the agent's own search over its past (RCL-1) — a chat message
@@ -1316,6 +1350,13 @@ impl Db {
                 Self::add_column(&conn, "memory_usage", column, "INTEGER NOT NULL DEFAULT 0")?;
             }
             Self::add_column(&conn, "memory_usage", "last_outcome_at", "INTEGER")?;
+        }
+        if current < 44 {
+            // v44 (`IMP-2`): an improvement is a proposal row with the problem it is for,
+            // the form it takes, the group it competes in and what the replays showed.
+            for column in ["problem_cue", "form", "group_id", "rehearsal_json", "live_outcome"] {
+                Self::add_column(&conn, "change_proposals", column, "TEXT")?;
+            }
         }
         //
         // v24 (`OBS-2`): `run_usage` is created by SCHEMA above and has no
@@ -2980,30 +3021,67 @@ impl Db {
             description: description.map(str::to_string),
             status: "pending".to_string(),
             created_at: ts,
+            problem_cue: None,
+            form: None,
+            group_id: None,
+            rehearsal_json: None,
+            live_outcome: None,
         })
+    }
+
+    /// `IMP-2`: file one improvement. Same row as any proposal, plus what makes it a
+    /// rival in a group. `status` is `pending`, `dropped` or `kept_base`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_improvement(
+        &self,
+        target: &str,
+        slug: Option<&str>,
+        proposed_text: &str,
+        rationale: &str,
+        description: Option<&str>,
+        status: &str,
+        problem_cue: &str,
+        form: &str,
+        group_id: &str,
+        rehearsal_json: &str,
+    ) -> Result<ChangeProposal, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let id = new_id();
+        let ts = now_ms();
+        conn.execute(
+            "INSERT INTO change_proposals(id, target, slug, proposed_text, rationale, description, status, created_at,
+                                          problem_cue, form, group_id, rehearsal_json)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![id, target, slug, proposed_text, rationale, description, status, ts, problem_cue, form, group_id, rehearsal_json],
+        )?;
+        drop(conn);
+        Ok(self.get_change_proposal(&id)?.expect("just inserted"))
+    }
+
+    /// `IMP-5`: every improvement ever filed, newest first, whatever its status.
+    pub fn list_improvements(&self) -> Result<Vec<ChangeProposal>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PROPOSAL_COLS} FROM change_proposals WHERE group_id IS NOT NULL ORDER BY created_at DESC, rowid DESC"
+        ))?;
+        let rows = stmt.query_map([], proposal_row)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// `IMP-5`: write how an applied improvement held up.
+    pub fn set_live_outcome(&self, id: &str, outcome: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE change_proposals SET live_outcome = ?2 WHERE id = ?1", params![id, outcome])?;
+        Ok(())
     }
 
     /// Proposals still awaiting an answer, newest first.
     pub fn list_change_proposals(&self) -> Result<Vec<ChangeProposal>, DbError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, target, slug, proposed_text, rationale, description, status, created_at
-             FROM change_proposals WHERE status = 'pending' ORDER BY created_at DESC",
-        )?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(ChangeProposal {
-                    id: r.get(0)?,
-                    target: r.get(1)?,
-                    slug: r.get(2)?,
-                    proposed_text: r.get(3)?,
-                    rationale: r.get(4)?,
-                    description: r.get(5)?,
-                    status: r.get(6)?,
-                    created_at: r.get(7)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PROPOSAL_COLS} FROM change_proposals WHERE status = 'pending' ORDER BY created_at DESC"
+        ))?;
+        let rows = stmt.query_map([], proposal_row)?.collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
 
@@ -3012,22 +3090,8 @@ impl Db {
     /// pending rows, so it can't answer this.)
     pub fn get_change_proposal(&self, id: &str) -> Result<Option<ChangeProposal>, DbError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, target, slug, proposed_text, rationale, description, status, created_at
-             FROM change_proposals WHERE id = ?1",
-        )?;
-        let mut rows = stmt.query_map([id], |r| {
-            Ok(ChangeProposal {
-                id: r.get(0)?,
-                target: r.get(1)?,
-                slug: r.get(2)?,
-                proposed_text: r.get(3)?,
-                rationale: r.get(4)?,
-                description: r.get(5)?,
-                status: r.get(6)?,
-                created_at: r.get(7)?,
-            })
-        })?;
+        let mut stmt = conn.prepare(&format!("SELECT {PROPOSAL_COLS} FROM change_proposals WHERE id = ?1"))?;
+        let mut rows = stmt.query_map([id], proposal_row)?;
         Ok(rows.next().transpose()?)
     }
 

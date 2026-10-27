@@ -4,6 +4,8 @@ import { AUTONOMY_CLASSES, useAppStore } from "../../lib/store";
 import { firesLine, habitLine, learningLines } from "../../lib/learning";
 import { Evidence, LetGo, RecentChanges } from "../Memory/BeliefSections";
 import MemoryPanel from "../Memory/MemoryPanel";
+import ProposalCard from "../Conversation/ProposalCard";
+import TriedFixes from "./TriedFixes";
 import "../../routes/Models.css";
 import "../Context/Context.css";
 import "./Self.css";
@@ -95,8 +97,24 @@ function LessonsTab() {
   useEffect(() => setVersion((v) => v + 1), [lessons]);
 
   const pending = proposals.filter(
-    (p) => p.target === "lesson" || p.target === "lesson-critic" || p.target === "engine-memory" || p.target === "habit"
+    (p) =>
+      p.target === "lesson" ||
+      p.target === "lesson-critic" ||
+      p.target === "engine-memory" ||
+      p.target === "habit" ||
+      // `IMP-4`: a line for a project's instructions is answered where it can be set.
+      (p.target === "project_instructions" && !!p.group_id)
   );
+  const [improve, setImprove] = useState<api.ImproveSummary | null>(null);
+  useEffect(() => {
+    if (!api.inTauri()) return;
+    api.improveSummary().then(setImprove).catch(() => setImprove(null));
+  }, [version, proposals]);
+
+  async function dropRule(key: string) {
+    await api.deleteImproveRule(key);
+    setImprove(await api.improveSummary());
+  }
   const standing = useAppStore((s) => s.makeStandingInstead);
   const [proposalError, setProposalError] = useState("");
 
@@ -130,8 +148,11 @@ function LessonsTab() {
   return (
     <div className="self-list">
       {pending.map((p) =>
-        p.target === "habit" ? (
+        p.target === "project_instructions" ? (
+          <ProposalCard key={p.id} id={p.id} />
+        ) : p.target === "habit" ? (
           <div className="memory-proposal" key={p.id}>
+            <TriedFixes proposal={p} />
             <p className="memory-proposal-head">I keep relearning {p.slug ?? "this one"}. {p.rationale}</p>
             <p className="memory-desc">{habitLine(p.proposed_text) ?? ""}</p>
             {proposalError && <p className="memory-error">{proposalError}</p>}
@@ -149,6 +170,7 @@ function LessonsTab() {
           </div>
         ) : (
           <div className="memory-proposal" key={p.id}>
+            <TriedFixes proposal={p} />
             <p className="memory-proposal-head">
               {p.target === "engine-memory" ? `${p.rationale} Keep this?` : `I'd like to learn this: ${p.rationale}`}
             </p>
@@ -213,6 +235,22 @@ function LessonsTab() {
         </div>
       ))}
 
+      {improve && improve.rules.length > 0 && (
+        <section className="memory-recent" aria-label="How I improve">
+          <h3 className="memory-section-title">How I improve</h3>
+          <ul>
+            {improve.rules.map((r) => (
+              <li key={r.key}>
+                {r.text}{" "}
+                <button className="btn-text danger" onClick={() => void dropRule(r.key)} aria-label={`Delete: ${r.text}`}>
+                  Delete
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <LetGo collection="lessons" version={version} onChanged={() => void refreshSelf()} />
     </div>
   );
@@ -236,7 +274,12 @@ function HealthTab() {
   useEffect(() => {
     api.getLearningReport().then(setLearning).catch(() => setLearning(null));
   }, []);
-  const lines = learningLines(learning);
+  const [heldRate, setHeldRate] = useState<number | null>(null);
+  useEffect(() => {
+    if (!api.inTauri()) return;
+    api.improveSummary().then((x) => setHeldRate(x.hold_rate)).catch(() => setHeldRate(null));
+  }, []);
+  const lines = learningLines(learning, heldRate === null ? null : `${Math.round(heldRate * 100)}%`);
 
   const latest = conversations[0];
 

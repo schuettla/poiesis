@@ -315,8 +315,13 @@ CREATE TABLE IF NOT EXISTS change_proposals (
   proposed_text TEXT NOT NULL,            -- full replacement/new text for the target
   rationale     TEXT NOT NULL,            -- why it is being proposed; shown to the user, never stored on the entry
   description   TEXT,                     -- the entry's own one-line summary, kept if applied (CRT-2)
-  status        TEXT NOT NULL DEFAULT 'pending', -- pending|applied|dismissed
-  created_at    INTEGER NOT NULL
+  status        TEXT NOT NULL DEFAULT 'pending', -- pending|applied|dismissed|dropped|kept_base
+  created_at    INTEGER NOT NULL,
+  problem_cue   TEXT,                     -- IMP-2: the problem this fix is for, in words
+  form          TEXT,                     -- IMP-2: check|reminder|instruction|earlier
+  group_id      TEXT,                     -- IMP-2: candidates for one problem share it
+  rehearsal_json TEXT,                    -- IMP-3: what the replays showed
+  live_outcome  TEXT                      -- IMP-5: held|failed, filled from credit later
 );
 
 -- Poiesis: per-model tool reliability (GRM-4 / HEAL-2). Content-free.

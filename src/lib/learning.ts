@@ -12,7 +12,7 @@ export function compactChars(n: number): string {
 const withLast = (now: string, last: string | null) => (last === null ? now : `${now} (last month ${last})`);
 
 /** The lines to show, or `null` while there is under two weeks of history. */
-export function learningLines(report: LearningReport | null): string[] | null {
+export function learningLines(report: LearningReport | null, held?: string | null): string[] | null {
   if (!report || !report.enough_history) return null;
   const { current, previous } = report;
   return [
@@ -22,8 +22,8 @@ export function learningLines(report: LearningReport | null): string[] | null {
       `${compactChars(current.always_on_chars)} characters`,
       previous ? compactChars(previous.always_on_chars) : null
     )}`,
-    // Nothing measures a fix holding up until the improvement loop exists.
-    "Fixes I made that held up: not yet",
+    // Only fixes with a later answer count (`IMP-5`); until one has, it says so.
+    `Fixes I made that held up: ${held ?? "not yet"}`,
   ];
 }
 
@@ -53,5 +53,50 @@ export function habitLine(proposedText: string): string | null {
     return firesLine({ on: v.on, check: typeof v.check === "string" ? v.check : null });
   } catch {
     return null;
+  }
+}
+
+/** What a replay result is called on the card. Mirrors `form_label` in `improve.rs`. */
+export function formLabel(form: string | null | undefined): string {
+  switch (form) {
+    case "check":
+      return "a check on the tool";
+    case "reminder":
+      return "a written reminder";
+    case "instruction":
+      return "a line in the project's instructions";
+    case "earlier":
+      return "what worked before";
+    case "merged":
+      return "two of these together";
+    default:
+      return "the setup as it is";
+  }
+}
+
+export interface Replays {
+  right: number;
+  tries: number;
+  baseRight: number;
+  conversations: string[];
+  rehearsed: boolean;
+}
+
+/** What the replays of one fix showed, from its `rehearsal_json`. */
+export function replaysOf(json: string | null | undefined): Replays {
+  const none: Replays = { right: 0, tries: 0, baseRight: 0, conversations: [], rehearsed: false };
+  if (!json) return none;
+  try {
+    const v = JSON.parse(json) as Record<string, unknown>;
+    const num = (x: unknown) => (typeof x === "number" ? x : 0);
+    return {
+      right: num(v.right),
+      tries: num(v.tries),
+      baseRight: num(v.base_right),
+      conversations: Array.isArray(v.conversations) ? v.conversations.filter((c): c is string => typeof c === "string") : [],
+      rehearsed: v.rehearsed === true,
+    };
+  } catch {
+    return none;
   }
 }

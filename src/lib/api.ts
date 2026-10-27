@@ -1328,7 +1328,43 @@ export interface ChangeProposal {
   description: string | null;
   status: string;
   created_at: number;
+  /** `IMP-2`: set on an improvement. The problem in words, the form of the fix, the
+   * group of rival fixes, what the replays showed (JSON) and how it held up later. */
+  problem_cue?: string | null;
+  form?: string | null;
+  group_id?: string | null;
+  rehearsal_json?: string | null;
+  live_outcome?: string | null;
 }
+
+/** `IMP-5`: a rule of thumb about which kind of fix holds up. */
+export interface ImproveRule {
+  key: string;
+  text: string;
+  count: number;
+  of: number;
+}
+
+export interface ImproveArea {
+  area: string;
+  agreed: number;
+  total: number;
+  streak: number;
+  trusted: boolean;
+}
+
+export interface ImproveSummary {
+  rules: ImproveRule[];
+  areas: ImproveArea[];
+  hold_rate: number | null;
+  agreement_rate: number | null;
+  tried: number;
+}
+
+export const improvementGroup = (groupId: string) =>
+  invoke<ChangeProposal[]>("improvement_group_cmd", { groupId });
+export const improveSummary = () => invoke<ImproveSummary>("improve_summary_cmd");
+export const deleteImproveRule = (key: string) => invoke<void>("delete_improve_rule_cmd", { key });
 
 export interface Consolidation {
   deletes: string[];

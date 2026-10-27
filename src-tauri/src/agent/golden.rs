@@ -585,10 +585,10 @@ where
 // stored.
 
 /// How many times each arm is asked.
-const REHEARSAL_TRIES: usize = 2;
+pub(crate) const REHEARSAL_TRIES: usize = 2;
 /// The sampling temperatures of the tries. The first matches the golden set; a
 /// second, warmer one stops two identical answers passing for agreement.
-const REHEARSAL_TEMPS: [f32; REHEARSAL_TRIES] = [0.2, 0.6];
+pub(crate) const REHEARSAL_TEMPS: [f32; REHEARSAL_TRIES] = [0.2, 0.6];
 
 /// The moment of a failed call, rebuilt from the session log.
 #[derive(Debug, Clone)]
