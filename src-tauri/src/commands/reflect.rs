@@ -96,8 +96,40 @@ pub struct Reflection {
 }
 
 /// Run one self-reflection pass over a finished conversation.
+///
+/// `FIX-1`: the pass announces itself on the app bus (`poiesis-reflecting`) at
+/// start and end, whoever started it. The launch catch-up, the daily job, the
+/// Rail menu, the Health tab and `/reflect` all land here, so this is the one
+/// place that can make the mark and the Rail row show the work.
 #[tauri::command]
 pub async fn reflect_conversation_cmd(
+    mgr: State<'_, RuntimeManager>,
+    db: State<'_, Db>,
+    mem: State<'_, MemoryStore>,
+    app: tauri::AppHandle,
+    conversation_id: String,
+    target: Option<ChatTarget>,
+) -> Result<Reflection, PoiesisError> {
+    let _ = app.emit(
+        "poiesis-reflecting",
+        reflecting_event(&conversation_id, true, 0),
+    );
+    let result = reflect_pass(mgr, db, mem, app.clone(), conversation_id.clone(), target).await;
+    let learned = result.as_ref().map(|r| r.saved.len()).unwrap_or(0);
+    let _ = app.emit(
+        "poiesis-reflecting",
+        reflecting_event(&conversation_id, false, learned),
+    );
+    result
+}
+
+/// The payload of `poiesis-reflecting`. `learned` is only meaningful when `on`
+/// is false: it is the number of lessons actually written, not proposed.
+fn reflecting_event(conversation_id: &str, on: bool, learned: usize) -> serde_json::Value {
+    serde_json::json!({ "conversation_id": conversation_id, "on": on, "learned": learned })
+}
+
+async fn reflect_pass(
     mgr: State<'_, RuntimeManager>,
     db: State<'_, Db>,
     mem: State<'_, MemoryStore>,
@@ -429,7 +461,7 @@ pub async fn reflect_conversation_cmd(
 /// Below this a conversation is too slight to have taught anything. Mirrors
 /// `REFLECT_MIN_MESSAGES` in `src/lib/store.ts` — the frontend applies it to the
 /// conversation it is leaving, this applies it to the ones it never got to.
-const CATCH_UP_MIN_MESSAGES: i64 = 8;
+pub(crate) const CATCH_UP_MIN_MESSAGES: i64 = 8;
 
 /// How many stranded conversations one catch-up pass will digest. Reflection is
 /// two model calls per lesson, so a backlog of twenty must not turn app launch
@@ -842,5 +874,15 @@ mod tests {
         // No signal at all: read as no issue raised, not as an error.
         let silent = parse_critic("Sure! Here is my review of the lesson.");
         assert!(silent.ok);
+    }
+
+    #[test]
+    fn the_reflecting_event_names_the_chat_and_what_it_learned() {
+        let start = reflecting_event("c1", true, 0);
+        assert_eq!(start["conversation_id"], "c1");
+        assert_eq!(start["on"], true);
+        let end = reflecting_event("c1", false, 2);
+        assert_eq!(end["on"], false);
+        assert_eq!(end["learned"], 2);
     }
 }

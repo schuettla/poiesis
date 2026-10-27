@@ -264,6 +264,7 @@ pub fn run() {
             commands::reflect::list_lessons_cmd,
             commands::reflect::forget_lesson_cmd,
             commands::organism::get_vitality_cmd,
+            commands::organism::get_learning_report_cmd,
             commands::organism::get_tool_health_cmd,
             commands::organism::restore_quarantined_cmd,
             commands::organism::delete_quarantined_cmd,

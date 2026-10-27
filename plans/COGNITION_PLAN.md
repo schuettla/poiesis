@@ -1,6 +1,65 @@
 # Cognition plan: grow the memory and self-learning Poiesis already has
 
-Status: plan, not built. v1 written 2026-10-27; **v2 rewritten 2026-10-27**.
+Status: in progress. v1 written 2026-10-27; **v2 rewritten 2026-10-27**.
+
+## Implementation status
+
+Work goes to `master` in one commit after the last phase and a review. No
+commit per phase.
+
+| Phase | State | Date |
+|---|---|---|
+| 0 - Fix what exists, and measure | done (see notes) | 2026-10-27 |
+| 1 - The conversation becomes the episode | not started | |
+| 2 - Recall you can see | not started | |
+| 3 - Beliefs with evidence | not started | |
+| 4 - The daily tidy-up | not started | |
+| 5 - Lessons that fire, and rehearsal | not started | |
+| 6 - The self-improvement loop | not started | |
+| 7 - Intentions | not started | |
+| 8 - Self-model | not started | |
+| 9 - Project setup | not started | |
+
+### Phase 0 notes
+
+- **FIX-1.** `reflect_conversation_cmd` is now a thin wrapper that emits
+  `poiesis-reflecting {conversation_id, on, learned}` before and after the old
+  body (`reflect_pass`). `store.ts` `applyReflecting` is the one place that moves
+  `reflectingIds`, `digestedIds`, `presence` and `reflectedAt`; the frontend
+  `reflectConversation` no longer sets them. A reflection that starts while a
+  turn streams keeps the mark on `active`. Tests: `store.reflecting.test.ts`,
+  `the_reflecting_event_names_the_chat_and_what_it_learned`.
+- **FIX-2.** The daily job reads `unreflected_conversations(CATCH_UP_MIN_MESSAGES)`
+  (made `pub(crate)`), so a one-liner is no longer stamped.
+- **FIX-3.** `compose_digest` takes a `DigestWhen`. Local hour 22 to 5 says
+  "While you were away", any other hour says "Earlier today". Uses the `chrono`
+  crate (clock feature only, already in the lock file). Phase 4 makes the job
+  idle-only, after which the wording can always be "While you were away".
+- **FIX-4.** `narrative` in `Self.tsx` is exported and fixed ("and I can follow N
+  skills").
+- **MEV-1.** `commands/organism.rs`: `learning_numbers` (windowed) and
+  `learning_report` (monthly snapshots in setting `learning.snapshots`, at most
+  6, one per 30 days). New `get_learning_report_cmd`. Repeat mistakes: a
+  `tool_fixes` row whose tool and error class (text before the first `:`)
+  appeared in an earlier conversation, and a lesson mentioning the tool was
+  written on an earlier day. Told twice: the second and later user `/forget` of
+  one subject, or the second and later declined suggestion of one command.
+  Always-on size: `recall_for(None)` index length.
+  **Deviation from the plan:** two of the five numbers cannot be computed yet.
+  Recall precision needs the credit columns (CRD-2) and stale rate needs the
+  Outdated click (CUE-UI-1). Both are fields in `LearningNumbers` that stay
+  `None` until then, with a test that says so. `tool_fixes` rows are pruned
+  after 30 days, which is why last month's values come from the snapshot and not
+  from the table.
+- **MEV-UI-1.** `HealthTab` shows "Whether I'm learning" (`lib/learning.ts`).
+  "No data yet" until the first snapshot is 14 days old. The fourth line says
+  "not yet" until Phase 6.
+- **Checks.** `vitest`: all pass except `ThoughtStrip.test.tsx` (fails on
+  untouched master). `tsc`: one error in `AgentRun.tsx` (`messageId`), also on
+  untouched master. `cargo test --lib`: 7 stable failures
+  (`engines::acp`, `engines::approve`, `engines::codex`, `agent::checkup`) and
+  2 to 3 flaky `db::tests::*fork*` tests (millisecond timestamp ties), all also
+  on untouched master; every new test passes.
 
 **What v2 changes.** v1 described a second memory system beside the one that
 exists: a new `episodes` table, a new `memory_uses` table, a new

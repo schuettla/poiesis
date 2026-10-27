@@ -4150,6 +4150,7 @@ dependencies = [
  "base64 0.22.1",
  "bzip2 0.5.2",
  "chromiumoxide",
+ "chrono",
  "futures-util",
  "image",
  "imap",

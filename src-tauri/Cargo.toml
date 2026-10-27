@@ -42,6 +42,9 @@ sysinfo = "0.32"
 # `bundled` compiles SQLite in (FTS5 enabled), so there is no system dependency.
 rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
+# Local time of day, for wording the daily digest (`FIX-3`). Already in the
+# lock file through the GUI stack; only the clock is enabled here.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # Multimodal input (Phase 5): text extraction from text-based PDFs (CHT-8) and
 # base64 for inlining images into vision requests (CHT-5).

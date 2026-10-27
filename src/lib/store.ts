@@ -2794,11 +2794,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   digestedIds: [],
   reflectConversation: async (conversationId) => {
     if (!api.inTauri()) return { learned: 0, proposed: 0 };
-    // Mark it before the call so the rail row starts digesting immediately.
-    set((s) => ({
-      reflectingIds: [...s.reflectingIds, conversationId],
-      presence: "reflecting",
-    }));
+    // `FIX-1`: the backend announces every reflection, whoever started it
+    // (`poiesis-reflecting`), and `applyReflecting` keeps the mark, the Rail
+    // row and the digest marker. This only asks for the work and reports back.
     // Reflection is a real turn against a real model — route it the same way a
     // chat turn is routed, so a cloud-only setup can still learn.
     const model = get().models.find((m) => m.id === get().selectedModelId);
@@ -2812,26 +2810,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch {
       /* a failed reflection teaches nothing and says nothing */
     }
-    set((s) => {
-      const stillReflecting = s.reflectingIds.filter((id) => id !== conversationId);
-      return {
-        reflectingIds: stillReflecting,
-        // Only step down to idle if nothing else is going on: a reflection
-        // finishing must not stop the mark breathing mid-generation.
-        presence: stillReflecting.length
-          ? s.presence
-          : s.busy
-            ? "active"
-            : "idle",
-        // Only a lesson actually written is something learned. A proposal is
-        // still a question, and the rail must not claim otherwise.
-        digestedIds: learned > 0 ? [...s.digestedIds, conversationId] : s.digestedIds,
-        // The conversation has had its turn either way — don't re-reflect it.
-        conversations: s.conversations.map((c) =>
-          c.id === conversationId ? { ...c, reflectedAt: Date.now() } : c
-        ),
-      };
-    });
     if (learned > 0 || proposed > 0) {
       get().refreshMemoryContext();
       get().refreshSelf();
@@ -6068,6 +6046,31 @@ function afterListening(s: AppState): Presence {
   return s.busy ? "active" : s.reflectingIds.length ? "reflecting" : "idle";
 }
 
+/** `FIX-1`: one reflection started or ended, anywhere in the app. The single
+ * place that moves `reflectingIds`, `digestedIds` and the mark for it. */
+export function applyReflecting(s: AppState, e: api.ReflectingEvent): Partial<AppState> {
+  const id = e.conversation_id;
+  if (e.on) {
+    return {
+      reflectingIds: s.reflectingIds.includes(id) ? s.reflectingIds : [...s.reflectingIds, id],
+      // A reflection starting must not stop the mark breathing mid-generation.
+      presence: s.busy ? "active" : s.presence === "tending" ? "tending" : "reflecting",
+    };
+  }
+  const stillReflecting = s.reflectingIds.filter((x) => x !== id);
+  return {
+    reflectingIds: stillReflecting,
+    // Only step down to idle if nothing else is going on: a reflection
+    // finishing must not stop the mark breathing mid-generation.
+    presence: stillReflecting.length ? s.presence : s.busy ? "active" : s.presence === "tending" ? "tending" : "idle",
+    // Only a lesson actually written is something learned. A proposal is
+    // still a question, and the rail must not claim otherwise.
+    digestedIds: e.learned > 0 && !s.digestedIds.includes(id) ? [...s.digestedIds, id] : s.digestedIds,
+    // The conversation has had its turn either way: don't re-reflect it.
+    conversations: s.conversations.map((c) => (c.id === id ? { ...c, reflectedAt: Date.now() } : c)),
+  };
+}
+
 /** `CPX-2`: tending to myself for a moment, then back to whatever was
  * underneath. Replaces `active` while it lasts and does not layer over it. */
 function tendBriefly(set: StoreSet) {
@@ -7190,6 +7193,10 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
   });
   api.onAppEvent<api.JobFinishedEvent>("poiesis-job-finished", () => {
     get().refreshScheduler();
+  });
+  // `FIX-1`: every reflection, including the launch catch-up and the daily job.
+  api.onAppEvent<api.ReflectingEvent>("poiesis-reflecting", (e) => {
+    set((s) => applyReflecting(s, e));
   });
   // TTL-2: short-lived facts let go, at startup or overnight.
   api.onAppEvent<api.ExpirySweptEvent>("poiesis-expiry-swept", (e) => {

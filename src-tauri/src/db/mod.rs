@@ -409,6 +409,15 @@ pub struct ToolFix {
     pub fixed_args: String,
 }
 
+/// One fail→fix row as the learning metrics read it (`MEV-1`).
+#[derive(Debug, Clone)]
+pub struct ToolFixLogRow {
+    pub conversation_id: String,
+    pub tool_name: String,
+    pub error: String,
+    pub created_at: i64,
+}
+
 /// One activation of a skill and how the conversation went afterwards
 /// (`OUT-1`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3610,6 +3619,53 @@ impl Db {
                     failed_args: r.get(1)?,
                     error: r.get(2)?,
                     fixed_args: r.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Every fail→fix pair on record, oldest first, content-free except for
+    /// the tool and its error text (`MEV-1`: the repeat-mistake rate).
+    pub fn tool_fix_log(&self) -> Result<Vec<ToolFixLogRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT conversation_id, tool_name, error, created_at FROM tool_fixes
+             ORDER BY created_at ASC, rowid ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(ToolFixLogRow {
+                    conversation_id: r.get(0)?,
+                    tool_name: r.get(1)?,
+                    error: r.get(2)?,
+                    created_at: r.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Session-log rows of one kind written in `[from, to)`, oldest first.
+    pub fn session_events_of_kind_between(
+        &self,
+        kind: &str,
+        from: i64,
+        to: i64,
+    ) -> Result<Vec<SessionEvent>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT seq, kind, payload_json, created_at FROM session_events
+             WHERE kind = ?1 AND created_at >= ?2 AND created_at < ?3
+             ORDER BY created_at ASC, seq ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![kind, from, to], |r| {
+                Ok(SessionEvent {
+                    seq: r.get(0)?,
+                    kind: r.get(1)?,
+                    payload_json: r.get(2)?,
+                    created_at: r.get(3)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

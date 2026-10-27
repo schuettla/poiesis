@@ -21,7 +21,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::agent::decide;
 use crate::agent::run::{run_agent, AgentEventSink};
 use crate::cloud::ChatEndpoint;
-use crate::commands::reflect::reflect_conversation_cmd;
+use crate::commands::reflect::{reflect_conversation_cmd, CATCH_UP_MIN_MESSAGES};
 use crate::db::Db;
 use crate::memory::MemoryStore;
 use crate::permissions::PermissionManager;
@@ -317,19 +317,20 @@ async fn run_nightly_reflection_digest(app: &AppHandle, cancel: CancelFlag) -> S
         }
     }
 
+    // `FIX-2`: the same floor as the launch catch-up and leaving a chat. A
+    // one-liner has nothing to teach and must not be stamped as reflected.
     let due: Vec<String> = app
         .state::<Db>()
-        .list_conversations()
+        .unreflected_conversations(CATCH_UP_MIN_MESSAGES)
         .unwrap_or_default()
         .into_iter()
-        .filter(|c| c.reflected_at.is_none())
         .take(NIGHTLY_CONVERSATION_CAP)
-        .map(|c| c.id)
         .collect();
+    let when = DigestWhen::now();
 
     if due.is_empty() {
-        let text = "Last night I looked back over the day but didn't find anything new to reflect on.";
-        save_digest(&app.state::<Db>(), text);
+        let text = compose_digest(0, 0, 0, 0, when);
+        save_digest(&app.state::<Db>(), &text);
         return "0 conversations".to_string();
     }
 
@@ -360,7 +361,7 @@ async fn run_nightly_reflection_digest(app: &AppHandle, cancel: CancelFlag) -> S
 
     let n = read;
     let plural = if n == 1 { "" } else { "s" };
-    let digest = compose_digest(read, due.len(), learned, proposed);
+    let digest = compose_digest(read, due.len(), learned, proposed, when);
     let db = app.state::<Db>();
     save_digest(&db, &digest);
     let _ = db.log_activity(
@@ -376,20 +377,56 @@ async fn run_nightly_reflection_digest(app: &AppHandle, cancel: CancelFlag) -> S
 /// can be tested without a model behind it. `read < total` means Stop ended the
 /// pass early: saying "I read back over the day" then would claim work that
 /// didn't happen, which is the one thing a digest must never do.
-fn compose_digest(read: usize, total: usize, learned: usize, proposed: usize) -> String {
+/// When the digest was written, as far as its first words go (`FIX-3`). Saying
+/// "last night" about a pass that ran at 3 pm after launch is a small lie the
+/// user can see on the clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DigestWhen {
+    /// Overnight, or early morning: the user was not at the keyboard.
+    Away,
+    /// Any other hour.
+    Today,
+}
+
+impl DigestWhen {
+    fn from_hour(hour: u32) -> Self {
+        if hour >= 22 || hour < 6 {
+            DigestWhen::Away
+        } else {
+            DigestWhen::Today
+        }
+    }
+
+    fn now() -> Self {
+        use chrono::Timelike;
+        Self::from_hour(chrono::Local::now().hour())
+    }
+
+    /// The opening words of a sentence.
+    fn lead(self) -> &'static str {
+        match self {
+            DigestWhen::Away => "While you were away",
+            DigestWhen::Today => "Earlier today",
+        }
+    }
+}
+
+fn compose_digest(read: usize, total: usize, learned: usize, proposed: usize, when: DigestWhen) -> String {
     if read == 0 {
         return if total == 0 {
-            "Last night I looked back over the day but didn't find anything new to reflect on."
-                .to_string()
+            format!(
+                "{} I looked back over the day but didn't find anything new to reflect on.",
+                when.lead()
+            )
         } else {
-            "You stopped me last night before I'd read anything back.".to_string()
+            "You stopped me before I'd read anything back.".to_string()
         };
     }
     let plural = if read == 1 { "" } else { "s" };
     let lead = if read < total {
-        format!("Last night I read back over {read} conversation{plural} before you stopped me")
+        format!("{} I read back over {read} conversation{plural} before you stopped me", when.lead())
     } else {
-        format!("Last night I read back over {read} conversation{plural}")
+        format!("{} I read back over {read} conversation{plural}", when.lead())
     };
     let learn_clause = match learned {
         0 => "didn't find anything new to learn".to_string(),
@@ -906,26 +943,42 @@ mod tests {
 
     #[test]
     fn a_digest_never_claims_more_reading_than_happened() {
+        let away = DigestWhen::Away;
         // The whole pass, the ordinary case.
-        let full = compose_digest(3, 3, 1, 0);
-        assert_eq!(full, "Last night I read back over 3 conversations. I learned one thing.");
+        let full = compose_digest(3, 3, 1, 0, away);
+        assert_eq!(full, "While you were away I read back over 3 conversations. I learned one thing.");
         assert!(!full.contains("stopped"));
 
         // Stopped partway: the count is what was actually read, and it says so
         // rather than implying the night's work finished.
-        let partial = compose_digest(2, 8, 0, 2);
-        assert!(partial.starts_with("Last night I read back over 2 conversations before you stopped me"));
+        let partial = compose_digest(2, 8, 0, 2, away);
+        assert!(partial.starts_with("While you were away I read back over 2 conversations before you stopped me"));
         assert!(partial.contains("there are 2 changes I'd like to make"));
 
-        // Stopped before anything was read — "read back over 0 conversations"
+        // Stopped before anything was read: "read back over 0 conversations"
         // would be a sentence about nothing.
         assert_eq!(
-            compose_digest(0, 8, 0, 0),
-            "You stopped me last night before I'd read anything back."
+            compose_digest(0, 8, 0, 0, away),
+            "You stopped me before I'd read anything back."
         );
 
         // Nothing was due in the first place: not the same event as being stopped.
-        assert!(compose_digest(0, 0, 0, 0).contains("didn't find anything new to reflect on"));
+        assert!(compose_digest(0, 0, 0, 0, away).contains("didn't find anything new to reflect on"));
+    }
+
+    #[test]
+    fn a_digest_is_worded_by_the_hour_it_ran() {
+        // `FIX-3`: a pass at 3 pm after launch is not "last night".
+        assert_eq!(DigestWhen::from_hour(3), DigestWhen::Away);
+        assert_eq!(DigestWhen::from_hour(23), DigestWhen::Away);
+        assert_eq!(DigestWhen::from_hour(15), DigestWhen::Today);
+        let day = compose_digest(1, 1, 0, 0, DigestWhen::Today);
+        assert!(day.starts_with("Earlier today I read back over 1 conversation"));
+        let night = compose_digest(1, 1, 0, 0, DigestWhen::Away);
+        assert!(night.starts_with("While you were away I read back over 1 conversation"));
+        for text in [&day, &night, &compose_digest(0, 0, 0, 0, DigestWhen::Today)] {
+            assert!(!text.to_lowercase().contains("last night"));
+        }
     }
 
     #[test]
@@ -933,10 +986,10 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         assert!(load_digest(&db).is_none());
 
-        save_digest(&db, "Last night I read back over 2 conversations. I learned one thing.");
+        save_digest(&db, "While you were away I read back over 2 conversations. I learned one thing.");
         let digest = load_digest(&db).unwrap();
         assert!(digest.unread);
-        assert!(digest.text.starts_with("Last night"));
+        assert!(digest.text.starts_with("While you were away"));
 
         mark_digest_read(&db).unwrap();
         assert!(!load_digest(&db).unwrap().unread);

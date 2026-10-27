@@ -7,7 +7,7 @@ const DAY = 86400_000;
 
 /** The first-person narrative above the tabs (PRES-3). Plain sentences, not
  * statistics: the organism describing itself. */
-function narrative(
+export function narrative(
   days: number,
   facts: number,
   lessons: number,
@@ -19,8 +19,8 @@ function narrative(
   const span = days < 1 ? "less than a day" : `${days} day${days === 1 ? "" : "s"}`;
   return (
     `I've been growing for ${span}. I know ${facts} thing${facts === 1 ? "" : "s"} about you, ` +
-    `I've learned ${lessons} lesson${lessons === 1 ? "" : "s"} from my own mistakes, and I keep ` +
-    `I can follow ${skills} skill${skills === 1 ? "" : "s"}.`
+    `I've learned ${lessons} lesson${lessons === 1 ? "" : "s"} from my own mistakes, and I can ` +
+    `follow ${skills} skill${skills === 1 ? "" : "s"}.`
   );
 }
 

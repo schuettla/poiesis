@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import * as api from "../../lib/api";
 import { AUTONOMY_CLASSES, useAppStore } from "../../lib/store";
+import { learningLines } from "../../lib/learning";
 import MemoryPanel from "../Memory/MemoryPanel";
 import "../../routes/Models.css";
 import "../Context/Context.css";
@@ -186,6 +187,11 @@ function HealthTab() {
   const checkingGolden = useAppStore((s) => s.checkingGolden);
   const checkGoldenNow = useAppStore((s) => s.checkGoldenNow);
   const [note, setNote] = useState("");
+  const [learning, setLearning] = useState<api.LearningReport | null>(null);
+  useEffect(() => {
+    api.getLearningReport().then(setLearning).catch(() => setLearning(null));
+  }, []);
+  const lines = learningLines(learning);
 
   const latest = conversations[0];
 
@@ -237,6 +243,19 @@ function HealthTab() {
           </label>
         </div>
         {note && <p className="self-line self-note">{note}</p>}
+      </div>
+
+      <div className="self-block">
+        <p className="self-subhead">Whether I'm learning</p>
+        {lines ? (
+          lines.map((l) => (
+            <p key={l} className="self-line">
+              {l}
+            </p>
+          ))
+        ) : (
+          <p className="empty-hint">No data yet. I need about two weeks to tell.</p>
+        )}
       </div>
 
       <div className="self-block">

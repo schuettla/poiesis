@@ -1466,6 +1466,14 @@ export interface HealedEvent {
   ok: boolean;
 }
 
+/** `FIX-1`: one reflection started (`on`) or ended. `learned` counts lessons
+ * written, not proposed, and is only set when `on` is false. */
+export interface ReflectingEvent {
+  conversation_id: string;
+  on: boolean;
+  learned: number;
+}
+
 /** `TTL-2`: short-lived facts let go, at startup or overnight. */
 export interface ExpirySweptEvent {
   count: number;
@@ -1544,6 +1552,25 @@ export const forgetLesson = (name: string) => invoke<string>("forget_lesson_cmd"
 
 export const getVitality = (modelName?: string) =>
   invoke<Vitality>("get_vitality_cmd", { modelName });
+
+/** `MEV-1`: the numbers that say whether I am learning. */
+export interface LearningNumbers {
+  repeat_mistakes: number;
+  told_twice: number;
+  always_on_chars: number;
+  /** `null` until credit exists. */
+  recall_precision: number | null;
+  /** `null` until the Outdated click exists. */
+  stale_per_100: number | null;
+}
+
+export interface LearningReport {
+  current: LearningNumbers;
+  previous: LearningNumbers | null;
+  enough_history: boolean;
+}
+
+export const getLearningReport = () => invoke<LearningReport>("get_learning_report_cmd");
 
 /** Omit `modelName` for a local model — the backend fills in the running one. */
 export const getToolHealth = (modelName?: string) =>
