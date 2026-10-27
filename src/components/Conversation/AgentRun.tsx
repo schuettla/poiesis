@@ -3,10 +3,13 @@ import type { Message } from "../../lib/types";
 import type { StopReason } from "../../lib/api";
 import { isPersistedId, useAppStore } from "../../lib/store";
 import Timeline from "./Timeline";
-import RunText from "./RunText";
+import CheckedAnswer from "./VerifyPanel";
+import { experimentOn } from "../../lib/experiments";
+import { canVerify } from "../../lib/verify";
 import ChatMedia, { ChatMediaPending } from "./ChatMedia";
 import FleetCard from "./FleetCard";
 import PlanCard from "./PlanCard";
+import { ThoughtReceipt, ThoughtStrip } from "./ThoughtStrip";
 import BlockRenderer from "../Blocks/BlockRenderer";
 import ProposalCard from "./ProposalCard";
 import QuestionCard from "./QuestionCard";
@@ -302,6 +305,10 @@ function TurnActions({ message, last }: { message: Message; last: boolean }) {
   const resumeLastRun = useAppStore((s) => s.resumeLastRun);
   const busy = useAppStore((s) => s.busy);
   const requestRewind = useAppStore((s) => s.requestRewind);
+  // `USE-UI-7`, `SEE-5`: only while `fast-slow` is on, and not while this answer is being checked.
+  const verifyOn = useAppStore((s) => experimentOn(s, "fast-slow"));
+  const verifyMessage = useAppStore((s) => s.verifyMessage);
+  const checking = useAppStore((s) => s.verifications[message.id]?.running === true);
   // `RWD-UI-1`: the message you wrote that this answer replied to. A primitive,
   // so the selector stays stable.
   const askedBy = useAppStore((s) => {
@@ -336,6 +343,15 @@ function TurnActions({ message, last }: { message: Message; last: boolean }) {
       {canAct && (
         <button className="why-link" onClick={() => void forkFromMessage(message.id)}>
           Try again from here
+        </button>
+      )}
+      {canAct && verifyOn && !checking && canVerify(message.text) && (
+        <button
+          className="why-link"
+          onClick={() => void verifyMessage(message.id)}
+          title="Search the web for this answer's claims (their words leave this computer) and have my slower model review the doubtful ones"
+        >
+          Check more deeply
         </button>
       )}
       {canAct && askedBy && (
@@ -438,7 +454,15 @@ export default function AgentRun({ message, last = false }: { message: Message; 
       )}
       {/* `PLN-UI-1`: above the timeline, because the plan is what the steps
           below it are for. */}
-      {message.plan && <PlanCard plan={message.plan} actionable={last && !message.streaming && !busyNow} />}
+      {message.plan && (
+        <PlanCard
+          plan={message.plan}
+          actionable={last && !message.streaming && !busyNow}
+          messageId={message.streaming ? undefined : message.id}
+        />
+      )}
+      {/* `SEE-2`: what the quick decisions understood, before the first word. */}
+      <ThoughtStrip message={message} />
       {message.steps && <Timeline steps={message.steps} live={!!message.streaming} />}
       {message.subRunIds && message.subRunIds.length > 0 && (
         <FleetCard runIds={message.subRunIds} />
@@ -446,7 +470,7 @@ export default function AgentRun({ message, last = false }: { message: Message; 
       {message.blocks?.map((b) => (
         <BlockRenderer key={b.id} block={b} />
       ))}
-      {message.text && <RunText text={message.text} streaming={message.streaming} />}
+      {message.text && <CheckedAnswer message={message} />}
       {media.map((a) => (
         <ChatMedia
           key={a.id}
@@ -468,6 +492,8 @@ export default function AgentRun({ message, last = false }: { message: Message; 
       {!message.streaming && <StoppedHere message={message} />}
       {saidNothing && <SaidNothing />}
       {noAnswer && <NoAnswer />}
+      {/* `SEE-2`: the same strip once the run is over, as a receipt. */}
+      <ThoughtReceipt message={message} />
       <TurnActions message={message} last={last} />
       {message.artifactIds && message.artifactIds.length > 0 && (
         <ArtifactChips ids={message.artifactIds} />

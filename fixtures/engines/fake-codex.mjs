@@ -285,6 +285,10 @@ function handle(m) {
       return;
     case "initialize":
       return send({ id: m.id, result: { userAgent: "poiesis/9.9.9 (fake)", codexHome: "", platformFamily: "windows", platformOs: "windows" } });
+    case "windowsSandbox/readiness":
+      // A file named `sandbox-not-ready` in the folder plays a computer where
+      // the sandbox was never set up.
+      return send({ id: m.id, result: { status: fs.existsSync(path.join(process.cwd(), "sandbox-not-ready")) ? "notConfigured" : "ready" } });
     case "model/list":
       return send({
         id: m.id,

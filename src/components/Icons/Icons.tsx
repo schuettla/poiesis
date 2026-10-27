@@ -45,6 +45,16 @@ function Glyph({ size = 14, strokeWidth = 1.3, className, children }: GlyphProps
 /** What every icon here accepts. */
 export type IconProps = Omit<GlyphProps, "children">;
 
+/** `SEE-2`: the quick thinking mark on the strip and the receipt. A bolt, drawn
+ * here rather than typed as a glyph, so it looks the same on every system. */
+export function BoltIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M11 2.5 4.5 11h4.2L8 17.5 15.5 8.7h-4.4L11 2.5z" strokeLinejoin="round" />
+    </Glyph>
+  );
+}
+
 export function BookmarkIcon(props: IconProps) {
   return (
     <Glyph {...props}>
@@ -143,6 +153,36 @@ export function CloseIcon(props: IconProps) {
   return (
     <Glyph {...props}>
       <path d="M5 5l10 10M15 5 5 15" strokeLinecap="round" />
+    </Glyph>
+  );
+}
+
+/* The window's caption buttons (TopBar/WindowControls). They were drawn on a
+ * 10px grid so they land on whole pixels at the 10px Windows 11 uses; on this
+ * module's 20-unit grid that is every coordinate doubled, which means they must
+ * be rendered at `size={10}` with `strokeWidth={2}` to stay a 1px hairline. */
+export function MinimizeIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M0 11h20" />
+    </Glyph>
+  );
+}
+
+export function MaximizeIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <rect x="1" y="1" width="18" height="18" rx="2" />
+    </Glyph>
+  );
+}
+
+/** Two windows, the front one drawn whole and the back one showing its corner. */
+export function RestoreIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <rect x="1" y="5" width="14" height="14" rx="2" />
+      <path d="M5 5V3a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2" />
     </Glyph>
   );
 }
@@ -348,6 +388,14 @@ export function SectionIcon({ view, ...props }: IconProps & { view: string }) {
       return (
         <Glyph {...props}>
           <path d="M4 16.5V11M8 16.5V6M12 16.5V9M16 16.5V3.5" strokeLinecap="round" />
+        </Glyph>
+      );
+    case "experiments":
+      // A flask: a neck, a body that widens, and the level of what is in it.
+      return (
+        <Glyph {...props}>
+          <path d="M8 3h4M8.6 3v4.6L4.4 15a1.4 1.4 0 0 0 1.2 2h8.8a1.4 1.4 0 0 0 1.2-2l-4.2-7.4V3" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M6.4 12.2h7.2" strokeLinecap="round" />
         </Glyph>
       );
     case "workingdir":

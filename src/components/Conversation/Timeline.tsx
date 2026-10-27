@@ -108,11 +108,20 @@ function UntrustedChip({
   open: boolean;
   onClick: () => void;
 }) {
-  const maxRisk = Math.max(...sources.map((u) => u.risk));
+  const scanRisk = Math.max(...sources.map((u) => u.risk));
+  // `USE-8`: the quick check found orders the pattern scan did not. It is drawn
+  // like a scan of risk 2: the text was already fenced as data either way.
+  const readsLikeOrders = sources.some((u) => u.readsAsInstructions !== undefined);
+  const maxRisk = readsLikeOrders ? Math.max(scanRisk, 2) : scanRisk;
   const labels = Array.from(new Set(sources.map((u) => u.label))).join(", ");
   const flags = Array.from(new Set(sources.flatMap((u) => u.flags)));
-  const text = maxRisk >= 2 ? "◇ from outside — I ignored its instructions" : "◇ from outside";
-  const ariaLabel = maxRisk >= 2 && flags.length > 0 ? `${text} (${flags.join(", ")})` : text;
+  const text =
+    scanRisk >= 2
+      ? "◇ from outside: I ignored its instructions"
+      : readsLikeOrders
+        ? "◇ from outside: it reads like orders to me"
+        : "◇ from outside";
+  const ariaLabel = scanRisk >= 2 && flags.length > 0 ? `${text} (${flags.join(", ")})` : text;
 
   return (
     <button
@@ -134,8 +143,15 @@ function UntrustedDisclosure({ sources }: { sources: UntrustedSource[] }) {
     <div className="untrusted-disclosure">
       {sources.map((u, i) => (
         <div key={`${u.label}-${i}`} className="untrusted-source">
-          <span className="untrusted-source-label">{u.label}</span>
-          <pre className="untrusted-source-text">{u.text}</pre>
+          <span
+            className="untrusted-source-label"
+            // `SEE-4`: words on the line, the number on the hover.
+            title={u.readsAsInstructions !== undefined ? `quick check, sure ${u.readsAsInstructions.toFixed(2)}` : undefined}
+          >
+            {u.label}
+            {u.readsAsInstructions !== undefined && " · reads like orders to the assistant"}
+          </span>
+          {u.text && <pre className="untrusted-source-text">{u.text}</pre>}
         </div>
       ))}
     </div>

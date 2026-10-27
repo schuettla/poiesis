@@ -158,6 +158,108 @@
   white-space: nowrap;
 }
 
+/* ---- classify (USE-UI-5): the table is the plain table's, with a bar and a sort ---- */
+.cls-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.cls-tools .btn-text {
+  margin-left: auto;
+}
+.cls-error {
+  margin: 0 0 10px;
+  font-size: var(--fs-footnote);
+  color: var(--danger);
+}
+.cls-sort {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.cls-sort:hover {
+  color: var(--ink);
+}
+.cls-item {
+  max-width: 320px;
+  padding: 8px 12px 8px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.cls-thumb {
+  width: 28px;
+  height: 28px;
+  margin-right: 8px;
+  border-radius: var(--radius-xs);
+  object-fit: cover;
+  vertical-align: middle;
+}
+.cls-answer {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.cls-answer:hover {
+  text-decoration: underline;
+}
+.cls-you {
+  color: var(--ink-faint);
+}
+.cls-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.cls-bar {
+  display: inline-block;
+  width: 44px;
+  height: 4px;
+  margin-right: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--paper-edge);
+  vertical-align: middle;
+  overflow: hidden;
+}
+.cls-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--ok);
+}
+.cls-low .cls-bar > i {
+  background: var(--ink-faint);
+}
+.cls-num {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+.cls-low .cls-num {
+  color: var(--ink);
+}
+.cls-flag {
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+}
+.cls-note {
+  padding: 8px 12px 8px 0;
+  color: var(--ink-faint);
+}
+
 /* ---- collection ---- */
 .col-filters {
   display: flex;

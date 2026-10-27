@@ -10,6 +10,9 @@ import {
   type MailAccount,
   type MailTestResult,
 } from "../lib/api";
+import { useAppStore } from "../lib/store";
+import KindEditor from "../components/Mail/KindEditor";
+import MailInbox from "../components/Mail/MailInbox";
 import "./Surface.css";
 import "./Settings.css";
 
@@ -68,7 +71,14 @@ const MAIL_PRESETS = {
   },
 } as const;
 
+type MailTab = "accounts" | "inbox";
+
 export default function Mail() {
+  // `USE-UI-4`: the Inbox exists only while Mail triage is on. Off, this page is
+  // the account list alone, as it was.
+  const triageOn = useAppStore((s) => s.experiments?.find((e) => e.id === "mail-triage")?.on === true);
+  const [tab, setTab] = useState<MailTab>("accounts");
+  const shown: MailTab = triageOn ? tab : "accounts";
   const [mailAccounts, setMailAccounts] = useState<MailAccount[]>([]);
   const [mailBusyId, setMailBusyId] = useState<string | null>(null);
   const [mailTestResults, setMailTestResults] = useState<Record<string, MailTestResult>>({});
@@ -175,147 +185,170 @@ export default function Mail() {
           through a Poiesis server.
         </p>
 
-        <section className="setting-block">
-          {mailAccounts.map((a) => {
-            const result = mailTestResults[a.id];
-            return (
-              <div key={a.id} className={`toolset-item ${a.enabled ? "" : "disabled"}`}>
-                <label className="toggle-line toolset-line">
-                  <input
-                    type="checkbox"
-                    checked={a.enabled}
-                    disabled={mailBusyId === a.id}
-                    onChange={() => toggleMailAccount(a)}
-                  />
-                  <span className="toolset-text">
-                    <span className="toolset-label">{a.label}</span>
-                    <span className="toolset-desc">{a.email}</span>
-                    {result && (
-                      <span className={`toolset-reliability ${result.ok ? "" : "error"}`}>
-                        {result.ok
-                          ? `I reached your inbox (${result.message_count ?? 0} messages) and the send server accepted me.`
-                          : `Couldn't connect: ${result.error}`}
-                      </span>
-                    )}
-                  </span>
-                </label>
-                <div className="connect-actions">
-                  <button className="btn-secondary" onClick={() => testAccount(a.id)} disabled={mailBusyId === a.id}>
-                    {mailBusyId === a.id ? "Checking…" : "Test"}
-                  </button>
-                  <button className="btn-text danger" onClick={() => removeMailAccount(a.id)} disabled={mailBusyId === a.id}>
-                    Remove
-                  </button>
-                </div>
-              </div>
-            );
-          })}
+        {triageOn && (
+          <div className="model-tabs" role="tablist" aria-label="Mail">
+            {(["accounts", "inbox"] as const).map((id) => (
+              <button
+                key={id}
+                className={`model-tab ${shown === id ? "on" : ""}`}
+                role="tab"
+                aria-selected={shown === id}
+                onClick={() => setTab(id)}
+              >
+                {id === "accounts" ? "Accounts" : "Inbox"}
+              </button>
+            ))}
+          </div>
+        )}
 
-          {!mailFormOpen ? (
-            <button className="btn-secondary" onClick={() => setMailFormOpen(true)}>
-              Add account
-            </button>
-          ) : (
-            <div className="connect-card">
-              <div className="transport-toggle" role="group" aria-label="Mail provider">
-                {(Object.keys(MAIL_PRESETS) as (keyof typeof MAIL_PRESETS)[]).map((key) => (
-                  <button
-                    key={key}
-                    className={`seg ${mailPreset === key ? "on" : ""}`}
-                    aria-pressed={mailPreset === key}
-                    onClick={() => applyMailPreset(key)}
-                  >
-                    {MAIL_PRESETS[key].label}
-                  </button>
-                ))}
-              </div>
-              <p className="field-hint">{MAIL_PRESETS[mailPreset].hint}</p>
-              {mailPreset === "generic" && (
-                <div className="connect-fields">
-                  <label className="field">
-                    <span className="field-label">IMAP host</span>
-                    <input className="field-input" value={mailImapHost} onChange={(e) => setMailImapHost(e.target.value)} />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">SMTP host</span>
-                    <input className="field-input" value={mailSmtpHost} onChange={(e) => setMailSmtpHost(e.target.value)} />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">IMAP port</span>
-                    <input
-                      className="field-input"
-                      type="number"
-                      value={mailImapPort}
-                      onChange={(e) => setMailImapPort(Number(e.target.value))}
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">SMTP port</span>
-                    <input
-                      className="field-input"
-                      type="number"
-                      value={mailSmtpPort}
-                      onChange={(e) => setMailSmtpPort(Number(e.target.value))}
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">Connection</span>
-                    <select
-                      className="field-input"
-                      value={mailSecurity}
-                      onChange={(e) => setMailSecurity(e.target.value as MailSecurity)}
+        {shown === "inbox" && <MailInbox accounts={mailAccounts} onGoToAccounts={() => setTab("accounts")} />}
+
+        {shown === "accounts" && (
+          <>
+            <section className="setting-block">
+              {mailAccounts.map((a) => {
+                const result = mailTestResults[a.id];
+                return (
+                  <div key={a.id} className={`toolset-item ${a.enabled ? "" : "disabled"}`}>
+                    <label className="toggle-line toolset-line">
+                      <input
+                        type="checkbox"
+                        checked={a.enabled}
+                        disabled={mailBusyId === a.id}
+                        onChange={() => toggleMailAccount(a)}
+                      />
+                      <span className="toolset-text">
+                        <span className="toolset-label">{a.label}</span>
+                        <span className="toolset-desc">{a.email}</span>
+                        {result && (
+                          <span className={`toolset-reliability ${result.ok ? "" : "error"}`}>
+                            {result.ok
+                              ? `I reached your inbox (${result.message_count ?? 0} messages) and the send server accepted me.`
+                              : `Couldn't connect: ${result.error}`}
+                          </span>
+                        )}
+                      </span>
+                    </label>
+                    <div className="connect-actions">
+                      <button className="btn-secondary" onClick={() => testAccount(a.id)} disabled={mailBusyId === a.id}>
+                        {mailBusyId === a.id ? "Checking…" : "Test"}
+                      </button>
+                      <button className="btn-text danger" onClick={() => removeMailAccount(a.id)} disabled={mailBusyId === a.id}>
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {!mailFormOpen ? (
+                <button className="btn-secondary" onClick={() => setMailFormOpen(true)}>
+                  Add account
+                </button>
+              ) : (
+                <div className="connect-card">
+                  <div className="transport-toggle" role="group" aria-label="Mail provider">
+                    {(Object.keys(MAIL_PRESETS) as (keyof typeof MAIL_PRESETS)[]).map((key) => (
+                      <button
+                        key={key}
+                        className={`seg ${mailPreset === key ? "on" : ""}`}
+                        aria-pressed={mailPreset === key}
+                        onClick={() => applyMailPreset(key)}
+                      >
+                        {MAIL_PRESETS[key].label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="field-hint">{MAIL_PRESETS[mailPreset].hint}</p>
+                  {mailPreset === "generic" && (
+                    <div className="connect-fields">
+                      <label className="field">
+                        <span className="field-label">IMAP host</span>
+                        <input className="field-input" value={mailImapHost} onChange={(e) => setMailImapHost(e.target.value)} />
+                      </label>
+                      <label className="field">
+                        <span className="field-label">SMTP host</span>
+                        <input className="field-input" value={mailSmtpHost} onChange={(e) => setMailSmtpHost(e.target.value)} />
+                      </label>
+                      <label className="field">
+                        <span className="field-label">IMAP port</span>
+                        <input
+                          className="field-input"
+                          type="number"
+                          value={mailImapPort}
+                          onChange={(e) => setMailImapPort(Number(e.target.value))}
+                        />
+                      </label>
+                      <label className="field">
+                        <span className="field-label">SMTP port</span>
+                        <input
+                          className="field-input"
+                          type="number"
+                          value={mailSmtpPort}
+                          onChange={(e) => setMailSmtpPort(Number(e.target.value))}
+                        />
+                      </label>
+                      <label className="field">
+                        <span className="field-label">Connection</span>
+                        <select
+                          className="field-input"
+                          value={mailSecurity}
+                          onChange={(e) => setMailSecurity(e.target.value as MailSecurity)}
+                        >
+                          <option value="tls">TLS (usually ports 993 and 465)</option>
+                          <option value="starttls">STARTTLS (usually ports 143 and 587)</option>
+                        </select>
+                      </label>
+                    </div>
+                  )}
+                  <div className="connect-fields">
+                    <label className="field">
+                      <span className="field-label">Label</span>
+                      <input
+                        className="field-input"
+                        placeholder="Personal"
+                        value={mailLabel}
+                        onChange={(e) => setMailLabel(e.target.value)}
+                      />
+                    </label>
+                    <label className="field">
+                      <span className="field-label">Email</span>
+                      <input
+                        className="field-input"
+                        placeholder="you@example.com"
+                        value={mailEmail}
+                        onChange={(e) => setMailEmail(e.target.value)}
+                      />
+                    </label>
+                    <label className="field">
+                      <span className="field-label">App password</span>
+                      <input
+                        className="field-input"
+                        type="password"
+                        value={mailPassword}
+                        onChange={(e) => setMailPassword(e.target.value)}
+                      />
+                    </label>
+                  </div>
+                  {mailError && <p className="hw-note error">{mailError}</p>}
+                  <div className="connect-actions">
+                    <button
+                      className="btn-primary"
+                      onClick={addAccount}
+                      disabled={mailSaving || !mailEmail.trim() || !mailPassword}
                     >
-                      <option value="tls">TLS (usually ports 993 and 465)</option>
-                      <option value="starttls">STARTTLS (usually ports 143 and 587)</option>
-                    </select>
-                  </label>
+                      {mailSaving ? "Adding…" : "Add"}
+                    </button>
+                    <button className="btn-secondary" onClick={() => setMailFormOpen(false)}>
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               )}
-              <div className="connect-fields">
-                <label className="field">
-                  <span className="field-label">Label</span>
-                  <input
-                    className="field-input"
-                    placeholder="Personal"
-                    value={mailLabel}
-                    onChange={(e) => setMailLabel(e.target.value)}
-                  />
-                </label>
-                <label className="field">
-                  <span className="field-label">Email</span>
-                  <input
-                    className="field-input"
-                    placeholder="you@example.com"
-                    value={mailEmail}
-                    onChange={(e) => setMailEmail(e.target.value)}
-                  />
-                </label>
-                <label className="field">
-                  <span className="field-label">App password</span>
-                  <input
-                    className="field-input"
-                    type="password"
-                    value={mailPassword}
-                    onChange={(e) => setMailPassword(e.target.value)}
-                  />
-                </label>
-              </div>
-              {mailError && <p className="hw-note error">{mailError}</p>}
-              <div className="connect-actions">
-                <button
-                  className="btn-primary"
-                  onClick={addAccount}
-                  disabled={mailSaving || !mailEmail.trim() || !mailPassword}
-                >
-                  {mailSaving ? "Adding…" : "Add"}
-                </button>
-                <button className="btn-secondary" onClick={() => setMailFormOpen(false)}>
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
+            </section>
+            {triageOn && <KindEditor />}
+          </>
+        )}
       </div>
     </div>
   );

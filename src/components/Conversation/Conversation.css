@@ -445,6 +445,153 @@
   line-height: 1.55;
   color: var(--ink-muted);
 }
+/* `SEE-2`: what the quick decisions understood, above the first text, and the
+   receipt it becomes at the foot. Both are one muted line of the timeline's own
+   size: they are a reading of the turn, not part of the answer, and the turn
+   never moves by more than a line when they arrive. Opened, the receipt is one
+   hairline group like the claim list under an answer, so the two read alike. */
+.thought-strip,
+.thought-receipt > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-faint);
+}
+.thought-strip {
+  min-height: var(--control-sm);
+  margin: 0 0 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  animation: fade-in var(--dur) var(--ease-out);
+}
+.thought-bolt {
+  flex: none;
+}
+.thought-part {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+.thought-part.speed {
+  font-variant-numeric: tabular-nums;
+}
+.thought-sep {
+  white-space: pre;
+}
+.thought-error {
+  color: var(--ink-muted);
+}
+/* The click beside a part: a quiet text action, colour first and a fill under the
+   pointer, like the turn's other small actions. */
+.thought-click {
+  margin-left: 6px;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  font-weight: 500;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.thought-click:hover:not(:disabled),
+.thought-click:focus-visible {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.thought-click:active:not(:disabled) {
+  background: var(--fill-press);
+}
+.thought-click:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.thought-receipt {
+  margin: 4px 0;
+}
+.thought-receipt > summary {
+  width: fit-content;
+  max-width: 100%;
+  min-height: var(--control-sm);
+  margin-left: -8px;
+  padding: 0 8px;
+  border-radius: var(--radius);
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.thought-receipt > summary::-webkit-details-marker {
+  display: none;
+}
+.thought-receipt > summary:hover,
+.thought-receipt > summary:focus-visible {
+  background: var(--fill-hover);
+  color: var(--ink-muted);
+}
+.thought-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.thought-twisty {
+  display: inline-flex;
+}
+.thought-twisty svg {
+  transition: transform var(--dur) var(--ease-out);
+}
+.thought-receipt[open] .thought-twisty svg {
+  transform: rotate(90deg);
+}
+.thought-rows {
+  margin: 6px 0 0 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  animation: rise-in var(--dur) var(--ease-out);
+}
+.thought-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 6px 12px;
+  line-height: 1.45;
+}
+.thought-row + .thought-row {
+  border-top: 1px solid var(--paper-edge);
+}
+.thought-row.quiet {
+  color: var(--ink-faint);
+}
+.thought-row-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.thought-row-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+.thought-row-actions .thought-click {
+  margin-left: 0;
+}
+.thought-marked {
+  padding: 2px 7px;
+  color: var(--ink-faint);
+}
 /* `HRN-UI-1`: a turn typed into a run that was already working. Same step as
    the "You" label it sits beside; weight and colour carry the hierarchy. */
 .mid-run-mark {
@@ -456,6 +603,31 @@
 }
 .mid-run-mark.pending {
   opacity: 0.7;
+}
+/* `USE-UI-2`: what a quick decision read the message as. Quiet, like the mark
+   beside it: it is a reading, and the words above it are what was said. */
+.steer-tag {
+  margin-left: 8px;
+  padding: 0 6px;
+  font-weight: 400;
+  font-size: var(--fs-timeline);
+  letter-spacing: 0.02em;
+  color: var(--ink-faint);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+}
+/* A sure stop waits for an answer, in the same step as the plan's approval row. */
+.steer-stop {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 6px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+}
+.steer-stop-q {
+  color: var(--ink-muted);
 }
 
 /* ---- inline artifact chips (CHT-6): open straight into the Canvas panel ---- */
@@ -1392,6 +1564,17 @@
   color: var(--ink);
   background: var(--fill-hover);
 }
+/* `USE-13`: a quick decision matched the rule before I started. */
+.fleet-chip-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+  vertical-align: middle;
+}
 .fleet-gear {
   display: inline-flex;
   align-items: center;
@@ -1683,6 +1866,35 @@
 }
 .plan-item.done .plan-text {
   color: var(--ink-faint);
+}
+/* `USE-UI-3`: a tick a quick decision gave from the answer. A ring around the
+   tick, so it reads as a judgement and not as the run's own "done", and it is a
+   button because clicking it says the judgement was wrong. The shape differs from
+   the plain box, which keeps it readable without colour. */
+.plan-mark.ringed {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15em;
+  height: 1.15em;
+  font-size: 0.85em;
+  line-height: 1;
+  color: var(--ink-muted);
+  border: 1px solid var(--ink-faint);
+  border-radius: var(--radius-pill);
+  transform: none;
+}
+button.plan-mark.ringed {
+  appearance: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+button.plan-mark.ringed:hover {
+  color: var(--ink);
+  border-color: var(--ink-muted);
 }
 /* A dropped item stays legible: struck through, not hidden. Losing it would
    turn the plan into a record of whatever happened to succeed. */

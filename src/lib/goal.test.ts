@@ -23,6 +23,7 @@ function harness(checks: (GoalCheck | Error)[], opts: { open?: boolean } = {}) {
   const goals: Record<string, Goal> = { c1: newGoal("make the tests pass", "npm test exits 0") };
   const sent: string[] = [];
   const notes: string[] = [];
+  const outcomes: string[] = [];
   let asked = 0;
   let open = opts.open ?? true;
   const host: GoalHost = {
@@ -40,12 +41,14 @@ function harness(checks: (GoalCheck | Error)[], opts: { open?: boolean } = {}) {
     send: async (_id, text) => {
       sent.push(text);
     },
+    outcome: (_id, event) => outcomes.push(event),
   };
   return {
     host,
     goals,
     sent,
     notes,
+    outcomes,
     asked: () => asked,
     leave: () => {
       open = false;
@@ -131,6 +134,32 @@ describe("the loop", () => {
     // And a sixth run end does nothing: the goal is over.
     await afterRun(h.host, "c1", {});
     expect(h.asked()).toBe(5);
+  });
+
+  /** `CTL-3`: the end states that tell the decision model it was right. */
+  it("tells the decision log when a goal ends stalled or exhausted, and only then", async () => {
+    const out = harness(Array(5).fill(NOT_YET));
+    for (let i = 0; i < 5; i++) await afterRun(out.host, "c1", {});
+    expect(out.outcomes).toEqual(["exhausted"]);
+
+    const stuck = harness(Array(5).fill(NOT_YET));
+    const nothing = { ok: 0, errors: [] };
+    for (let i = 0; i < 3; i++) await afterRun(stuck.host, "c1", { evidence: nothing });
+    expect(stuck.outcomes).toEqual(["stalled"]);
+
+    const met = harness([MET]);
+    await afterRun(met.host, "c1", {});
+    const stopped = harness([MET]);
+    await afterRun(stopped.host, "c1", { stopReason: "aborted" });
+    expect(met.outcomes).toEqual([]);
+    expect(stopped.outcomes).toEqual([]);
+  });
+
+  it("a host with no outcome hook still works", async () => {
+    const h = harness(Array(5).fill(NOT_YET));
+    delete h.host.outcome;
+    for (let i = 0; i < 5; i++) await afterRun(h.host, "c1", {});
+    expect(h.goals.c1.status).toBe("exhausted");
   });
 
   it("a run the user stopped ends the goal without a check", async () => {

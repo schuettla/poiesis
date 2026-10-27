@@ -1,7 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   addEngineRule,
   deleteEngineRule,
+  inTauri,
+  prematchCounts,
   previewEngineRoute,
   reorderEngineRules,
   resetEngineRules,
@@ -11,8 +13,9 @@ import {
   type EngineRoutePreview,
   type EngineRule,
   type EngineUseMode,
+  type PrematchCount,
 } from "../../lib/api";
-import { MODE_LABELS, modeHelp, previewLine, ruleLooksWrong } from "../../lib/engines";
+import { answeredBy, matchCounter, MODE_LABELS, modeHelp, previewLine, ruleLooksWrong } from "../../lib/engines";
 import { useAppStore } from "../../lib/store";
 import ConfirmDialog from "../Confirm/ConfirmDialog";
 import ProposalCard, { parseRuleChange } from "../Conversation/ProposalCard";
@@ -49,6 +52,19 @@ export default function RuleList({ engine: e }: { engine: EngineInfo }) {
   const proposals = useAppStore((s) => s.changeProposals);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  // `USE-UI-10`: how each rule fared when a quick decision matched it early.
+  const [early, setEarly] = useState<Record<string, PrematchCount>>({});
+  useEffect(() => {
+    if (!inTauri()) return;
+    let live = true;
+    Promise.resolve()
+      .then(() => prematchCounts())
+      .then((rows) => live && setEarly(Object.fromEntries(rows.map((r) => [r.rule, r]))))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [e.id]);
 
   // `RTE-6`: changes I have suggested to this agent's rules, waiting for a yes.
   const suggested = useMemo(
@@ -139,6 +155,7 @@ export default function RuleList({ engine: e }: { engine: EngineInfo }) {
                 <RuleItem
                   key={r.id}
                   rule={r}
+                  early={early[`${e.id}:${r.label}`]}
                   first={i === 0}
                   last={i === list.length - 1}
                   onMove={(by) => move(r, by)}
@@ -227,12 +244,14 @@ export default function RuleList({ engine: e }: { engine: EngineInfo }) {
 
 function RuleItem({
   rule: r,
+  early,
   first,
   last,
   onMove,
   run,
 }: {
   rule: EngineRule;
+  early?: PrematchCount;
   first: boolean;
   last: boolean;
   onMove: (by: -1 | 1) => void;
@@ -299,6 +318,7 @@ function RuleItem({
               {ruleLooksWrong(r) && " · maybe reword it"}
             </span>
           )}
+          {matchCounter(early) && <span className="rule-uses">{matchCounter(early)}</span>}
         </div>
         {!editing && (
           <div className="rule-tools">
@@ -454,6 +474,7 @@ export function TryRequest() {
         <p className="engines-value" role="status">
           {previewLine(answer)}
           {answer.rule_text && <span className="engines-muted"> “{answer.rule_text}”</span>}
+          <span className="engines-muted"> {answeredBy(answer)}</span>
         </p>
       )}
       {error && (

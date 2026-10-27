@@ -15,6 +15,7 @@ use crate::runtime::{EmbedManager, RerankManager, RuntimeManager};
 use crate::secrets::{self, SERVICE_MCP};
 
 use super::connector_gate::{self, Admit, CallKind};
+use super::decide::toolgate;
 use super::fleet::{Fleet, RunHandle, RunLimits, RunOutcome, StopReason};
 use super::toolsets::{self, Toolset, ToolContext};
 use crate::memory::MemoryStore;
@@ -158,7 +159,7 @@ impl ToolRegistry {
 
         let conv = db.get_conversation(conversation_id).ok().flatten();
         // The interface tool belongs to a chat that is in Workspace mode.
-        let workspace = conv.as_ref().is_some_and(|c| c.workspace);
+        let workspace = conv.as_ref().is_some_and(|c| crate::experiments::in_workspace(db, c));
         let persona = conv
             .and_then(|c| c.persona_id)
             .and_then(|pid| db.get_persona(&pid).ok().flatten());
@@ -322,6 +323,54 @@ impl ToolRegistry {
         ToolRegistry { specs, toolsets: enabled, mcp, skills }
     }
 
+    /// `SEE-3`: Web search for this run only, whatever the setting says. The setting is
+    /// untouched, so the next message is back to what it says.
+    fn with_web(&mut self) {
+        if !self.toolsets.contains(&Toolset::WebSearch) {
+            self.specs.extend(Toolset::WebSearch.tool_specs());
+            self.toolsets.push(Toolset::WebSearch);
+        }
+    }
+
+    /// What a tool's maker says it does, for the kind check (`USE-12`).
+    fn description_of(&self, name: &str) -> String {
+        self.specs
+            .iter()
+            .find(|s| s.pointer("/function/name").and_then(|n| n.as_str()) == Some(name))
+            .and_then(|s| s.pointer("/function/description"))
+            .and_then(|d| d.as_str())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// `USE-4`: every advertised tool with whose it is, for the tool menu's
+    /// decision. A tool of nobody's (the loop's own) is left out.
+    fn offers(&self) -> Vec<(String, super::decide::tools::Owner)> {
+        use super::decide::tools::Owner;
+        self.tool_names()
+            .into_iter()
+            .filter_map(|name| {
+                let owner = match self.mcp.get(&name) {
+                    Some(b) if b.transport == crate::connectors::composio::TRANSPORT => Owner::Apps,
+                    Some(b) => Owner::Connector { id: b.connector_id.clone(), name: b.connector_name.clone() },
+                    None => Owner::Builtin(self.builtin_for(&name)?),
+                };
+                Some((name, owner))
+            })
+            .collect()
+    }
+
+    /// The agent types `delegate` would list, for the tool menu's decision.
+    fn delegate_agents(&self) -> Vec<String> {
+        self.specs
+            .iter()
+            .find(|s| s.pointer("/function/name").and_then(|n| n.as_str()) == Some("delegate"))
+            .and_then(|s| s.pointer("/function/parameters/properties/tasks/items/properties/agent/enum"))
+            .and_then(|e| e.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default()
+    }
+
     /// The enabled built-in toolset that owns `name`, if any.
     fn builtin_for(&self, name: &str) -> Option<Toolset> {
         self.toolsets.iter().copied().find(|s| s.handles(name))
@@ -447,7 +496,9 @@ fn fence_could_be_a_call(block: &str, tool_names: &[String]) -> bool {
         .any(|word| tool_names.iter().any(|n| n == word))
 }
 
-/// Thin wrapper over the Tauri channel with typed emit helpers.
+/// Thin wrapper over the Tauri channel with typed emit helpers. Cloning shares
+/// the channel, for a background check that reports after its step has returned.
+#[derive(Clone)]
 pub struct AgentEventSink {
     channel: Channel<AgentEvent>,
     /// `SUB-2`: the child run this sink belongs to, if any. Set, every event
@@ -530,7 +581,13 @@ impl AgentEventSink {
             undo_token: undo_token.unwrap_or_default().to_string(),
         });
     }
-    pub fn send_permission(&self, request: PermissionRequest) {
+    pub fn send_permission(&self, mut request: PermissionRequest) {
+        // `USE-12`: a question a tool raises about itself carries the line a quick
+        // decision found worth saying about the call, if it did.
+        if request.reason.is_none() {
+            request.reason = super::decide::toolgate::line_for(&request);
+            request.reason_hover = super::decide::toolgate::hover_for(&request);
+        }
         self.send(AgentEvent::Permission { request });
     }
     /// `BRW-UI-1`: the Browser panel replaces its state wholesale on every
@@ -976,6 +1033,189 @@ fn refuses_in_plan_first(registry: &ToolRegistry, name: &str) -> bool {
     }
 }
 
+/// `USE-4`: is a sign-in card waiting for the person in this chat? The turn
+/// continues once they are done (`CAP-6`), so Connected apps must stay on the menu.
+/// A card counts for half an hour, whatever phase it reached short of being given up.
+fn sign_in_waiting(db: &Db, conversation_id: &str) -> bool {
+    const HALF_HOUR_MS: i64 = 30 * 60 * 1000;
+    let now = crate::db::now_ms();
+    db.list_blocks(conversation_id).unwrap_or_default().iter().any(|b| {
+        let phase = b
+            .state_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v.get("phase").and_then(|p| p.as_str()).map(str::to_string));
+        b.kind == "connect" && now - b.created_at < HALF_HOUR_MS && !matches!(phase.as_deref(), Some("cancelled" | "failed"))
+    })
+}
+
+/// `USE-4`: ask which tool groups this message needs, and leave the ones the
+/// decision is sure it does not off the menu for this turn. Runs after every
+/// deterministic narrowing, so it only sees what the run could really use. Any
+/// failure, a cold engine, an experiment that is off or a missed deadline leaves
+/// the menu as it was.
+async fn narrow_menu(
+    db: &Db,
+    registry: &ToolRegistry,
+    conversation_id: &str,
+    rc: &RunContext<'_>,
+    messages: &[serde_json::Value],
+    sink: &AgentEventSink,
+    // `USE-13`: the lead was just told to hand this to an agent app.
+    handing_over: bool,
+) {
+    use super::decide::{self, tools, Purpose};
+    if !crate::experiments::is_on(db, "fast-slow") {
+        return;
+    }
+    let apps = db
+        .composio_connector()
+        .ok()
+        .flatten()
+        .map(|c| super::app_calls::granted_app_names(db, conversation_id, &c))
+        .unwrap_or_default();
+    let mut units = tools::units(&registry.offers(), &apps, &registry.delegate_agents());
+    let keep = tools::forced(rc.options.delegate_to.is_some() || handing_over, sign_in_waiting(db, conversation_id));
+    units.retain(|u| !keep.contains(&u.id.as_str()));
+    let (message, previous) = tools::last_exchange(messages);
+    let Some(ask) = tools::ask_for(&message, &previous, &units) else { return };
+    let opts = decide::Opts { conversation_id: Some(conversation_id), run_id: Some(&rc.run.id) };
+    let verdict = match decide::ask(&ask.as_ask(), Purpose::ToolSelect, opts).await {
+        Ok(verdict) => verdict,
+        // `SEE-2`: with `fast-slow` on, no answer because there is no engine is said
+        // once, never left silent. A budget or a failed request is not that.
+        Err(decide::DecideError::Deadline) => {
+            publish_thought(rc.run, sink, |t| t.engine = Some("cold".into()));
+            return;
+        }
+        Err(decide::DecideError::Unavailable) => {
+            publish_thought(rc.run, sink, |t| t.engine = Some("unavailable".into()));
+            return;
+        }
+        // Running, but on the processor, which a turn does not wait for: said as it is.
+        Err(decide::DecideError::Processor) => {
+            publish_thought(rc.run, sink, |t| t.engine = Some("cpu".into()));
+            return;
+        }
+        Err(_) => return,
+    };
+    let pick = tools::pick(&units, &verdict);
+    decide::settle(&verdict, Purpose::ToolSelect, pick.act, opts);
+    // The strip: where the message needs to look, and what was left out of what the
+    // user had turned on. What each held group would have cost is measured here.
+    let mut seen = decide::thought::from_menu(&units, &pick.held, &verdict, &apps);
+    seen.held = pick
+        .held
+        .iter()
+        .map(|h| decide::thought::HeldTokens {
+            id: h.unit.id.clone(),
+            tokens: decide::thought::spec_tokens(&registry.specs, &h.unit.tools),
+        })
+        .collect();
+    if !pick.held.is_empty() {
+        decide::note(&verdict, &decide::thought::menu_note(&pick.held));
+    }
+    publish_thought(rc.run, sink, |t| {
+        t.looking = seen.looking;
+        t.direct = seen.direct;
+        t.left_out = seen.left_out;
+        t.held = seen.held;
+        t.ms += seen.ms;
+    });
+    if pick.held.is_empty() {
+        return;
+    }
+    let mut held = rc.run.held.lock().unwrap();
+    held.hold(&verdict.id, pick.held);
+    sink.emit(AgentEvent::ToolsHeld { run_id: rc.run.id.clone(), units: held.views() });
+}
+
+/// `SEE-2`: change what the strip says about this turn and say it whole. Nothing is
+/// sent while there is nothing to say.
+pub(crate) fn publish_thought(
+    run: &super::fleet::RunHandle,
+    sink: &AgentEventSink,
+    change: impl FnOnce(&mut super::decide::thought::Thought),
+) {
+    let thought = {
+        let mut held = run.thought.lock().unwrap();
+        change(&mut held);
+        held.clone()
+    };
+    if !thought.is_empty() {
+        sink.emit(AgentEvent::Thought { run_id: run.id.clone(), thought });
+    }
+}
+
+/// `USE-13`: before the lead's first request, ask the decision model whether one
+/// of the user's handover rules fits this message, and act on a confident match
+/// (see `subagents::act_on_prematch`). Asked only when an agent app is really on
+/// this run's menu, the user did not name one with `/delegate`, and the chat has
+/// not used up that app's per-chat limit. Any failure, a cold engine, an
+/// experiment that is off or a missed deadline leaves the turn as it was.
+#[allow(clippy::too_many_arguments)]
+async fn prematch_turn(
+    db: &Db,
+    perms: &PermissionManager,
+    client: &reqwest::Client,
+    local_endpoint: Option<&ChatEndpoint>,
+    conversation_id: &str,
+    rc: &RunContext<'_>,
+    registry: &ToolRegistry,
+    headless: bool,
+    messages: &[serde_json::Value],
+    sink: &AgentEventSink,
+) -> super::subagents::Early {
+    use super::decide::{self, handover, tools, Purpose};
+    use crate::engines::rules;
+    if !crate::experiments::is_on(db, "fast-slow") || rc.options.delegate_to.is_some() {
+        return Default::default();
+    }
+    // The tool is withdrawn at the depth limit, and without it there is no one
+    // to hand a task to.
+    if registry.delegate_agents().is_empty() {
+        return Default::default();
+    }
+    // `SEE-3`: the person took "Do it yourself" on the composer's hint. Nothing is asked;
+    // the lead is told, in fixed words, as it is after the same answer to a handover card.
+    if rc.options.no_handover {
+        return super::subagents::Early { notes: vec![handover::LINE_YOURSELF.to_string()], keep_agents: false };
+    }
+    let route = rules::RouteCtx { conversation_id, headless, delegate_to: None };
+    let (offered, _) = rules::offered(db, &route);
+    let offered: Vec<_> = offered.into_iter().filter(|o| rules::within_limit(db, o, conversation_id).is_ok()).collect();
+    let (message, previous) = tools::last_exchange(messages);
+    let Some(ask) = handover::ask_for(&message, &previous, &offered) else { return Default::default() };
+    let opts = decide::Opts { conversation_id: Some(conversation_id), run_id: Some(&rc.run.id) };
+    // `SEE-3`: the composer asked this very question about these very words while they were
+    // typed, so the turn reads that answer and the strip does not wait for another.
+    let verdict = match decide::typing::reuse(conversation_id, Purpose::HandoverRoute, &ask.as_ask()) {
+        Some(verdict) => {
+            // It is this turn's decision now, so it is written with the turn.
+            decide::typing::log_sent(db, &verdict.id, conversation_id, Some(&rc.run.id));
+            verdict
+        }
+        None => {
+            let Ok(verdict) = decide::ask_live(&ask.as_ask(), Purpose::HandoverRoute, opts).await else {
+                return Default::default();
+            };
+            verdict
+        }
+    };
+    publish_thought(rc.run, sink, |t| t.ms += verdict.ms);
+    let cx = super::subagents::EarlyCtx {
+        db,
+        perms,
+        sink,
+        client,
+        local_endpoint,
+        run: rc.run,
+        conversation_id,
+        message: &message,
+    };
+    super::subagents::act_on_prematch(&cx, &offered, &verdict).await
+}
+
 /// `AGC-1`/`AGC-3`: which of the loop's own tools this run is offered.
 ///
 /// A child never speaks to the user: it keeps only `compact`, which touches
@@ -1153,6 +1393,13 @@ pub struct RunOptions {
     /// mode and rules (never the guards, nor `/external off`).
     #[serde(default)]
     pub delegate_to: Option<String>,
+    /// `SEE-3`: Web search is on for this message alone, whatever the setting says.
+    #[serde(default)]
+    pub web: bool,
+    /// `SEE-3`: the user said to do this one themselves, so no handover rule is matched
+    /// and the lead is told so.
+    #[serde(default)]
+    pub no_handover: bool,
 }
 
 impl RunOptions {
@@ -1476,6 +1723,9 @@ struct TurnCtx<'a> {
     /// ends its turn after the batch it was in, and says this if it had no words
     /// of its own. The sign-in resumes the conversation.
     waiting_on_person: std::sync::Mutex<Option<String>>,
+    /// `USE-12`: what the user asked this turn (for a child run, the task it was
+    /// given), which a tool call is compared with. Taken once, like `plan_mode`.
+    request: String,
 }
 
 /// `HRN-6`: everything that changes from one turn to the next.
@@ -1584,15 +1834,29 @@ impl RunState {
     /// is told outright that stopping is a legitimate answer, and one ask is the
     /// limit — a model that means to stop will say so, and arguing with it costs
     /// the user a whole turn.
-    fn nudge_unfinished_plan(&mut self, plan: &super::plan::Plan, answer: &str) -> bool {
+    ///
+    /// `USE-5`: `probably` holds the places (0-based) of open items the decision
+    /// model thought the answer finished but had no fit to say so. Each is named as
+    /// such in the list, so the model confirms it instead of redoing it.
+    fn nudge_unfinished_plan(&mut self, plan: &super::plan::Plan, answer: &str, probably: &[usize]) -> bool {
         if self.plan_nudges >= MAX_PLAN_NUDGES {
             return false;
         }
-        let left = plan.unreached();
+        let left = plan.open_items();
         if left.is_empty() {
             return false;
         }
-        let list = left.iter().map(|i| format!("- {}", i.text)).collect::<Vec<_>>().join("\n");
+        let list = left
+            .iter()
+            .map(|(n, i)| {
+                if probably.contains(n) {
+                    format!("- {} (probably done: your answer seems to cover it)", i.text)
+                } else {
+                    format!("- {}", i.text)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         self.plan_nudges += 1;
         // The model has to see its own reply to know what it is being asked to
         // continue from, exactly as with the narration nudge.
@@ -1646,12 +1910,119 @@ fn unverified_message(files: usize, check: &str, can_run: bool) -> String {
 }
 
 impl TurnCtx<'_> {
-    fn unverified_note(&self) -> Option<String> {
+    /// `USE-4`: a held-back group came back since the last turn, by the model's
+    /// own ask or call, or by the user's click. Said to the screen and written as
+    /// the label the decision's calibration learns from: it was needed after all.
+    fn report_held(&self) {
+        let (back, decision) = {
+            let mut held = self.rc.run.held.lock().unwrap();
+            (held.take_unreported(), held.decision_id().map(str::to_string))
+        };
+        if back.is_empty() {
+            return;
+        }
+        if let Some(decision) = decision {
+            for (view, how) in &back {
+                let _ = self.db.add_outcome(&decision, "wrong", Some(&view.id), &format!("{}:{}", how.source(), view.id));
+            }
+        }
+        for by in ["model", "you"] {
+            let units: Vec<String> =
+                back.iter().filter(|(_, how)| how.by() == by).map(|(v, _)| v.id.clone()).collect();
+            if !units.is_empty() {
+                self.sink.emit(AgentEvent::ToolsBack { run_id: self.rc.run.id.clone(), units, by: by.to_string() });
+            }
+        }
+    }
+
+    /// `USE-4`: the `need_tools` call. It can only bring back what was held. A
+    /// group that was never offered gets the reason Settings -> Tools gives, so
+    /// this cannot route around what a switch, an account or a grant says.
+    fn need_tools(&self, args: &serde_json::Value) -> String {
+        let why_not = |id: &str| {
+            let info = Toolset::from_id(id)?.info(self.db);
+            match info.needs {
+                Some(needs) => Some(format!("{}: {needs}", info.label)),
+                None if !info.enabled => {
+                    Some(format!("{}: it is switched off in Settings \u{2192} Tools.", info.label))
+                }
+                None => None,
+            }
+        };
+        super::decide::tools::bring_back(&mut self.rc.run.held.lock().unwrap(), &super::decide::tools::requested(args), why_not)
+    }
+
+    /// `USE-5`: before the nudge that asks about a half-done plan, ask whether the
+    /// answer finished any open item. What the model is sure of, with a fit behind
+    /// it, is ticked and shown (a ringed tick); the rest stays open. Returns the
+    /// places of the items it only thinks are done, for the nudge to say so.
+    async fn judge_plan(&self, answer: &str) -> Vec<usize> {
+        if answer.trim().is_empty() {
+            return Vec::new();
+        }
+        let snapshot = {
+            let plan = self.plan.lock().unwrap();
+            if plan.open_items().is_empty() {
+                return Vec::new();
+            }
+            plan.clone()
+        };
+        let judged =
+            super::decide::loopctl::judge_open_items(&snapshot, answer, Some(self.conversation_id), &self.rc.run.id).await;
+        if judged.is_empty() {
+            return Vec::new();
+        }
+        {
+            let mut plan = self.plan.lock().unwrap();
+            if super::decide::loopctl::apply(&mut plan, &judged) > 0 {
+                self.sink.plan(&self.rc.run.id, &plan);
+            }
+        }
+        super::decide::loopctl::probably(&judged)
+    }
+
+    /// `SEE-1`: the answer grew by `delta`. A sentence can only have become final if the
+    /// new text holds a stop or a line break, so the splitter runs only then.
+    fn feed_check(&self, answer: &str, delta: &str) {
+        if !delta.contains(['.', '!', '?', '\n']) {
+            return;
+        }
+        if let Some(stream) = self.rc.run.check.lock().unwrap().as_mut() {
+            stream.feed(answer, self.ledger.unchecked_edits());
+        }
+    }
+
+    /// `SEE-1`: the run is over. A finished answer is handed over whole, so the sentences
+    /// that were not final yet are checked too; a run that was stopped or failed has no
+    /// answer to check.
+    fn finish_check(&self, answer: &str, reason: StopReason) {
+        if let Some(stream) = self.rc.run.check.lock().unwrap().as_mut() {
+            if answer.trim().is_empty() || matches!(reason, StopReason::Aborted | StopReason::Error) {
+                stream.abandon();
+            } else {
+                stream.finish(answer, self.ledger.unchecked_edits());
+            }
+        }
+    }
+
+    async fn unverified_note(&self, answer: &str) -> Option<String> {
         if self.ledger.edited_count() == 0 {
             return None;
         }
-        let (_, card) = super::project::for_conversation(self.db, self.conversation_id)?;
-        let check = card.check_task()?.name.clone();
+        let check = {
+            let (_, card) = super::project::for_conversation(self.db, self.conversation_id)?;
+            card.check_task()?.name.clone()
+        };
+        if !self.ledger.has_unverified() {
+            return None;
+        }
+        // `USE-5`: an answer that confidently claims nothing works or was tested
+        // (it says it is untested, or only describes the change) needs no
+        // reminder. Asked before the note is taken, so a skipped one is still
+        // there for a later answer in this run.
+        if super::decide::loopctl::claims_nothing(answer, Some(self.conversation_id), &self.rc.run.id).await.is_some() {
+            return None;
+        }
         let files = self.ledger.take_unverified()?;
         let can_run = super::coderun::can_verify(self.db, self.conversation_id, self.headless);
         Some(unverified_message(files, &check, can_run))
@@ -1730,6 +2101,28 @@ async fn run_agent_inner(
         db,
         &crate::engines::rules::RouteCtx { conversation_id, headless, delegate_to: rc.options.delegate_to.as_deref() },
     );
+    // `SEE-3`: "Turn on for this message". The setting is untouched; this run's table has
+    // the tools, and the next message is back to what the setting says. Only the lead, and
+    // only where the user is there to have asked.
+    if rc.options.web
+        && run.parent.is_none()
+        && !headless
+        && tools_enabled
+        && !read_only
+        && !registry.toolsets.contains(&Toolset::WebSearch)
+    {
+        registry.with_web();
+    }
+    // `USE-13` then `USE-4`: match the message against the user's handover rules
+    // first, so a handover the user just agreed to is never taken off the menu.
+    // Never for a child, a resume, an unattended run or a run with no tools.
+    if super::decide::tools::may_narrow(run.parent.is_some(), rc.plan.is_some(), headless, tools_enabled) {
+        let early = prematch_turn(db, perms, client, local_endpoint, conversation_id, rc, &registry, headless, &messages, sink).await;
+        for note in &early.notes {
+            messages.push(serde_json::json!({ "role": "system", "content": note }));
+        }
+        narrow_menu(db, &registry, conversation_id, rc, &messages, sink, early.keep_agents).await;
+    }
     let mut tool_names = registry.tool_names();
     let mut invocable = registry.invocable_names();
     // `HRN-8`: named here rather than only once a result exists — holding back
@@ -1820,7 +2213,24 @@ async fn run_agent_inner(
         plan_first,
         compact_asked: Default::default(),
         waiting_on_person: Default::default(),
+        request: super::decide::tools::last_exchange(&messages).0,
     };
+
+    // `SEE-1`: a top-level answer in a chat checks itself as it streams, against what the
+    // turn read. Not for a child, an unattended run, or a turn with no message row to keep
+    // the result with.
+    if let (None, false, Some(message_id)) = (&run.parent, headless, assistant_message_id) {
+        if super::autocheck::Stream::wanted(db) {
+            *run.check.lock().unwrap() = Some(super::autocheck::Stream::start(super::autocheck::Start {
+                conversation_id: conversation_id.to_string(),
+                run_id: run.id.clone(),
+                message_id: message_id.to_string(),
+                client: client.clone(),
+                endpoint: endpoint.clone(),
+                cancel: run.cancel.clone(),
+            }));
+        }
+    }
 
     // `CTX-2`: the model's view of this conversation, written as the run goes.
     // The opening array is stored first so a resume has something to replay even
@@ -1854,6 +2264,7 @@ async fn run_agent_inner(
             obs.appended(&serde_json::json!({ "role": "assistant", "content": &text }));
         }
         obs.stopped(reason.as_str(), run.steps());
+        cx.finish_check(&text, reason);
         // `OBS-2`: bill the run before announcing it, on every exit path —
         // including the ones that failed, because a failed run still spent
         // whatever it spent.
@@ -1875,6 +2286,18 @@ async fn run_agent_inner(
             usage.as_ref().map(|u| u.output_tokens).unwrap_or(0),
             run.steps(),
         );
+        // `USE-4`: a run that finished without ever needing a group it left off the
+        // menu was probably right to. Labelled weakly: the answer might have been
+        // better with it. Anything that came back is labelled by `report_held`.
+        cx.report_held();
+        if reason == StopReason::Completed {
+            let held = run.held.lock().unwrap();
+            if let Some(decision) = held.decision_id() {
+                for h in held.never_back() {
+                    let _ = db.add_outcome(decision, "weak_right", Some(&h.unit.id), &format!("kept-out:{}", h.unit.id));
+                }
+            }
+        }
         // `PLN-5`: what the run meant to do, as it stood when it stopped. A run
         // that ran out of budget can now say which items it never reached
         // instead of only that it stopped.
@@ -1927,11 +2350,12 @@ async fn run_agent_inner(
             return end(std::mem::take(&mut st.final_text), ended);
         }
 
+        cx.report_held();
         let mut scratch = Vec::new();
         let tools = cx.assemble(&mut scratch);
         let (outcome, held) = cx.request(&mut st, tools).await;
 
-        match cx.classify(&mut st, outcome, held) {
+        match cx.classify(&mut st, outcome, held).await {
             Next::Stop(reason) => return end(std::mem::take(&mut st.final_text), reason),
             Next::Calls(calls) => {
                 cx.dispatch_batch(&mut st, &calls).await;
@@ -2130,19 +2554,32 @@ impl TurnCtx<'_> {
         }
         let plans = self.plan_mode.offers_tool();
         // `AGC-1`/`AGC-3`: the loop's own two tools, for the whole run.
-        let own: Vec<serde_json::Value> = super::commands::harness_spec(&self.harness_names)
+        let own: Vec<serde_json::Value> = super::commands::harness_spec(&self.harness_names, &super::commands::modes_offered(self.db))
             .into_iter()
             .chain(self.ask_offered.then(super::commands::ask_user_spec))
             .collect();
-        if self.results.has_any() || plans || !own.is_empty() {
+        // `USE-4`: what this turn's quick decision left off the menu, and the one
+        // tool that brings it back. Empty (and no copy) for every run that was not
+        // narrowed.
+        let (out, need) = {
+            let held = self.rc.run.held.lock().unwrap();
+            let out: std::collections::HashSet<String> = held.out_tools().into_iter().map(str::to_string).collect();
+            let need = (!out.is_empty()).then(|| super::decide::tools::need_tools_spec(&held.out().collect::<Vec<_>>()));
+            (out, need)
+        };
+        if self.results.has_any() || plans || !own.is_empty() || need.is_some() {
             *scratch = self
                 .registry
                 .specs
                 .iter()
+                .filter(|s| {
+                    !s.pointer("/function/name").and_then(|n| n.as_str()).is_some_and(|n| out.contains(n))
+                })
                 .cloned()
                 .chain(self.results.has_any().then(super::results::tool_specs).unwrap_or_default())
                 .chain(plans.then(super::plan::tool_specs).unwrap_or_default())
                 .chain(own)
+                .chain(need)
                 .collect();
             return scratch;
         }
@@ -2188,6 +2625,7 @@ impl TurnCtx<'_> {
             if !tools_enabled {
                 final_text.push_str(t);
                 sink.token(t);
+                self.feed_check(final_text, t);
                 return;
             }
             if !streaming_live && should_flush_prose(&turn_buf, tool_names) {
@@ -2201,6 +2639,7 @@ impl TurnCtx<'_> {
                 let chunk = &turn_buf[emitted..cut];
                 final_text.push_str(chunk);
                 sink.token(chunk);
+                self.feed_check(final_text, chunk);
                 emitted = cut;
             }
         };
@@ -2237,7 +2676,7 @@ impl TurnCtx<'_> {
 
     /// **classify** — what this turn amounts to: a final answer, tool calls,
     /// narration that has to be nudged into a real call, or a stop.
-    fn classify(
+    async fn classify(
         &self,
         st: &mut RunState,
         outcome: Result<TurnOutcome, ProxyError>,
@@ -2303,6 +2742,7 @@ impl TurnCtx<'_> {
                     if !unshown.is_empty() {
                         st.final_text.push_str(unshown);
                         self.sink.token(unshown);
+                        self.feed_check(&st.final_text, unshown);
                     }
 
                     // An empty answer that had something behind it — tool
@@ -2315,14 +2755,17 @@ impl TurnCtx<'_> {
                     // `PLN-2`: an answer that arrives with the plan half done.
                     // Asked once, after the prose has been shown — the user
                     // keeps what was written either way, and what follows
-                    // continues it rather than replacing it.
-                    if st.nudge_unfinished_plan(&self.plan.lock().unwrap(), &text) {
+                    // continues it rather than replacing it. `USE-5`: first the
+                    // decision model ticks what the answer already finished, so
+                    // the nudge names only what is really open.
+                    let probably = self.judge_plan(&text).await;
+                    if st.nudge_unfinished_plan(&self.plan.lock().unwrap(), &text, &probably) {
                         return Next::Again;
                     }
 
                     // `COD-12`: code changed in a project with a check, and the
                     // check never ran after it. Asked once; never a gate.
-                    if let Some(note) = self.unverified_note() {
+                    if let Some(note) = self.unverified_note(&text).await {
                         st.push_nudge(&text, note);
                         return Next::Again;
                     }
@@ -2505,7 +2948,7 @@ fn is_bookkeeping(calls: &[ToolCallReq]) -> bool {
     !calls.is_empty()
         && calls
             .iter()
-            .all(|c| super::plan::handles(&c.name) || super::commands::handles(&c.name))
+            .all(|c| super::plan::handles(&c.name) || super::commands::handles(&c.name) || super::decide::tools::handles(&c.name))
 }
 
 /// `SKC-2`: the `skill` call a `/name` stands for. The `arguments` field is not
@@ -2979,6 +3422,14 @@ async fn dispatch(
     if name == "ask_user" && self.ask_offered {
         return self.ask_user(call_id, args).await;
     }
+    // `USE-4`: bringing a held-back tool group back. Only live while something is held.
+    if super::decide::tools::handles(name) && !self.rc.run.held.lock().unwrap().is_empty() {
+        return Ok((self.need_tools(args), None));
+    }
+    // `USE-4`: a call to a tool that was left off the menu (the model remembered
+    // it from earlier in the chat) brings its group back. Every gate below still
+    // applies: the group was only ever held, never refused.
+    self.rc.run.held.lock().unwrap().restore_for_tool(name, super::decide::tools::Back::Called);
     // `PLF-2`: a registry without the mutating specs is not enough. A content-form
     // call is parsed by name, and a model that remembers a tool from earlier in
     // the conversation can still ask for it.
@@ -3013,7 +3464,37 @@ async fn dispatch(
             cancel: Some(&self.cancel),
             run_started_at: self.started_at_ms,
         };
-        let output = toolset.execute(&ctx, name, args).await?;
+        // `USE-12`: a quick look at a call that runs code, sends, drives a page or
+        // changes files the person would be asked about. It can add a question or a
+        // line to one, or refuse where nobody could answer; it removes nothing.
+        let trust = || {
+            self.db
+                .conversation_folder(self.conversation_id)
+                .map(|(_, t)| crate::permissions::Trust::parse(&t))
+                .unwrap_or(crate::permissions::Trust::Confirm)
+        };
+        let note = if toolgate::is_asked(name, trust, self.headless) {
+            match toolgate::before_own(&self.gate_site(), name, args).await {
+                toolgate::Before::Refuse(text) => return Err(text),
+                toolgate::Before::Go(note) => note,
+            }
+        } else {
+            None
+        };
+        let (result, skipped) = match note {
+            Some(note) => toolgate::with_note(note, toolset.execute(&ctx, name, args)).await,
+            None => (toolset.execute(&ctx, name, args).await, None),
+        };
+        // `USE-12`: a question that was skipped is said on the step, after whatever
+        // the tool said about itself.
+        if let Some(text) = skipped {
+            let mut step = ctx.step_note.lock().unwrap();
+            *step = Some(match step.take() {
+                Some(own) => format!("{own} \u{b7} {text}"),
+                None => text,
+            });
+        }
+        let output = result?;
         // A toolset that said what its step line should read (RET-UI-2) wins over
         // the generic summary; everything else still gets `summarize`.
         Ok((output, ctx.step_note.into_inner().unwrap_or(None)))
@@ -3022,6 +3503,44 @@ async fn dispatch(
         if binding.transport == crate::connectors::composio::TRANSPORT {
             return self.composio_call(call_id, binding, name, args).await;
         }
+        // `USE-12`: what a quick decision makes of the call. A tool whose name reads
+        // as a read or a change may really send; and the call may not be what was
+        // asked for. Both only add to the question below.
+        let day = connector_gate::send_day();
+        let mut kind = binding.kind;
+        let mut notes = toolgate::AppNotes::default();
+        if kind != CallKind::Send && !self.kind_overridden(&binding.connector_id, name) {
+            notes.raised = toolgate::raise_kind(
+                self.db,
+                self.conversation_id,
+                Some(&self.rc.run.id),
+                self.headless,
+                &binding.connector_id,
+                &binding.connector_name,
+                name,
+                &self.registry.description_of(name),
+                &day,
+            )
+            .await;
+            if notes.raised.is_some() {
+                // Only a tool that reads is offered while planning first.
+                if self.read_only {
+                    return Err(PLAN_FIRST_REFUSAL.to_string());
+                }
+                kind = CallKind::Send;
+            }
+        }
+        let what = toolgate::app_what(&binding.connector_name, &connector_gate::humanise(name), args);
+        notes.scope = toolgate::scope_of(
+            self.db,
+            self.conversation_id,
+            Some(&self.rc.run.id),
+            self.headless,
+            &self.request,
+            &what,
+            true,
+        )
+        .await;
         // `MCG-3`: a connector's tool is read, change or send, and the last two
         // ask before they run unless the person has said otherwise.
         let env = connector_gate::GateEnv {
@@ -3031,14 +3550,15 @@ async fn dispatch(
             cancel: &self.cancel,
             conversation_id: self.conversation_id,
             headless: self.headless,
-            day: connector_gate::send_day(),
+            day,
+            notes: Some(&notes),
         };
         let call = connector_gate::Call {
             connector_id: &binding.connector_id,
             connector_name: &binding.connector_name,
             app: "",
             tool: name,
-            kind: binding.kind,
+            kind,
             args,
             parts: &[],
             said: None,
@@ -3071,6 +3591,29 @@ async fn dispatch(
 }
 
 impl TurnCtx<'_> {
+    /// `USE-12`: everything a look at a tool call needs from this run.
+    fn gate_site(&self) -> toolgate::Site<'_> {
+        toolgate::Site {
+            db: self.db,
+            perms: self.perms,
+            sink: self.sink,
+            cancel: &self.cancel,
+            conversation_id: self.conversation_id,
+            run_id: Some(&self.rc.run.id),
+            headless: self.headless,
+            request: &self.request,
+        }
+    }
+
+    /// Whether the person set this connector tool's kind themselves (`MCG-7`). Such
+    /// a kind is theirs, and a quick decision does not look at it.
+    fn kind_overridden(&self, connector_id: &str, tool: &str) -> bool {
+        self.db
+            .get_connector_policy(connector_id, "")
+            .map(|p| connector_gate::overrides_of(&p).contains_key(tool))
+            .unwrap_or(false)
+    }
+
     /// Write the agent's act into the log in the same shape a user's command has
     /// (`REG-4`), so one `CommandNote` speaks for either.
     fn trace(&self, name: &str, args: &str, outcome: &str, note: &str) {
@@ -3213,6 +3756,7 @@ impl TurnCtx<'_> {
             headless: self.headless,
             read_only: self.read_only,
             pool: &self.mcp_pool,
+            request: Some(&self.request),
         };
         relay_composio(&relay, call_id, binding, name, args).await.map(|out| (out, None))
     }
@@ -3284,6 +3828,51 @@ pub(crate) struct AppRelay<'a> {
     pub headless: bool,
     pub read_only: bool,
     pub pool: &'a McpPool,
+    /// `USE-12`: what the call is compared with: what the user asked this turn, or
+    /// the task an agent app was handed. `None` means there is nothing to compare
+    /// with and the in-scope look is skipped.
+    pub request: Option<&'a str>,
+}
+
+/// `USE-12`: what a quick decision makes of a batch of app tools. A target whose name
+/// reads as a read or a change, and that the person has not set a kind for, may be
+/// taken for a send; and the batch may not be what was asked for. Both only add to
+/// the question the gate asks next.
+async fn look_at_batch(
+    r: &AppRelay<'_>,
+    binding: &McpBinding,
+    p: &mut super::app_calls::Planned,
+) -> toolgate::AppNotes {
+    use crate::connectors::composio;
+    let mut notes = toolgate::AppNotes::default();
+    let day = connector_gate::send_day();
+    for i in 0..p.resolved.len() {
+        let (skip, app, slug) = {
+            let t = &p.resolved[i];
+            (t.kind == CallKind::Send || t.overridden, composio::app_label(&t.app), t.target.slug.clone())
+        };
+        if skip {
+            continue;
+        }
+        let raised = toolgate::raise_kind(r.db, r.conversation_id, None, r.headless, &binding.connector_id, &app, &slug, "", &day).await;
+        if let Some(up) = raised {
+            p.raise(i);
+            notes.raised.get_or_insert(up);
+        }
+    }
+    if let Some(request) = r.request {
+        let items: Vec<String> = p
+            .resolved
+            .iter()
+            .take(5)
+            .map(|t| format!("{} in {}", super::app_calls::action_of(&t.target.slug, &t.app), composio::app_label(&t.app)))
+            .collect();
+        let apps = p.parts.iter().map(|part| part.name.as_str()).collect::<Vec<_>>().join(" and ");
+        let first = p.resolved.first().map(|t| t.target.args.clone()).unwrap_or_else(|| serde_json::json!({}));
+        let what = toolgate::app_what(&apps, &items.join("; "), &first);
+        notes.scope = toolgate::scope_of(r.db, r.conversation_id, None, r.headless, request, &what, true).await;
+    }
+    notes
 }
 
 /// `CAP-5`: a call to one of Composio's meta-tools, other than connecting.
@@ -3299,10 +3888,15 @@ pub(crate) async fn relay_composio(
     args: &serde_json::Value,
 ) -> Result<String, String> {
     use crate::connectors::composio;
-    let planned = if name == composio::MULTI_EXECUTE {
+    let mut planned = if name == composio::MULTI_EXECUTE {
         Some(super::app_calls::plan(r.db, r.conversation_id, &binding.connector_id, name, args)?)
     } else {
         None
+    };
+    // `USE-12`: before the plan-first check, so a target taken for a send is held to it.
+    let notes = match planned.as_mut() {
+        Some(p) => look_at_batch(r, binding, p).await,
+        None => toolgate::AppNotes::default(),
     };
     if let Some(p) = &planned {
         // `CAP-C-F9`: while planning first an app may be read from, nothing more.
@@ -3317,6 +3911,7 @@ pub(crate) async fn relay_composio(
             conversation_id: r.conversation_id,
             headless: r.headless,
             day: connector_gate::send_day(),
+            notes: Some(&notes),
         };
         let panel_tools = super::app_calls::panel_tools(&binding.connector_id, &p.resolved);
         let call = connector_gate::Call {
@@ -3503,6 +4098,8 @@ fn describe(name: &str, args: &serde_json::Value, registry: &ToolRegistry) -> (S
         super::commands::describe_harness(args)
     } else if name == "ask_user" {
         super::commands::describe_ask(args)
+    } else if super::decide::tools::handles(name) {
+        ("asked for".to_string(), super::decide::tools::requested(args).join(", "))
     } else if let Some(toolset) = registry.builtin_for(name) {
         toolset.describe(name, args)
     } else if let Some(binding) = registry.mcp.get(name) {
@@ -4352,7 +4949,7 @@ mod tests {
         .unwrap();
         let mut st = state(vec![user("how do I adapt marketing to AI?")]);
 
-        assert!(st.nudge_unfinished_plan(&plan.lock().unwrap(), "Here is a great question."));
+        assert!(st.nudge_unfinished_plan(&plan.lock().unwrap(), "Here is a great question.", &[]));
         // Its own answer first, so it knows what it is continuing from, then
         // the ask — naming the items that are actually open.
         assert_eq!(role(&st.messages[1]), "assistant");
@@ -4364,7 +4961,24 @@ mod tests {
 
         // Once. A model that means to stop will stop, and a second ask spends
         // another whole turn learning what the first already established.
-        assert!(!st.nudge_unfinished_plan(&plan.lock().unwrap(), "Still done."));
+        assert!(!st.nudge_unfinished_plan(&plan.lock().unwrap(), "Still done.", &[]));
+    }
+
+    /// `USE-5`: an item the decision model only thinks is done (no fit behind
+    /// the number) is named as such, so the model confirms it instead of redoing
+    /// it; an item it ticked is no longer open, so it is not in the list at all.
+    #[test]
+    fn the_nudge_calls_a_likely_finish_probably_done_and_leaves_a_ticked_item_out() {
+        let plan = std::sync::Mutex::new(planned(&["research", "map", "draft"]));
+        plan.lock().unwrap().mark_judged(0, 0.9, "d1");
+        let mut st = state(vec![user("how do I adapt marketing to AI?")]);
+
+        assert!(st.nudge_unfinished_plan(&plan.lock().unwrap(), "Here is a great question.", &[2]));
+        let asked = content(&st.messages[2]);
+        assert!(asked.contains("- map\n") || asked.contains("- map"), "{asked}");
+        assert!(asked.contains("- draft (probably done: your answer seems to cover it)"), "{asked}");
+        assert!(!asked.contains("- map (probably"), "only the judged item is called probably done: {asked}");
+        assert!(!asked.contains("research"), "a ticked item is not open: {asked}");
     }
 
     /// A run that finished its plan — or never wrote one — is not asked
@@ -4373,7 +4987,7 @@ mod tests {
     #[test]
     fn a_finished_plan_and_no_plan_at_all_are_both_left_alone() {
         let mut st = state(vec![user("go")]);
-        assert!(!st.nudge_unfinished_plan(&super::super::plan::Plan::default(), "Done."));
+        assert!(!st.nudge_unfinished_plan(&super::super::plan::Plan::default(), "Done.", &[]));
 
         let plan = std::sync::Mutex::new(planned(&["one", "two"]));
         for n in 1..=2 {
@@ -4383,7 +4997,7 @@ mod tests {
             )
             .unwrap();
         }
-        assert!(!st.nudge_unfinished_plan(&plan.lock().unwrap(), "Done."));
+        assert!(!st.nudge_unfinished_plan(&plan.lock().unwrap(), "Done.", &[]));
 
         // A dropped item counts as reached: it was decided about, not skipped.
         let dropped = std::sync::Mutex::new(planned(&["one"]));
@@ -4392,7 +5006,7 @@ mod tests {
             &serde_json::json!({ "update": { "index": 1, "status": "dropped", "why": "not needed" } }),
         )
         .unwrap();
-        assert!(!st.nudge_unfinished_plan(&dropped.lock().unwrap(), "Done."));
+        assert!(!st.nudge_unfinished_plan(&dropped.lock().unwrap(), "Done.", &[]));
         assert_eq!(st.messages.len(), 1, "nothing was added to the transcript");
     }
 
@@ -4744,6 +5358,49 @@ mod tests {
         assert!(registry.builtin_for("web_search").is_none());
     }
 
+    /// `SEE-T-7`: "Turn on for this message" gives this run's table the web tools and
+    /// leaves the setting alone, so the next run is built without them again.
+    #[test]
+    fn web_for_one_message_is_in_that_runs_table_and_not_in_the_setting() {
+        let (db, conv) = db_with_sandbox();
+        Toolset::WebSearch.set_enabled(&db, false);
+        let mut registry = registry_for(&db, &conv, None, false);
+        assert!(registry.builtin_for("web_search").is_none());
+        let before = registry.specs.len();
+        registry.with_web();
+        assert_eq!(registry.builtin_for("web_search"), Some(Toolset::WebSearch));
+        assert!(registry.specs.len() > before, "the tools are advertised");
+        // Again changes nothing.
+        let after = registry.specs.len();
+        registry.with_web();
+        assert_eq!(registry.specs.len(), after);
+
+        assert!(!Toolset::WebSearch.is_enabled(&db), "the setting is untouched");
+        assert!(registry_for(&db, &conv, None, false).builtin_for("web_search").is_none(), "the next run is as before");
+    }
+
+    /// With the switch already on there is nothing to add.
+    #[test]
+    fn web_for_one_message_adds_nothing_when_the_setting_is_on() {
+        let (db, conv) = db_with_sandbox();
+        Toolset::WebSearch.set_enabled(&db, true);
+        let mut registry = registry_for(&db, &conv, None, false);
+        let before = registry.specs.len();
+        registry.with_web();
+        assert_eq!(registry.specs.len(), before);
+    }
+
+    /// `SEE-3`: the two choices a hint can be taken up on arrive as the run's options, and
+    /// an ordinary turn has neither.
+    #[test]
+    fn the_composers_hint_choices_are_run_options_and_off_by_default() {
+        let none: RunOptions = serde_json::from_str("{}").unwrap();
+        assert!(!none.web && !none.no_handover);
+        let both: RunOptions = serde_json::from_str(r#"{"web":true,"noHandover":true}"#).unwrap();
+        assert!(both.web && both.no_handover);
+        assert!(!RunOptions::default().web && !RunOptions::default().no_handover, "a child never inherits them");
+    }
+
     /// `RPC-3`: the loop-over-many-items shape is taught only while the ability
     /// is on. Describing a capability that is switched off costs a wasted step
     /// to find that out.
@@ -4849,6 +5506,112 @@ mod tests {
         let child = registry_for(&db, &conv.id, None, false);
         assert!(!child.tool_names().iter().any(|n| n == "delegate"));
         assert!(!child.toolsets.contains(&Toolset::Subagents));
+    }
+
+    fn unit_ids(registry: &ToolRegistry) -> Vec<String> {
+        crate::agent::decide::tools::units(&registry.offers(), "Slack", &registry.delegate_agents())
+            .into_iter()
+            .map(|u| u.id)
+            .collect()
+    }
+
+    /// `USE-T-1`: the tool menu's groups are read from what the run could really
+    /// use. A toolset that is off, or on but not ready (mail with no account), is
+    /// never a group, so the decision is never asked about it and `need_tools`
+    /// has nothing to hand back.
+    #[test]
+    fn only_groups_the_run_can_really_use_are_asked_about() {
+        let db = Db::open_in_memory().unwrap();
+        Toolset::Mail.set_enabled(&db, true);
+        Toolset::WebSearch.set_enabled(&db, true);
+        let conv = db.create_conversation("c", None, false).unwrap();
+
+        let ids = unit_ids(&registry_for(&db, &conv.id, None, true));
+        assert!(ids.contains(&"web_search".to_string()) && ids.contains(&"subagents".to_string()));
+        assert!(!ids.contains(&"mail".to_string()), "no account, so not on the menu");
+        assert!(!ids.contains(&"filesystem".to_string()), "File access is never held back");
+        assert!(!ids.contains(&"browser".to_string()), "switched off");
+
+        db.add_mail_account(&crate::db::NewMailAccount {
+            label: "Me".into(),
+            email: "me@example.com".into(),
+            imap_host: "imap.example.com".into(),
+            imap_port: 993,
+            smtp_host: "smtp.example.com".into(),
+            smtp_port: 465,
+            username: "me".into(),
+            security: "tls".into(),
+        })
+        .unwrap();
+        assert!(unit_ids(&registry_for(&db, &conv.id, None, true)).contains(&"mail".to_string()));
+    }
+
+    /// `USE-T-1`: a child that may not delegate has no Other agents group.
+    #[test]
+    fn a_run_with_no_room_to_delegate_has_no_other_agents_group() {
+        let db = Db::open_in_memory().unwrap();
+        let conv = db.create_conversation("c", None, false).unwrap();
+        assert!(unit_ids(&registry_for(&db, &conv.id, None, true)).contains(&"subagents".to_string()));
+        assert!(!unit_ids(&registry_for(&db, &conv.id, None, false)).contains(&"subagents".to_string()));
+    }
+
+    /// `USE-4`: Composio's meta-tools are one group named by the granted apps, and
+    /// each MCP connector is its own group, named by its first tools.
+    #[test]
+    fn connected_apps_and_each_connector_are_groups_of_their_own() {
+        let binding = |transport: &str, connector: &str| McpBinding {
+            connector_id: connector.into(),
+            connector_name: connector.to_uppercase(),
+            url: String::new(),
+            transport: transport.into(),
+            kind: CallKind::Read,
+        };
+        let mut registry = ToolRegistry { specs: Vec::new(), toolsets: vec![], mcp: HashMap::new(), skills: vec![] };
+        for (tool, transport, connector) in [
+            ("COMPOSIO_SEARCH_TOOLS", crate::connectors::composio::TRANSPORT, "composio"),
+            ("list_notes", "http", "notes"),
+            ("add_note", "http", "notes"),
+        ] {
+            registry.specs.push(serde_json::json!({ "type": "function", "function": { "name": tool } }));
+            registry.mcp.insert(tool.into(), binding(transport, connector));
+        }
+        let units = crate::agent::decide::tools::units(&registry.offers(), "Slack", &[]);
+        let ids: Vec<&str> = units.iter().map(|u| u.id.as_str()).collect();
+        assert_eq!(ids, ["apps", "mcp:notes"]);
+        assert_eq!(units[0].about, "Connected apps: Slack.", "names, never descriptions");
+        assert_eq!(units[1].label, "NOTES");
+        assert_eq!(units[1].tools.len(), 2);
+    }
+
+    /// `USE-4`: the agent types `delegate` lists reach the decision as names.
+    #[test]
+    fn the_agent_names_come_from_the_delegate_spec() {
+        let mut spec = Toolset::Subagents.tool_specs()[0].clone();
+        spec["function"]["parameters"]["properties"]["tasks"]["items"]["properties"]["agent"] =
+            serde_json::json!({ "type": "string", "enum": ["researcher", "Claude Code"] });
+        let registry = ToolRegistry { specs: vec![spec], toolsets: vec![Toolset::Subagents], mcp: HashMap::new(), skills: vec![] };
+        assert_eq!(registry.delegate_agents(), ["researcher", "Claude Code"]);
+        assert!(ToolRegistry { specs: vec![], toolsets: vec![], mcp: HashMap::new(), skills: vec![] }.delegate_agents().is_empty());
+    }
+
+    /// `USE-T-1`: a waiting sign-in card keeps Connected apps on the menu, until
+    /// it is given up or half an hour has gone.
+    #[test]
+    fn a_sign_in_card_that_is_still_open_counts_as_waiting() {
+        let db = Db::open_in_memory().unwrap();
+        let conv = db.create_conversation("c", None, false).unwrap();
+        assert!(!sign_in_waiting(&db, &conv.id));
+        let block = db.add_block(&conv.id, None, "connect", "Connect Gmail", r#"{"app":"gmail"}"#).unwrap();
+        assert!(sign_in_waiting(&db, &conv.id), "a fresh card with no answer yet");
+        db.update_block_state(&block.id, r#"{"phase":"signing"}"#).unwrap();
+        assert!(sign_in_waiting(&db, &conv.id));
+        db.update_block_state(&block.id, r#"{"phase":"connected"}"#).unwrap();
+        assert!(sign_in_waiting(&db, &conv.id), "the turn that follows the sign-in still needs the apps");
+        db.update_block_state(&block.id, r#"{"phase":"cancelled"}"#).unwrap();
+        assert!(!sign_in_waiting(&db, &conv.id), "given up");
+        let note = db.add_block(&conv.id, None, "note", "Not a card", "{}").unwrap();
+        db.update_block_state(&note.id, r#"{"phase":"signing"}"#).unwrap();
+        assert!(!sign_in_waiting(&db, &conv.id), "only sign-in cards count");
     }
 
     /// `SUB-T6`: a child is never more powerful than its parent. A persona that

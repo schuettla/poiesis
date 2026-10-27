@@ -100,9 +100,21 @@ pub fn handles(name: &str) -> bool {
     matches!(name, "harness" | "ask_user")
 }
 
+/// `EXP-3`: the modes `switch_mode` may name. Workspace is an experiment, so the
+/// model is not told it exists until the user has turned it on.
+pub fn modes_offered(db: &Db) -> Vec<&'static str> {
+    let mut modes = Vec::with_capacity(2);
+    if crate::experiments::is_on(db, "workspace") {
+        modes.push("workspace");
+    }
+    modes.push("plan_first");
+    modes
+}
+
 /// `AGC-1`: the `harness` spec for the names this run offers. `None` when there
-/// are none: a tool that cannot do anything is not offered.
-pub fn harness_spec(names: &[&str]) -> Option<serde_json::Value> {
+/// are none: a tool that cannot do anything is not offered. `modes` is what
+/// `switch_mode` may name (`modes_offered`).
+pub fn harness_spec(names: &[&str], modes: &[&str]) -> Option<serde_json::Value> {
     if names.is_empty() {
         return None;
     }
@@ -117,7 +129,7 @@ pub fn harness_spec(names: &[&str]) -> Option<serde_json::Value> {
                     "name": { "type": "string", "enum": names },
                     "reason": { "type": "string", "description": "One sentence the user will read, in first person." },
                     "command": { "type": "string", "description": "suggest: the slash command, e.g. /skillify" },
-                    "mode": { "type": "string", "enum": ["workspace", "plan_first"], "description": "switch_mode" },
+                    "mode": { "type": "string", "enum": modes, "description": "switch_mode" },
                     "when": { "type": "string", "description": "schedule: e.g. 'every weekday at 9'" },
                     "task": { "type": "string", "description": "schedule: what to do" }
                 },
@@ -275,6 +287,11 @@ pub fn decide(
         }
         "switch_mode" => {
             let (mode, label) = match call.mode.as_deref() {
+                // A setting can change mid-run, so this is checked here as well as
+                // in the spec, like the rung above.
+                Some("workspace") if !crate::experiments::is_on(db, "workspace") => {
+                    return Err("Workspace mode is an experiment the user has not turned on.".to_string())
+                }
                 Some("workspace") => ("workspace", "Workspace"),
                 Some("plan_first") => ("plan_first", "Plan first"),
                 _ => return Err("mode must be \"workspace\" or \"plan_first\".".to_string()),
@@ -385,13 +402,13 @@ mod tests {
         db.set_setting("autonomy.modes", "off").unwrap();
         db.set_setting("autonomy.schedule", "off").unwrap();
         assert!(agent_callable(&db, false).is_empty());
-        assert!(harness_spec(&agent_callable(&db, false)).is_none());
+        assert!(harness_spec(&agent_callable(&db, false), &modes_offered(&db)).is_none());
     }
 
     /// `AGC-T1`: the enum in the spec is exactly the names offered.
     #[test]
     fn the_spec_lists_only_the_names_on_offer() {
-        let spec = harness_spec(&["compact", "schedule"]).unwrap();
+        let spec = harness_spec(&["compact", "schedule"], &["plan_first"]).unwrap();
         assert_eq!(
             spec.pointer("/function/parameters/properties/name/enum").unwrap(),
             &serde_json::json!(["compact", "schedule"])
@@ -399,6 +416,35 @@ mod tests {
         // The description has to say this is the agent's own session.
         let text = spec.pointer("/function/description").and_then(|d| d.as_str()).unwrap();
         assert!(text.contains("not the user's computer"));
+    }
+
+    /// `EXP-T-1`: Workspace is an experiment, so the model is not told it can
+    /// switch to it until the user has turned it on.
+    #[test]
+    fn the_switch_mode_spec_offers_workspace_only_when_the_experiment_is_on() {
+        let db = Db::open_in_memory().unwrap();
+        let modes_in = |db: &Db| {
+            let spec = harness_spec(&["switch_mode"], &modes_offered(db)).unwrap();
+            spec.pointer("/function/parameters/properties/mode/enum").unwrap().clone()
+        };
+        assert_eq!(modes_in(&db), serde_json::json!(["plan_first"]), "plan first is not an experiment");
+        db.set_setting("experiment.workspace", "on").unwrap();
+        assert_eq!(modes_in(&db), serde_json::json!(["workspace", "plan_first"]));
+    }
+
+    /// A model copying an old call, or a setting turned off mid-run, is refused.
+    #[test]
+    fn a_workspace_switch_is_refused_while_the_experiment_is_off() {
+        let db = Db::open_in_memory().unwrap();
+        let mut switch = call("switch_mode");
+        switch.mode = Some("workspace".into());
+        let refused = decide(&db, "c", &ALL, &switch).unwrap_err();
+        assert!(refused.contains("experiment"), "{refused}");
+        switch.mode = Some("plan_first".into());
+        assert!(decide(&db, "c", &ALL, &switch).is_ok());
+        db.set_setting("experiment.workspace", "on").unwrap();
+        switch.mode = Some("workspace".into());
+        assert!(decide(&db, "c", &ALL, &switch).is_ok());
     }
 
     fn call(name: &str) -> HarnessCall {
@@ -427,6 +473,7 @@ mod tests {
     #[test]
     fn planning_first_turns_an_automatic_switch_into_a_question() {
         let db = Db::open_in_memory().unwrap();
+        db.set_setting("experiment.workspace", "on").unwrap();
         db.set_setting("autonomy.modes", "auto").unwrap();
         let mut switch = call("switch_mode");
         switch.mode = Some("workspace".into());
@@ -534,6 +581,7 @@ mod tests {
     #[test]
     fn a_mode_switch_asks_and_a_schedule_always_asks() {
         let db = Db::open_in_memory().unwrap();
+        db.set_setting("experiment.workspace", "on").unwrap();
         let mut switch = call("switch_mode");
         switch.mode = Some("workspace".into());
         match decide(&db, "c", &ALL, &switch).unwrap() {

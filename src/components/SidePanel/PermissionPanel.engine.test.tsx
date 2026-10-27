@@ -119,6 +119,27 @@ describe("the handover card", () => {
     expect(resolvePermission.mock.calls.map((c) => c[1])).toEqual(["once", "deny", "forever"]);
   });
 
+  it("says a quick decision matched the rule before I started, and keeps the same buttons", () => {
+    show(card({ rule: { label: "U2", text: "Running the tests", matched: 0.93 } }));
+    expect(container.textContent).toContain("Matches your rule U2: Running the tests");
+    expect(container.textContent).not.toContain("Because of your rule");
+    expect(container.querySelector(".permission-where")?.getAttribute("title")).toBe("matched before I started (0.93)");
+    expect(buttons().slice(0, 3)).toEqual(["Hand it over", "Do it yourself", "Always for this"]);
+  });
+
+  it("adds a second line when I cited a rule the quick decision had scored low", () => {
+    show(card({ rule: { label: "U2", text: "Running the tests", doubt: "I'm not sure this matches U2." } }));
+    expect(container.textContent).toContain("Because of your rule U2: Running the tests");
+    expect(container.textContent).toContain("I'm not sure this matches U2.");
+    const lines = Array.from(container.querySelectorAll(".permission-where")).map((p) => p.textContent);
+    expect(lines).toHaveLength(2);
+  });
+
+  it("has no doubt line on an ordinary card", () => {
+    show(card());
+    expect(container.querySelectorAll(".permission-where")).toHaveLength(1);
+  });
+
   it("has no Always when you named the agent yourself", () => {
     show(card({ rule: undefined }));
     expect(container.textContent).toContain("You asked for it.");

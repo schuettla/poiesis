@@ -135,6 +135,12 @@ pub async fn agent_chat_cmd(
         }
     };
 
+    // `DEC-4`: have the decision engine warm by the time this turn's first
+    // decision is asked. The first turn after a cold start goes without.
+    crate::agent::decide::prewarm();
+    // `CTL-2`: a user turn starts; its decision budget starts with it.
+    crate::agent::decide::begin_turn(&conversation_id);
+
     let mut msgs: Vec<serde_json::Value> = messages
         .into_iter()
         .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
@@ -484,23 +490,38 @@ pub async fn goal_check_cmd(
     let changes = goal::changes_line(&crate::agent::changes::change_set(&db, &conversation_id, since));
     let messages = goal::check_messages(&objective, &until, &last_answer, &changes);
 
-    let outcome = cloud::drive_turn(
+    // `DEC-6`: the quick decision runs beside the prose check, which still runs
+    // for its one line of evidence or next step. Until the decision is
+    // calibrated it can only make the check stricter (`goal::combine`).
+    let decide_goal = async {
+        use crate::agent::decide::{ask, sites, Opts, Purpose};
+        let site = sites::goal(goal::decision_state(&objective, &until, &last_answer, &changes));
+        let opts = Opts { conversation_id: Some(&conversation_id), run_id: None };
+        let verdict = ask(&site.as_ask(), Purpose::GoalMet, opts).await.ok()?;
+        let got = sites::goal_from(&verdict);
+        // Below 0.8 is "not yet", which is an answer: the decision was acted on.
+        crate::agent::decide::settle(&verdict, Purpose::GoalMet, crate::agent::decide::control::Act::Go, opts);
+        got
+    };
+    let cancel = crate::runtime::proxy::CancelFlag::new();
+    let prose = cloud::drive_turn(
         &mgr.client,
         &setup.endpoint,
         &messages,
         &[],
         0.0,
         cloud::Effort::Off,
-        &crate::runtime::proxy::CancelFlag::new(),
+        &cancel,
         |_| {},
-    )
-    .await
-    .map_err(|e| PoiesisError::Message(e.provider_message().to_string()))?;
-    match outcome {
-        crate::runtime::proxy::TurnOutcome::Final { content, .. } => Ok(goal::parse_check(&content)),
+    );
+    let (decision, outcome) = tokio::join!(decide_goal, prose);
+    let outcome = outcome.map_err(|e| PoiesisError::Message(e.provider_message().to_string()))?;
+    let prose = match outcome {
+        crate::runtime::proxy::TurnOutcome::Final { content, .. } => goal::parse_check(&content),
         // A judge that asked for a tool instead of answering has not answered.
-        _ => Ok(goal::parse_check("")),
-    }
+        _ => goal::parse_check(""),
+    };
+    Ok(goal::combine(decision, prose))
 }
 
 /// `RWD-1`: go back to before one of the user's turns. A branch plus, when
@@ -536,23 +557,66 @@ pub struct ForkedConversation {
     pub resend: Option<String>,
 }
 
+/// What became of a message sent to a running agent (`HRN-2`, `USE-5`).
+#[derive(serde::Serialize)]
+pub struct SteerOutcome {
+    /// `queued`: the run will read it at its next step. `held`: the decision
+    /// model is sure it is a stop, so it waits for the user's answer to "Stop the
+    /// run?". `gone`: the run finished between the keystroke and the send.
+    pub status: &'static str,
+    /// What the decision model read the message as, when it was sure enough to say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read: Option<crate::agent::decide::loopctl::SteerRead>,
+}
+
+/// The request a conversation's run is working on: its latest user message,
+/// clipped. The steering check reads a message against it ("stop" after "fix the
+/// tests" is not the same as after "draft the mail").
+pub(crate) fn current_task(db: &crate::db::Db, conversation_id: &str) -> String {
+    db.list_messages_window(conversation_id, 8)
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content)
+        .unwrap_or_default()
+}
+
 /// `HRN-2`: say something to a run that is already working. The text lands in
 /// the run's inbox and is picked up at the top of its next iteration — not
 /// mid-tool-call, where the transcript is not in a valid state.
+///
+/// `USE-5`: first the decision model reads the message as a stop, a redirect, an
+/// addition or a question. The class goes back with the answer for the screen to
+/// tag; only a calibrated stop is held. `already_read` skips the read, for a
+/// message the user has just answered "Keep going" to.
 #[tauri::command]
-pub fn steer_run_cmd(
+pub async fn steer_run_cmd(
     fleet: State<'_, Fleet>,
+    db: State<'_, crate::db::Db>,
     run_id: String,
     text: String,
-) -> Result<bool, PoiesisError> {
-    let Some(run) = fleet.get(&run_id) else {
-        // The run finished between the keystroke and the send. Not an error:
-        // the caller turns this into an ordinary next-turn message.
-        return Ok(false);
+    already_read: Option<bool>,
+) -> Result<SteerOutcome, PoiesisError> {
+    let gone = SteerOutcome { status: "gone", read: None };
+    // The run may finish between the keystroke and the send. Not an error: the
+    // caller turns this into an ordinary next-turn message.
+    let Some(run) = fleet.get(&run_id) else { return Ok(gone) };
+    let read = if already_read == Some(true) {
+        None
+    } else {
+        let task = current_task(&db, &run.conversation_id);
+        crate::agent::decide::loopctl::read_steer(&task, &text, &run.conversation_id, &run.id).await
     };
+    if read.as_ref().is_some_and(|r| r.ask_stop) {
+        return Ok(SteerOutcome { status: "held", read });
+    }
+    // The read can take a moment; the run may have ended in it.
+    let Some(run) = fleet.get(&run_id) else { return Ok(gone) };
     run.steer(Steer::user(text));
-    Ok(true)
+    Ok(SteerOutcome { status: "queued", read })
 }
+
 
 /// `AGC-3`: the user's answer to a question a run is waiting on. `false` when
 /// the run is gone or the question was already answered, which the caller turns
@@ -565,6 +629,17 @@ pub fn answer_question_cmd(
     answer: crate::agent::fleet::Answer,
 ) -> Result<bool, PoiesisError> {
     Ok(fleet.get(&run_id).is_some_and(|run| run.answer(&question_id, answer)))
+}
+
+/// `USE-UI-1`: the user clicked the "tools held back" chip. Those groups are on the
+/// run's menu again from its next step, the same as if it had asked with
+/// `need_tools`, and the decision is labelled as a miss. Returns how many came
+/// back; `0` when the run is gone or nothing named was held.
+#[tauri::command]
+pub fn restore_tools_cmd(fleet: State<'_, Fleet>, run_id: String, units: Vec<String>) -> Result<usize, PoiesisError> {
+    let Some(run) = fleet.get(&run_id) else { return Ok(0) };
+    let back = run.held.lock().map(|mut held| held.restore(&units, crate::agent::decide::tools::Back::Chip));
+    Ok(back.map_or(0, |b| b.len()))
 }
 
 /// `HRN-UI-4`: write a kept result into the conversation's working folder.

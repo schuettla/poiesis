@@ -170,7 +170,12 @@ pub async fn run_external(req: Request<'_>) -> RunOutcome {
         return fail(&req, &name, "I don't know that kind of agent.", started, "");
     };
 
-    let port = Port::new(req.perms, req.sink, &name, req.folder, trust, req.headless);
+    let port = Port::new(req.perms, req.sink, &name, req.folder, trust, req.headless).with_look(super::approve::Look {
+        db: req.db,
+        conversation_id: req.child_conversation_id.to_string(),
+        run_id: req.run.id.clone(),
+        task: req.task.to_string(),
+    });
     let trace = Trace::default();
     // `MCPS-2`: Poiesis's own tools, for an agent that can mount them and a user
     // who said it may. Anything else gets none, and is not told they exist.
@@ -286,30 +291,7 @@ pub async fn run_external(req: Request<'_>) -> RunOutcome {
         notional,
         (seconds * 1000.0) as u64,
     );
-    // The child's conversation keeps the task and the report, so Open shows them
-    // after a restart.
-    let _ = req.db.append_message(
-        req.child_conversation_id,
-        &NewMessage {
-            role: "user".into(),
-            content: req.task.to_string(),
-            model_name: None,
-            model_provenance: None,
-            steps_json: None,
-            attachments: Vec::new(),
-        },
-    );
-    let _ = req.db.append_message(
-        req.child_conversation_id,
-        &NewMessage {
-            role: "assistant".into(),
-            content: text.clone(),
-            model_name: Some(name.clone()),
-            model_provenance: Some("agent-app".into()),
-            steps_json,
-            attachments: Vec::new(),
-        },
-    );
+    keep_transcript(&req, &name, &text, steps_json);
     let _ = req.db.log_activity(
         Some(req.child_conversation_id),
         "subagent",
@@ -367,12 +349,42 @@ fn report_for(name: &str, o: &ExternalOutcome, port: &Port<'_>, steps: usize, to
     if o.resume_failed {
         seen.push_str(" Its earlier session was gone, so it started fresh.");
     }
+    if o.sandbox_off {
+        seen.push_str(&format!(" {name}'s sandbox is not set up on this computer, so it had to ask before each step."));
+    }
     if let Some(used) = tools.and_then(|t| t.summary()) {
         seen.push_str(&format!(" It also {used}."));
     }
     // What Poiesis saw comes first: it is ours, and a report that is clipped
     // for length loses its end, not its frame.
     format!("{seen}\n\nIts report:\n{text}")
+}
+
+/// The child's conversation keeps the task and what came of it, so Open shows
+/// them after a restart, a job that never started included.
+fn keep_transcript(req: &Request<'_>, name: &str, text: &str, steps_json: Option<String>) {
+    let _ = req.db.append_message(
+        req.child_conversation_id,
+        &NewMessage {
+            role: "user".into(),
+            content: req.task.to_string(),
+            model_name: None,
+            model_provenance: None,
+            steps_json: None,
+            attachments: Vec::new(),
+        },
+    );
+    let _ = req.db.append_message(
+        req.child_conversation_id,
+        &NewMessage {
+            role: "assistant".into(),
+            content: text.to_string(),
+            model_name: Some(name.to_string()),
+            model_provenance: Some("agent-app".into()),
+            steps_json,
+            attachments: Vec::new(),
+        },
+    );
 }
 
 fn fail(req: &Request<'_>, name: &str, why: &str, started: std::time::Instant, stderr: &str) -> RunOutcome {
@@ -388,6 +400,8 @@ fn fail(req: &Request<'_>, name: &str, why: &str, started: std::time::Instant, s
             self_allowed: 0,
         },
     );
+    let text = format!("{name} did not start: {why}");
+    keep_transcript(req, name, &text, None);
     req.sink.emit(AgentEvent::RunEnded {
         run_id: req.run.id.clone(),
         stop_reason: StopReason::Error.as_str().to_string(),
@@ -397,7 +411,7 @@ fn fail(req: &Request<'_>, name: &str, why: &str, started: std::time::Instant, s
         cost_usd: None,
         plan: None,
     });
-    RunOutcome { text: format!("{name} did not start: {why}"), stop_reason: StopReason::Error, steps: 0, usage: None }
+    RunOutcome { text, stop_reason: StopReason::Error, steps: 0, usage: None }
 }
 
 #[cfg(test)]

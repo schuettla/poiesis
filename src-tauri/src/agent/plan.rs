@@ -81,6 +81,14 @@ pub struct PlanItem {
     /// the difference is worth seeing.
     #[serde(default)]
     pub added: bool,
+    /// `USE-5`: the decision model judged this item finished from the answer, and
+    /// how sure it was. Set only with `status: Done`, and cleared the moment the
+    /// model or the user moves the item. The screen draws these ticks as rings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judged: Option<f32>,
+    /// The decision behind `judged`, so reopening the item can label it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
 }
 
 /// One run's plan. `revisions` counts *rewrites* — a `set` over an existing
@@ -118,7 +126,14 @@ impl Plan {
         }
         self.items = texts
             .into_iter()
-            .map(|text| PlanItem { text, status: PlanStatus::Todo, why: None, added: false })
+            .map(|text| PlanItem {
+                text,
+                status: PlanStatus::Todo,
+                why: None,
+                added: false,
+                judged: None,
+                decision: None,
+            })
             .collect();
     }
 
@@ -130,8 +145,44 @@ impl Plan {
                 status: PlanStatus::Todo,
                 why: None,
                 added: true,
+                judged: None,
+                decision: None,
             });
         }
+    }
+
+    /// The items still open, with their 0-based place in the list.
+    pub fn open_items(&self) -> Vec<(usize, &PlanItem)> {
+        self.items
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| matches!(i.status, PlanStatus::Todo | PlanStatus::Doing))
+            .collect()
+    }
+
+    /// `USE-5`: tick an open item off because the decision model judged the
+    /// answer to finish it. Returns whether it was open: an item the model closed
+    /// or dropped in the meantime is left as it is.
+    pub fn mark_judged(&mut self, index: usize, p: f32, decision: &str) -> bool {
+        let Some(item) = self.items.get_mut(index) else { return false };
+        if !matches!(item.status, PlanStatus::Todo | PlanStatus::Doing) {
+            return false;
+        }
+        item.status = PlanStatus::Done;
+        item.judged = Some(p);
+        item.decision = Some(decision.to_string());
+        true
+    }
+
+    /// `USE-5`: the user reopened a judged tick. Returns the decision it came
+    /// from, which is now known to be wrong; `None` when the item was not judged
+    /// (a tick the model gave itself is not this feature's to undo).
+    pub fn reopen(&mut self, index: usize) -> Option<String> {
+        let item = self.items.get_mut(index)?;
+        item.judged?;
+        item.status = PlanStatus::Todo;
+        item.judged = None;
+        item.decision.take()
     }
 
     /// Move one item. `index` is 1-based, as the tool advertises and as the
@@ -152,6 +203,9 @@ impl Plan {
         }
         let item = &mut self.items[index - 1];
         item.status = status;
+        // The model has now spoken for the item itself, which replaces the guess.
+        item.judged = None;
+        item.decision = None;
         // A reason belongs to a drop. Carrying one onto `done` would put an
         // excuse beside finished work; clearing it on the way back out of
         // `dropped` keeps a stale reason from outliving the drop it explained.
@@ -193,6 +247,9 @@ impl Plan {
             }
             if item.added {
                 line.push_str(" (added later)");
+            }
+            if item.judged.is_some() {
+                line.push_str(" (judged finished from your answer)");
             }
             lines.push(line);
         }
@@ -635,6 +692,44 @@ mod tests {
         let plan = m.lock().unwrap();
         let left: Vec<&str> = plan.unreached().iter().map(|i| i.text.as_str()).collect();
         assert_eq!(left, vec!["two", "three"], "done and dropped are both reached");
+    }
+
+    /// `USE-5`: a judged tick keeps its probability and decision, is not left
+    /// open for the nudge, and a reopen hands the decision back for labelling.
+    #[test]
+    fn a_judged_tick_can_be_reopened_and_names_its_decision() {
+        let m = plan_with(&["one", "two", "three"]);
+        execute(&m, &serde_json::json!({ "update": { "index": 3, "status": "dropped", "why": "no" } })).unwrap();
+        let mut plan = m.lock().unwrap();
+        assert_eq!(plan.open_items().iter().map(|(i, _)| *i).collect::<Vec<_>>(), vec![0, 1]);
+
+        assert!(plan.mark_judged(0, 0.88, "d1"));
+        assert!(!plan.mark_judged(2, 0.99, "d2"), "a dropped item is not ticked");
+        assert!(!plan.mark_judged(9, 0.99, "d3"), "no such item");
+        assert_eq!((plan.items[0].status, plan.items[0].judged), (PlanStatus::Done, Some(0.88)));
+        assert_eq!(plan.unreached().len(), 1, "only item two is still open for the nudge");
+        assert!(plan.render().contains("1. one — done (judged finished from your answer)"));
+
+        assert_eq!(plan.reopen(0).as_deref(), Some("d1"));
+        assert_eq!((plan.items[0].status, plan.items[0].judged, plan.items[0].decision.clone()), (PlanStatus::Todo, None, None));
+        assert_eq!(plan.reopen(0), None, "nothing left to undo");
+        // A tick the model gave itself is not a judgement, so there is nothing to label.
+        plan.update(2, PlanStatus::Done, None).unwrap();
+        assert_eq!(plan.reopen(1), None);
+        assert_eq!(plan.items[1].status, PlanStatus::Done);
+    }
+
+    /// The model moving an item itself replaces the guess about it.
+    #[test]
+    fn the_models_own_update_clears_a_judgement() {
+        let m = plan_with(&["one"]);
+        m.lock().unwrap().mark_judged(0, 0.9, "d1");
+        execute(&m, &serde_json::json!({ "update": { "index": 1, "status": "doing" } })).unwrap();
+        let plan = m.lock().unwrap();
+        assert_eq!((plan.items[0].status, plan.items[0].judged, plan.items[0].decision.clone()), (PlanStatus::Doing, None, None));
+        // A judgement is not written for a plan that never had one.
+        let json = serde_json::to_string(&plan.items[0]).unwrap();
+        assert!(!json.contains("judged") && !json.contains("decision"), "{json}");
     }
 
     /// A call with no recognised argument says what the tool wants instead of

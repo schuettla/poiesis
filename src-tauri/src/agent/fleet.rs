@@ -226,6 +226,19 @@ pub struct RunHandle {
     /// removed the moment it is answered, so a second answer to the same
     /// question finds nothing and reports it.
     questions: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Answer>>>,
+    /// `USE-4`: the tool groups this run left off its menu and the ones that came
+    /// back. Here, not on the loop's own state, because a click on the run bar
+    /// arrives from outside the loop.
+    pub held: Mutex<super::decide::tools::HeldSet>,
+    /// `USE-13`: what the handover pre-match said about this turn, for the lead's
+    /// own `delegate` call to be checked against.
+    pub prematch: Mutex<Option<super::decide::handover::Prematch>>,
+    /// `SEE-2`: what the quick decisions understood before the first word, which the
+    /// strip above the run's text shows. Whole, so each change can be sent whole.
+    pub thought: Mutex<super::decide::thought::Thought>,
+    /// `SEE-1`: where the answer's text goes as it grows, so each sentence is checked once
+    /// the stream has moved past it. `None` when this run's answer is not checked.
+    pub check: Mutex<Option<super::autocheck::Stream>>,
 }
 
 impl RunHandle {
@@ -331,6 +344,10 @@ impl Fleet {
             output_tokens: AtomicU64::new(0),
             usage_known: std::sync::atomic::AtomicBool::new(false),
             questions: Mutex::new(HashMap::new()),
+            held: Mutex::new(Default::default()),
+            thought: Mutex::new(Default::default()),
+            check: Mutex::new(None),
+            prematch: Mutex::new(None),
         });
         if let Ok(mut runs) = self.runs.lock() {
             runs.insert(handle.id.clone(), handle.clone());

@@ -25,7 +25,7 @@ use crate::runtime::{EmbedManager, RerankManager, RuntimeManager};
 
 use super::run::AgentEventSink;
 use super::{
-    artifacts, browser, codeexec, coderun, filesystem, imagegen, mail, memory_skill, present, recall,
+    artifacts, browser, classify, codeexec, coderun, filesystem, imagegen, mail, memory_skill, present, recall,
     retrieval, screen, skillpack, subagents, websearch,
 };
 
@@ -162,7 +162,33 @@ pub fn mark_untrusted_for(
         flags: scan.flags.clone(),
         text: text.to_string(),
     });
+    // `USE-8`: for what the pattern scan misses. The text goes to the model now,
+    // wrapped; the quick check follows and can only add a flag.
+    flag_outside(sink, conversation_id, call_id, label, text, scan.risk);
     super::untrusted::wrap(label, text, &scan)
+}
+
+/// `USE-8`: ask the decision model, in the background, whether outside text reads
+/// like an instruction to the assistant, and mark the step `call_id` if it does.
+/// For a caller that hands outside text to a model without [`mark_untrusted`]'s
+/// wrapping (an agent app's report) as well as for `mark_untrusted_for` itself.
+pub fn flag_outside(
+    sink: &AgentEventSink,
+    conversation_id: &str,
+    call_id: &str,
+    label: &str,
+    text: &str,
+    scan_risk: u8,
+) {
+    super::decide::filters::check_in_background(
+        super::decide::filters::Intake {
+            conversation_id: conversation_id.to_string(),
+            label: label.to_string(),
+            step: Some((sink.clone(), call_id.to_string())),
+        },
+        text,
+        scan_risk,
+    );
 }
 
 /// Cap on a tool-emitted render's serialized payload (RND-3). A render this
@@ -184,14 +210,14 @@ pub enum RenderSkip {
 }
 
 /// Apply RND-3's guard rails. `Ok(json)` means go ahead and persist.
-fn check_render(headless: bool, already_rendered: bool, payload_len: usize) -> Result<(), RenderSkip> {
+fn check_render(headless: bool, already_rendered: bool, payload_len: usize, cap: usize) -> Result<(), RenderSkip> {
     if headless {
         return Err(RenderSkip::Headless);
     }
     if already_rendered {
         return Err(RenderSkip::AlreadyRendered);
     }
-    if payload_len > RENDER_CAP_BYTES {
+    if payload_len > cap {
         return Err(RenderSkip::TooLarge);
     }
     Ok(())
@@ -213,9 +239,21 @@ pub fn render_block(
     title: &str,
     data: &serde_json::Value,
 ) -> Option<String> {
+    render_block_within(ctx, kind, title, data, RENDER_CAP_BYTES)
+}
+
+/// [`render_block`] with a cap of its own, for a block that is a table of up to
+/// five hundred rows by design (`USE-9`) and not a tool dumping raw text.
+pub fn render_block_within(
+    ctx: &ToolContext<'_>,
+    kind: &str,
+    title: &str,
+    data: &serde_json::Value,
+    cap: usize,
+) -> Option<String> {
     let data_json = serde_json::to_string(data).ok()?;
     let already = ctx.rendered.load(Ordering::Relaxed);
-    if let Err(skip) = check_render(ctx.headless, already, data_json.len()) {
+    if let Err(skip) = check_render(ctx.headless, already, data_json.len(), cap) {
         if skip != RenderSkip::Headless {
             eprintln!("render_block: skipped render for '{title}' ({skip:?})");
         }
@@ -274,6 +312,10 @@ pub enum Toolset {
     /// `COD-6`: run the build, check and tests a project declares, in its
     /// folder. Default off, sensitive — it runs the project's own programs.
     CodeRun,
+    /// `USE-9`: sort many items with one closed question, on the quick decision
+    /// model. Not sensitive and on by default: what makes it available is
+    /// Fast & slow thinking and the decision model (`ready`), not this switch.
+    Decide,
 }
 
 /// A toolset's metadata for the Settings surface (id, label, blurb, current state).
@@ -294,7 +336,7 @@ pub struct ToolsetInfo {
 
 impl Toolset {
     /// Every built-in toolset, in display order.
-    pub const ALL: [Toolset; 15] = [
+    pub const ALL: [Toolset; 16] = [
         Toolset::FileSystem,
         Toolset::WebSearch,
         Toolset::CodeExec,
@@ -310,6 +352,7 @@ impl Toolset {
         Toolset::Browser,
         Toolset::System,
         Toolset::Subagents,
+        Toolset::Decide,
     ];
 
     /// Stable id used for settings keys and the frontend.
@@ -330,6 +373,7 @@ impl Toolset {
             Toolset::System => "system",
             Toolset::Subagents => "subagents",
             Toolset::CodeRun => "code_run",
+            Toolset::Decide => "decide",
         }
     }
 
@@ -337,7 +381,7 @@ impl Toolset {
         Toolset::ALL.into_iter().find(|s| s.id() == id)
     }
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Toolset::FileSystem => "File access",
             Toolset::WebSearch => "Web search",
@@ -354,6 +398,7 @@ impl Toolset {
             Toolset::System => "Screen & apps",
             Toolset::Subagents => "Delegation",
             Toolset::CodeRun => "Run project tasks",
+            Toolset::Decide => "Sort many items",
         }
     }
 
@@ -404,6 +449,9 @@ impl Toolset {
             Toolset::CodeRun => {
                 "Run a project's own build, type check and tests in its folder, so I can find out whether a change works instead of guessing. Only tasks the project declares, never in a read-only folder. Memory, process count and running time are limited; network and files outside the folder are not walled off."
             }
+            Toolset::Decide => {
+                "Sort a long list with one question about each item (which kind, yes or no, how urgent), fast, on the small decision model on this computer. You get a table with a confidence for every row. Needs Fast & slow thinking in Settings \u{2192} Experiments and the decision model in Models."
+            }
         }
     }
 
@@ -439,6 +487,7 @@ impl Toolset {
                 | Toolset::Indexing
                 | Toolset::Skills
                 | Toolset::Subagents
+                | Toolset::Decide
         )
     }
 
@@ -462,9 +511,9 @@ impl Toolset {
     /// The switch in Settings is untouched, and the tool comes back the moment
     /// the setup is done, because this is read for every run.
     ///
-    /// Only the two toolsets that need an account or a model say no. Every
-    /// other one works with nothing beyond its switch (and the folder or site
-    /// permissions they ask for at the moment of use).
+    /// Only the three toolsets that need an account, a model or an experiment say
+    /// no. Every other one works with nothing beyond its switch (and the folder or
+    /// site permissions they ask for at the moment of use).
     pub fn ready(self, db: &Db) -> bool {
         match self {
             // At least one mail account that is not switched off. A failed read
@@ -474,6 +523,18 @@ impl Toolset {
             // backend usable, local or cloud?
             Toolset::ImageGen => {
                 crate::media::resolve_backend(&crate::media::Registry::new(), db, crate::media::Modality::Image).is_ok()
+            }
+            // The experiment is on and a decision model is there: a file installed,
+            // or the cloud chosen with its key. Whether the engine starts is found
+            // out by the first call, which says so.
+            Toolset::Decide => {
+                crate::experiments::is_on(db, "fast-slow")
+                    && (db
+                        .default_model_by_role("decide")
+                        .ok()
+                        .flatten()
+                        .is_some_and(|m| std::path::Path::new(&m.path).exists())
+                        || crate::agent::decide::cloud::chosen(db))
             }
             _ => true,
         }
@@ -501,6 +562,9 @@ impl Toolset {
             Toolset::Mail => "I can't use this yet. Add a mail account in Settings \u{2192} Mail.",
             Toolset::ImageGen => {
                 "I can't use this yet. Set up image generation in Models \u{2192} Image, or connect an account in Providers."
+            }
+            Toolset::Decide => {
+                "I can't use this yet. Turn on Fast & slow thinking in Settings \u{2192} Experiments and install the decision model in Models."
             }
             _ => "",
         }
@@ -568,6 +632,7 @@ impl Toolset {
             Toolset::System => screen::tool_specs(),
             Toolset::Subagents => subagents::tool_specs(),
             Toolset::CodeRun => coderun::tool_specs(),
+            Toolset::Decide => classify::tool_specs(),
         };
         v.as_array().cloned().unwrap_or_default()
     }
@@ -590,6 +655,7 @@ impl Toolset {
             Toolset::System => screen::handles(name),
             Toolset::Subagents => subagents::handles(name),
             Toolset::CodeRun => coderun::handles(name),
+            Toolset::Decide => classify::handles(name),
         }
     }
 
@@ -611,6 +677,7 @@ impl Toolset {
             Toolset::System => screen::describe(name, args),
             Toolset::Subagents => subagents::describe(name, args),
             Toolset::CodeRun => coderun::describe(name, args),
+            Toolset::Decide => classify::describe(name, args),
         }
     }
 
@@ -637,6 +704,7 @@ impl Toolset {
             Toolset::System => screen::execute(ctx, name, args).await,
             Toolset::Subagents => subagents::execute(ctx, name, args).await,
             Toolset::CodeRun => coderun::execute(ctx, name, args).await,
+            Toolset::Decide => classify::execute(ctx, name, args).await,
         }
     }
 }
@@ -655,7 +723,7 @@ pub(crate) fn classify_mutation(tool: &str) -> Option<bool> {
         "fetch_url", "search_folder", "find_similar", "search_history", "read_conversation",
         "list_mail", "search_mail", "read_mail", "read_artifact", "check_preview", "browse",
         "browser_read", "browser_scroll", "browser_screenshot", "screenshot", "skill", "delegate",
-        "check_agents", "collect_agents",
+        "check_agents", "collect_agents", "classify",
     ];
     if MUTATING.contains(&tool) {
         Some(true)
@@ -726,24 +794,69 @@ mod tests {
         assert!(Toolset::FileSystem.mutates("a_tool_nobody_placed"), "unplaced is treated as changing");
     }
 
+    /// `USE-9`: the sorting tool is on the menu only with Fast & slow thinking on
+    /// and a decision model file there, and never because of its own switch alone.
+    #[test]
+    fn the_sorting_tool_is_offered_only_with_the_experiment_on_and_the_decision_model_installed() {
+        let db = Db::open_in_memory().unwrap();
+        assert!(Toolset::Decide.is_enabled(&db), "its switch is on");
+        assert!(!Toolset::Decide.ready(&db), "nothing else is");
+        assert!(Toolset::Decide.info(&db).needs.unwrap().contains("Fast & slow thinking"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("Clef-Flash-Q4_K_M.gguf");
+        std::fs::write(&file, b"not really a model").unwrap();
+        db.add_model_with_role(
+            &crate::db::NewModelEntry {
+                name: "Clef-flash".into(),
+                path: file.to_string_lossy().to_string(),
+                quant: None,
+                size_bytes: None,
+                vision: true,
+            },
+            "decide",
+        )
+        .unwrap();
+        assert!(!Toolset::Decide.ready(&db), "the model is there but the experiment is off");
+
+        db.set_setting(&crate::experiments::setting_key("fast-slow"), "on").unwrap();
+        assert!(Toolset::Decide.ready(&db));
+        assert!(Toolset::Decide.info(&db).needs.is_none());
+
+        std::fs::remove_file(&file).unwrap();
+        assert!(!Toolset::Decide.ready(&db), "a row whose file is gone is not a model");
+
+        Toolset::Decide.set_enabled(&db, false);
+        assert!(!Toolset::Decide.is_enabled(&db), "and the person can still switch it off");
+    }
+
+    #[test]
+    fn the_sorting_tool_reads_files_and_is_kept_while_planning_first() {
+        assert!(Toolset::Decide.handles("classify"));
+        assert!(!Toolset::Decide.mutates("classify"));
+        assert!(!Toolset::Decide.info(&Db::open_in_memory().unwrap()).sensitive);
+    }
+
     #[test]
     fn a_headless_run_renders_nothing() {
-        assert_eq!(check_render(true, false, 10), Err(RenderSkip::Headless));
+        assert_eq!(check_render(true, false, 10, RENDER_CAP_BYTES), Err(RenderSkip::Headless));
     }
 
     #[test]
     fn one_render_per_tool_call() {
-        assert_eq!(check_render(false, false, 10), Ok(()));
-        assert_eq!(check_render(false, true, 10), Err(RenderSkip::AlreadyRendered));
+        assert_eq!(check_render(false, false, 10, RENDER_CAP_BYTES), Ok(()));
+        assert_eq!(check_render(false, true, 10, RENDER_CAP_BYTES), Err(RenderSkip::AlreadyRendered));
     }
 
     #[test]
     fn an_oversized_payload_is_dropped_not_truncated() {
-        assert_eq!(check_render(false, false, RENDER_CAP_BYTES), Ok(()));
+        assert_eq!(check_render(false, false, RENDER_CAP_BYTES, RENDER_CAP_BYTES), Ok(()));
         assert_eq!(
-            check_render(false, false, RENDER_CAP_BYTES + 1),
+            check_render(false, false, RENDER_CAP_BYTES + 1, RENDER_CAP_BYTES),
             Err(RenderSkip::TooLarge)
         );
+        // A block with its own cap is held to that cap, not the default.
+        assert_eq!(check_render(false, false, RENDER_CAP_BYTES + 1, 4 * RENDER_CAP_BYTES), Ok(()));
     }
 
     /// SMP-4b: attaching a folder is the consent to read it, so folder reading

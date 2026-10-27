@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { inTauri } from "../../lib/api";
+import { CloseIcon, MaximizeIcon, MinimizeIcon, RestoreIcon } from "../Icons/Icons";
 
 /** Windows draws the app without its native frame (`decorations: false` in
  * `tauri.windows.conf.json`), so the header is the title bar: it carries the
@@ -52,9 +53,7 @@ export default function WindowControls() {
   return (
     <div className="window-controls">
       <button className="wc-btn" aria-label="Minimize" title="Minimize" onClick={() => void win.minimize()}>
-        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-          <path d="M0 5.5h10" stroke="currentColor" strokeWidth="1" />
-        </svg>
+        <MinimizeIcon size={10} strokeWidth={2} />
       </button>
       <button
         className="wc-btn"
@@ -62,21 +61,11 @@ export default function WindowControls() {
         title={maximized ? "Restore" : "Maximize"}
         onClick={() => void win.toggleMaximize()}
       >
-        {maximized ? (
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-            <rect x="0.5" y="2.5" width="7" height="7" rx="1" stroke="currentColor" />
-            <path d="M2.5 2.5V1.5a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-1" stroke="currentColor" />
-          </svg>
-        ) : (
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-            <rect x="0.5" y="0.5" width="9" height="9" rx="1" stroke="currentColor" />
-          </svg>
-        )}
+        {maximized ? <RestoreIcon size={10} strokeWidth={2} /> : <MaximizeIcon size={10} strokeWidth={2} />}
       </button>
       <button className="wc-btn wc-close" aria-label="Close" title="Close" onClick={() => void win.close()}>
-        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-          <path d="M0.5 0.5l9 9M9.5 0.5l-9 9" stroke="currentColor" strokeWidth="1" />
-        </svg>
+        {/* The shared cross is inset to 5..15; at 20px it spans the same 10px the caption button wants. */}
+        <CloseIcon size={20} strokeWidth={1} />
       </button>
     </div>
   );

@@ -397,6 +397,15 @@ async fn authorize(
             if !must_ask {
                 return Ok(Clearance { in_folder: true });
             }
+            // `USE-12`, `relax-prompts`: a change to one file in the attached folder,
+            // when a calibrated quick decision was very sure it is small and what was
+            // asked for. Never a deletion or a move, and never outside the folder.
+            if op_impact == Impact::Modify {
+                if let Some(text) = super::decide::toolgate::skip_prompt(name) {
+                    let _ = db.log_activity(Some(conversation_id), "decide", &text);
+                    return Ok(Clearance { in_folder: true });
+                }
+            }
             if headless {
                 return Err(format!(
                     "Unattended runs can't ask permission, so this stopped instead of \
@@ -488,6 +497,49 @@ async fn authorize(
             Ok(Clearance { in_folder: false })
         }
     }
+}
+
+/// `USE-9`: clear a read of `raw` the way `read_file` does (the working folder,
+/// the saved grants, this chat's grants, then a prompt) and hand back the resolved
+/// path. For a tool that reads many files in one call: `cleared` remembers, for
+/// the one call, what each folder's answer was, so five hundred files in a folder
+/// the user said yes to once, or no to once, ask once.
+pub(crate) async fn clear_read(
+    ctx: &ToolContext<'_>,
+    raw: &str,
+    cleared: &mut std::collections::HashMap<PathBuf, Result<(), String>>,
+) -> Result<PathBuf, String> {
+    let (folder_raw, trust_raw) = ctx.db.conversation_folder(ctx.conversation_id).map_err(|e| e.to_string())?;
+    let folder = folder_raw.as_ref().map(|f| canonicalize_lenient(Path::new(f)));
+    let folder_ref = folder.as_deref();
+    check_anchored(raw, folder_ref)?;
+    let path = resolve(raw, folder_ref);
+    // A skill's own folder is readable once the skill is loaded (`SKL-3`).
+    let in_skill_root = folder_ref.map(|f| !path_within_root(&path, f)).unwrap_or(true)
+        && ctx.extra_read_roots.lock().unwrap().iter().any(|root| path_within_root(&path, root));
+    if in_skill_root {
+        return Ok(path);
+    }
+    let folder_key = path.parent().map(Path::to_path_buf).unwrap_or_else(|| path.clone());
+    if let Some(done) = cleared.get(&folder_key) {
+        return done.clone().map(|()| path);
+    }
+    let result = authorize(
+        ctx.db,
+        ctx.perms,
+        ctx.sink,
+        ctx.conversation_id,
+        folder_ref,
+        Trust::parse(&trust_raw),
+        &path,
+        "read_file",
+        None,
+        ctx.headless,
+    )
+    .await
+    .map(|_| ());
+    cleared.insert(folder_key, result.clone());
+    result.map(|()| path)
 }
 
 fn capitalize(s: &str) -> String {
@@ -1385,5 +1437,60 @@ mod tests {
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_file(&outside).ok();
+    }
+
+    /// `USE-12`, `relax-prompts`: with a calibrated, very sure decision behind it, a
+    /// change to one file in the attached folder goes through unasked. Nothing else
+    /// does: not a deletion, not a move, not another tool than the one decided about,
+    /// not a path outside the folder. A headless run turns every real prompt into a
+    /// refusal, so "Err" here means "a question was about to be asked".
+    #[tokio::test]
+    async fn a_relaxed_edit_in_the_folder_skips_its_question_and_nothing_else_does() {
+        use super::super::decide::toolgate::{with_note, Note, Relax};
+        let db = Db::open_in_memory().unwrap();
+        let perms = PermissionManager::new();
+        let sink = AgentEventSink::new(tauri::ipc::Channel::new(|_| Ok(())));
+        let trust = Trust::parse("confirm");
+        let root = canonicalize_lenient(&std::env::temp_dir()).join("poiesis-relax-folder");
+        std::fs::create_dir_all(&root).unwrap();
+        let inside = root.join("notes.txt");
+        let outside = canonicalize_lenient(&std::env::temp_dir()).join("poiesis-relax-outside.txt");
+        let sure = Relax { low: 0.97, in_scope: 0.99 };
+
+        let ask = |tool: &'static str, path: PathBuf, note_for: Option<&'static str>| {
+            let (db, perms, sink, root) = (&db, &perms, &sink, root.clone());
+            async move {
+                let run = authorize(db, perms, sink, "conv_relax", Some(root.as_path()), trust, &path, tool, None, true);
+                match note_for {
+                    Some(t) => with_note(Note::new(t, None, Some(sure)), run).await,
+                    None => (run.await, None),
+                }
+            }
+        };
+
+        // No note: the question was coming.
+        let (out, said) = ask("edit_file", inside.clone(), None).await;
+        assert!(out.unwrap_err().contains("needs an answer nobody is there to give"));
+        assert_eq!(said, None);
+        // A note for this very tool: no question, and the words for the step.
+        let (out, said) = ask("edit_file", inside.clone(), Some("edit_file")).await;
+        assert!(out.unwrap().in_folder);
+        assert_eq!(said.as_deref(), Some("Skipped a prompt \u{b7} edit_file \u{b7} low risk (0.97)"));
+        let (out, _) = ask("write_file", inside.clone(), Some("write_file")).await;
+        assert!(out.is_ok(), "writing one file is the other tool that may be relaxed");
+        // A note for another tool relaxes nothing.
+        let (out, said) = ask("edit_file", inside.clone(), Some("write_file")).await;
+        assert!(out.is_err() && said.is_none());
+        // Taking something away is never relaxed, whatever note is in force.
+        for tool in ["delete_file", "move_file"] {
+            let (out, said) = ask(tool, inside.clone(), Some(tool)).await;
+            assert!(out.is_err() && said.is_none(), "{tool}");
+        }
+        // Outside the folder is the scope flow, which a note does not touch.
+        let (out, said) = ask("edit_file", outside.clone(), Some("edit_file")).await;
+        assert!(out.unwrap_err().contains("outside the folder"));
+        assert_eq!(said, None);
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

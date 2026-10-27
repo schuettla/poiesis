@@ -146,6 +146,9 @@ export interface GoalHost {
   note(convId: string, text: string): void;
   /** Send an ordinary turn. */
   send(convId: string, text: string): Promise<void>;
+  /** `CTL-3`: the goal ended stuck or out of rounds, which tells the decision
+   * model whether its "not yet" was right. Nothing waits for it. */
+  outcome?(convId: string, event: "stalled" | "exhausted"): void;
 }
 
 /**
@@ -208,11 +211,13 @@ export async function afterRun(host: GoalHost, convId: string, end: RunEnd): Pro
   if (weighed?.stalled) {
     host.patch(convId, { checking: false, status: "stalled", lastCheck: check, stalled: weighed.stalled });
     host.note(convId, weighed.stalled);
+    host.outcome?.(convId, "stalled");
     return;
   }
   if (goal.round >= goal.maxRounds) {
     host.patch(convId, { checking: false, status: "exhausted", lastCheck: check });
     host.note(convId, `I stopped after ${goal.maxRounds} rounds. The goal is not met yet: ${check.next}`);
+    host.outcome?.(convId, "exhausted");
     return;
   }
 

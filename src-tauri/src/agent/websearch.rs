@@ -78,10 +78,10 @@ pub fn describe(name: &str, args: &serde_json::Value) -> (String, String) {
 }
 
 #[derive(Debug)]
-struct SearchHit {
-    title: String,
-    url: String,
-    snippet: String,
+pub(crate) struct SearchHit {
+    pub(crate) title: String,
+    pub(crate) url: String,
+    pub(crate) snippet: String,
 }
 
 /// Execute a Web Search tool call: search, optionally read the lead page, and
@@ -194,7 +194,7 @@ const RESULT_MARKER: &str = "result__a";
 /// In practice this endpoint almost never returns a genuinely empty result set;
 /// a query of pure gibberish still comes back with ten hits. So an empty parse
 /// is overwhelmingly likely to be a failure, and is now reported as one.
-async fn search(client: &reqwest::Client, query: &str) -> Result<Vec<SearchHit>, String> {
+pub(crate) async fn search(client: &reqwest::Client, query: &str) -> Result<Vec<SearchHit>, String> {
     let resp = client
         .post(ENDPOINT)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
@@ -305,7 +305,7 @@ fn clean_url(href: &str) -> String {
 
 /// Fetch a page and reduce it to readable plain text (script/style removed, tags
 /// stripped, whitespace collapsed, capped).
-async fn fetch_readable(client: &reqwest::Client, url: &str, cap: usize) -> Result<String, String> {
+pub(crate) async fn fetch_readable(client: &reqwest::Client, url: &str, cap: usize) -> Result<String, String> {
     let resp = client
         .get(url)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
@@ -314,6 +314,109 @@ async fn fetch_readable(client: &reqwest::Client, url: &str, cap: usize) -> Resu
         .map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
     Ok(html_to_text(&body, cap))
+}
+
+/// A page as the check of an answer reads it (`USE-10`): its readable text, capped,
+/// and the date it says it was published or changed, when it says one. The date comes
+/// from the page's own markup or, failing that, the `Last-Modified` header; a page
+/// that gives neither has none, and the caller keeps the time it was read instead.
+pub(crate) async fn fetch_page(client: &reqwest::Client, url: &str, cap: usize) -> Result<(String, Option<String>), String> {
+    let resp = client
+        .get(url)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("the page answered {}", resp.status()));
+    }
+    let modified = resp
+        .headers()
+        .get(reqwest::header::LAST_MODIFIED)
+        .and_then(|v| v.to_str().ok())
+        .and_then(date_from_http);
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let date = page_date(&body).or(modified);
+    Ok((html_to_text(&body, cap), date))
+}
+
+/// The date (`YYYY-MM-DD`) a page says it was published or modified. Looks at the
+/// markers pages put there for search engines: Open Graph and `<meta>` times, JSON-LD
+/// `datePublished`/`dateModified` and a `<time datetime>` tag. The first that holds a
+/// date wins, in that order.
+pub(crate) fn page_date(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    // `needle` is a lower-case marker; the value follows it inside quotes.
+    let after = |needle: &str, quote_from: usize| -> Option<String> {
+        let at = lower.find(needle)? + quote_from;
+        let rest = &html[at..];
+        let start = rest.find(['"', '\''])? + 1;
+        let value = &rest[start..];
+        let end = value.find(['"', '\''])?;
+        iso_day(&value[..end])
+    };
+    for needle in ["article:published_time", "article:modified_time", "og:updated_time", "name=\"date\"", "itemprop=\"datepublished\""] {
+        if let Some(day) = tag_content(&lower, html, needle) {
+            return Some(day);
+        }
+    }
+    for key in ["\"datepublished\"", "\"datemodified\""] {
+        if let Some(day) = after(key, key.len()) {
+            return Some(day);
+        }
+    }
+    if let Some(at) = lower.find("<time") {
+        let tag_end = lower[at..].find('>').map(|e| at + e)?;
+        let tag = &html[at..tag_end];
+        if let Some(i) = tag.to_ascii_lowercase().find("datetime=") {
+            let rest = &tag[i + 9..];
+            let start = rest.find(['"', '\''])? + 1;
+            let value = &rest[start..];
+            let end = value.find(['"', '\''])?;
+            return iso_day(&value[..end]);
+        }
+    }
+    None
+}
+
+/// The `content="..."` of the `<meta>` tag that holds `needle`.
+fn tag_content(lower: &str, html: &str, needle: &str) -> Option<String> {
+    let at = lower.find(needle)?;
+    let open = lower[..at].rfind('<')?;
+    let close = lower[at..].find('>').map(|e| at + e)?;
+    let tag = &html[open..close];
+    let i = tag.to_ascii_lowercase().find("content=")?;
+    let rest = &tag[i + 8..];
+    let start = rest.find(['"', '\''])? + 1;
+    let value = &rest[start..];
+    let end = value.find(['"', '\''])?;
+    iso_day(&value[..end])
+}
+
+/// `2024-03-05T10:00:00Z` or `2024-03-05` as `2024-03-05`; anything else is no date.
+fn iso_day(value: &str) -> Option<String> {
+    let day: String = value.trim().chars().take(10).collect();
+    if !day.is_ascii() || day.len() != 10 {
+        return None;
+    }
+    let b = day.as_bytes();
+    let ok = b[4] == b'-' && b[7] == b'-' && b.iter().enumerate().all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit());
+    let year: u32 = day[..4].parse().ok()?;
+    let month: u32 = day[5..7].parse().ok()?;
+    (ok && (1900..=2100).contains(&year) && (1..=12).contains(&month)).then_some(day)
+}
+
+/// `Tue, 05 Mar 2024 10:00:00 GMT` as `2024-03-05`.
+fn date_from_http(value: &str) -> Option<String> {
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    let day: u32 = parts.get(1)?.parse().ok()?;
+    let name = *parts.get(2)?;
+    let month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        .iter()
+        .position(|m| m.eq_ignore_ascii_case(name))?
+        + 1;
+    let year: u32 = parts.get(3)?.parse().ok()?;
+    iso_day(&format!("{year:04}-{month:02}-{day:02}"))
 }
 
 /// Crude readability: drop `<script>`/`<style>` blocks, strip remaining tags,
@@ -491,6 +594,27 @@ mod tests {
         // The marker is present but nothing survives parsing: genuinely empty.
         let empty = r#"<div class="result__a-wrapper">result__a</div>"#;
         assert!(interpret(reqwest::StatusCode::OK, empty).expect("not an error").is_empty());
+    }
+
+    #[test]
+    fn a_page_gives_its_date_from_the_markers_search_engines_read() {
+        let og = r#"<head><meta property="article:published_time" content="2024-03-05T10:00:00Z"></head>"#;
+        assert_eq!(page_date(og).as_deref(), Some("2024-03-05"));
+        let reversed = r#"<meta content='2023-11-30' property='article:modified_time'>"#;
+        assert_eq!(page_date(reversed).as_deref(), Some("2023-11-30"));
+        let ld = r#"<script type="application/ld+json">{"@type":"Article","datePublished":"2022-01-09T08:00:00+01:00"}</script>"#;
+        assert_eq!(page_date(ld).as_deref(), Some("2022-01-09"));
+        let time = r#"<p>Posted <time datetime="2021-07-04">July 4</time></p>"#;
+        assert_eq!(page_date(time).as_deref(), Some("2021-07-04"));
+        assert_eq!(page_date("<p>no date here</p>"), None);
+        assert_eq!(page_date(r#"<meta property="article:published_time" content="soon">"#), None);
+    }
+
+    #[test]
+    fn the_last_modified_header_reads_as_a_day() {
+        assert_eq!(date_from_http("Tue, 05 Mar 2024 10:00:00 GMT").as_deref(), Some("2024-03-05"));
+        assert_eq!(date_from_http("Mon, 1 Jan 2001 00:00:00 GMT").as_deref(), Some("2001-01-01"));
+        assert_eq!(date_from_http("yesterday"), None);
     }
 
     #[test]

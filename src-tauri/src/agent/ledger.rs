@@ -110,6 +110,20 @@ impl Ledger {
         Some(inner.edited.len())
     }
 
+    /// Whether `take_unverified` would say `Some` now, without using it up.
+    pub fn has_unverified(&self) -> bool {
+        let inner = self.0.lock().unwrap();
+        !(inner.nudged || inner.edited.is_empty() || inner.last_check > inner.last_edit)
+    }
+
+    /// Whether files were changed and no check ran after the last change, whether or not
+    /// the run was already asked about it. The automatic check of an answer marks a
+    /// sentence that says the change works while this is so (`SEE-1`).
+    pub fn unchecked_edits(&self) -> bool {
+        let inner = self.0.lock().unwrap();
+        !inner.edited.is_empty() && inner.last_check <= inner.last_edit
+    }
+
     pub fn edited_count(&self) -> usize {
         self.0.lock().unwrap().edited.len()
     }
@@ -170,12 +184,16 @@ mod tests {
     fn the_unverified_note_fires_once_and_only_after_unchecked_edits() {
         let ledger = Ledger::default();
         assert_eq!(ledger.take_unverified(), None, "nothing edited");
+        assert!(!ledger.has_unverified());
 
         let f = scratch_file("x");
         ledger.record_check();
         ledger.record_edit(&f, true);
+        // Looking does not use the note up: a skipped reminder is still there.
+        assert!(ledger.has_unverified() && ledger.has_unverified());
         assert_eq!(ledger.take_unverified(), Some(1), "a check before the edit does not count");
         assert_eq!(ledger.take_unverified(), None, "once per run");
+        assert!(!ledger.has_unverified());
 
         let checked = Ledger::default();
         checked.record_edit(&f, true);
@@ -185,6 +203,17 @@ mod tests {
         let outside = Ledger::default();
         outside.record_edit(&f, false);
         assert_eq!(outside.take_unverified(), None, "a file outside the project is not project code");
+        assert!(!outside.unchecked_edits());
+
+        // `SEE-1`: still unchecked after the nudge was used, and not once a check ran.
+        let nudged = Ledger::default();
+        assert!(!nudged.unchecked_edits());
+        nudged.record_edit(&f, true);
+        assert!(nudged.unchecked_edits());
+        nudged.take_unverified();
+        assert!(nudged.unchecked_edits(), "the nudge being used up does not make the edit checked");
+        nudged.record_check();
+        assert!(!nudged.unchecked_edits());
         std::fs::remove_file(&f).ok();
     }
 }

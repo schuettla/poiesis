@@ -188,6 +188,10 @@ impl CloudModel {
 
 pub fn set_key(provider: Provider, key: &str) -> Result<(), secrets::SecretError> {
     let out = secrets::set_secret(SERVICE_CLOUD, provider.id(), key);
+    // A new OpenRouter key is a fresh start for quick decisions in the cloud.
+    if provider == Provider::OpenRouter {
+        crate::agent::decide::cloud::forget_faults();
+    }
     // A media backend's availability is decided by whether its key is present,
     // so the cached catalog is wrong the moment one is added or removed.
     crate::media::invalidate_model_cache();
@@ -196,6 +200,9 @@ pub fn set_key(provider: Provider, key: &str) -> Result<(), secrets::SecretError
 
 pub fn clear_key(provider: Provider) -> Result<(), secrets::SecretError> {
     let out = secrets::delete_secret(SERVICE_CLOUD, provider.id());
+    if provider == Provider::OpenRouter {
+        crate::agent::decide::cloud::forget_faults();
+    }
     crate::media::invalidate_model_cache();
     out
 }

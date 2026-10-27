@@ -102,6 +102,14 @@
   color: var(--ink-muted);
   margin: 0 0 2px;
 }
+/* `USE-12`: what a quick decision noticed about the call. Quiet, but not the
+   footnote grey of the lines around it: it is the one thing here that says "look". */
+.permission-reason {
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink);
+  margin: 0 0 10px;
+}
 .permission-remember {
   display: flex;
   align-items: baseline;
@@ -121,6 +129,25 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+/* USE-UI-9: the page that stopped the browser, cropped to the top of it. */
+.permission-shot {
+  margin: 0 0 12px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--paper-edge);
+}
+.permission-shot-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 240px;
+  object-fit: cover;
+  object-position: top;
+}
+.permission-actions-spaced {
+  margin: 14px 0 12px;
 }
 .permission-btn {
   font-family: var(--font-sans);

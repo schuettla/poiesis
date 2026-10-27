@@ -626,7 +626,7 @@ fn from_db(db: &crate::db::Db, opts: &GatherOpts<'_>) -> PromptInputs {
         .and_then(|c| c.project_id.as_deref())
         .and_then(|id| db.get_project(id).ok().flatten());
 
-    let workspace = conv.as_ref().is_some_and(|c| c.workspace);
+    let workspace = conv.as_ref().is_some_and(|c| crate::experiments::in_workspace(db, c));
 
     PromptInputs {
         base,
@@ -1089,6 +1089,10 @@ mod tests {
         db.add_block(&conv, None, "surface", "Workspace", r#"{"type":"stack"}"#).unwrap();
         assert!(!from_db(&db, &opts(&conv, true)).workspace);
         db.set_conversation_workspace(&conv, true).unwrap();
+        // `EXP-3`: the chat's flag is kept, but with the experiment off it is a
+        // normal chat, told nothing about a canvas.
+        assert!(!from_db(&db, &opts(&conv, true)).workspace);
+        db.set_setting("experiment.workspace", "on").unwrap();
         assert!(from_db(&db, &opts(&conv, true)).workspace);
 
         let mut inputs = base();

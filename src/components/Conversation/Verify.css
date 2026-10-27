@@ -1,0 +1,484 @@
+/* `USE-UI-7`, `SEE-UI-1`: Verify. Underlines in the answer, and a quiet panel under it.
+
+   One rule decides every colour here: the dot or the underline carries the finding,
+   the words carry the meaning, and ink carries the text. Supported claims carry no
+   mark unless asked for. Refuted is red, a claim that was not confirmed is amber and
+   dotted, and sources in dispute are amber and solid. The underline is never the only
+   sign: the list and the card say it in words.
+
+   The panel is built from the app's own parts: a hairline list that reads like a
+   settings group, a card like the other cards in the stream, the shared segmented
+   control for "right / wrong" and the shared switch for "Underline supported". */
+
+/* ---- the finding's colour, once ----
+   `--vf` is the colour of a finding. A mark, a dot and a row all read it from the
+   `vf-*` class they already carry, so the mapping lives in one place. */
+.vf-supported,
+.vf-backed {
+  --vf: var(--ok);
+}
+.vf-refuted,
+.vf-contradicted,
+.vf-undone {
+  --vf: var(--danger);
+}
+.vf-insufficient,
+.vf-conflicting,
+.vf-nothing,
+.vf-disagree {
+  --vf: var(--caution);
+}
+
+/* ---- the underline in the answer ---- */
+.run-text mark.vf-mark {
+  margin: 0 -2px;
+  padding: 0 2px;
+  color: inherit;
+  background: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: var(--vf, var(--ink-faint));
+  text-underline-offset: 3px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  transition:
+    background-color var(--t-fast),
+    text-decoration-color var(--t-fast);
+}
+.run-text mark.vf-mark:hover {
+  background: color-mix(in srgb, var(--vf, var(--ink)) 10%, transparent);
+}
+.run-text mark.vf-mark:focus-visible {
+  outline: 2px solid var(--ink-faint);
+  outline-offset: 1px;
+}
+.run-text mark.vf-mark.picked {
+  background: color-mix(in srgb, var(--vf, var(--ink)) 16%, transparent);
+}
+.run-text mark.vf-supported,
+.run-text mark.vf-refuted,
+.run-text mark.vf-conflicting,
+.run-text mark.vf-undone {
+  text-decoration-style: solid;
+}
+.run-text mark.vf-insufficient {
+  text-decoration-style: dotted;
+}
+
+/* ---- the panel ---- */
+.verify-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  animation: fade-in var(--dur) var(--ease-out);
+}
+.verify-panel > * {
+  min-width: 0;
+}
+
+/* One line of the panel. It keeps the height of a small control, so the answer above
+   it never moves when the line goes from "checking" to a result. */
+.verify-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  min-height: var(--control-sm);
+  margin-top: 10px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.verify-panel > .verify-row {
+  margin-top: 0;
+}
+.verify-summary {
+  font-weight: 500;
+  color: var(--ink);
+}
+.verify-aside {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.verify-progress {
+  font-variant-numeric: tabular-nums;
+}
+.verify-error {
+  margin: 0;
+  color: var(--danger);
+}
+
+/* What the check says about itself, when it has something to add (a search that
+   stopped, a limit that was hit). A soft note on the quiet ground, not an alarm. */
+.verify-note {
+  margin: 0;
+  padding: 8px 12px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  background: var(--fill-quiet);
+  border-radius: var(--radius);
+}
+
+/* The small actions at the right end of the line. */
+.verify-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  margin-left: auto;
+}
+
+/* A quiet text action: colour-only feedback, like the app's other text buttons. */
+.verify-link {
+  padding: 3px 6px;
+  margin: 0 -6px;
+  font: inherit;
+  font-weight: 500;
+  color: var(--ink-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.verify-link:hover:not(:disabled),
+.verify-link:focus-visible {
+  color: var(--ink);
+  background: var(--fill-hover);
+}
+.verify-link:active:not(:disabled) {
+  background: var(--fill-press);
+}
+.verify-link:disabled {
+  color: var(--ink-faint);
+  cursor: default;
+}
+
+/* A real action, at the height of a small control: the shared secondary button. */
+.verify-btn {
+  min-height: var(--control-sm);
+  padding: 0 10px;
+  font-size: var(--fs-footnote);
+}
+
+/* "Underline supported": the app's switch, drawn a size down to sit on a footnote line. */
+.verify-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.verify-toggle:hover {
+  color: var(--ink);
+}
+.verify-toggle .toggle {
+  width: 28px;
+  height: 16px;
+}
+.verify-toggle .toggle-knob {
+  width: 12px;
+  height: 12px;
+}
+.verify-toggle .toggle-input:checked + .toggle-track .toggle-knob {
+  transform: translateX(12px);
+}
+
+/* The dot that says what a finding is. Never alone: its words are beside it. */
+.verify-dot,
+.verify-finding::before {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vf, var(--ink-faint));
+}
+.verify-finding::before {
+  content: "";
+}
+
+/* While a check runs. A single dot that breathes: the app's own sign that something
+   is at work, without a spinner. */
+.verify-pulse {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  animation: verify-breathe 1.6s var(--ease-in-out) infinite;
+}
+@keyframes verify-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ---- the claim list ----
+   Closed by default. Opened, it is one hairline group, the way a settings list is,
+   with its own scroll so a long check never pushes the conversation away. */
+.verify-claims > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: var(--control-sm);
+  margin-left: -8px;
+  padding: 0 8px;
+  list-style: none;
+  color: var(--ink-muted);
+  border-radius: var(--radius);
+  cursor: pointer;
+  user-select: none;
+}
+.verify-claims > summary::-webkit-details-marker {
+  display: none;
+}
+.verify-claims > summary:hover,
+.verify-claims > summary:focus-visible {
+  color: var(--ink);
+  background: var(--fill-hover);
+}
+.verify-twisty {
+  display: inline-flex;
+}
+.verify-twisty svg {
+  transition: transform var(--dur) var(--ease-out);
+}
+.verify-claims[open] .verify-twisty svg {
+  transform: rotate(90deg);
+}
+.verify-claims ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  max-height: 264px;
+  overflow-y: auto;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  animation: rise-in var(--dur) var(--ease-out);
+}
+.verify-claims li + li {
+  border-top: 1px solid var(--paper-edge);
+}
+.verify-claim {
+  display: grid;
+  grid-template-columns: 9.5em minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  width: 100%;
+  padding: 9px 12px;
+  text-align: left;
+  font: inherit;
+  line-height: 1.45;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+}
+.verify-claim:hover {
+  background: var(--fill-hover);
+}
+.verify-claim:active {
+  background: var(--fill-press);
+}
+.verify-claim.picked {
+  background: var(--fill-selected);
+}
+.verify-claim-text {
+  overflow-wrap: anywhere;
+}
+.verify-finding {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.verify-finding.vf-supported {
+  color: var(--ink-muted);
+}
+
+/* ---- the card of one claim ---- */
+.verify-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  animation: rise-in var(--dur-slow) var(--ease-out);
+}
+.verify-card p {
+  margin: 0;
+}
+.verify-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.verify-how {
+  color: var(--ink-faint);
+  text-align: right;
+}
+.verify-card-claim {
+  font-size: var(--fs-callout);
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.verify-card-reason {
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+.verify-card-none {
+  color: var(--ink-faint);
+}
+.verify-passages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.verify-passages li {
+  padding: 10px 12px;
+  background: var(--fill-quiet);
+  border-radius: var(--radius);
+}
+.verify-passages blockquote {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--paper-edge-2);
+  line-height: 1.5;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.verify-source {
+  margin-top: 6px;
+  padding-left: 12px;
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+}
+.verify-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--paper-edge);
+}
+.verify-card-actions .btn-secondary {
+  margin-left: auto;
+}
+
+/* "This is right / This is wrong": a verdict on the claim, one or the other, so it is
+   the shared segmented control, drawn a step smaller to sit in a card. */
+.segmented.verify-marks {
+  min-height: var(--control-sm);
+}
+.verify-marks .segmented-item {
+  min-height: calc(var(--control-sm) - 4px);
+  padding: 0 10px;
+}
+
+/* ---- `SEE-UI-1`: the automatic check ----
+   A backed sentence is drawn for a moment as the check passes over the text and then
+   settles back to plain text. Under reduced motion it is not drawn at all;
+   "Underline supported" keeps a backed sentence marked. A sentence the assistant says it
+   did, that no step of the run did, is red with a small flag. */
+.run-text mark.vf-sweep {
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--ok);
+  animation: vf-sweep 1.5s ease-out forwards;
+}
+@keyframes vf-sweep {
+  from {
+    text-decoration-color: var(--ok);
+  }
+  to {
+    text-decoration-color: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-text mark.vf-sweep {
+    text-decoration: none;
+    animation: none;
+  }
+  .verify-pulse {
+    animation: none;
+  }
+}
+.run-text mark.vf-undone::after {
+  content: "";
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  margin-left: 3px;
+  background: var(--danger);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M3.5 2h1.8v16H3.5zM5.3 3h11l-3 4 3 4h-11z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M3.5 2h1.8v16H3.5zM5.3 3h11l-3 4 3 4h-11z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* ---- the trust line ----
+   One line under the answer, in a row that keeps its height. Each part is a filter on
+   the claim list: quiet at rest, a fill under the pointer, firmer when it is the
+   filter in use. */
+.trust-line {
+  min-height: var(--control-sm);
+  align-items: center;
+}
+.trust-part {
+  display: inline-flex;
+  align-items: center;
+}
+.trust-dot {
+  white-space: pre;
+  color: var(--ink-faint);
+}
+.trust-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 8px;
+  margin: 0 -2px;
+  font: inherit;
+  font-weight: 500;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.trust-seg.vf-backed {
+  color: var(--ink-muted);
+}
+.trust-seg:hover,
+.trust-seg:focus-visible {
+  background: var(--fill-hover);
+}
+.trust-seg:active {
+  background: var(--fill-press);
+}
+.trust-seg[aria-pressed="true"] {
+  color: var(--ink);
+  background: var(--fill-selected);
+}

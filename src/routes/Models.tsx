@@ -36,6 +36,7 @@ import {
   type ImageLibrary,
 } from "../components/ImageModels/ImageModels";
 import ConfirmDialog from "../components/Confirm/ConfirmDialog";
+import { DecisionModelGroup } from "../components/DecisionModel/DecisionModel";
 import { ChevronIcon, DownloadIcon, PlusIcon, SectionIcon } from "../components/Icons/Icons";
 import "./Surface.css";
 import "../components/ModelPicker/ModelPicker.css";
@@ -81,6 +82,8 @@ function matches(m: Model, q: string): boolean {
  * this PC or through the user's accounts, in one list per tab. */
 export default function Models() {
   const [tab, setTab] = useState<FavoriteTab>("chat");
+  // The Decision model is a tab of its own, not a kind of chat or media model.
+  const [pane, setPane] = useState<"models" | "decide">("models");
   const [door, setDoor] = useState<Door | null>(null);
   const [hw, setHw] = useState<HardwareProfile | null>(null);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
@@ -97,6 +100,8 @@ export default function Models() {
   const setSource = useAppStore((s) => s.setModelsSource);
   const openProviders = useAppStore((s) => s.openProviders);
   const openRuntime = useAppStore((s) => s.openRuntime);
+  const tabRequest = useAppStore((s) => s.modelsTabRequest);
+  const clearTabRequest = useAppStore((s) => s.clearModelsTabRequest);
   const imageLib = useImageLibrary();
 
   useEffect(() => {
@@ -112,10 +117,24 @@ export default function Models() {
       .catch(() => setRuntimeInstalled(null));
   }, []);
 
+  // Arriving from Experiments or Runtime, "Set up" lands on the tab it means.
+  useEffect(() => {
+    if (!tabRequest) return;
+    if (tabRequest === "decide") setPane("decide");
+    else {
+      setPane("models");
+      setTab(tabRequest);
+    }
+    clearTabRequest();
+  }, [tabRequest, clearTabRequest]);
+
   // A source chip from Providers / Runtime (`MOD-6`) always lands on Chat,
   // where server and cloud chat models live.
   useEffect(() => {
-    if (source && source.source !== "local") setTab("chat");
+    if (source && source.source !== "local") {
+      setPane("models");
+      setTab("chat");
+    }
   }, [source]);
 
   const inTab = (m: Model) => (tab === "chat" ? isChatModel(m) : isMediaModel(m));
@@ -182,22 +201,31 @@ export default function Models() {
             {(
               [
                 ["chat", "Chat"],
+                ...(inTauri() ? [["decide", "Decision"]] : []),
                 ["media", "Images & video"],
-              ] as [FavoriteTab, string][]
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                className={`model-tab ${tab === id ? "on" : ""}`}
-                role="tab"
-                aria-selected={tab === id}
-                onClick={() => {
-                  setTab(id);
-                  setDoor(null);
-                }}
-              >
-                {label}
-              </button>
-            ))}
+              ] as ["chat" | "decide" | "media", string][]
+            ).map(([id, label]) => {
+              const on = id === "decide" ? pane === "decide" : pane === "models" && tab === id;
+              return (
+                <button
+                  key={id}
+                  className={`model-tab ${on ? "on" : ""}`}
+                  role="tab"
+                  aria-selected={on}
+                  onClick={() => {
+                    setDoor(null);
+                    if (id === "decide") {
+                      setPane("decide");
+                    } else {
+                      setPane("models");
+                      setTab(id);
+                    }
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
           <div className="models-filters" role="group" aria-label="Where models run">
             {(
@@ -228,6 +256,10 @@ export default function Models() {
           </div>
         </div>
 
+        {pane === "decide" ? (
+          <DecisionModelGroup filter={filter} />
+        ) : (
+          <>
         {/* `MOD-8`: two equal ways in when there is nothing to chat with. */}
         {isFirstRun && (
           <FirstRun
@@ -248,7 +280,6 @@ export default function Models() {
         {showLocal && tab === "media" && imageLib.models.length > 0 && (
           <LocalImageGroup lib={imageLib} />
         )}
-
         {/* Your server · X */}
         {serverGroups.map((g) => (
           <section className="model-section" key={g.id}>
@@ -355,6 +386,8 @@ export default function Models() {
           )}
           {imageLib.error && tab === "media" && <p className="hw-note error">{imageLib.error}</p>}
         </section>
+          </>
+        )}
       </div>
     </div>
   );

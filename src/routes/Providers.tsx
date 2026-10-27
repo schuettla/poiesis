@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  decideCloudStatus,
   inTauri,
   verifyProviderKey,
   clearProviderKey,
@@ -133,6 +134,15 @@ function ProviderCard({ provider: p }: { provider: ProviderInfo }) {
   const [formOpen, setFormOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  // `DEC-UI-3`: the OpenRouter key is also what quick decisions use, once they are
+  // sent there. The card says so only while that is true.
+  const [quickDecisions, setQuickDecisions] = useState(false);
+  useEffect(() => {
+    if (p.id !== "openrouter" || !inTauri()) return;
+    decideCloudStatus()
+      .then((s) => setQuickDecisions(s.backend === "cloud"))
+      .catch(() => {});
+  }, [p.id, p.key_set]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -204,6 +214,9 @@ function ProviderCard({ provider: p }: { provider: ProviderInfo }) {
         </span>
       </div>
       <p className="provider-card-unlocks">{unlocksLine(p, p.key_set ? chatCount : 0)}</p>
+      {p.id === "openrouter" && quickDecisions && (
+        <p className="provider-card-unlocks">Also used for: quick decisions (chosen in Runtime)</p>
+      )}
       {state === "attention" && (
         <p className="provider-card-problem">
           {p.last_error}{" "}

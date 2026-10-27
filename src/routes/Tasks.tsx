@@ -212,6 +212,12 @@ function formatWhen(at: number): string {
   return sameDay ? `today at ${time}` : `${d.toLocaleDateString()} at ${time}`;
 }
 
+/** `SEE-4`: the hover of a skipped run, with the number the quick decision gave: the
+ * chance that the condition held. */
+function skipTitle(held: number | undefined): string | undefined {
+  return held === undefined ? undefined : `Quick decision: the chance that the condition held was ${held.toFixed(2)}`;
+}
+
 /** One task: what it does, when it next runs, and every run you can open. */
 function TaskCard({
   job,
@@ -248,6 +254,7 @@ function TaskCard({
       </div>
       <p className="task-prompt">{job.prompt}</p>
       {job.scope && <p className="task-meta">Reads {job.scope}</p>}
+      {job.run_if && <p className="task-meta">Only runs if {job.run_if}</p>}
       <p className="task-meta">
         {running
           ? "Running now…"
@@ -276,14 +283,25 @@ function TaskCard({
 
       {showRuns && (
         <ul className="task-runs">
-          {job.runs.map((r) => (
-            <li key={r.conversation_id}>
-              <button className="task-run-open" onClick={() => openRun(r.conversation_id)}>
+          {job.runs.map((r) =>
+            // `USE-UI-6`: a run the condition skipped has no chat to open, so it
+            // is a muted row that says why, in words. The probability is its hover.
+            r.skipped !== undefined ? (
+              <li key={`${r.at}-skipped`} className="task-run-skipped">
                 <span className="task-run-when">{formatWhen(r.at)}</span>
-                <span className="task-run-summary">{r.summary}</span>
-              </button>
-            </li>
-          ))}
+                <span className="task-run-summary" title={skipTitle(r.skipped)}>
+                  {r.summary}
+                </span>
+              </li>
+            ) : (
+              <li key={r.conversation_id}>
+                <button className="task-run-open" onClick={() => openRun(r.conversation_id)}>
+                  <span className="task-run-when">{formatWhen(r.at)}</span>
+                  <span className="task-run-summary">{r.summary}</span>
+                </button>
+              </li>
+            )
+          )}
         </ul>
       )}
     </article>
@@ -316,6 +334,7 @@ function TaskEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [scope, setScope] = useState<string | null>(job?.scope ?? null);
+  const [runIf, setRunIf] = useState(job?.run_if ?? "");
   const [enabled, setEnabled] = useState(job?.enabled ?? true);
   const [saving, setSaving] = useState(false);
 
@@ -339,6 +358,7 @@ function TaskEditor({
         scope,
         enabled,
         source_conversation_id: job ? job.source_conversation_id : (draft?.conversationId ?? null),
+        run_if: runIf.trim() || null,
       });
     } finally {
       setSaving(false);
@@ -395,6 +415,26 @@ function TaskEditor({
           </button>
         )}
       </div>
+      {/* `USE-UI-6`: the condition. A quick decision checks it before each scheduled
+          run, over the folder above, any web address written in the task and what
+          the last run said. It only ever skips: if it cannot be checked, the task
+          runs as it always did, and "Run now" never checks it. */}
+      <label className="self-field">
+        <span>Only run if… (optional)</span>
+        <input
+          type="text"
+          value={runIf}
+          placeholder="there's a new release since last time"
+          onChange={(e) => setRunIf(e.target.value)}
+        />
+      </label>
+      {runIf.trim() && (
+        <p className="self-line self-note">
+          Checked on this computer before each scheduled run, against the folder, the web addresses
+          in the task and the last result. It needs Fast &amp; slow thinking in Settings →
+          Experiments; without it the task always runs.
+        </p>
+      )}
       <label className="toggle-line">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         <span>Run it on this schedule</span>

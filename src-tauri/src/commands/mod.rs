@@ -5,12 +5,14 @@ pub mod agent;
 pub mod attachments;
 pub mod browser;
 pub mod cloud;
+pub mod decide;
 pub mod composio;
 pub mod connectors;
 pub mod conversations;
 pub mod embedgen;
 pub mod endpoints;
 pub mod engines;
+pub mod experiments;
 pub mod files;
 pub mod imagegen;
 pub mod index;
@@ -30,6 +32,7 @@ pub mod skills;
 pub mod subagents;
 pub mod updater;
 pub mod usage;
+pub mod verify;
 #[cfg(feature = "voice")]
 pub mod voice;
 

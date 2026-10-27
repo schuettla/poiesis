@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 
+use super::decide::toolgate::AppNotes;
 use crate::autonomy::{autonomy_gate, Rung};
 use crate::db::{ConnectorPolicy, Db};
 use crate::mcp::{McpClient, McpTool};
@@ -223,6 +224,10 @@ pub struct GateEnv<'a> {
     pub headless: bool,
     /// `YYYY-MM-DD`: the day this call counts as.
     pub day: String,
+    /// `USE-12`: what a quick decision noticed about this call. It can add a line to
+    /// the question, and ask about a read nobody asked for. It never lets a call
+    /// through that the policy below would stop.
+    pub notes: Option<&'a AppNotes>,
 }
 
 /// One app's share of a call (`CAP-5`). A call to an ordinary connector has one;
@@ -395,13 +400,17 @@ pub async fn admit(env: &GateEnv<'_>, call: &Call<'_>) -> Result<Admit, String> 
         })
         .collect();
     let app = label(call);
+    let strictest = groups.iter().map(|g| g.kind).max().unwrap_or(call.kind);
+    // `USE-12`: a read the request did not call for is asked about, which is the one
+    // thing a quick decision can add here.
+    let added = env.notes.is_some_and(|n| n.adds_to(strictest));
 
     // A call that touches several apps asks once if any of them needs asking.
     let mut reason: Option<String> = None;
     let mut all_allowed = true;
     for (g, policy) in groups.iter().zip(&policies) {
         let allowed = match g.kind {
-            CallKind::Read => policy.read_policy != "ask",
+            CallKind::Read => policy.read_policy != "ask" && !added,
             CallKind::Change => policy.change_policy == "allow",
             CallKind::Send => {
                 // `Off` withdraws send tools from the registry; this is the same
@@ -436,16 +445,21 @@ pub async fn admit(env: &GateEnv<'_>, call: &Call<'_>) -> Result<Admit, String> 
         .zip(&policies)
         .find(|(g, _)| g.kind == CallKind::Send)
         .map(|(_, p)| p.send_cap);
-    let strictest = groups.iter().map(|g| g.kind).max().unwrap_or(call.kind);
 
     let base = summary(call);
     let summary = match &reason {
         Some(r) => format!("{r} {base}"),
         None => base,
     };
+    // `USE-12`: the line the question carries. A question added for a read says so.
+    let line = env.notes.and_then(|n| n.reason(added));
 
     if env.headless {
-        return Ok(leave_for_approval(env, call, &summary, reason.is_some()));
+        let said = match (&line, added) {
+            (Some(l), true) => format!("{summary} ({l})"),
+            _ => summary,
+        };
+        return Ok(leave_for_approval(env, call, &said, reason.is_some()));
     }
 
     let id = format!("perm_{}", uuid::Uuid::new_v4());
@@ -461,6 +475,8 @@ pub async fn admit(env: &GateEnv<'_>, call: &Call<'_>) -> Result<Admit, String> 
     if !call.tools.is_empty() {
         request.tools = Some(call.tools.to_vec());
     }
+    request.reason = line;
+    request.reason_hover = env.notes.and_then(|n| n.hover(added));
     env.sink.send_permission(request);
     let decision = until_cancelled(env.cancel, rx).await.map(|d| d.unwrap_or(Decision::Deny));
     match decision {
@@ -470,6 +486,9 @@ pub async fn admit(env: &GateEnv<'_>, call: &Call<'_>) -> Result<Admit, String> 
         }
         Some(Decision::Deny) => {
             log_decision(env, call, "declined");
+            if let Some(n) = env.notes {
+                n.label_refusal(env.db);
+            }
             Err(format!("The person declined to let me use {} in {app}.", humanise(call.tool)))
         }
         Some(Decision::Once) | Some(Decision::Chat) => {
@@ -802,6 +821,7 @@ mod tests {
                 conversation_id: "conv",
                 headless,
                 day: day.to_string(),
+                notes: None,
             }
         }
 
@@ -1041,6 +1061,117 @@ mod tests {
         let only = [part("gmail", "Gmail", CallKind::Change, 0)];
         assert_eq!(admit(&h.env(false, "d"), &batch(&only, "x", &args)).await, Ok(Admit::Run));
         assert_eq!(h.shown.lock().unwrap().len(), 1);
+    }
+
+    // ---- what a quick decision noticed (USE-12) ----
+
+    use crate::agent::decide::toolgate::{Flag, Scoped, Upgrade, Why};
+
+    fn off_request(p: f32, add: bool) -> AppNotes {
+        AppNotes {
+            scope: Some(Scoped { flag: Flag { why: Why::Scope, p, add, calibrated: false }, decision: "s".into() }),
+            raised: None,
+        }
+    }
+
+    /// `USE-T-2`: a read that would have run unasked is asked about when the request did
+    /// not call for it, and the question says why.
+    #[tokio::test]
+    async fn a_read_nobody_asked_for_is_asked_about_with_the_reason() {
+        let h = Harness::new();
+        let args = serde_json::json!({ "query": "salary" });
+        let notes = off_request(0.9, true);
+        let mut env = h.env(false, "d");
+        env.notes = Some(&notes);
+        let answer = h.answer_next(Decision::Once);
+        assert_eq!(admit(&env, &call(CallKind::Read, &args)).await, Ok(Admit::Run));
+        answer.await.unwrap();
+        let shown = h.shown.lock().unwrap();
+        assert_eq!(shown.len(), 1);
+        let text = shown[0].to_string();
+        assert!(text.contains("Asked because this is not what you asked for"), "{text}");
+    }
+
+    /// A doubt that is only a line never adds a question to a read, and never removes one.
+    #[tokio::test]
+    async fn a_doubt_that_is_only_a_line_leaves_a_read_alone_and_a_change_gets_the_line() {
+        let h = Harness::new();
+        let args = serde_json::json!({});
+        let notes = off_request(0.7, false);
+        let mut env = h.env(false, "d");
+        env.notes = Some(&notes);
+        assert_eq!(admit(&env, &call(CallKind::Read, &args)).await, Ok(Admit::Run));
+        assert!(h.shown.lock().unwrap().is_empty(), "a read is not stopped by a line");
+        let answer = h.answer_next(Decision::Once);
+        assert_eq!(admit(&env, &call(CallKind::Change, &args)).await, Ok(Admit::Run));
+        answer.await.unwrap();
+        let text = h.shown.lock().unwrap()[0].to_string();
+        assert!(text.contains("Flagged: this may not be what you asked for"), "{text}");
+    }
+
+    /// A question that was never going to be asked is not made unnecessary by a note.
+    #[tokio::test]
+    async fn a_note_never_lets_a_call_through_that_the_policy_would_stop() {
+        let h = Harness::new();
+        let args = serde_json::json!({});
+        let notes = off_request(0.0, false);
+        let mut env = h.env(false, "d");
+        env.notes = Some(&notes);
+        let answer = h.answer_next(Decision::Deny);
+        assert!(admit(&env, &call(CallKind::Send, &args)).await.is_err());
+        answer.await.unwrap();
+        assert_eq!(h.shown.lock().unwrap().len(), 1, "a send still asks");
+    }
+
+    #[tokio::test]
+    async fn a_no_to_a_flagged_question_labels_both_decisions() {
+        let h = Harness::new();
+        for id in ["s", "k"] {
+            h.db.add_decision(&crate::db::decisions::NewDecision {
+                id,
+                conversation_id: None,
+                run_id: None,
+                purpose: "tool-risk",
+                backend: "local:m",
+                model: "m",
+                ms: 1,
+                calibrated: false,
+                answers: &serde_json::json!({}),
+                input_tokens: 0,
+                state_preview: "",
+                state_hash: id,
+                action: None,
+            })
+            .unwrap();
+        }
+        let args = serde_json::json!({});
+        let notes = AppNotes {
+            scope: Some(Scoped { flag: Flag { why: Why::Scope, p: 0.9, add: true, calibrated: false }, decision: "s".into() }),
+            raised: Some(Upgrade { p: 0.7, decision: "k".into(), calibrated: false }),
+        };
+        let mut env = h.env(false, "d");
+        env.notes = Some(&notes);
+        let answer = h.answer_next(Decision::Deny);
+        assert!(admit(&env, &call(CallKind::Send, &args)).await.is_err());
+        answer.await.unwrap();
+        let labels = |id: &str| h.db.decision_by_id(id).unwrap().unwrap().outcomes.iter().map(|l| l.label.clone()).collect::<Vec<_>>();
+        assert_eq!(labels("s"), ["right"]);
+        assert_eq!(labels("k"), ["weak_right"]);
+    }
+
+    /// `USE-T-2`: an added question on an unattended run is parked "left for you", never a hang.
+    #[tokio::test]
+    async fn an_added_question_on_an_unattended_read_is_left_for_the_person() {
+        let h = Harness::new();
+        let args = serde_json::json!({});
+        let notes = off_request(0.95, true);
+        let mut env = h.env(true, "d");
+        env.notes = Some(&notes);
+        let out = admit(&env, &call(CallKind::Read, &args)).await.unwrap();
+        let Admit::Left(text) = out else { panic!("expected the call to be left") };
+        assert!(text.contains("not what you asked for"), "{text}");
+        assert!(h.shown.lock().unwrap().is_empty());
+        assert_eq!(h.db.list_change_proposals().unwrap().len(), 1);
     }
 
     #[tokio::test]

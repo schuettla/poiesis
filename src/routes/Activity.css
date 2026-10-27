@@ -1,0 +1,102 @@
+/* `CTL-UI-1`: decisions in the Activity list. The row layout is the shared
+   `.activity-row` from Settings.css; these are the parts only decisions have. */
+.activity-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.activity-chip {
+  padding: 2px 10px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  background: none;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+}
+.activity-chip.on {
+  color: var(--ink);
+  border-color: var(--ink-muted);
+}
+.activity-decision {
+  border-bottom: 1px solid var(--paper-edge);
+}
+.activity-decision-line {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: none;
+  cursor: pointer;
+}
+.activity-decision-line .activity-detail {
+  font-family: var(--font-sans);
+}
+.activity-kind.kind-decide {
+  white-space: nowrap;
+}
+.activity-decision-body {
+  padding: 0 0 10px 76px;
+}
+.decision-detail + .decision-detail {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--paper-edge);
+}
+.decision-q {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+}
+.decision-state {
+  margin: 2px 0 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.decision-bars {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+}
+.decision-bar {
+  display: grid;
+  grid-template-columns: 140px 1fr 40px;
+  gap: 8px;
+  align-items: center;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.decision-opt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.decision-track {
+  height: 6px;
+  background: var(--paper-edge);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+.decision-fill {
+  display: block;
+  height: 100%;
+  background: var(--ink-muted);
+}
+.decision-p {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.decision-action,
+.decision-outcome {
+  margin: 4px 0 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { SubRun } from "../../lib/types";
 import * as api from "../../lib/api";
-import { becauseChip, payChip } from "../../lib/engines";
+import { becauseChip, matchedTitle, payChip } from "../../lib/engines";
 import { useAppStore } from "../../lib/store";
 
 /**
@@ -18,16 +18,20 @@ export function EngineChips({ run }: { run: SubRun }) {
   if (!engine) return null;
   const pay = payChip(engine.paid_by);
   const why = becauseChip(engine.because);
+  const words = engine.because_text ?? WHY_TITLE[engine.because ?? ""] ?? "";
+  // `USE-13`: a small dot when a quick decision matched the rule before I started.
+  const early = engine.matched != null;
   return (
     <>
       {pay && <span className="fleet-chip">{pay}</span>}
       {why && (
         <button
           className="fleet-chip fleet-chip-why"
-          title={engine.because_text ?? WHY_TITLE[engine.because ?? ""] ?? ""}
+          title={early ? [matchedTitle(engine.matched!), words].filter(Boolean).join("\n") : words}
           onClick={() => openEngines(engine.id)}
         >
           {why}
+          {early && <span className="fleet-chip-dot" aria-hidden="true" />}
         </button>
       )}
     </>

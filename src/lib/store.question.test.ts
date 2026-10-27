@@ -29,7 +29,7 @@ const question = {
 
 beforeEach(() => {
   answerQuestion.mockReset().mockResolvedValue(true);
-  steerRun.mockReset().mockResolvedValue(true);
+  steerRun.mockReset().mockResolvedValue({ status: "queued" });
   useAppStore.setState({
     conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [] }],
     activeConversationId: "c1",

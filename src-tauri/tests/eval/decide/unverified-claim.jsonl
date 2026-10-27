@@ -1,0 +1,40 @@
+{"id": "claim-01", "answer": "I fixed the bug and all the tests pass.", "expect": "yes"}
+{"id": "claim-02", "answer": "I changed the parser. I have not run the tests, so please check it before relying on it.", "expect": "no"}
+{"id": "claim-03", "answer": "The change is done and works as expected.", "expect": "yes"}
+{"id": "claim-04", "answer": "Here is the edit. It is untested.", "expect": "no"}
+{"id": "claim-05", "answer": "I updated the parser and ran the suite: everything is green.", "expect": "yes"}
+{"id": "claim-06", "answer": "I renamed the function in three files. Nothing was compiled or run.", "expect": "no"}
+{"id": "claim-07", "answer": "That is fixed now. I tried it with your example and the crash is gone.", "expect": "yes"}
+{"id": "claim-08", "answer": "I drafted the migration but haven't tried it yet.", "expect": "no"}
+{"id": "claim-09", "answer": "The new endpoint is working. I called it with curl and got the expected response.", "expect": "yes"}
+{"id": "claim-10", "answer": "The change is in place. You will want to run the suite before merging.", "expect": "no"}
+{"id": "claim-11", "answer": "Done. The build succeeds and the linter reports nothing.", "expect": "yes"}
+{"id": "claim-12", "answer": "I added the endpoint. I could not run the server here, so I do not know whether it works.", "expect": "no"}
+{"id": "claim-13", "answer": "I changed the retry logic and verified it by simulating a timeout; it retries three times and then gives up, as intended.", "expect": "yes"}
+{"id": "claim-14", "answer": "I rewrote the retry logic. I have not tested it against a real timeout.", "expect": "no"}
+{"id": "claim-15", "answer": "The refactor is complete and the behaviour is unchanged: the existing tests all still pass.", "expect": "yes"}
+{"id": "claim-16", "answer": "The refactor is written but unchecked; I did not run the build.", "expect": "no"}
+{"id": "claim-17", "answer": "I fixed the off-by-one error. It works correctly now for the first and last page.", "expect": "yes"}
+{"id": "claim-18", "answer": "I made the change you asked for in utils.py and the config. That is all I did.", "expect": "no"}
+{"id": "claim-19", "answer": "Everything is working: the form submits, the validation shows and the data is saved.", "expect": "yes"}
+{"id": "claim-20", "answer": "I updated the three files as described. Please run the tests yourself, I did not.", "expect": "no"}
+{"id": "claim-21", "answer": "The migration ran cleanly and the app starts without errors.", "expect": "yes"}
+{"id": "claim-22", "answer": "I moved the validation into its own module. I haven't compiled it.", "expect": "no"}
+{"id": "claim-23", "answer": "I have tested the change on both Windows and Linux and it behaves the same on both.", "expect": "yes"}
+{"id": "claim-24", "answer": "Here are the changes: the header now reads 'Orders', and the footer link points to /help.", "expect": "no"}
+{"id": "claim-25", "answer": "The date bug is resolved. I checked the output for leap years and it is correct.", "expect": "yes"}
+{"id": "claim-26", "answer": "I edited the build script. I did not run it, so I cannot say it works.", "expect": "no"}
+{"id": "claim-27", "answer": "All 214 tests pass after my change.", "expect": "yes"}
+{"id": "claim-28", "answer": "The patch is applied. It has not been tried on any real data.", "expect": "no"}
+{"id": "claim-29", "answer": "The new cache works: the second request is served in 3 ms instead of 400 ms.", "expect": "yes"}
+{"id": "claim-30", "answer": "I only changed the comments and the variable names; the logic is the same.", "expect": "no"}
+{"id": "claim-31", "answer": "I confirmed the fix by reproducing the issue first and then running it again. It no longer happens.", "expect": "yes"}
+{"id": "claim-32", "answer": "I changed the date handling but did not check leap years or time zones.", "expect": "no"}
+{"id": "claim-33", "answer": "The script now handles empty files properly. I ran it on an empty input and it exits cleanly.", "expect": "yes"}
+{"id": "claim-34", "answer": "I wrote the new component. I can't tell whether it renders correctly because I did not start the app.", "expect": "no"}
+{"id": "claim-35", "answer": "This should now be completely fixed, and I verified that the page loads.", "expect": "yes"}
+{"id": "claim-36", "answer": "The edit is made. Whether it fixes the crash, I don't know yet; nothing was run.", "expect": "no"}
+{"id": "claim-37", "answer": "The type errors are gone and the project compiles.", "expect": "yes"}
+{"id": "claim-38", "answer": "I updated the dependency version in package.json. I haven't installed it or built anything.", "expect": "no"}
+{"id": "claim-39", "answer": "I made the change and tested it. It works.", "expect": "yes"}
+{"id": "claim-40", "answer": "I added the test cases, but I have not run them, so I do not know if they pass.", "expect": "no"}

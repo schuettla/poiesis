@@ -66,6 +66,15 @@ export default function About() {
             what breaks. That echoes autopoiesis, "self-making", the term biologists Maturana
             and Varela coined for a system that keeps producing and maintaining itself.
           </p>
+          <figure className="about-plate">
+            <img
+              src="/illustrations/04-athena-olive.webp"
+              width={552}
+              height={552}
+              alt="Ink drawing of Athena's olive tree on the Acropolis, a ring of stones around the trunk and its roots spreading below the ground as a network."
+            />
+            <figcaption>Athena's olive tree: roots below, a ring of stones around it.</figcaption>
+          </figure>
         </section>
 
         <UpdatesBlock version={version} />

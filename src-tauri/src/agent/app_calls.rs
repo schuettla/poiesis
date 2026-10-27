@@ -221,6 +221,13 @@ fn has_mail_account(db: &Db) -> bool {
     db.list_mail_accounts().unwrap_or_default().iter().any(|a| a.enabled)
 }
 
+/// `USE-4`: the app names this conversation may use, as the tool menu's decision
+/// reads them: names only, never Composio's descriptions or schemas.
+pub fn granted_app_names(db: &Db, conversation_id: &str, c: &Connector) -> String {
+    let grants = grants_for(db, conversation_id, &c.id);
+    named_list(&connected(db, &c.id), &grants)
+}
+
 /// The meta-tools this conversation is offered, in a fixed order, each with the
 /// connected-apps sentence in front of its own description.
 ///
@@ -407,6 +414,9 @@ pub struct Resolved {
     pub target: Target,
     pub app: String,
     pub kind: CallKind,
+    /// The person set this tool's kind themselves (`MCG-7`). A quick decision never
+    /// overrules that (`USE-12`).
+    pub overridden: bool,
 }
 
 /// Name each target's app and kind. The kind is the person's override for that
@@ -422,11 +432,12 @@ pub fn resolve(db: &Db, connector_id: &str, tool: &str, args: &Value) -> Result<
                 .get_connector_policy(connector_id, &app)
                 .map(|p| connector_gate::overrides_of(&p))
                 .unwrap_or_default();
+            let overridden = overrides.contains_key(&target.slug);
             let kind = overrides
                 .get(&target.slug)
                 .copied()
                 .unwrap_or_else(|| connector_gate::classify(&target.slug, &ToolHints::default()));
-            Resolved { target, app, kind }
+            Resolved { target, app, kind, overridden }
         })
         .collect())
 }
@@ -515,6 +526,21 @@ pub struct Planned {
     /// `CAP-C-F6`: each target's own arguments as the rows the panel lists, so a
     /// message about to be sent is readable and not buried in a `tools` array.
     pub shown: Value,
+    /// For rewording `said` when a target is raised.
+    mail_account: bool,
+}
+
+impl Planned {
+    /// `USE-12`: gate target `i` as a send, because a quick decision took it for one
+    /// whatever its name said. The app's part, the strictest kind and the sentence
+    /// follow. Nothing here ever makes a target looser.
+    pub fn raise(&mut self, i: usize) {
+        let Some(r) = self.resolved.get_mut(i) else { return };
+        r.kind = CallKind::Send;
+        self.parts = parts_of(&self.resolved);
+        self.kind = self.resolved.iter().map(|r| r.kind).max().unwrap_or(CallKind::Read);
+        self.said = said(&self.resolved, &self.parts, self.kind, self.mail_account);
+    }
 }
 
 const SHOWN_TARGETS: usize = 5;
@@ -631,9 +657,10 @@ pub fn plan(db: &Db, conversation_id: &str, connector_id: &str, tool: &str, args
     }
     let parts = parts_of(&resolved);
     let kind = resolved.iter().map(|r| r.kind).max().unwrap_or(CallKind::Read);
-    let said = said(&resolved, &parts, kind, has_mail_account(db));
+    let mail_account = has_mail_account(db);
+    let said = said(&resolved, &parts, kind, mail_account);
     let shown = shown_arguments(&resolved);
-    Ok(Planned { resolved, parts, kind, said, shown })
+    Ok(Planned { resolved, parts, kind, said, shown, mail_account })
 }
 
 // ---- connecting from the chat (CAP-6) ----
@@ -1149,6 +1176,41 @@ mod tests {
         assert!(p.said.starts_with("I'd like to send something through Gmail and Slack:"), "{}", p.said);
         assert!(p.said.contains("send message \u{2192} #general"), "{}", p.said);
         assert!(p.said.contains("fetch emails \u{2192} invoice"), "{}", p.said);
+    }
+
+    /// `USE-T-3`: a target a quick decision took for a send is gated as one, the app's
+    /// part counts the send, the sentence follows, and nothing else changes.
+    #[test]
+    fn a_raised_target_is_gated_as_a_send_and_the_rest_of_the_batch_stays() {
+        let db = Db::open_in_memory().unwrap();
+        let c = row(&db, &[("a1", "gmail", "work"), ("a2", "slack", "default")]);
+        let args = json!({ "tools": [
+            { "tool_slug": "GMAIL_FETCH_EMAILS", "arguments": { "query": "invoice" } },
+            { "tool_slug": "SLACK_UPDATE_CONVERSATION", "arguments": { "channel": "#general" } },
+        ]});
+        let mut p = plan(&db, &conv(&db), &c.id, MULTI_EXECUTE, &args).unwrap();
+        assert_eq!(p.kind, CallKind::Change, "by its name the second only changes");
+        p.raise(1);
+        assert_eq!(p.kind, CallKind::Send);
+        assert_eq!(p.parts[0], Part { app: "gmail".into(), name: "Gmail".into(), kind: CallKind::Read, sends: 0 });
+        assert_eq!(p.parts[1], Part { app: "slack".into(), name: "Slack".into(), kind: CallKind::Send, sends: 1 });
+        assert!(p.said.starts_with("I'd like to send something through Gmail and Slack:"), "{}", p.said);
+        assert_eq!(p.resolved[0].kind, CallKind::Read, "the target next to it is not touched");
+        p.raise(9);
+        assert_eq!(p.kind, CallKind::Send, "a place that is not there changes nothing");
+    }
+
+    #[test]
+    fn a_target_knows_when_the_person_set_its_kind() {
+        let db = Db::open_in_memory().unwrap();
+        let c = row(&db, &[("a1", "gmail", "work")]);
+        let mut policy = db.get_connector_policy(&c.id, "gmail").unwrap();
+        policy.tool_overrides = Some(r#"{"GMAIL_FETCH_EMAILS":"read"}"#.into());
+        db.save_connector_policy(&policy).unwrap();
+        let args = json!({ "tools": [{ "tool_slug": "GMAIL_FETCH_EMAILS" }, { "tool_slug": "GMAIL_LIST_LABELS" }] });
+        let p = plan(&db, &conv(&db), &c.id, MULTI_EXECUTE, &args).unwrap();
+        // Even a setting that equals what the name says is the person's, and wins.
+        assert_eq!((p.resolved[0].overridden, p.resolved[1].overridden), (true, false));
     }
 
     #[test]

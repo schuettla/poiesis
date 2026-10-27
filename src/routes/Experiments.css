@@ -1,0 +1,199 @@
+/* Settings -> Experiments (`EXP-UI-1`). Laid out like External agents: flat cards
+   with hairlines, a state dot, the name over a one-line status, a tag and the
+   On/Off switch in the head; below it small uppercase group titles and lines
+   separated by hairlines. The only colour is the state dot and the amber of a
+   switch that cannot be turned on yet. */
+
+.exp-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0 8px;
+}
+.exp-card {
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+}
+
+/* ---- the head ---- */
+.exp-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px 0;
+}
+.exp-glyph {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--ink-faint);
+}
+.exp-card.on .exp-glyph {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+.exp-ident {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.exp-title {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ink);
+}
+.exp-status {
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.exp-status.warn {
+  color: var(--cloud);
+}
+.exp-stage {
+  flex: none;
+  padding: 1px 8px;
+  font-size: var(--fs-caption);
+  color: var(--ink-muted);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-pill);
+}
+.exp-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.exp-switch-text {
+  min-width: 18px;
+  text-align: right;
+  font-size: var(--fs-footnote);
+  font-weight: 500;
+  color: var(--ink-faint);
+}
+.exp-switch-text.on {
+  color: var(--ink);
+}
+.exp-summary {
+  margin: 8px 18px 14px 38px;
+  max-width: 62ch;
+  font-size: var(--fs-ui);
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+/* ---- the body ---- */
+.exp-body {
+  padding: 0 18px 12px 38px;
+  border-top: 1px solid var(--paper-edge);
+}
+.exp-group {
+  padding: 16px 0 8px;
+}
+.exp-group + .exp-group {
+  border-top: 1px solid var(--paper-edge);
+}
+.exp-sub {
+  margin: 0 0 6px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.exp-list {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  font-size: var(--fs-ui);
+  line-height: 1.55;
+  color: var(--ink);
+}
+.exp-list li + li {
+  margin-top: 4px;
+}
+
+/* One line: what it is, then its value. */
+.exp-row {
+  display: flex;
+  gap: 16px;
+  padding: 10px 0;
+  font-size: var(--fs-ui);
+}
+.exp-row + .exp-row {
+  border-top: 1px solid var(--paper-edge);
+}
+.exp-label {
+  flex: 0 0 9.5rem;
+  font-weight: 500;
+  color: var(--ink);
+}
+.exp-value {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+.exp-need {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+}
+.exp-need-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--ink-faint);
+}
+.exp-need.met .exp-need-dot {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+.exp-need.missing {
+  color: var(--cloud);
+}
+
+/* ---- screen messages ---- */
+.exp-hint {
+  margin: 12px 0 0;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.exp-error {
+  margin: 8px 0 4px;
+  font-size: var(--fs-footnote);
+  color: var(--danger);
+}
+.exp-note {
+  margin: 8px 0 6px;
+  padding: 10px 14px;
+  background: var(--fill-quiet);
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-ui);
+  line-height: 1.55;
+  color: var(--ink);
+}
+.exp-note p {
+  margin: 0;
+}
+.exp-note-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}

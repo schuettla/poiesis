@@ -1,0 +1,67 @@
+{"id": "hp-01", "request": "Add a dark mode setting: it needs a new option in the config, the settings screen and the theme files.", "expect": "claude-code:U1"}
+{"id": "hp-02", "request": "Add pagination to the list endpoints and update the callers in the web app.", "expect": "claude-code:U1"}
+{"id": "hp-03", "request": "Change the date format everywhere in this project from DD/MM to ISO.", "expect": "claude-code:U1"}
+{"id": "hp-04", "request": "Implement the new export feature across the API, the database layer and the UI.", "expect": "claude-code:U1"}
+{"id": "hp-05", "request": "Switch the logging calls in all the modules to the new logger.", "expect": "claude-code:U1"}
+{"id": "hp-06", "request": "Add a currency field to the order model and update every place that reads it.", "expect": "claude-code:U1"}
+{"id": "hp-07", "request": "Make the sidebar collapsible, with changes in the layout component, its styles and the tests.", "expect": "claude-code:U1"}
+{"id": "hp-08", "request": "Move the shared types into a common package and fix the imports in every service.", "expect": "claude-code:U1"}
+{"id": "hp-09", "request": "Add an audit trail to all the admin actions in this codebase.", "expect": "claude-code:U1"}
+{"id": "hp-10", "request": "Run the test suite and fix whatever fails.", "expect": "claude-code:U2"}
+{"id": "hp-11", "request": "The build is red on CI. Run it locally and get it green.", "expect": "claude-code:U2"}
+{"id": "hp-12", "request": "Run npm test and fix the failing tests.", "expect": "claude-code:U2"}
+{"id": "hp-13", "request": "cargo test fails on my machine. Please run it and fix it.", "expect": "claude-code:U2"}
+{"id": "hp-14", "request": "Run the linter and the type checker and fix all the errors they report.", "expect": "claude-code:U2"}
+{"id": "hp-15", "request": "Make the build pass. It fails with a type error somewhere.", "expect": "claude-code:U2"}
+{"id": "hp-16", "request": "Run the integration tests and sort out the ones that time out.", "expect": "claude-code:U2"}
+{"id": "hp-17", "request": "The tests were passing yesterday. Run them, find what broke and fix it.", "expect": "claude-code:U2"}
+{"id": "hp-18", "request": "Run the formatter and the build, then fix any warnings.", "expect": "claude-code:U2"}
+{"id": "hp-19", "request": "Rename the User class to Account everywhere.", "expect": "claude-code:U3"}
+{"id": "hp-20", "request": "Migrate this project from Jest to Vitest.", "expect": "claude-code:U3"}
+{"id": "hp-21", "request": "Refactor the data access layer into repositories across the project.", "expect": "claude-code:U3"}
+{"id": "hp-22", "request": "Upgrade the project to React 19 and migrate the deprecated APIs.", "expect": "claude-code:U3"}
+{"id": "hp-23", "request": "Convert all the class components in this repo to function components.", "expect": "claude-code:U3"}
+{"id": "hp-24", "request": "Rename the config option timeoutMs to timeout_ms across the code and the docs.", "expect": "claude-code:U3"}
+{"id": "hp-25", "request": "Migrate the database access from raw SQL strings to the query builder in all the modules.", "expect": "claude-code:U3"}
+{"id": "hp-26", "request": "Replace the old HTTP client with the new one throughout the project.", "expect": "claude-code:U3"}
+{"id": "hp-27", "request": "Move this repo from CommonJS to ES modules.", "expect": "claude-code:U3"}
+{"id": "hp-28", "request": "The app crashes on startup with a null pointer. Find out why.", "expect": "claude-code:U4"}
+{"id": "hp-29", "request": "Users say the export sometimes returns an empty file. Reproduce it and find the cause.", "expect": "claude-code:U4"}
+{"id": "hp-30", "request": "There is a memory leak when the window is opened and closed ten times. Track it down.", "expect": "claude-code:U4"}
+{"id": "hp-31", "request": "The login test is flaky. Run it in a loop and find out what makes it fail.", "expect": "claude-code:U4"}
+{"id": "hp-32", "request": "The API returns a 500 for one specific request. Reproduce it locally and tell me what is wrong.", "expect": "claude-code:U4"}
+{"id": "hp-33", "request": "The progress bar jumps back to zero. Find the bug by running the app.", "expect": "claude-code:U4"}
+{"id": "hp-34", "request": "Find out why the nightly job takes ten times longer than it did last week.", "expect": "claude-code:U4"}
+{"id": "hp-35", "request": "Something in the parser loops forever on one input file. Find it.", "expect": "claude-code:U4"}
+{"id": "hp-36", "request": "The sync sometimes duplicates items. Reproduce it and find the cause.", "expect": "claude-code:U4"}
+{"id": "hp-37", "request": "Explain what the retry logic in this repo does.", "expect": "none"}
+{"id": "hp-38", "request": "Review this function and tell me if you see any problems.", "expect": "none"}
+{"id": "hp-39", "request": "What does the middleware chain do in this project?", "expect": "none"}
+{"id": "hp-40", "request": "Walk me through how the cache invalidation works here.", "expect": "none"}
+{"id": "hp-41", "request": "Can you summarise what changed in the last release?", "expect": "none"}
+{"id": "hp-42", "request": "Is this approach to pagination reasonable? Just give me your opinion.", "expect": "none"}
+{"id": "hp-43", "request": "Fix the typo in the first line of the README.", "expect": "none"}
+{"id": "hp-44", "request": "Change the default timeout from 30 to 60 in config.ts.", "expect": "none"}
+{"id": "hp-45", "request": "Rename the variable tmp to buffer in this function.", "expect": "none"}
+{"id": "hp-46", "request": "Add the missing semicolon on line 12 of utils.js.", "expect": "none"}
+{"id": "hp-47", "request": "Update the copyright year in the footer.", "expect": "none"}
+{"id": "hp-48", "request": "Change the button label from Save to Apply.", "expect": "none"}
+{"id": "hp-49", "request": "Draft a reply to Sam about the schedule.", "expect": "none"}
+{"id": "hp-50", "request": "What is on my calendar tomorrow?", "expect": "none"}
+{"id": "hp-51", "request": "Summarise the three emails from the supplier.", "expect": "none"}
+{"id": "hp-52", "request": "Write a short thank-you note to the team.", "expect": "none"}
+{"id": "hp-53", "request": "Search the web for the best way to store olive oil.", "expect": "none"}
+{"id": "hp-54", "request": "Help me plan a trip to Lisbon in May.", "expect": "none"}
+{"id": "hp-55", "request": "Translate this paragraph into German.", "expect": "none"}
+{"id": "hp-56", "request": "Remind me what we decided about the budget last week.", "expect": "none"}
+{"id": "hp-57", "request": "Thanks, that makes sense.", "expect": "none"}
+{"id": "hp-58", "request": "What is the difference between a mutex and a semaphore?", "expect": "none"}
+{"id": "hp-59", "request": "Why is the sky blue?", "expect": "none"}
+{"id": "hp-60", "request": "Give me three names for a podcast about gardening.", "expect": "none"}
+{"id": "hp-61", "request": "How do I write a for loop in Python?", "expect": "none"}
+{"id": "hp-62", "request": "What does idempotent mean?", "expect": "none"}
+{"id": "hp-63", "request": "Can you proofread this paragraph?", "expect": "none"}
+{"id": "hp-64", "request": "Do the same in the billing module too.", "previous": "I renamed the config option timeoutMs to timeout_ms in the orders module and updated the tests.", "expect": "claude-code:U3"}
+{"id": "hp-65", "request": "Go ahead.", "previous": "Shall I run the test suite and fix the failures?", "expect": "claude-code:U2"}
+{"id": "hp-66", "request": "Thanks, now do the other one.", "previous": "Here is the corrected email to Sam.", "expect": "none"}
+{"id": "hp-67", "request": "Yes, that one.", "previous": "Do you mean the typo in the README or the one in the changelog?", "expect": "none"}

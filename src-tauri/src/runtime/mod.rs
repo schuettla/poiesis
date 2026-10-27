@@ -5,6 +5,7 @@
 //! lifecycle-managed child process on a dynamic loopback port, and proxying
 //! streamed completions back to the UI.
 
+pub mod decideserver;
 pub mod download;
 pub mod embedserver;
 pub mod hardware;
@@ -28,5 +29,6 @@ pub mod voice_speech;
 pub mod watchdog;
 
 pub use manager::RuntimeManager;
+pub use decideserver::DecideManager;
 pub use embedserver::EmbedManager;
 pub use rerankserver::RerankManager;

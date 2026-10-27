@@ -1,0 +1,40 @@
+{"id": "sentence-01", "sentence": "The Eiffel Tower is 330 metres tall.", "ask": "checkable", "expect": "yes"}
+{"id": "sentence-02", "sentence": "I think the second option looks nicer.", "ask": "checkable", "expect": "no"}
+{"id": "sentence-03", "sentence": "The Nile is about 6,650 kilometres long.", "ask": "kind", "expect": "fact"}
+{"id": "sentence-04", "sentence": "I searched the web for the latest figures.", "ask": "kind", "expect": "did"}
+{"id": "sentence-05", "sentence": "Python 3.0 was released on December 3, 2008.", "ask": "checkable", "expect": "yes"}
+{"id": "sentence-06", "sentence": "You might want to take a short break first.", "ask": "checkable", "expect": "no"}
+{"id": "sentence-07", "sentence": "Marie Curie won two Nobel Prizes.", "ask": "kind", "expect": "fact"}
+{"id": "sentence-08", "sentence": "I sent the invoice to the client.", "ask": "kind", "expect": "did"}
+{"id": "sentence-09", "sentence": "The report was written by Maria Lopez.", "ask": "checkable", "expect": "yes"}
+{"id": "sentence-10", "sentence": "Let me know if you would like more detail.", "ask": "checkable", "expect": "no"}
+{"id": "sentence-11", "sentence": "The company was founded in 1998 in Munich.", "ask": "kind", "expect": "fact"}
+{"id": "sentence-12", "sentence": "I wrote the changes to config.toml.", "ask": "kind", "expect": "did"}
+{"id": "sentence-13", "sentence": "Revenue grew 12 percent in the third quarter.", "ask": "checkable", "expect": "yes"}
+{"id": "sentence-14", "sentence": "That is a great question.", "ask": "checkable", "expect": "no"}
+{"id": "sentence-15", "sentence": "The latest stable release is version 2.4.1.", "ask": "kind", "expect": "fact"}
+{"id": "sentence-16", "sentence": "I ran the test suite and it passed.", "ask": "kind", "expect": "did"}
+{"id": "sentence-17", "sentence": "I sent the email to Ana this morning.", "ask": "checkable", "expect": "yes"}
+{"id": "sentence-18", "sentence": "A good rule of thumb is to keep functions small.", "ask": "checkable", "expect": "no"}
+{"id": "sentence-19", "sentence": "Water boils at 100 degrees Celsius at sea level.", "ask": "kind", "expect": "fact"}
+{"id": "sentence-20", "sentence": "I created the calendar event for Friday.", "ask": "kind", "expect": "did"}
+{"id": "sentence-21", "sentence": "I ran the tests and all 214 of them passed.", "ask": "checkable", "expect": "yes"}
+{"id": "sentence-22", "sentence": "It could be worth trying a different approach.", "ask": "checkable", "expect": "no"}
+{"id": "sentence-23", "sentence": "The article was published in The Guardian on 3 May.", "ask": "kind", "expect": "fact"}
+{"id": "sentence-24", "sentence": "I deleted the old backup files.", "ask": "kind", "expect": "did"}
+{"id": "sentence-25", "sentence": "The function is defined in src/parser.rs.", "ask": "checkable", "expect": "yes"}
+{"id": "sentence-26", "sentence": "Hopefully this helps you get started.", "ask": "checkable", "expect": "no"}
+{"id": "sentence-27", "sentence": "The population of Canada is about 40 million.", "ask": "kind", "expect": "fact"}
+{"id": "sentence-28", "sentence": "I committed the fix and pushed it to the main branch.", "ask": "kind", "expect": "did"}
+{"id": "sentence-29", "sentence": "Einstein said that imagination is more important than knowledge.", "ask": "checkable", "expect": "yes"}
+{"id": "sentence-30", "sentence": "We can look at the other cases next.", "ask": "checkable", "expect": "no"}
+{"id": "sentence-31", "sentence": "The function returns null when the list is empty.", "ask": "kind", "expect": "fact"}
+{"id": "sentence-32", "sentence": "I read your report and checked its numbers.", "ask": "kind", "expect": "did"}
+{"id": "sentence-33", "sentence": "The meeting is scheduled for 14 March at 10:00.", "ask": "checkable", "expect": "yes"}
+{"id": "sentence-34", "sentence": "Writing clearly takes practice and patience.", "ask": "checkable", "expect": "no"}
+{"id": "sentence-35", "sentence": "The treaty was signed by 27 countries.", "ask": "kind", "expect": "fact"}
+{"id": "sentence-36", "sentence": "I installed the missing dependency.", "ask": "kind", "expect": "did"}
+{"id": "sentence-37", "sentence": "I created a new file called notes.md in your project folder.", "ask": "checkable", "expect": "yes"}
+{"id": "sentence-38", "sentence": "I would suggest starting with the simplest version.", "ask": "checkable", "expect": "no"}
+{"id": "sentence-39", "sentence": "According to the page, the shop opens at 9:00.", "ask": "kind", "expect": "fact"}
+{"id": "sentence-40", "sentence": "I replied to Marc's message.", "ask": "kind", "expect": "did"}

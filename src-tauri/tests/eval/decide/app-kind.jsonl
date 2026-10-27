@@ -1,0 +1,42 @@
+{"id":"ak-01","app":"Calendar","tool":"calendar_list_events","description":"Lists the events in a calendar between two dates.","expect":"read"}
+{"id":"ak-02","app":"Slack","tool":"slack_get_channel_history","description":"Returns the most recent messages of a channel.","expect":"read"}
+{"id":"ak-03","app":"GitHub","tool":"get_issue","description":"Fetches one issue with its comments.","expect":"read"}
+{"id":"ak-04","app":"Notion","tool":"notion-search","description":"Searches pages and databases in the workspace.","expect":"read"}
+{"id":"ak-05","app":"Gmail","tool":"GMAIL_FETCH_EMAILS","description":"Fetches the emails that match a query.","expect":"read"}
+{"id":"ak-06","app":"Google Drive","tool":"drive_download_file","description":"Downloads the content of a file.","expect":"read"}
+{"id":"ak-07","app":"Stripe","tool":"STRIPE_LIST_INVOICES","description":"Lists invoices, newest first.","expect":"read"}
+{"id":"ak-08","app":"Linear","tool":"get_cycle_status","description":"Returns the progress of the current cycle.","expect":"read"}
+{"id":"ak-09","app":"Weather","tool":"forecast","description":"Returns the forecast for a place.","expect":"read"}
+{"id":"ak-10","app":"Jira","tool":"check_ticket_status","description":"Looks up the status of a ticket.","expect":"read"}
+{"id":"ak-11","app":"Google Sheets","tool":"values_get","description":"Reads a range of cells from a sheet.","expect":"read"}
+{"id":"ak-12","app":"Maps","tool":"lookup_place","description":"Finds a place by name and returns its address.","expect":"read"}
+{"id":"ak-13","app":"Calendar","tool":"calendar_update_event","description":"Changes the title or the time of an existing event in your own calendar. Nobody is notified.","expect":"change"}
+{"id":"ak-14","app":"Notion","tool":"notion-update-page","description":"Updates the properties or the content of a page.","expect":"change"}
+{"id":"ak-15","app":"GitHub","tool":"create_branch","description":"Creates a branch from a commit.","expect":"change"}
+{"id":"ak-16","app":"Google Drive","tool":"drive_move_file","description":"Moves a file to another folder in your Drive.","expect":"change"}
+{"id":"ak-17","app":"Google Sheets","tool":"values_update","description":"Writes values into a range of cells.","expect":"change"}
+{"id":"ak-18","app":"Linear","tool":"update_issue_state","description":"Sets the state of an issue, for example to Done.","expect":"change"}
+{"id":"ak-19","app":"Todoist","tool":"complete_task","description":"Marks one of your tasks as complete.","expect":"change"}
+{"id":"ak-20","app":"Gmail","tool":"GMAIL_CREATE_EMAIL_DRAFT","description":"Creates a draft in your drafts folder. Nothing is sent.","expect":"change"}
+{"id":"ak-21","app":"Gmail","tool":"GMAIL_LABEL_THREAD","description":"Adds a label to a thread in your own mailbox.","expect":"change"}
+{"id":"ak-22","app":"Dropbox","tool":"rename_file","description":"Renames a file in your Dropbox.","expect":"change"}
+{"id":"ak-23","app":"Calendar","tool":"calendar_delete_event","description":"Removes an event from your own calendar.","expect":"change"}
+{"id":"ak-24","app":"Evernote","tool":"update_note","description":"Replaces the text of one of your notes.","expect":"change"}
+{"id":"ak-25","app":"Slack","tool":"slack_post_message","description":"Posts a message to a channel.","expect":"send"}
+{"id":"ak-26","app":"Gmail","tool":"GMAIL_SEND_EMAIL","description":"Sends an email.","expect":"send"}
+{"id":"ak-27","app":"Calendar","tool":"calendar_create_event","description":"Creates an event and sends an invitation to every attendee.","expect":"send"}
+{"id":"ak-28","app":"Notion","tool":"notion-create-comment","description":"Adds a comment to a page and notifies the people mentioned in it.","expect":"send"}
+{"id":"ak-29","app":"GitHub","tool":"create_issue_comment","description":"Comments on an issue. Everyone watching the issue gets an email.","expect":"send"}
+{"id":"ak-30","app":"Stripe","tool":"STRIPE_CREATE_REFUND","description":"Refunds a payment to the customer.","expect":"send"}
+{"id":"ak-31","app":"Twitter","tool":"create_tweet","description":"Publishes a tweet from your account.","expect":"send"}
+{"id":"ak-32","app":"Intercom","tool":"update_conversation","description":"Adds a reply to a conversation and delivers it to the customer.","expect":"send"}
+{"id":"ak-33","app":"Mailchimp","tool":"campaign_actions_schedule","description":"Schedules a campaign to be delivered to everybody on the list.","expect":"send"}
+{"id":"ak-34","app":"Zoom","tool":"meetings_create","description":"Creates a meeting and emails the invitation to the invitees.","expect":"send"}
+{"id":"ak-35","app":"Twilio","tool":"messages_create","description":"Sends a text message to a phone number.","expect":"send"}
+{"id":"ak-36","app":"Google Docs","tool":"share_document","description":"Gives other people access to a document and emails them a link.","expect":"send"}
+{"id":"ak-37","app":"PayPal","tool":"orders_capture","description":"Captures the payment for an order.","expect":"send"}
+{"id":"ak-38","app":"Discord","tool":"channels_messages_create","description":"Creates a message in a channel.","expect":"send"}
+{"id":"ak-39","app":"Automation","tool":"run_workflow","description":"Runs a workflow.","expect":"unsure"}
+{"id":"ak-40","app":"Automation","tool":"execute","description":"Executes an action.","expect":"unsure"}
+{"id":"ak-41","app":"Automation","tool":"trigger","description":"Triggers the configured automation.","expect":"unsure"}
+{"id":"ak-42","app":"Inbox","tool":"process_item","description":"Processes an item.","expect":"unsure"}

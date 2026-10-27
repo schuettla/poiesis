@@ -1,0 +1,40 @@
+{"id": "ret-01", "query": "What is the refund window?", "excerpts": "Refunds are accepted within 30 days of purchase with a receipt.", "expect": "yes"}
+{"id": "ret-02", "query": "What is the refund window?", "excerpts": "Our store sells shoes, bags and belts. Returns are handled by the customer service team, who are available on weekdays.", "expect": "no"}
+{"id": "ret-03", "query": "When does the lease end?", "excerpts": "The lease term runs from 1 March 2024 to 28 February 2027.", "expect": "yes"}
+{"id": "ret-04", "query": "When does the lease end?", "excerpts": "The lease covers the ground floor unit at 14 Mill Street, including the storage room and two parking spaces.", "expect": "no"}
+{"id": "ret-05", "query": "Who is the contact for invoices?", "excerpts": "Invoices go to Marta Holm, accounts@northwind.example, phone 555-0142.", "expect": "yes"}
+{"id": "ret-06", "query": "Who is the contact for invoices?", "excerpts": "Northwind pays suppliers on a 45 day cycle. Late payments may incur a fee under section 9.", "expect": "no"}
+{"id": "ret-07", "query": "How much RAM does the server have?", "excerpts": "Server spec: 16 CPU cores, 64 GB RAM, 2 TB NVMe storage.", "expect": "yes"}
+{"id": "ret-08", "query": "How much RAM does the server have?", "excerpts": "The server runs Ubuntu 22.04 and hosts the billing service and the report generator.", "expect": "no"}
+{"id": "ret-09", "query": "What was Q3 revenue?", "excerpts": "Q3 revenue was 4.2 million euros, up 8 percent from Q2.", "expect": "yes"}
+{"id": "ret-10", "query": "What was Q3 revenue?", "excerpts": "The Q3 report covers revenue, costs and headcount. Figures are discussed in the board meeting.", "expect": "no"}
+{"id": "ret-11", "query": "What is the wifi password at the cabin?", "excerpts": "Cabin notes: wifi network is Pinecone, password is Lakeside2024. Firewood is in the shed.", "expect": "yes"}
+{"id": "ret-12", "query": "What is the wifi password at the cabin?", "excerpts": "Cabin notes: the cabin has a wood stove, two bedrooms and a lake view. Wifi is available in the main room.", "expect": "no"}
+{"id": "ret-13", "query": "Which database does the app use?", "excerpts": "The backend stores data in PostgreSQL 15 and caches sessions in Redis.", "expect": "yes"}
+{"id": "ret-14", "query": "Which database does the app use?", "excerpts": "The backend is written in Go and deployed to Kubernetes. Data access goes through a repository layer.", "expect": "no"}
+{"id": "ret-15", "query": "When is the dentist appointment?", "excerpts": "Dentist: Thursday 14 November at 09:30, Dr Weiss, bring the insurance card.", "expect": "yes"}
+{"id": "ret-16", "query": "When is the dentist appointment?", "excerpts": "Remember to book the dentist, the car service and the boiler check before the end of the year.", "expect": "no"}
+{"id": "ret-17", "query": "What is the maximum file size for uploads?", "excerpts": "Uploads are limited to 25 MB per file; larger files must use the resumable endpoint.", "expect": "yes"}
+{"id": "ret-18", "query": "What is the maximum file size for uploads?", "excerpts": "The upload endpoint accepts PDF, PNG and JPEG files and returns a document id on success.", "expect": "no"}
+{"id": "ret-19", "query": "How many vacation days do I have?", "excerpts": "Employees receive 28 vacation days per year, pro rated in the first year.", "expect": "yes"}
+{"id": "ret-20", "query": "How many vacation days do I have?", "excerpts": "The vacation policy explains how to request leave, who approves it and how sick days are reported.", "expect": "no"}
+{"id": "ret-21", "query": "What colour is the living room wall?", "excerpts": "Paint log: living room walls were repainted in Farrow and Ball Pigeon, a soft grey, in 2022.", "expect": "yes"}
+{"id": "ret-22", "query": "What colour is the living room wall?", "excerpts": "Paint log: hallway, kitchen and bathroom were repainted; the living room is scheduled for next spring.", "expect": "no"}
+{"id": "ret-23", "query": "Which version of Node does the project need?", "excerpts": "Requires Node 20 or newer. Use nvm to switch versions.", "expect": "yes"}
+{"id": "ret-24", "query": "Which version of Node does the project need?", "excerpts": "Install dependencies with npm install, then run npm test to check everything works.", "expect": "no"}
+{"id": "ret-25", "query": "Who won the 2022 chess tournament?", "excerpts": "The 2022 club tournament was won by Ilse Brandt, ahead of Tomas Reed on tiebreak.", "expect": "yes"}
+{"id": "ret-26", "query": "Who won the 2022 chess tournament?", "excerpts": "The club tournament has been held every autumn since 2009, with about forty players taking part.", "expect": "no"}
+{"id": "ret-27", "query": "What is the interest rate on the loan?", "excerpts": "The loan carries a fixed annual interest rate of 3.9 percent over 20 years.", "expect": "yes"}
+{"id": "ret-28", "query": "What is the interest rate on the loan?", "excerpts": "The loan was arranged in 2021 with Sparkasse and is secured against the house.", "expect": "no"}
+{"id": "ret-29", "query": "Where is the spare key kept?", "excerpts": "The spare key is in the blue flowerpot left of the back door.", "expect": "yes"}
+{"id": "ret-30", "query": "Where is the spare key kept?", "excerpts": "The back door sticks in wet weather. The front door lock was replaced last year.", "expect": "no"}
+{"id": "ret-31", "query": "What time does the pharmacy close on Saturday?", "excerpts": "Pharmacy hours: Monday to Friday 8:00 to 19:00, Saturday 9:00 to 14:00, closed Sunday.", "expect": "yes"}
+{"id": "ret-32", "query": "What time does the pharmacy close on Saturday?", "excerpts": "The pharmacy on Linden Road also offers vaccinations and a delivery service for older customers.", "expect": "no"}
+{"id": "ret-33", "query": "How long is the warranty?", "excerpts": "The product comes with a two year limited warranty covering manufacturing defects.", "expect": "yes"}
+{"id": "ret-34", "query": "How long is the warranty?", "excerpts": "The warranty does not cover damage caused by water, drops or unauthorised repairs.", "expect": "no"}
+{"id": "ret-35", "query": "Where is the new office?", "excerpts": "The new office is in Lisbon, Portugal, and opens in January.", "expect": "yes"}
+{"id": "ret-36", "query": "Where is the new office?", "excerpts": "The new office will have room for thirty people and a small meeting room.", "expect": "no"}
+{"id": "ret-37", "query": "What dose of ibuprofen did the doctor suggest?", "excerpts": "Doctor note: ibuprofen 400 mg up to three times a day with food, for at most five days.", "expect": "yes"}
+{"id": "ret-38", "query": "What dose of ibuprofen did the doctor suggest?", "excerpts": "Doctor note: rest, drink fluids and avoid heavy lifting. Return if the pain gets worse.", "expect": "no"}
+{"id": "ret-39", "query": "What is the project deadline?", "excerpts": "Deadline for the final deliverable: 15 December, end of day.", "expect": "yes"}
+{"id": "ret-40", "query": "What is the project deadline?", "excerpts": "The final deliverable includes the report, the slides and the source code archive.", "expect": "no"}

@@ -108,6 +108,16 @@
   background: var(--fill-hover);
   color: var(--ink);
 }
+/* `USE-UI-6`: a run the task's condition skipped. Same columns as an openable run,
+   but muted and not a button: there is no chat behind it. */
+.task-run-skipped {
+  display: flex;
+  gap: 10px;
+  padding: 6px 8px;
+  color: var(--ink-faint);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+}
 .task-run-when {
   flex: 0 0 auto;
 }

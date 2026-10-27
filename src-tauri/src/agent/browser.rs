@@ -20,13 +20,16 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use chromiumoxide::browser::{Browser, BrowserConfig};
+use chromiumoxide::cdp::browser_protocol::network::{Cookie, CookieParam, TimeSinceEpoch};
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
+use chromiumoxide::cdp::browser_protocol::storage::{GetCookiesParams, SetCookiesParams};
 use chromiumoxide::page::{Page, ScreenshotParams};
 use futures_util::StreamExt;
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::permissions::{Decision, PermissionRequest};
+use crate::permissions::{Decision, PageRef, PermissionRequest};
 
+use super::decide::pagecheck::{self, CardAnswer, PageRead, Wall};
 use super::toolsets::{mark_untrusted, set_step_note, ToolContext};
 
 /// A session unused this long is closed — a browsing agent forgotten mid-run
@@ -38,6 +41,12 @@ const READ_CAP: usize = 8000;
 const BROWSE_CAP: usize = 3000;
 /// Action-trail lines kept per session, for the Browser panel (`BRW-UI-1`).
 const TRAIL_CAP: usize = 12;
+/// How long a person may keep the browser window they were handed (`USE-11`)
+/// before it is closed for them and the agent goes on.
+const TAKE_OVER_MAX: Duration = Duration::from_secs(15 * 60);
+/// How long a browser gets to close itself cleanly. A clean close is what saves
+/// the cookies, so a login survives; a kill would lose it.
+const CLOSE_WAIT: Duration = Duration::from_secs(5);
 
 pub fn tool_specs() -> serde_json::Value {
     serde_json::json!([
@@ -267,6 +276,10 @@ struct BrowserSession {
     /// Domains approved for this conversation's session so far — cleared
     /// with the session, unlike a persisted "always allow" grant.
     approved: HashSet<String>,
+    /// Hosts the quick page check (`USE-11`) is not run on again this session,
+    /// because the person looked at the card and answered it. Asking again would
+    /// be nagging.
+    unchecked: HashSet<String>,
     pub title: String,
     pub domain: String,
     pub screenshot: Option<PathBuf>,
@@ -411,9 +424,17 @@ impl BrowserPool {
                 return Ok(());
             }
         }
-        let session = launch(conversation_id, profile_root).await?;
+        let session = launch(conversation_id, profile_root, false).await?;
         self.sessions.lock().await.insert(conversation_id.to_string(), session);
         Ok(())
+    }
+
+    /// The person answered the page card without taking over: stop checking this
+    /// host for the rest of the session.
+    async fn waive_check(&self, conversation_id: &str, host: &str) {
+        if let Some(s) = self.sessions.lock().await.get_mut(conversation_id) {
+            s.unchecked.insert(host.to_string());
+        }
     }
 }
 
@@ -483,7 +504,9 @@ pub fn prune_screenshots(data_dir: &Path) {
     }
 }
 
-async fn launch(conversation_id: &str, profile_root: &Path) -> Result<BrowserSession, String> {
+/// `headed` opens a window the person can use (`USE-11`'s take over); otherwise
+/// the browser is headless, as it is for the agent's own work.
+async fn launch(conversation_id: &str, profile_root: &Path, headed: bool) -> Result<BrowserSession, String> {
     let exe = chromiumoxide::detection::default_executable(Default::default()).map_err(|_| {
         "I don't see Chrome or Edge installed — the browser needs one of those already on \
          this machine."
@@ -499,20 +522,18 @@ async fn launch(conversation_id: &str, profile_root: &Path) -> Result<BrowserSes
     // that current Chrome has dropped, and it's fingerprinted far more
     // aggressively by the sites we'd want to read. The window size is set
     // because the default 800x600 makes the panel's screenshots useless.
-    let config = BrowserConfig::builder()
-        .chrome_executable(exe)
-        .user_data_dir(profile_dir)
-        .new_headless_mode()
-        .window_size(1280, 900)
-        .build()?;
+    let builder = BrowserConfig::builder().chrome_executable(exe).user_data_dir(profile_dir).window_size(1280, 900);
+    let config = if headed { builder.with_head() } else { builder.new_headless_mode() }.build()?;
     let (browser, mut handler) = Browser::launch(config).await.map_err(|e| e.to_string())?;
     let handler_task = tokio::task::spawn(async move {
         while handler.next().await.is_some() {}
     });
-    let page = browser
-        .new_page("about:blank")
-        .await
-        .map_err(|e| e.to_string())?;
+    // A window with its own first tab would otherwise get a second one.
+    let first = if headed { browser.pages().await.ok().and_then(|p| p.into_iter().next()) } else { None };
+    let page = match first {
+        Some(page) => page,
+        None => browser.new_page("about:blank").await.map_err(|e| e.to_string())?,
+    };
 
     Ok(BrowserSession {
         _browser: browser,
@@ -520,6 +541,7 @@ async fn launch(conversation_id: &str, profile_root: &Path) -> Result<BrowserSes
         _handler: handler_task,
         last_used: Instant::now(),
         approved: HashSet::new(),
+        unchecked: HashSet::new(),
         title: String::new(),
         domain: String::new(),
         screenshot: None,
@@ -603,25 +625,309 @@ async fn enforce_domain_after(
 
 /// The tail every page-changing action shares: refresh the panel, note what
 /// happened, and hand the model the page it's now looking at.
+///
+/// `check` asks the quick decision model what the page shows (`USE-11`). It needs
+/// a picture, so the panel's screenshot is taken whether or not the page moved.
 async fn finish_action(
     ctx: &ToolContext<'_>,
     pool: &BrowserPool,
     note: String,
     shoot: bool,
+    check: bool,
 ) -> Result<String, String> {
-    let mut sessions = pool.sessions.lock().await;
-    let session = sessions
-        .get_mut(ctx.conversation_id)
-        .ok_or("the browser session closed while I was working")?;
-    settle(session).await;
-    session.note(note);
-    if shoot {
-        capture_auto(session, ctx.data_dir).await;
+    let looking = check && crate::experiments::is_on(ctx.db, "fast-slow");
+    let landed = land(ctx, pool, note, shoot, looking).await?;
+    let Some(seen) = landed.seen else { return Ok(landed.body) };
+    // Neither the model nor the person is waited on while the session is locked.
+    let state = {
+        let parsed = url::Url::parse(&seen.url).ok();
+        let path = parsed.as_ref().map(|u| u.path()).unwrap_or("");
+        pagecheck::ask_state(&landed.host, path, &seen.title, &landed.text)
+    };
+    let Some(look) = pagecheck::look(&state, &seen.shot, ctx.conversation_id).await else { return Ok(landed.body) };
+    match look.read {
+        PageRead::Fine => Ok(landed.body),
+        PageRead::Error(p) => Ok(format!("{}\n\n{}", landed.body, pagecheck::error_note(p))),
+        PageRead::Stop { wall, p } => hand_over(ctx, pool, &seen, &landed.host, wall, p, &look.decision, landed.body).await,
     }
-    publish(ctx, session);
-    let host = session.domain.clone();
-    let out = visible_text(&session.page).await?;
-    Ok(mark_untrusted(ctx, &format!("page at {host}"), &clamp(&out, BROWSE_CAP)))
+}
+
+/// The page an action landed on: what the panel was told, what the model reads,
+/// and what a quick look needs.
+struct Landed {
+    host: String,
+    /// The page's text as read, before it is cut and wrapped for the model.
+    text: String,
+    /// What the model is handed.
+    body: String,
+    /// Set when a quick look is to be taken at this page.
+    seen: Option<Seen>,
+}
+
+/// The page a quick look is taken at.
+struct Seen {
+    url: String,
+    title: String,
+    shot: PathBuf,
+}
+
+/// Refresh the panel, note what happened and read the page. `looking` also takes
+/// the screenshot a quick look needs, unless the person already waved this host on.
+async fn land(
+    ctx: &ToolContext<'_>,
+    pool: &BrowserPool,
+    note: String,
+    shoot: bool,
+    looking: bool,
+) -> Result<Landed, String> {
+    let (host, text, seen) = {
+        let mut sessions = pool.sessions.lock().await;
+        let session = sessions
+            .get_mut(ctx.conversation_id)
+            .ok_or("the browser session closed while I was working")?;
+        settle(session).await;
+        session.note(note);
+        let looking = looking && !session.unchecked.contains(&session.domain);
+        if shoot || looking {
+            capture_auto(session, ctx.data_dir).await;
+        }
+        publish(ctx, session);
+        let host = session.domain.clone();
+        let text = visible_text(&session.page).await?;
+        let url = session.page.url().await.ok().flatten().unwrap_or_default();
+        let seen = match (&session.screenshot, looking) {
+            (Some(shot), true) => Some(Seen { url, title: session.title.clone(), shot: shot.clone() }),
+            _ => None,
+        };
+        (host, text, seen)
+    };
+    let body = mark_untrusted(ctx, &format!("page at {host}"), &clamp(&text, BROWSE_CAP));
+    Ok(Landed { host, text, body, seen })
+}
+
+/// `USE-UI-9`: the check could not call the page ordinary, so the browser is
+/// stopped and the person is asked, with a picture. Like `gate_domain`, the
+/// session lock is not held while the card sits there.
+#[allow(clippy::too_many_arguments)]
+async fn hand_over(
+    ctx: &ToolContext<'_>,
+    pool: &BrowserPool,
+    seen: &Seen,
+    host: &str,
+    wall: Wall,
+    p: f32,
+    decision: &str,
+    body: String,
+) -> Result<String, String> {
+    set_step_note(
+        ctx,
+        match wall {
+            Wall::Login => "stopped at a login page",
+            Wall::Captcha => "stopped at a captcha",
+            Wall::Unsure => "stopped at a page I could not place",
+        },
+    );
+    let id = format!("perm_{}", uuid::Uuid::new_v4());
+    let rx = ctx.perms.open_request(&id);
+    ctx.sink.send_permission(PermissionRequest::page_stop(
+        id,
+        wall.question().to_string(),
+        PageRef {
+            host: host.to_string(),
+            wall: wall.code().to_string(),
+            screenshot: Some(seen.shot.to_string_lossy().to_string()),
+            note: pagecheck::card_line(wall, p),
+        },
+    ));
+    let answer = match rx.await.unwrap_or(Decision::Deny) {
+        Decision::Once | Decision::Forever => CardAnswer::Open,
+        Decision::Chat => CardAnswer::Fine,
+        Decision::Deny => CardAnswer::Skip,
+    };
+    pagecheck::label_card(ctx.db, decision, answer);
+    match answer {
+        CardAnswer::Open => take_over(ctx, pool, &seen.url, host, wall).await,
+        CardAnswer::Fine => {
+            pool.waive_check(ctx.conversation_id, host).await;
+            Ok(body)
+        }
+        CardAnswer::Skip => {
+            pool.waive_check(ctx.conversation_id, host).await;
+            Ok(pagecheck::skipped_text(wall).to_string())
+        }
+    }
+}
+
+/// What a session keeps across a take over: the sites the person approved, the
+/// hosts not to check again, and the trail the panel shows.
+struct Carry {
+    approved: HashSet<String>,
+    unchecked: HashSet<String>,
+    trail: Vec<String>,
+}
+
+/// Close a browser cleanly, which is what writes its cookies to the profile.
+async fn close_session(session: BrowserSession) {
+    let mut browser = session._browser;
+    let _ = tokio::time::timeout(CLOSE_WAIT, async {
+        let _ = browser.close().await;
+        let _ = browser.wait().await;
+    })
+    .await;
+}
+
+/// Every cookie the browser holds, the ones that last only until it closes
+/// included.
+async fn cookie_jar(browser: &Browser) -> Option<Vec<Cookie>> {
+    browser.execute(GetCookiesParams::default()).await.ok().map(|r| r.result.cookies)
+}
+
+fn as_param(c: Cookie) -> CookieParam {
+    let mut p = CookieParam::new(c.name, c.value);
+    p.domain = Some(c.domain);
+    p.path = Some(c.path);
+    p.secure = Some(c.secure);
+    p.http_only = Some(c.http_only);
+    p.same_site = c.same_site;
+    p.priority = Some(c.priority);
+    // A session cookie has no end date; giving it one would outlast the session.
+    if !c.session {
+        p.expires = Some(TimeSinceEpoch::new(c.expires));
+    }
+    p
+}
+
+/// Put cookies back into a browser. A sign-in is usually a cookie that lasts only
+/// until the browser closes, and the window the person signs in at is closed
+/// before the quiet browser starts, so the profile alone would not keep it.
+async fn refill_jar(browser: &Browser, cookies: Vec<Cookie>) {
+    if !cookies.is_empty() {
+        let _ = browser.execute(SetCookiesParams::new(cookies.into_iter().map(as_param).collect())).await;
+    }
+}
+
+/// Whether the person has closed the window they were handed: the browser has
+/// ended, or no tab is left open. A browser can linger with no window (a
+/// background mode), so the tabs are looked at as well as the process.
+async fn window_closed(window: &mut BrowserSession) -> bool {
+    if window._browser.try_wait().map(|s| s.is_some()).unwrap_or(true) {
+        return true;
+    }
+    matches!(window._browser.pages().await, Ok(pages) if pages.is_empty())
+}
+
+/// The address to go back to once the person is done: where they ended up, if
+/// that is a site they or the agent already approved, else where they started.
+fn return_url(started: &str, ended: Option<&str>, approved: &HashSet<String>) -> String {
+    let allowed = |url: &str| {
+        refused_host(url).is_none() && host_of(url).is_some_and(|h| approved.contains(&h))
+    };
+    match ended {
+        Some(url) if allowed(url) => url.to_string(),
+        _ => started.to_string(),
+    }
+}
+
+/// `USE-UI-9`'s **Open browser**: the quiet browser is closed and the same profile
+/// is opened in a window the person can use, on the same page. They sign in or
+/// solve the check there, close the window, and the agent goes on in a quiet
+/// browser again with the login the profile now holds. Their own browser and its
+/// cookies are never touched: this is the agent's own profile.
+async fn take_over(
+    ctx: &ToolContext<'_>,
+    pool: &BrowserPool,
+    url: &str,
+    host: &str,
+    wall: Wall,
+) -> Result<String, String> {
+    let mut old = pool
+        .sessions
+        .lock()
+        .await
+        .remove(ctx.conversation_id)
+        .ok_or("the browser session closed while I was working")?;
+    old.note("handed the browser to you".to_string());
+    publish(ctx, &old);
+    let carry = Carry { approved: old.approved.clone(), unchecked: old.unchecked.clone(), trail: old.trail.clone() };
+    close_session(old).await;
+
+    let reopen = |carry: Carry, mut session: BrowserSession| {
+        session.approved = carry.approved;
+        session.unchecked = carry.unchecked;
+        session.trail = carry.trail;
+        session
+    };
+
+    let mut window = match launch(ctx.conversation_id, ctx.data_dir, true).await {
+        Ok(w) => w,
+        Err(e) => {
+            // Leave the agent a working browser, as it had before.
+            if let Ok(fresh) = launch(ctx.conversation_id, ctx.data_dir, false).await {
+                pool.sessions.lock().await.insert(ctx.conversation_id.to_string(), reopen(carry, fresh));
+            }
+            return Err(format!("I couldn't open a browser window for you ({e})."));
+        }
+    };
+    let _ = window.page.goto(url).await;
+    // A fresh window comes with a spare tab of its own; the person should see one page.
+    for other in window._browser.pages().await.unwrap_or_default() {
+        if other.target_id() != window.page.target_id() {
+            let _ = other.close().await;
+        }
+    }
+    set_step_note(ctx, "waiting for you in the browser window");
+
+    // Until the window is closed, the run is stopped, or the time is up. Where the
+    // person got to, and the cookies they now hold, are noted on the way, because a
+    // closed window has neither an address nor a jar to ask.
+    let started = Instant::now();
+    let mut ended: Option<String> = None;
+    let mut cookies: Vec<Cookie> = Vec::new();
+    let mut stopped = false;
+    loop {
+        if window_closed(&mut window).await {
+            break;
+        }
+        if ctx.cancel.is_some_and(|c| c.is_cancelled()) {
+            stopped = true;
+            break;
+        }
+        if started.elapsed() >= TAKE_OVER_MAX {
+            break;
+        }
+        if let Ok(Some(now)) = window.page.url().await {
+            ended = Some(now);
+        }
+        if let Some(jar) = cookie_jar(&window._browser).await {
+            cookies = jar;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    close_session(window).await;
+    if stopped {
+        return Err("You stopped the run while the browser window was open.".to_string());
+    }
+
+    let back = return_url(url, ended.as_deref(), &carry.approved);
+    let mut fresh = launch(ctx.conversation_id, ctx.data_dir, false).await?;
+    // The person has just dealt with this host, so it is not checked at once again.
+    let mut carry = carry;
+    if let Some(h) = host_of(&back) {
+        carry.unchecked.insert(h);
+    }
+    carry.unchecked.insert(host.to_string());
+    fresh = reopen(carry, fresh);
+    refill_jar(&fresh._browser, cookies).await;
+    fresh.page.goto(&back).await.map_err(|e| e.to_string())?;
+    let _ = fresh.page.wait_for_navigation().await;
+    pool.sessions.lock().await.insert(ctx.conversation_id.to_string(), fresh);
+    let page = land(ctx, pool, "took the browser back from you".to_string(), true, false).await?;
+    let why = match wall {
+        Wall::Login => "to sign in",
+        Wall::Captcha => "to pass a check",
+        Wall::Unsure => "to look at the page",
+    };
+    Ok(format!("The person took the browser {why} and has closed the window. The page now:\n\n{}", page.body))
 }
 
 // ---- tool bodies ----
@@ -653,7 +959,7 @@ async fn browse(ctx: &ToolContext<'_>, pool: &BrowserPool, args: &serde_json::Va
     enforce_domain_after(ctx, pool, &before).await?;
 
     set_step_note(ctx, format!("visited {host}"));
-    let body = finish_action(ctx, pool, format!("visited {host}"), true).await?;
+    let body = finish_action(ctx, pool, format!("visited {host}"), true, true).await?;
     let (title, domain) = {
         let sessions = pool.sessions.lock().await;
         match sessions.get(ctx.conversation_id) {
@@ -703,7 +1009,7 @@ async fn click(ctx: &ToolContext<'_>, pool: &BrowserPool, args: &serde_json::Val
     let moved = enforce_domain_after(ctx, pool, &before_url).await?;
 
     set_step_note(ctx, format!("clicked \u{201c}{clicked_label}\u{201d}"));
-    finish_action(ctx, pool, format!("clicked \u{201c}{clicked_label}\u{201d}"), moved).await
+    finish_action(ctx, pool, format!("clicked \u{201c}{clicked_label}\u{201d}"), moved, true).await
 }
 
 /// Find and click a link or button by what it says.
@@ -888,7 +1194,7 @@ async fn press(ctx: &ToolContext<'_>, pool: &BrowserPool, args: &serde_json::Val
     // Enter in a search box is a form submit, and a form can post to another
     // host — the same `BRW-3` gate a click gets.
     let moved = enforce_domain_after(ctx, pool, &before_url).await?;
-    finish_action(ctx, pool, format!("pressed {key}"), moved).await
+    finish_action(ctx, pool, format!("pressed {key}"), moved, true).await
 }
 
 async fn scroll(ctx: &ToolContext<'_>, pool: &BrowserPool, args: &serde_json::Value) -> Result<String, String> {
@@ -901,7 +1207,7 @@ async fn scroll(ctx: &ToolContext<'_>, pool: &BrowserPool, args: &serde_json::Va
         let _ = session.page.evaluate(format!("window.scrollBy(0, {delta})")).await;
     }
     let note = if down { "scrolled down" } else { "scrolled up" };
-    finish_action(ctx, pool, note.to_string(), false).await
+    finish_action(ctx, pool, note.to_string(), false, false).await
 }
 
 async fn read(ctx: &ToolContext<'_>, pool: &BrowserPool) -> Result<String, String> {
@@ -1177,5 +1483,129 @@ mod tests {
     fn clamp_counts_chars_not_bytes() {
         assert_eq!(clamp("hello", 10), "hello");
         assert_eq!(clamp("hello world", 5), "hello\u{2026}");
+    }
+
+    /// `USE-UI-9`: after a take over the agent goes back to where the person ended
+    /// up, but only on a site it was already allowed to visit. Any other address,
+    /// a private one, or none (a closed window has none) falls back to where it
+    /// started.
+    #[test]
+    fn after_a_take_over_the_agent_returns_only_to_a_site_it_may_visit() {
+        let approved: HashSet<String> = ["shop.example".to_string()].into_iter().collect();
+        let start = "https://shop.example/login";
+        assert_eq!(return_url(start, Some("https://shop.example/account"), &approved), "https://shop.example/account");
+        assert_eq!(return_url(start, Some("https://elsewhere.example/"), &approved), start, "not approved");
+        assert_eq!(return_url(start, Some("http://localhost:8080/"), &approved), start, "never a private address");
+        assert_eq!(return_url(start, Some("about:blank"), &approved), start);
+        assert_eq!(return_url(start, None, &approved), start, "a closed window has no address");
+    }
+
+    /// The window a person is handed is a real, visible Chrome on the agent's own
+    /// profile: it opens, shows the page's address, and closes cleanly so the
+    /// profile keeps what was typed into it. Needs Chrome or Edge installed and
+    /// opens a window for a moment, so it is run by hand:
+    /// `cargo test --lib take_over_window -- --ignored`.
+    #[tokio::test]
+    #[ignore = "opens a real browser window"]
+    async fn take_over_window_opens_on_the_profile_and_closes_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut window = launch("takeover-smoke", dir.path(), true).await.expect("a visible browser starts");
+        window.page.goto("data:text/html,<title>hello</title>").await.expect("the page opens");
+        assert!(window._browser.try_wait().unwrap().is_none(), "the window is still open");
+        assert!(dir.path().join("browser-profiles").join("takeover-smoke").exists());
+        // The person closes the window: its last tab goes, and the browser ends
+        // by itself, which is what `take_over` waits for.
+        let before = window._browser.pages().await.map(|p| p.len()).unwrap_or(0);
+        for page in window._browser.pages().await.unwrap_or_default() {
+            let _ = page.close().await;
+        }
+        let started = Instant::now();
+        let mut gone = false;
+        while started.elapsed() < Duration::from_secs(15) {
+            if window_closed(&mut window).await {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        let exited = window._browser.try_wait().map(|s| s.is_some()).unwrap_or(true);
+        eprintln!("tabs before: {before}, exited: {exited}");
+        assert!(gone, "closing every tab is noticed");
+        close_session(window).await;
+        // A quiet browser can be started again on the same profile.
+        let quiet = launch("takeover-smoke", dir.path(), false).await.expect("the profile is free again");
+        close_session(quiet).await;
+    }
+
+    /// A local page that sets a sign-in cookie lasting until the browser closes on
+    /// `/`, and shows the cookies the browser sends on any other path.
+    fn cookie_server() -> u16 {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { break };
+                let mut buf = [0u8; 4096];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let sent = req
+                    .lines()
+                    .find(|l| l.to_ascii_lowercase().starts_with("cookie:"))
+                    .unwrap_or("cookie: none")
+                    .to_string();
+                let set = if path == "/" { "Set-Cookie: sid=abc123; Path=/
+" } else { "" };
+                let body = format!("<title>t</title><p id=\"c\">{sent}</p>");
+                let reply = format!(
+                    "HTTP/1.1 200 OK
+Content-Type: text/html
+{set}Content-Length: {}
+Connection: close
+
+{body}",
+                    body.len()
+                );
+                let _ = s.write_all(reply.as_bytes());
+            }
+        });
+        port
+    }
+
+    async fn cookies_seen(session: &BrowserSession, port: u16) -> String {
+        session.page.goto(format!("http://127.0.0.1:{port}/echo")).await.expect("the page opens");
+        session
+            .page
+            .evaluate("document.getElementById('c').innerText")
+            .await
+            .expect("the page is read")
+            .into_value::<String>()
+            .unwrap_or_default()
+    }
+
+    /// The sign-in a person makes in the window is usually a cookie that lasts only
+    /// until the browser closes. The window is closed before the quiet browser
+    /// starts, so it is carried over by hand. Run by hand like the test above.
+    #[tokio::test]
+    #[ignore = "opens a real browser window"]
+    async fn a_sign_in_made_in_the_window_reaches_the_quiet_browser() {
+        let port = cookie_server();
+        let dir = tempfile::tempdir().unwrap();
+        let window = launch("cookie-smoke", dir.path(), true).await.expect("a visible browser starts");
+        window.page.goto(format!("http://127.0.0.1:{port}/")).await.expect("the page opens");
+        let jar = cookie_jar(&window._browser).await.expect("the jar is read");
+        let sid = jar.iter().find(|c| c.name == "sid").expect("the page set its cookie");
+        assert!(sid.session, "it lasts only until the browser closes");
+        close_session(window).await;
+
+        let quiet = launch("cookie-smoke", dir.path(), false).await.expect("the profile is free again");
+        // The control: the profile alone does not keep it.
+        let before = cookies_seen(&quiet, port).await;
+        assert!(!before.contains("sid=abc123"), "without carrying it over the sign-in is lost: {before}");
+        refill_jar(&quiet._browser, jar).await;
+        let after = cookies_seen(&quiet, port).await;
+        assert!(after.contains("sid=abc123"), "carried over, the sign-in is sent: {after}");
+        close_session(quiet).await;
     }
 }

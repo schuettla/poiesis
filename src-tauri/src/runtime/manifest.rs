@@ -17,7 +17,11 @@ use super::hardware::{GpuVendor, HardwareProfile};
 /// `gemma3` GGUF died with "unknown model architecture" before the server ever
 /// bound its port. When bumping this, bump it far enough that the architectures
 /// in the model catalogue actually load.
-pub const PINNED_BUILD_TAG: &str = "b10333";
+///
+/// `b11418` (2026-10-05) is the first build with `/v1/systemone` (#29818), the
+/// Clef decision model (#29831) and Clef vision input (#29969), which the
+/// decision engine needs (`DEC-1`).
+pub const PINNED_BUILD_TAG: &str = "b11418";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -83,7 +87,7 @@ impl Backend {
     ///
     /// This is load-bearing, not decoration. Upstream renamed the CUDA builds
     /// from `…-cuda-cu12.4-…` to `…-cuda-12.4-…`, which left the engine zip
-    /// (`llama-b10333-bin-win-cuda-12.4-x64.zip`) and the CUDA DLL package
+    /// (`llama-b11418-bin-win-cuda-12.4-x64.zip`) and the CUDA DLL package
     /// (`cudart-llama-bin-win-cuda-12.4-x64.zip`) differing *only* in their
     /// prefix — no set of substrings can tell them apart any more.
     pub const ENGINE_PREFIX: &'static str = "llama-";
@@ -95,8 +99,8 @@ impl Backend {
     /// top of [`Backend::ENGINE_PREFIX`].
     ///
     /// Matched against the real upstream naming, e.g.
-    /// `llama-b10333-bin-win-cuda-12.4-x64.zip`,
-    /// `llama-b10333-bin-win-cpu-x64.zip`. The `x64` term also excludes the
+    /// `llama-b11418-bin-win-cuda-12.4-x64.zip`,
+    /// `llama-b11418-bin-win-cpu-x64.zip`. The `x64` term also excludes the
     /// arm64 builds published under otherwise identical names.
     pub fn asset_keywords(&self) -> Vec<&'static str> {
         match self {
@@ -106,7 +110,9 @@ impl Backend {
             Backend::Cuda12 => vec!["win", "cuda-12", "x64"],
             Backend::Cuda13 => vec!["win", "cuda-13", "x64"],
             Backend::Vulkan => vec!["win", "vulkan", "x64"],
-            Backend::Hip => vec!["win", "hip", "x64"],
+            // Upstream renamed `win-hip-radeon-x64` to `win-rocm-10.0-x64`
+            // between b10333 and b11418; the ROCm version is left unpinned.
+            Backend::Hip => vec!["win", "rocm", "x64"],
             Backend::Sycl => vec!["win", "sycl", "x64"],
             // Upstream no longer ships per-ISA CPU builds. The single CPU zip
             // carries a `ggml-cpu-<microarch>.dll` per ISA (sandybridge …

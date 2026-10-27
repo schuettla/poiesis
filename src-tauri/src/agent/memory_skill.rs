@@ -121,6 +121,44 @@ pub async fn execute(
     }
 }
 
+/// `DEC-6`: the scope as a decision (`Purpose::MemScope`, a background purpose,
+/// so it only ever runs on this computer). The outer `None` means no decision
+/// was made and the caller asks the old way; `Some(None)` means the model was
+/// asked and is not sure, which leaves the fact unclassified.
+async fn decide_scope(
+    name: &str,
+    description: &str,
+    body: &str,
+    conversation_id: Option<&str>,
+) -> Option<Option<String>> {
+    let site = super::decide::sites::scope(name, description, body);
+    let opts = super::decide::Opts { conversation_id, run_id: None };
+    let verdict = super::decide::ask(&site.as_ask(), super::decide::Purpose::MemScope, opts).await.ok()?;
+    let kept = super::decide::sites::scope_from(&verdict);
+    let act = if kept.is_some() { super::decide::control::Act::Go } else { super::decide::control::Act::Below };
+    super::decide::settle(&verdict, super::decide::Purpose::MemScope, act, opts);
+    Some(kept)
+}
+
+/// The scope of a fact: the decision first, then the local chat model as before.
+/// `endpoint` is the local engine or nothing, never a cloud provider.
+pub async fn scope_for(
+    client: &reqwest::Client,
+    endpoint: Option<&crate::cloud::ChatEndpoint>,
+    name: &str,
+    description: &str,
+    body: &str,
+    conversation_id: Option<&str>,
+) -> Option<String> {
+    if let Some(decided) = decide_scope(name, description, body, conversation_id).await {
+        return decided;
+    }
+    match endpoint {
+        Some(endpoint) => classify_scope(client, endpoint, name, description, body).await,
+        None => None,
+    }
+}
+
 /// `SCP-1`: one local call, right at save time, asking whether a fact applies
 /// to every answer or only when its subject comes up. `endpoint` is always the
 /// local engine — this is a call the user did not ask for, so it never goes to
@@ -195,10 +233,8 @@ async fn memory_op(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<St
                 .unwrap_or("fact");
             // No local model loaded ⇒ leave it unclassified rather than reach
             // for the turn's cloud endpoint; `backfill_scope` retries locally.
-            let scope = match ctx.local_endpoint {
-                Some(endpoint) => classify_scope(ctx.client, endpoint, name, description, text).await,
-                None => None,
-            };
+            let scope =
+                scope_for(ctx.client, ctx.local_endpoint, name, description, text, Some(ctx.conversation_id)).await;
 
             // TTL-1: an explicit expiry from the model wins. Otherwise, a body
             // that reads as transient gets a 14-day default rather than living

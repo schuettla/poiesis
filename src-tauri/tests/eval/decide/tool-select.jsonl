@@ -1,0 +1,40 @@
+{"id": "tool-01", "request": "What's the latest stable version of Rust and what changed in it?", "unit": "web_search", "expect": "yes"}
+{"id": "tool-02", "request": "Look up the opening hours of the post office on Main Street.", "unit": "web_search", "expect": "yes"}
+{"id": "tool-03", "request": "Who won the match last night?", "unit": "web_search", "expect": "yes"}
+{"id": "tool-04", "request": "Explain what a mutex is in two sentences.", "unit": "web_search", "expect": "no"}
+{"id": "tool-05", "request": "Rewrite this paragraph so it sounds more friendly: 'Your request has been denied.'", "unit": "web_search", "expect": "no"}
+{"id": "tool-06", "request": "Thanks, that helps.", "unit": "web_search", "expect": "no"}
+{"id": "tool-07", "request": "Did anyone reply to my message about the invoice?", "unit": "mail", "expect": "yes"}
+{"id": "tool-08", "request": "Send a short note to Ana saying I will be ten minutes late.", "unit": "mail", "expect": "yes"}
+{"id": "tool-09", "request": "Find the email with the flight confirmation for Lisbon.", "unit": "mail", "expect": "yes"}
+{"id": "tool-10", "request": "What is the difference between a list and a tuple in Python?", "unit": "mail", "expect": "no"}
+{"id": "tool-11", "request": "Summarise the file notes.txt in three bullets.", "unit": "mail", "expect": "no"}
+{"id": "tool-12", "request": "Good morning!", "unit": "mail", "expect": "no"}
+{"id": "tool-13", "request": "What's on my calendar tomorrow?", "unit": "apps", "expect": "yes"}
+{"id": "tool-14", "request": "Post a message in the team Slack channel that the release is out.", "unit": "apps", "expect": "yes"}
+{"id": "tool-15", "request": "Add a page to Notion with today's meeting notes.", "unit": "apps", "expect": "yes"}
+{"id": "tool-16", "request": "Convert 72 degrees Fahrenheit to Celsius.", "unit": "apps", "expect": "no"}
+{"id": "tool-17", "request": "Why does my loop never end? while i < 10: print(i)", "unit": "apps", "expect": "no"}
+{"id": "tool-18", "request": "Translate 'where is the station' into Spanish.", "unit": "apps", "expect": "no"}
+{"id": "tool-19", "request": "Refactor the whole billing module and add tests, in the background while I work on something else.", "unit": "subagents", "expect": "yes"}
+{"id": "tool-20", "request": "Have Claude Code migrate this project to TypeScript.", "unit": "subagents", "expect": "yes"}
+{"id": "tool-21", "request": "Research three database options in parallel and compare them.", "unit": "subagents", "expect": "yes"}
+{"id": "tool-22", "request": "What does the word 'idempotent' mean?", "unit": "subagents", "expect": "no"}
+{"id": "tool-23", "request": "Give me a haiku about autumn.", "unit": "subagents", "expect": "no"}
+{"id": "tool-24", "request": "What is 17 times 23?", "unit": "subagents", "expect": "no"}
+{"id": "tool-25", "request": "Open the pricing page of that site and tell me what the plans cost.", "unit": "browser", "expect": "yes"}
+{"id": "tool-26", "request": "Fill in the contact form on the website with my details.", "unit": "browser", "expect": "yes"}
+{"id": "tool-27", "request": "Log in to the dashboard in the browser and check the build status.", "unit": "browser", "expect": "yes"}
+{"id": "tool-28", "request": "Remind me what the capital of Australia is.", "unit": "browser", "expect": "no"}
+{"id": "tool-29", "request": "Draft a polite reply declining the invitation.", "unit": "browser", "expect": "no"}
+{"id": "tool-30", "request": "Which is better for a small team, Postgres or MySQL?", "unit": "browser", "expect": "no"}
+{"id": "tool-31", "request": "Run this snippet and tell me what it prints: print(sum(range(100)))", "unit": "code_exec", "expect": "yes"}
+{"id": "tool-32", "request": "Parse this CSV and compute the average of the third column.", "unit": "code_exec", "expect": "yes"}
+{"id": "tool-33", "request": "Check whether this regex matches all of these twelve strings.", "unit": "code_exec", "expect": "yes"}
+{"id": "tool-34", "request": "How are you today?", "unit": "code_exec", "expect": "no"}
+{"id": "tool-35", "request": "Suggest a name for my new bakery.", "unit": "code_exec", "expect": "no"}
+{"id": "tool-36", "request": "Make a picture of a red fox in the snow.", "unit": "image_gen", "expect": "yes"}
+{"id": "tool-37", "request": "Generate a logo for my podcast about gardening.", "unit": "image_gen", "expect": "yes"}
+{"id": "tool-38", "request": "Describe the plot of Hamlet in a paragraph.", "unit": "image_gen", "expect": "no"}
+{"id": "tool-39", "request": "Fix the failing test in parser.test.ts.", "unit": "image_gen", "expect": "no"}
+{"id": "tool-40", "request": "What time zone is Tokyo in?", "unit": "image_gen", "expect": "no"}

@@ -15,6 +15,8 @@ pub mod connectors;
 mod mic_permission;
 pub mod db;
 pub mod engines;
+pub mod experiments;
+pub mod experiments_report;
 mod marketplace;
 mod mcp;
 pub mod media;
@@ -28,7 +30,7 @@ use tauri::{Emitter, Manager};
 
 use db::Db;
 use permissions::PermissionManager;
-use runtime::{EmbedManager, RerankManager, RuntimeManager};
+use runtime::{DecideManager, EmbedManager, RerankManager, RuntimeManager};
 
 /// Application-wide error type surfaced to the frontend as a string.
 #[derive(Debug, thiserror::Error)]
@@ -108,6 +110,9 @@ pub fn run() {
             // skills, once. Runs before anything reads the skills folder, and
             // moves the originals to `.trash/` rather than deleting them.
             memory::recipe_legacy::migrate(&memory, &db, &base_dir.join("skills"));
+            // `EXP-3`: Workspace mode became an experiment. Anyone who already has
+            // a Workspace chat keeps it on, once.
+            experiments::migrate(&db);
             // Drop file-undo snapshots past their retention window, so the trash
             // can't grow without bound behind the user's back.
             agent::trash::prune(&db, &base_dir);
@@ -150,6 +155,9 @@ pub fn run() {
             runtime::embedserver::spawn_idle_stop(app.handle().clone());
             app.manage(RerankManager::new());
             runtime::rerankserver::spawn_idle_stop(app.handle().clone());
+            // `DEC-4`: the decision engine loads on first use and stops when idle.
+            app.manage(DecideManager::new());
+            runtime::decideserver::spawn_idle_stop(app.handle().clone());
             // VOC-1: speech engines load on first use and unload when idle.
             #[cfg(feature = "voice")]
             {
@@ -163,6 +171,7 @@ pub fn run() {
             // mid-run steering aim at now that a turn can start other turns.
             app.manage(agent::fleet::Fleet::new());
             app.manage(commands::agent::SideQuestion::default());
+            app.manage(commands::verify::VerifyRuns::default());
             app.manage(commands::scheduler::SchedulerState::new());
             commands::scheduler::spawn_ticker(app.handle().clone());
             // ART-6: artifacts are served from loopback so a preview has a real
@@ -190,6 +199,19 @@ pub fn run() {
             // {background: true}` has nothing to spawn into and says so, rather
             // than accepting work it cannot do.
             agent::background::init(app.handle().clone());
+            // `DEC-5`: the decision seam reaches its engine through this handle,
+            // as `background` does. Needs `app.manage(db)` and the managers above.
+            agent::decide::init(app.handle().clone());
+            // `CTL-4`: refit the decision calibration when a week and enough
+            // labels have gone by. Old decisions are dropped after 90 days.
+            {
+                let db = app.state::<db::Db>();
+                let _ = db.prune_decisions(db::now_ms() - 90 * 24 * 60 * 60 * 1000);
+            }
+            agent::decide::seed::start_refits(app.handle().clone());
+            // `USE-6a`: the small inbox's fetch loop. It does nothing while Mail
+            // triage is off. Needs `app.manage(db)` and the decision seam above.
+            agent::mail_sync::start(app.handle().clone());
             // `CLI-2`: find the agent apps installed on this computer, in the
             // background. Needs `app.manage(db)` above.
             commands::engines::spawn_detect_on_start(app.handle().clone());
@@ -284,6 +306,7 @@ pub fn run() {
             commands::agent::agent_chat_cmd,
             commands::agent::steer_run_cmd,
             commands::agent::answer_question_cmd,
+            commands::agent::restore_tools_cmd,
             commands::agent::goal_check_cmd,
             commands::agent::side_question_cmd,
             commands::agent::cancel_side_question_cmd,
@@ -367,6 +390,37 @@ pub fn run() {
             commands::rerankgen::download_rerank_model_cmd,
             commands::rerankgen::set_default_rerank_model_cmd,
             commands::rerankgen::delete_rerank_model_cmd,
+            commands::decide::decide_status_cmd,
+            commands::decide::decide_policy_cmd,
+            commands::decide::decisions_list_cmd,
+            commands::decide::classify_correct_cmd,
+            commands::decide::steer_answer_cmd,
+            commands::decide::composer_hint_cmd,
+            commands::decide::composer_hint_label_cmd,
+            commands::decide::reopen_plan_item_cmd,
+            commands::decide::decide_calibration_cmd,
+            commands::decide::run_decisions_cmd,
+            commands::decide::receipt_wrong_cmd,
+            commands::decide::decide_start_cmd,
+            commands::decide::calibrate_decide_cmd,
+            commands::decide::record_goal_outcome_cmd,
+            commands::decide::decide_models_cmd,
+            commands::decide::download_decide_model_cmd,
+            commands::decide::set_default_decide_model_cmd,
+            commands::decide::delete_decide_model_cmd,
+            commands::decide::set_decide_placement_cmd,
+            commands::decide::decide_cloud_catalog_cmd,
+            commands::decide::decide_cloud_probe_cmd,
+            commands::decide::decide_cloud_select_cmd,
+            commands::decide::set_decide_backend_cmd,
+            commands::decide::set_decide_purpose_cloud_cmd,
+            commands::decide::decide_cloud_status_cmd,
+            commands::decide::decide_usage_cmd,
+            commands::experiments::experiments_list_cmd,
+            commands::experiments::set_experiment_cmd,
+            commands::experiments::experiments_seen_cmd,
+            commands::experiments::experiment_report_cmd,
+            commands::experiments::experiment_reset_cmd,
             commands::index::index_status_cmd,
             commands::index::should_auto_index_cmd,
             commands::index::build_index_cmd,
@@ -439,6 +493,7 @@ pub fn run() {
             commands::engines::engines_rules_reorder_cmd,
             commands::engines::engines_rules_reset_cmd,
             commands::engines::engines_undo_handover_cmd,
+            commands::engines::engines_prematch_counts_cmd,
             commands::engines::engines_continue_cmd,
             commands::engines::engines_route_preview_cmd,
             commands::engines::set_conversation_engines_off_cmd,
@@ -494,6 +549,17 @@ pub fn run() {
             commands::mail::test_mail_account_cmd,
             commands::mail::set_mail_account_enabled_cmd,
             commands::mail::delete_mail_account_cmd,
+            commands::mail::mail_inbox_cmd,
+            commands::mail::mail_sync_now_cmd,
+            commands::mail::mail_retag_cmd,
+            commands::mail::mail_categories_cmd,
+            commands::mail::set_mail_categories_cmd,
+            commands::verify::verify_message_cmd,
+            commands::verify::verify_cancel_cmd,
+            commands::verify::verify_list_cmd,
+            commands::verify::verify_mark_cmd,
+            commands::verify::verify_revise_cmd,
+            commands::verify::verify_review_cmd,
             commands::skills::list_skills_cmd,
             commands::skills::set_skill_enabled_cmd,
             commands::skills::create_skill_cmd,
@@ -531,6 +597,9 @@ pub(crate) fn shutdown_engines(app: &tauri::AppHandle) {
         tauri::async_runtime::block_on(mgr.stop());
     }
     if let Some(mgr) = app.try_state::<RerankManager>() {
+        tauri::async_runtime::block_on(mgr.stop());
+    }
+    if let Some(mgr) = app.try_state::<DecideManager>() {
         tauri::async_runtime::block_on(mgr.stop());
     }
 }

@@ -1,0 +1,246 @@
+/* The Inbox (`USE-UI-4`) and the editor of its kinds. Every class starts with
+   `mail-`; the segmented filter, the shared menu and the buttons come from the
+   shared sheets. */
+
+.mail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+.mail-head .transport-toggle {
+  margin-bottom: 0;
+}
+.mail-count {
+  margin-left: 6px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.mail-status {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0 var(--sp-2);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.mail-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.mail-refresh:hover:not(:disabled) {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.mail-refresh:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.mail-total {
+  margin: var(--sp-3) 0 var(--sp-1);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+
+/* ---- rows ---- */
+.mail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--paper-edge-2);
+}
+.mail-row {
+  display: grid;
+  grid-template-columns: 18px 10rem minmax(0, 1fr) auto 4.5rem auto;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 40px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--paper-edge-2);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+.mail-row:hover,
+.mail-row:focus-within {
+  background: var(--fill-hover);
+}
+.mail-row.unread {
+  color: var(--ink);
+}
+.mail-row.unread .mail-from,
+.mail-row.unread .mail-subject-text {
+  font-weight: 600;
+}
+.mail-from,
+.mail-subject-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-subject {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.mail-when {
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Four bars that grow, as many filled as the message is urgent. */
+.mail-urgency {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 16px;
+}
+.mail-urgency.empty {
+  width: 18px;
+}
+.mail-urgency-bar {
+  display: block;
+  width: 3px;
+  border-radius: var(--radius-xs);
+  background: var(--paper-edge-2);
+}
+.mail-urgency-bar.s1 {
+  height: 5px;
+}
+.mail-urgency-bar.s2 {
+  height: 8px;
+}
+.mail-urgency-bar.s3 {
+  height: 11px;
+}
+.mail-urgency-bar.s4 {
+  height: 14px;
+}
+.mail-urgency-bar.on {
+  background: var(--ink);
+}
+
+.mail-reply {
+  flex: none;
+  padding: 0 7px;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-pill);
+}
+
+/* The kind: a quiet pill that opens the menu. A row with none offers to set one
+   only when it is looked at, so an unsure row stays empty. */
+.mail-kind-wrap {
+  position: relative;
+  display: inline-flex;
+  justify-content: flex-end;
+  min-width: 6.5rem;
+}
+.mail-kind {
+  padding: 1px 9px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink);
+  background: var(--fill-quiet);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.mail-kind:hover {
+  border-color: var(--paper-edge-2);
+}
+.mail-kind.mine {
+  border-color: var(--paper-edge-2);
+  background: none;
+}
+.mail-kind.none {
+  color: var(--ink-faint);
+  background: none;
+  opacity: 0;
+}
+.mail-row:hover .mail-kind.none,
+.mail-row:focus-within .mail-kind.none,
+.mail-kind.none[aria-expanded="true"] {
+  opacity: 1;
+}
+.mail-ask {
+  opacity: 0;
+  white-space: nowrap;
+}
+.mail-row:hover .mail-ask,
+.mail-row:focus-within .mail-ask {
+  opacity: 1;
+}
+
+/* ---- the kinds editor ---- */
+.mail-kinds {
+  margin-top: var(--sp-8);
+}
+.mail-kinds-title {
+  margin: 0 0 var(--sp-1);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink);
+}
+.mail-kind-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0;
+  padding: 0;
+  list-style: none;
+}
+.mail-kind-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 2px 4px 2px 10px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink);
+  background: var(--fill-quiet);
+  border-radius: var(--radius-pill);
+}
+.mail-kind-remove {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: var(--fs-ui);
+  line-height: 1;
+  color: var(--ink-muted);
+  background: none;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.mail-kind-remove:hover:not(:disabled) {
+  background: var(--fill-press);
+  color: var(--ink);
+}
+.mail-kind-remove:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.mail-kind-add {
+  display: flex;
+  gap: var(--sp-2);
+  max-width: 22rem;
+  margin-bottom: var(--sp-2);
+}

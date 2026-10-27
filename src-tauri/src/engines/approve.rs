@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::agent::decide::toolgate;
 use crate::agent::run::AgentEventSink;
+use crate::db::Db;
 use crate::permissions::{Decision, PermissionManager, PermissionRequest, Trust};
 use crate::runtime::proxy::CancelFlag;
 
@@ -65,6 +67,12 @@ fn file_of(input: &Value) -> Option<&str> {
     s(input, "file_path").or_else(|| s(input, "path")).or_else(|| s(input, "notebook_path"))
 }
 
+/// Is the tool's path outside the folder? A relative path is read from the folder
+/// the agent works in (its own working folder), never from Poiesis's.
+fn outside(input: &Value, cwd: &Path) -> bool {
+    file_of(input).is_some_and(|p| !crate::permissions::path_within_root(&cwd.join(p), cwd))
+}
+
 /// The path as the user knows it: relative to the folder when it is inside it.
 pub fn shown_path(p: &str, cwd: &Path) -> String {
     Path::new(p).strip_prefix(cwd).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| p.to_string())
@@ -96,14 +104,13 @@ pub fn describe_tool(tool: &str, input: &Value, cwd: &Path) -> (String, String) 
 
 /// The question's sentence: first person to the person reading it.
 fn sentence(engine: &str, tool: &str, input: &Value, cwd: &Path) -> String {
-    let outside = file_of(input).is_some_and(|p| !crate::permissions::path_within_root(Path::new(p), cwd));
-    let where_ = if outside { " (outside the folder it was given)" } else { "" };
+    let where_ = if outside(input, cwd) { " (outside the folder it was given)" } else { "" };
     match kind_of(tool) {
         ToolKind::Command => format!("{engine} wants to run a command."),
         ToolKind::Edit => {
             let name = file_of(input).map(|p| shown_path(p, cwd)).unwrap_or_else(|| "a file".into());
             let verb = match tool {
-                "Write" if !file_of(input).is_some_and(|p| Path::new(p).exists()) => "create",
+                "Write" if !file_of(input).is_some_and(|p| cwd.join(p).exists()) => "create",
                 "Delete" => "delete",
                 _ => "edit",
             };
@@ -171,6 +178,18 @@ impl Verdict {
     }
 }
 
+/// `USE-12`: what a request is compared with, so a quick decision can say when it
+/// is not part of the task. It adds one line to the question and nothing else: an
+/// agent app owns its own loop.
+pub struct Look<'a> {
+    pub db: &'a Db,
+    /// The conversation the decision is logged and counted under.
+    pub conversation_id: String,
+    pub run_id: String,
+    /// The task the agent app was handed.
+    pub task: String,
+}
+
 /// Where one agent run's questions go.
 pub struct Port<'a> {
     pub perms: &'a PermissionManager,
@@ -180,6 +199,7 @@ pub struct Port<'a> {
     pub trust: Trust,
     /// Nobody is there to answer.
     pub headless: bool,
+    look: Option<Look<'a>>,
     remembered: Mutex<HashSet<String>>,
     pub asked: AtomicU32,
     pub allowed: AtomicU32,
@@ -202,11 +222,18 @@ impl<'a> Port<'a> {
             cwd: cwd.to_path_buf(),
             trust,
             headless,
+            look: None,
             remembered: Mutex::new(HashSet::new()),
             asked: AtomicU32::new(0),
             allowed: AtomicU32::new(0),
             denied: AtomicU32::new(0),
         }
+    }
+
+    /// Let a quick decision read each question against the task (`USE-12`).
+    pub fn with_look(mut self, look: Look<'a>) -> Self {
+        self.look = Some(look);
+        self
     }
 
     /// Decide one request. `gone` is set when the question is no longer wanted
@@ -225,8 +252,7 @@ impl<'a> Port<'a> {
         let kind = kind_of(tool);
         // Looking is allowed at every level. A read that needs asking about is
         // one outside the folder, and that goes through the checks below.
-        let outside = file_of(input).is_some_and(|p| !crate::permissions::path_within_root(Path::new(p), &self.cwd));
-        if kind == ToolKind::Read && !outside {
+        if kind == ToolKind::Read && !outside(input, &self.cwd) {
             return Verdict::Allow;
         }
         if self.trust == Trust::ReadOnly {
@@ -245,18 +271,41 @@ impl<'a> Port<'a> {
         let argv = (kind == ToolKind::Command).then(|| vec![clip(s(input, "command").unwrap_or(""), SHOW_MAX)]);
         let diff = match kind {
             ToolKind::Edit => edit_diff(tool, input),
-            ToolKind::Other | ToolKind::Fetch => Some(clip(&input.to_string(), 1500)),
+            // What is approved is shown up to the same length as a command.
+            ToolKind::Other | ToolKind::Fetch => Some(clip(&input.to_string(), SHOW_MAX)),
             _ => None,
         };
-        self.sink.send_permission(PermissionRequest::engine_ask(
-            id.clone(),
-            self.engine.clone(),
-            tool.to_string(),
-            sentence(&self.engine, tool, input, &self.cwd),
-            self.cwd.to_string_lossy().to_string(),
-            argv,
-            diff,
-        ));
+        // `USE-12`: is it part of the task the agent was handed? One line, never a
+        // question added or taken away.
+        let scoped = match &self.look {
+            Some(look) => {
+                let detail = argv.as_ref().map(|a| a.join(" ")).or_else(|| diff.clone()).unwrap_or_default();
+                toolgate::scope_of(
+                    look.db,
+                    &look.conversation_id,
+                    Some(&look.run_id),
+                    false,
+                    &look.task,
+                    &toolgate::engine_what(&self.engine, tool, &detail),
+                    false,
+                )
+                .await
+            }
+            None => None,
+        };
+        self.sink.send_permission(
+            PermissionRequest::engine_ask(
+                id.clone(),
+                self.engine.clone(),
+                tool.to_string(),
+                sentence(&self.engine, tool, input, &self.cwd),
+                self.cwd.to_string_lossy().to_string(),
+                argv,
+                diff,
+            )
+            .with_reason(scoped.as_ref().map(|s| s.flag.line()))
+            .with_reason_hover(scoped.as_ref().map(|s| s.flag.hover())),
+        );
 
         let answer = tokio::select! {
             d = rx => d.ok(),
@@ -269,7 +318,13 @@ impl<'a> Port<'a> {
                 self.remembered.lock().unwrap().insert(key);
                 Verdict::Allow
             }
-            Some(Decision::Deny) => Verdict::Deny("Not allowed: the user declined.".into()),
+            Some(Decision::Deny) => {
+                // `CTL-3`: a no to a request a quick decision called off the task.
+                if let (Some(look), Some(s)) = (&self.look, &scoped) {
+                    let _ = look.db.add_outcome(&s.decision, "right", None, "engine-card");
+                }
+                Verdict::Deny("Not allowed: the user declined.".into())
+            }
             None => {
                 // Withdraw what is still on the panel, then say no.
                 self.perms.resolve(&id, Decision::Deny);
@@ -340,6 +395,21 @@ mod tests {
         let elsewhere = tempfile::tempdir().unwrap();
         let out = sentence("Claude Code", "Edit", &json!({"file_path": elsewhere.path().join("z.txt").to_string_lossy()}), dir.path());
         assert!(out.contains("outside the folder"), "{out}");
+    }
+
+    /// A relative path is read from the agent's folder: inside is inside, and `..`
+    /// out of it is still outside.
+    #[test]
+    fn a_relative_path_is_read_from_the_agents_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src").join("a.rs"), "x").unwrap();
+        assert!(!outside(&json!({"file_path": "src/a.rs"}), dir.path()));
+        assert!(!outside(&json!({"path": "."}), dir.path()));
+        assert!(outside(&json!({"file_path": "../elsewhere.txt"}), dir.path()));
+        assert!(!outside(&json!({"pattern": "TODO"}), dir.path()), "no path at all is not outside");
+        let edit = sentence("Codex", "Write", &json!({"file_path": "src/a.rs"}), dir.path());
+        assert_eq!(edit, "Codex wants to edit src/a.rs.", "the file exists in the agent's folder");
     }
 
     #[test]

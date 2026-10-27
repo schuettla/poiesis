@@ -2,15 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { EngineInfo, EngineRoutePreview, EngineTryResult } from "./api";
 import {
   MODE_LABELS,
+  answeredBy,
   becauseChip,
   cannotEnable,
   engineStatus,
   envToMap,
   linesToArgs,
+  matchCounter,
+  matchedTitle,
   modeHelp,
   paidByLabel,
   payChip,
   previewLine,
+  ruleLine,
   ruleLooksWrong,
   tryLine,
 } from "./engines";
@@ -107,5 +111,34 @@ describe("engine wording", () => {
     expect(paidByLabel("own", "opencode/beam-free")).toBe("free model");
     expect(becauseChip("persona")).toBe("its persona");
     expect(becauseChip("asked")).toBe("you asked");
+  });
+});
+
+describe("the handover pre-match (USE-UI-10)", () => {
+  it("says a rule was matched early only when a quick decision matched it", () => {
+    expect(ruleLine({ label: "U2", text: "Run the tests" })).toBe("Because of your rule U2: Run the tests");
+    expect(ruleLine({ label: "U2", text: "Run the tests", matched: null })).toBe("Because of your rule U2: Run the tests");
+    expect(ruleLine({ label: "U2", text: "Run the tests", matched: 0.931 })).toBe("Matches your rule U2: Run the tests");
+  });
+
+  // `SEE-T-8`: a match is an unfitted number to the card, so only 0.9 and up is said plainly.
+  it("says a middling match with probably, and never shows the number", () => {
+    expect(ruleLine({ label: "U2", text: "Run the tests", matched: 0.86 })).toBe("Probably matches your rule U2: Run the tests");
+    expect(ruleLine({ label: "U2", text: "Run the tests", matched: 0.97 })).not.toMatch(/\d\.\d/);
+  });
+
+  it("words the dot's hover and which path answered", () => {
+    expect(matchedTitle(0.93)).toBe("matched before I started (0.93)");
+    expect(answeredBy({ quick_ms: 41 })).toBe("quick decision \u00b7 41 ms");
+    expect(answeredBy({ quick_ms: null })).toBe("asked my chat model");
+    expect(answeredBy({})).toBe("asked my chat model");
+  });
+
+  it("counts how a rule fared, and says nothing when no quick decision matched it", () => {
+    expect(matchCounter(undefined)).toBeNull();
+    expect(matchCounter({ matched: 0, declined: 0 })).toBeNull();
+    expect(matchCounter({ matched: 12, declined: 1 })).toBe("matched early 12\u00d7 \u00b7 you said do it yourself 1\u00d7");
+    expect(matchCounter({ matched: 3, declined: 0 })).toBe("matched early 3\u00d7");
+    expect(matchCounter({ matched: 0, declined: 2 })).toBe("you said do it yourself 2\u00d7");
   });
 });

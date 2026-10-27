@@ -1040,6 +1040,48 @@ kbd {
   color: var(--ink-faint);
 }
 
+/* ---------- plates: the ink drawings that sit beside a section's text ---------- */
+.feature {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 64px;
+  align-items: center;
+}
+.feature.flip > .plate {
+  order: -1;
+}
+.below {
+  margin-top: 56px;
+}
+.plate {
+  margin: 0;
+  max-width: 500px;
+  justify-self: end;
+}
+.feature.flip > .plate {
+  justify-self: start;
+}
+.plate img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: cover;
+  background: var(--canvas);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+}
+[data-mode="dark"] .plate img {
+  filter: brightness(0.82) contrast(1.05);
+}
+.plate figcaption {
+  margin-top: 10px;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: var(--fs-callout);
+  color: var(--ink-faint);
+}
+
 /* ---------- repair ---------- */
 .two {
   display: grid;
@@ -1822,12 +1864,19 @@ kbd {
     padding: 72px 0;
   }
   .split,
+  .feature,
   .start {
     grid-template-columns: minmax(0, 1fr);
     gap: 36px;
   }
-  .split.flip > :first-child {
+  .split.flip > :first-child,
+  .feature.flip > .plate {
     order: 0;
+  }
+  .plate,
+  .feature.flip > .plate {
+    justify-self: start;
+    width: 100%;
   }
   .cells {
     grid-template-columns: repeat(2, minmax(0, 1fr));

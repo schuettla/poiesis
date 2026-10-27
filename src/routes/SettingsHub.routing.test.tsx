@@ -77,6 +77,7 @@ describe("the settings hub", () => {
       Mail: "mail",
       Activity: "activity",
       Usage: "usage",
+      Experiments: "experiments",
       "Working dir": "workingdir",
       About: "about",
     };

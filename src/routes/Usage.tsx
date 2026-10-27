@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import * as api from "../lib/api";
 import { inTauri } from "../lib/api";
+import { decisionCostText, decisionCountText, decisionSummary, decisionTotals } from "../lib/decideUsage";
 import { paidByLabel } from "../lib/engines";
 import { useAppStore } from "../lib/store";
 import "./Usage.css";
@@ -144,6 +145,21 @@ export default function Usage() {
     };
   }, [days]);
   const appCallTotal = appCalls.reduce((n, r) => n + r.calls, 0);
+
+  // `CTL-UI-2`: quick decisions, by where they were asked. Local ones cost nothing.
+  const [decisions, setDecisions] = useState<api.DecisionUsageRow[]>([]);
+  useEffect(() => {
+    if (!inTauri()) return;
+    let live = true;
+    api
+      .decideUsage(days)
+      .then((rows) => live && setDecisions(rows))
+      .catch(() => live && setDecisions([]));
+    return () => {
+      live = false;
+    };
+  }, [days]);
+  const decisionSums = decisionTotals(decisions);
 
   const total = data?.total;
   const hasAnything = (total?.runs ?? 0) > 0;
@@ -307,6 +323,23 @@ export default function Usage() {
                   </div>
                 );
               })}
+            </div>
+          </section>
+        )}
+
+        {decisionSums.total > 0 && (
+          <section className="usage-section" aria-label="Decisions">
+            <h3>Decisions</h3>
+            <p className="usage-empty">{decisionSummary(decisionSums)}</p>
+            <div className="usage-rows">
+              {decisions.map((row) => (
+                <div className="usage-row" key={`${row.backend}:${row.model}`}>
+                  <span className="usage-name">{row.model}</span>
+                  <span className="usage-runs">{decisionCountText(row)}</span>
+                  <span className="usage-tokens">{tokens(row.input_tokens)} in</span>
+                  <span className={`usage-cost ${row.backend === "local" ? "free" : ""}`}>{decisionCostText(row)}</span>
+                </div>
+              ))}
             </div>
           </section>
         )}

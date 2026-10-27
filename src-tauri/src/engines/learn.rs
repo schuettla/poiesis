@@ -240,7 +240,35 @@ pub async fn follow_up(db: &Db, client: &reqwest::Client, local: Option<&ChatEnd
         }
         Draft::Nothing | Draft::Unreadable => None,
     };
+    // `USE-8`: words the model wrote get the quick check the scan cannot give them.
+    // One that reads like an instruction is dropped, and the proposal falls back to
+    // plain words, the way an unreadable draft does.
+    let change = match change {
+        Some(c) => match new_words(&c) {
+            Some(words) => match crate::agent::decide::filters::refuses_proposal(words, None).await {
+                Some(p) => {
+                    let _ = db.log_activity(
+                        None,
+                        "engine_injection_refused",
+                        &format!("dropped drafted rule words for {}: the quick check says they read like an instruction ({p:.2})", due.engine_name),
+                    );
+                    None
+                }
+                None => Some(c),
+            },
+            None => Some(c),
+        },
+        None => None,
+    };
     let _ = propose(db, &due, change);
+}
+
+/// The words a change would put in a rule, if it puts any.
+fn new_words(change: &Change) -> Option<&str> {
+    match change {
+        Change::Add { text, .. } | Change::Edit { text, .. } => Some(text),
+        Change::Off { .. } => None,
+    }
 }
 
 // ---- raising and applying a proposal ----
@@ -367,6 +395,29 @@ mod tests {
             })
             .unwrap();
         (db, rule)
+    }
+
+    /// `USE-8`: only a change that puts words in a rule is read by the quick check.
+    #[test]
+    fn only_a_change_with_new_words_is_checked() {
+        let add = Change::Add { kind: "avoid".into(), text: "One-line fixes.".into() };
+        let edit = Change::Edit { rule_id: "r1".into(), text: "Big refactors.".into() };
+        let off = Change::Off { rule_id: "r1".into() };
+        assert_eq!(new_words(&add), Some("One-line fixes."));
+        assert_eq!(new_words(&edit), Some("Big refactors."));
+        assert_eq!(new_words(&off), None);
+    }
+
+    /// `USE-8`: with no quick check available the drafted words go through as they
+    /// did before there was one.
+    #[tokio::test]
+    async fn without_a_quick_check_a_drafted_rule_is_proposed_as_before() {
+        let (db, rule) = setup();
+        record_override(&db, &rule, "fix one typo");
+        record_override(&db, &rule, "rename a var");
+        let due = record_override(&db, &rule, "bump a version").expect("the third one is due");
+        follow_up(&db, &reqwest::Client::new(), None, Some(due)).await;
+        assert_eq!(db.list_change_proposals().unwrap().iter().filter(|p| p.target == TARGET).count(), 1);
     }
 
     /// `RTE-T-4`: three no's make exactly one proposal, a fourth while it waits

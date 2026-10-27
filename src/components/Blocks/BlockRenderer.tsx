@@ -4,6 +4,7 @@ import type { BlockView } from "../../lib/types";
 import { useAppStore } from "../../lib/store";
 import type { Diagnostic } from "../../lib/api";
 import DiagnosticsList, { locateDiagnostic } from "../Conversation/Diagnostics";
+import ClassifyBlock from "./ClassifyBlock";
 import ConnectBlock from "./ConnectBlock";
 import Frame from "./Frame";
 import "./blocks.css";
@@ -28,6 +29,8 @@ function BlockFrame({ block }: { block: BlockView }) {
   switch (block.kind) {
     case "connect":
       return <ConnectBlock block={block} />;
+    case "classify":
+      return <ClassifyBlock block={block} />;
     case "comparison":
       return <ComparisonBlock block={block} />;
     case "collection":

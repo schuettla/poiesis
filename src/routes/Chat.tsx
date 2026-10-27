@@ -14,6 +14,7 @@ import VoiceMode from "../components/Voice/VoiceMode";
 import { useVoiceStore } from "../lib/voice/voiceStore";
 import { hideVoiceSurface } from "../lib/voice/controller";
 import WorkspaceOffer from "../components/Workspace/WorkspaceOffer";
+import WorkspaceOffBanner from "../components/Workspace/WorkspaceOffBanner";
 import MemoryToast from "../components/Memory/MemoryToast";
 import RecallOffer from "../components/RecallRuntime/RecallOffer";
 import SessionStrip from "../components/Blocks/SessionStrip";
@@ -193,6 +194,7 @@ export default function Chat() {
         </div>
         {/* Interface changes the user has not seen, offered while out of the canvas. */}
         {!voiceShown && <WorkspaceOffer />}
+        {!voiceShown && <WorkspaceOffBanner />}
         {voiceShown && <VoiceMode />}
       </div>
       {/* The voice surface has its own bar, so the box is not shown under it. */}

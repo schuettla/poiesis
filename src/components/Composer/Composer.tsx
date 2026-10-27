@@ -10,6 +10,9 @@ import ConfirmDialog from "../Confirm/ConfirmDialog";
 import CommandMenu from "./CommandMenu";
 import PlusMenu from "./PlusMenu";
 import ModifierChips from "./ModifierChips";
+import ComposerHintLine from "./ComposerHintLine";
+import { useComposerHint } from "./useComposerHint";
+import { experimentOn } from "../../lib/experiments";
 import ModeChips from "./ModeChips";
 import RunBar from "./RunBar";
 import SuggestionChip from "./SuggestionChip";
@@ -223,7 +226,10 @@ export default function Composer({
       // rather than waiting for a turn that may be minutes away.
       if (canSteer && text) {
         setValue("");
-        steerActiveRun(text).then((delivered) => {
+        // `SEE-3`: "Add it instead" made this an addition, for this message alone.
+        const asAddition = !!useAppStore.getState().turnModifiers.asAddition;
+        if (asAddition) clearTurnModifier("asAddition");
+        (asAddition ? steerActiveRun(text, { asAddition }) : steerActiveRun(text)).then((delivered) => {
           // The run ended in the gap. Nothing was queued, so send it as an
           // ordinary message instead of dropping what the user typed.
           if (!delivered) onSend(text);
@@ -332,6 +338,35 @@ export default function Composer({
 
   function removeAttachment(id: string) {
     setAttachments((a) => a.filter((x) => x.id !== id));
+  }
+
+  // `SEE-3`: the message is read while it is typed, for a chat message only: not a picture
+  // being described, and not the answer to a question the run is waiting on.
+  const quickThinking = useAppStore((s) => experimentOn(s, "fast-slow"));
+  const liveRunId = useAppStore((s) =>
+    s.activeRun && s.activeRun.convId === s.activeConversationId ? s.activeRun.runId : undefined
+  );
+  const hintWeb = useAppStore((s) => !!s.turnModifiers.web);
+  const hintYourself = useAppStore((s) => !!s.turnModifiers.noHandover);
+  const hintAddition = useAppStore((s) => !!s.turnModifiers.asAddition);
+  const hintFx = useComposerHint({
+    text: value,
+    convId: activeConversationId,
+    runId: liveRunId,
+    on: quickThinking && inTauri() && mediaTarget === null && chipModality === null && !asking && !planRevising,
+  });
+  // A hint whose action has been taken is not shown again for this message.
+  const hint = hintFx.hint;
+  const shownHint =
+    hint && !(hint.kind === "web" && hintWeb) && !(hint.kind === "handover" && hintYourself) && !(hint.kind === "stop" && hintAddition)
+      ? hint
+      : null;
+  function takeHint() {
+    const taken = hintFx.take();
+    if (!taken) return;
+    if (taken.kind === "web") setTurnModifier({ web: true });
+    else if (taken.kind === "handover") setTurnModifier({ noHandover: true });
+    else setTurnModifier({ asAddition: true });
   }
 
   const placeholder = asking
@@ -670,6 +705,8 @@ export default function Composer({
             />
             </div>
           </div>
+          {/* `SEE-3`: what was read in the message, before the send button. */}
+          <ComposerHintLine hint={shownHint} onTake={takeHint} onDismiss={hintFx.dismiss} />
           {busy && canSteer && value.trim() ? (
             // Typing during a run means you have something to say to it, not
             // that you want it stopped — so the same key sends, and Stop is

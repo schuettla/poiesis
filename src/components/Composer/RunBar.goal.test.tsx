@@ -100,6 +100,28 @@ describe("while it works", () => {
     expect(link?.title).toBe("2 tests still fail");
   });
 
+  // `USE-UI-11`
+  it("says not yet in words after a verdict, with the probability and the next step on the hover", () => {
+    put({
+      goals: {
+        [CONV]: goal({ round: 2, lastCheck: { met: false, evidence: "", next: "2 tests still fail", p: 0.12 } }),
+      },
+    });
+    expect(line()).toMatch(/^◎ make the tests pass · round 2 of 5 · not yet/);
+    expect(line()).not.toMatch(/\d\.\d\d/);
+    expect(container.querySelector<HTMLButtonElement>(".run-bar-link")?.title).toBe(
+      "2 tests still fail\nQuick decision: 0.12 that the goal holds"
+    );
+  });
+
+  it("shows no probability when the check came from the written answer alone", () => {
+    put({
+      goals: { [CONV]: goal({ round: 2, lastCheck: { met: false, evidence: "", next: "2 tests still fail" } }) },
+    });
+    expect(line()).not.toContain("not yet");
+    expect(line()).not.toMatch(/\(\d\.\d\d\)/);
+  });
+
   it("Stop goal stops it", () => {
     put({ goals: { [CONV]: goal() } });
     const stop = Array.from(container.querySelectorAll<HTMLButtonElement>(".run-bar-act")).find(
@@ -135,6 +157,19 @@ describe("after it ends", () => {
     // Nothing to stop, and no chip.
     expect(container.textContent).not.toContain("Stop goal");
     expect(chips()).toEqual([]);
+  });
+
+  it("met with a probability: Done, with what shows it, `met` in words and the probability on the hover", () => {
+    put({
+      runSummaries: { [CONV]: summary({ live: false, stopReason: "completed" }) },
+      goals: {
+        [CONV]: goal({ status: "met", lastCheck: { met: true, evidence: "npm test exited 0", next: "", p: 0.91 } }),
+      },
+    });
+    expect(line()).toBe("◆ Done: npm test exited 0 · met");
+    expect(container.querySelector<HTMLButtonElement>(".run-bar-link")?.title).toBe(
+      "make the tests pass\nQuick decision: 0.91 that the goal holds"
+    );
   });
 
   it("exhausted: says it did not get there, and what was left", () => {

@@ -8,6 +8,7 @@ import {
   type UpdateInfo,
 } from "../lib/api";
 import { useAppStore } from "../lib/store";
+import { QuickDecisionsCard } from "../components/DecisionModel/DecisionModel";
 import ImageRuntime from "../components/ImageModels/ImageRuntime";
 import RecallRuntime from "../components/RecallRuntime/RecallRuntime";
 import VoiceRuntime from "../components/VoiceRuntime/VoiceRuntime";
@@ -246,6 +247,9 @@ export default function Runtime() {
             )}
           </div>
         </section>
+
+        {/* `DEC-UI-2`: the small model behind quick decisions */}
+        <QuickDecisionsCard />
 
         {/* Acceleration backend (manual override) */}
         <section className="runtime-card">

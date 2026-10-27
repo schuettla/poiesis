@@ -146,16 +146,29 @@ export default function RunBar() {
         const notes = document.querySelectorAll(".command-note");
         notes[notes.length - 1]?.scrollIntoView?.({ behavior: "smooth", block: "center" });
       };
+      // `USE-UI-11`, `SEE-4`: the quick decision's verdict is said in words, `not yet` or
+      // `met`, and its probability is the hover. Only there when the check had one; the
+      // written fallback shows none.
+      const p = goal.lastCheck?.p;
+      const chance = typeof p === "number" ? `Quick decision: ${p.toFixed(2)} that the goal holds` : "";
+      const hover = (words?: string) => [words, chance].filter(Boolean).join("\n");
       if (goal.status === "active") {
         out.push({
           key: "goal",
-          text: goal.checking ? `◎ ${said} · checking` : `◎ ${said} · round ${goal.round} of ${goal.maxRounds}`,
-          title: goal.lastCheck?.next || "Show where I am in this goal",
+          text: goal.checking
+            ? `◎ ${said} · checking`
+            : `◎ ${said} · round ${goal.round} of ${goal.maxRounds}${chance ? " · not yet" : ""}`,
+          title: hover(goal.lastCheck?.next || "Show where I am in this goal"),
           onClick: toLatest,
           extra: [{ label: "Stop goal", onClick: () => stopGoal(convId) }],
         });
       } else if (goal.status === "met") {
-        out.push({ key: "goal", text: `◆ Done: ${goal.lastCheck?.evidence ?? said}`, title: said, onClick: toLatest });
+        out.push({
+          key: "goal",
+          text: `◆ Done: ${goal.lastCheck?.evidence ?? said}${chance ? " · met" : ""}`,
+          title: hover(said),
+          onClick: toLatest,
+        });
       } else {
         out.push({
           key: "goal",
@@ -254,7 +267,19 @@ export default function RunBar() {
       });
     }
     return out;
-  }, [summary, convId, subRuns, changes, asking, goal, stopGoal, setDockView, setDockOpen, openUsage, keepChanges]);
+  }, [
+    summary,
+    convId,
+    subRuns,
+    changes,
+    asking,
+    goal,
+    stopGoal,
+    setDockView,
+    setDockOpen,
+    openUsage,
+    keepChanges,
+  ]);
 
   const interrupted =
     !!summary && !summary.live && !!summary.stopReason && summary.stopReason !== "completed";

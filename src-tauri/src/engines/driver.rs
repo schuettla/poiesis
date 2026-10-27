@@ -97,6 +97,8 @@ pub struct ExternalOutcome {
     pub self_allowed: u32,
     /// The session it was asked to continue was gone, so it started fresh.
     pub resume_failed: bool,
+    /// Its sandbox was not set up, so it was made to ask about every step.
+    pub sandbox_off: bool,
 }
 
 /// How to start one app, resolved from its row and the catalog.

@@ -66,7 +66,16 @@ export interface AgentStep {
    * (`TRU-1`/`TRU-2`). One entry per source a call wrapped — a retrieval call
    * can wrap several file excerpts in one step. Drives the `◇ from outside`
    * chip and its disclosure (`TRU-UI-1`). */
-  untrusted?: { label: string; risk: number; flags: string[]; text: string }[];
+  untrusted?: {
+    label: string;
+    risk: number;
+    flags: string[];
+    text: string;
+    /** `USE-8`: how likely the quick decision model found it that this text
+     * tries to instruct the assistant, 0 to 1. Set only when it did; arrives
+     * after the text went to the model, so it marks the step and blocks nothing. */
+    readsAsInstructions?: number;
+  }[];
   /** `HRN-UI-2`: the batch of steps this one is running alongside. Steps that
    * share a group are drawn as one "3 things at once" band, because that is
    * what actually happened — a stack that fills one row at a time would show
@@ -155,6 +164,9 @@ export interface RunSummary {
   localRun: boolean;
   stopReason?: import("./api").StopReason;
   plan?: import("./api").PlanView;
+  /** `USE-4`: tool groups a quick decision left off this run's menu, and which
+   * of them came back since. Absent when nothing was held back. */
+  held?: { units: import("./api").HeldTool[]; back: string[] };
 }
 
 /** The typed workspace-block kinds the renderer understands (Generative UI).
@@ -169,6 +181,7 @@ export type BlockKind =
   | "table"
   | "diagnostics"
   | "connect"
+  | "classify"
   | "surface";
 
 /** One node of the agent-composed interface tree (the dynamic Workspace
@@ -249,7 +262,11 @@ export interface Message {
    * `pending` until the run picks it up at the top of its next iteration,
    * `delivered` after. Nothing is queued for a later turn — the run reads it
    * mid-flight, which is why the mark says so. */
-  midRun?: "pending" | "delivered";
+  midRun?: "pending" | "delivered" | "held";
+  /** `USE-5`: what a quick decision read this mid-run message as. `held` turns
+   * carry a sure stop and wait for "Stop the run?"; the rest show the class as a
+   * tag. In memory only: it is about a moment, not about the conversation. */
+  steer?: { kind: import("./api").SteerKind; p: number; decision: string };
   /** `HRN-3`: why an assistant turn stopped. Absent or `completed` means the
    * model finished; anything else means the text is what the run had in hand. */
   stopReason?: import("./api").StopReason;
@@ -266,6 +283,9 @@ export interface Message {
    * Absent for a turn that never planned — most of them. Persisted with the
    * turn (`PLN-UI-5`), so reopening the conversation brings it back. */
   plan?: import("./api").PlanView;
+  /** `SEE-2`: what the quick decisions understood before the first word, and, once
+   * the run ended, the decisions behind the receipt. In memory only. */
+  thought?: import("./thought").TurnThought;
   createdAt: number;
 }
 
@@ -403,6 +423,7 @@ export const ALL_VIEWS = [
   "mail",
   "tools",
   "usage",
+  "experiments",
   "about",
   // `PRJ-UI-4`: the project view. A route rather than a window takeover, so it
   // opens beside your chats and closes without losing them. Which project it
@@ -437,6 +458,8 @@ export const HUB_SECTIONS: { view: View; label: string; icon: string }[] = [
   { view: "mail", label: "Mail", icon: "✉" },
   { view: "activity", label: "Activity", icon: "≡" },
   { view: "usage", label: "Usage", icon: "◔" },
+  // `EXP-UI-1`: between Usage and Working dir.
+  { view: "experiments", label: "Experiments", icon: "⚗" },
   { view: "workingdir", label: "Working dir", icon: "▥" },
   { view: "about", label: "About", icon: "ⓘ" },
 ];
@@ -485,6 +508,13 @@ export interface TurnModifiers {
   /** `DEF-5`: the chip is there because it is my default, not because it was
    * asked for. Removing it means not this time and never changes the setting. */
   planFirstIsDefault?: boolean;
+  /** `SEE-3`: Web search is on for this message, whatever the setting says. Never a default. */
+  web?: boolean;
+  /** `SEE-3`: do this one yourself; no handover rule is matched. Never a default. */
+  noHandover?: boolean;
+  /** `SEE-3`: what I say to the working run is an addition, not a stop. Never a default,
+   * and spent by the send to the run, not by a new turn. */
+  asAddition?: boolean;
 }
 
 /** `REG-4`: how a traced command ended. Only `done` and `failed` exist until the

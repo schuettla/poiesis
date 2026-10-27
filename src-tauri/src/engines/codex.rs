@@ -23,7 +23,10 @@
 //!   tree is killed.
 //! - A watchdog: two minutes with no message, no question open and no Stop
 //!   means a wedged `app-server` (it accepts input and never answers).
-//! - `windowsSandbox/setupStart` is never called.
+//! - `windowsSandbox/setupStart` is never called. On Windows an `auto` run asks
+//!   `windowsSandbox/readiness` first; if the sandbox is not ready it runs with
+//!   the ask-first policy instead, because nothing else would keep its commands
+//!   in the folder.
 //! - Poiesis's own tools (`MCPS-2`) are mounted with a `config` override on
 //!   `thread/start` and `thread/resume`: `mcp_servers.poiesis.url` is the loopback
 //!   address. Codex asks before each MCP tool call with
@@ -164,6 +167,8 @@ fn text_item(text: &str) -> Value {
 /// What a reply from the app answers.
 enum Pending {
     Init,
+    /// `windowsSandbox/readiness`, asked before an `auto` thread on Windows.
+    Readiness,
     /// `thread/resume` of the thread we hold.
     Resume(String),
     Start,
@@ -183,7 +188,45 @@ impl Conn {
         let id = self.next_id;
         self.next_id += 1;
         self.pending.insert(id, what);
-        wire.send(&json!({"id": id, "method": method, "params": params})).await
+        let mut msg = json!({"id": id, "method": method});
+        // A method that takes nothing is sent with no `params`, as recorded.
+        if !params.is_null() {
+            msg["params"] = params;
+        }
+        wire.send(&msg).await
+    }
+}
+
+/// Does this trust lean on Codex's own sandbox to keep commands in the folder?
+/// Only `auto` does: there Codex runs commands without asking (`policy_for`).
+fn needs_sandbox(trust: Option<Trust>) -> bool {
+    cfg!(windows) && trust == Some(Trust::Auto)
+}
+
+/// What a `windowsSandbox/readiness` result means. Anything but `ready` is
+/// "not ready" (an error reply is too, in the loop).
+fn sandbox_ready(result: &Value) -> bool {
+    result.get("status").and_then(|s| s.as_str()) == Some("ready")
+}
+
+/// Start the thread, or continue the one we were given.
+async fn open_thread(
+    conn: &mut Conn,
+    wire: &mut Wire,
+    turn: &ExternalTurn<'_>,
+    trust: Option<Trust>,
+    mcp: Option<&str>,
+    resume: Option<String>,
+) -> Result<(), String> {
+    match resume {
+        Some(thread) => {
+            // `excludeTurns`: do not load the whole history.
+            let mut p = thread_params(turn, trust, mcp);
+            p["threadId"] = json!(thread);
+            p["excludeTurns"] = json!(true);
+            conn.call(wire, "thread/resume", p, Pending::Resume(thread)).await
+        }
+        None => conn.call(wire, "thread/start", thread_params(turn, trust, mcp), Pending::Start).await,
     }
 }
 
@@ -226,7 +269,7 @@ fn elicitation_reply(params: &Value, ours_mounted: bool) -> Option<Value> {
 async fn run(turn: &ExternalTurn<'_>) -> Result<ExternalOutcome, DriverError> {
     let launch = turn.launch;
     let job = turn.job.as_ref();
-    let trust = job.map(|j| j.trust);
+    let mut trust = job.map(|j| j.trust);
     let resume = job.and_then(|j| j.resume.clone());
 
     // MCPS-2: the loopback address our tools live at, only when the user switched
@@ -380,13 +423,21 @@ async fn run(turn: &ExternalTurn<'_>) -> Result<ExternalOutcome, DriverError> {
                                     // start a new one, once, and say so.
                                     Pending::Resume(_) if thread_is_gone(err) => {
                                         run.resume_failed = true;
-                                        if let Err(e) = conn.call(&mut wire, "thread/start", thread_params(turn, trust, mcp), Pending::Start).await {
+                                        if let Err(e) = open_thread(&mut conn, &mut wire, turn, trust, mcp, None).await {
                                             break Some(DriverError::Start(e));
                                         }
                                     }
                                     // A steer that arrived as the turn ended, or an
                                     // interrupt of one that already had: nothing to do.
                                     Pending::Steer | Pending::Interrupt => {}
+                                    // A Codex that cannot say is treated as not ready.
+                                    Pending::Readiness => {
+                                        trust = Some(Trust::Confirm);
+                                        run.sandbox_off = true;
+                                        if let Err(e) = open_thread(&mut conn, &mut wire, turn, trust, mcp, resume.clone()).await {
+                                            break Some(DriverError::Start(e));
+                                        }
+                                    }
                                     _ => break Some(rpc_error(err)),
                                 }
                                 continue;
@@ -395,17 +446,26 @@ async fn run(turn: &ExternalTurn<'_>) -> Result<ExternalOutcome, DriverError> {
                             match entry {
                                 Pending::Init => {
                                     let _ = wire.send(&json!({"method": "initialized"})).await;
-                                    let step = match resume.clone() {
-                                        Some(thread) => {
-                                            // `excludeTurns`: do not load the whole history.
-                                            let mut p = thread_params(turn, trust, mcp);
-                                            p["threadId"] = json!(thread);
-                                            p["excludeTurns"] = json!(true);
-                                            conn.call(&mut wire, "thread/resume", p, Pending::Resume(thread)).await
-                                        }
-                                        None => conn.call(&mut wire, "thread/start", thread_params(turn, trust, mcp), Pending::Start).await,
+                                    // In an `auto` folder only Codex's sandbox keeps its
+                                    // commands in the folder. Ask whether it is set up
+                                    // first (read-only; `setupStart` is never called).
+                                    let step = if needs_sandbox(trust) {
+                                        conn.call(&mut wire, "windowsSandbox/readiness", Value::Null, Pending::Readiness).await
+                                    } else {
+                                        open_thread(&mut conn, &mut wire, turn, trust, mcp, resume.clone()).await
                                     };
                                     if let Err(e) = step {
+                                        break Some(DriverError::Start(e));
+                                    }
+                                }
+                                Pending::Readiness => {
+                                    // Not set up: every step is asked about, as in
+                                    // an ask-first folder, and the report says why.
+                                    if !sandbox_ready(&result) {
+                                        trust = Some(Trust::Confirm);
+                                        run.sandbox_off = true;
+                                    }
+                                    if let Err(e) = open_thread(&mut conn, &mut wire, turn, trust, mcp, resume.clone()).await {
                                         break Some(DriverError::Start(e));
                                     }
                                 }
@@ -654,6 +714,8 @@ struct Run {
     turn_id: Option<String>,
     model: Option<String>,
     resume_failed: bool,
+    /// The sandbox was not set up, so this `auto` run asked about every step.
+    sandbox_off: bool,
     final_text: Option<String>,
     last_text: Option<String>,
     /// Everything streamed, in case no message ever completed.
@@ -704,6 +766,7 @@ impl Run {
             turn_id: None,
             model: None,
             resume_failed: false,
+            sandbox_off: false,
             final_text: None,
             last_text: None,
             deltas: String::new(),
@@ -981,6 +1044,7 @@ impl Run {
             stderr_tail: String::new(),
             self_allowed: self.self_allowed,
             resume_failed: self.resume_failed,
+            sandbox_off: self.sandbox_off,
         }
     }
 }
@@ -1144,6 +1208,16 @@ mod tests {
         assert!(run.ask_for("item/tool/requestUserInput", &json!({})).is_none());
         assert!(run.ask_for("item/permissions/requestApproval", &json!({})).is_none());
         assert!(run.ask_for("applyPatchApproval", &json!({})).is_none());
+    }
+
+    #[test]
+    fn only_a_ready_answer_counts_as_a_ready_sandbox() {
+        assert!(sandbox_ready(&json!({"status": "ready"})), "as recorded on 0.163.0");
+        assert!(!sandbox_ready(&json!({"status": "notConfigured"})));
+        assert!(!sandbox_ready(&json!({})));
+        // Only an `auto` folder leans on the sandbox, and only Windows is asked.
+        assert_eq!(needs_sandbox(Some(Trust::Auto)), cfg!(windows));
+        assert!(!needs_sandbox(Some(Trust::Confirm)) && !needs_sandbox(Some(Trust::ReadOnly)) && !needs_sandbox(None));
     }
 
     /// Trust becomes Codex's own sandbox and policy; none of them is the one that

@@ -17,8 +17,10 @@ import WorkingDir from "./WorkingDir";
 import Mail from "./Mail";
 import Tools from "./Tools";
 import Usage from "./Usage";
+import Experiments from "./Experiments";
 import About from "./About";
 import { updateIsWaiting } from "../lib/updates";
+import { hasNewExperiment } from "../lib/experiments";
 import "./SettingsHub.css";
 
 /** The hub's own sections, and whether a view is one of them. Both now live in
@@ -57,16 +59,21 @@ export default function SettingsHub() {
   const appsNeedAttention = useAppStore((s) => s.appsNeedAttention);
   // `CLI-2`: an agent app was found that I haven't shown yet.
   const enginesNewlyFound = useAppStore((s) => s.enginesNewlyFound);
+  // `EXP-UI-1`: an experiment appeared that the screen has not shown yet.
+  const experimentsNew = useAppStore((s) => hasNewExperiment(s));
   const badgeFor = (v: View) =>
     (v === "settings" && soulPending) ||
     (v === "self" && (selfPending || consolidationPending)) ||
     (v === "skills" && skillPending) ||
     (v === "apps" && appsNeedAttention) ||
     (v === "engines" && (enginesNewlyFound || enginePending)) ||
+    (v === "experiments" && experimentsNew) ||
     (v === "about" && updateWaiting);
   const badgeText = (v: View) =>
     v === "about"
       ? "An update is waiting"
+      : v === "experiments"
+        ? "A new experiment"
       : v === "apps"
         ? "A sign-in has expired"
         : v === "engines"
@@ -119,6 +126,7 @@ export default function SettingsHub() {
         {view === "tasks" && <Tasks />}
         {view === "activity" && <Activity />}
         {view === "usage" && <Usage />}
+        {view === "experiments" && <Experiments />}
         {view === "about" && <About />}
       </div>
     </div>

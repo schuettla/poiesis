@@ -314,6 +314,41 @@ pub async fn engines_undo_handover_cmd(
     Ok(true)
 }
 
+/// `USE-UI-10`: how a rule fared when a quick decision matched it before the lead
+/// ran. `rule` is `<agent id>:<label>`, as the rule list knows it.
+#[derive(serde::Serialize)]
+pub struct PrematchCount {
+    pub rule: String,
+    /// The user said *Hand it over* or *Always for this*.
+    pub matched: u32,
+    /// The user said *Do it yourself*.
+    pub declined: u32,
+}
+
+#[tauri::command]
+pub fn engines_prematch_counts_cmd(db: State<'_, Db>) -> Cmd<Vec<PrematchCount>> {
+    use crate::agent::decide::handover::{Label, CARD_SOURCE};
+    use crate::agent::decide::Purpose;
+    let rows = db.outcome_counts(Purpose::HandoverRoute.name(), CARD_SOURCE).map_err(msg)?;
+    let mut out: Vec<PrematchCount> = Vec::new();
+    for (rule, label, n) in rows {
+        let at = match out.iter().position(|c| c.rule == rule) {
+            Some(at) => at,
+            None => {
+                out.push(PrematchCount { rule, matched: 0, declined: 0 });
+                out.len() - 1
+            }
+        };
+        let n = n.max(0) as u32;
+        if label == Label::Right.name() {
+            out[at].matched += n;
+        } else if label == Label::Wrong.name() {
+            out[at].declined += n;
+        }
+    }
+    Ok(out)
+}
+
 /// `CLI-UI-5` (**Continue there**): open a terminal in the folder the job ran in,
 /// running the agent's own `--resume <session>`. Returns the command, so the
 /// screen can copy it whatever happens to the terminal.
@@ -391,6 +426,36 @@ pub async fn engines_route_preview_cmd(
     let candidates = engines::rules::candidates(&db);
     if candidates.is_empty() {
         return Ok(engines::rules::Preview::default());
+    }
+    // `DEC-6`: the quick decision first, as a choice among the user's own rules.
+    // Guards stay exactly where they were: `preview_from_option` runs them. A
+    // wavering or unsure answer, or no decision engine, asks the model below.
+    {
+        use crate::agent::decide::sites::{self, Route};
+        use crate::agent::decide::{ask, Opts, Purpose};
+        let options = engines::rules::route_options(&candidates);
+        if !options.is_empty() {
+            let site = sites::route(request, options, &engines::rules::route_avoid_lines(&candidates));
+            if let Ok(verdict) = ask(&site.as_ask(), Purpose::HandoverRoute, Opts::default()).await {
+                let routed = sites::route_from(&verdict);
+                let act = if matches!(routed, Route::Unsure) {
+                    crate::agent::decide::control::Act::Below
+                } else {
+                    crate::agent::decide::control::Act::Go
+                };
+                crate::agent::decide::settle(&verdict, Purpose::HandoverRoute, act, Opts::default());
+                let quick_ms = Some(verdict.ms);
+                match routed {
+                    Route::Agent(option) => {
+                        if let Some(p) = engines::rules::preview_from_option(&candidates, &option, &engines::rules::Place::assumed()) {
+                            return Ok(engines::rules::Preview { quick_ms, ..p });
+                        }
+                    }
+                    Route::Nobody => return Ok(engines::rules::Preview { quick_ms, ..Default::default() }),
+                    Route::Unsure => {}
+                }
+            }
+        }
     }
     let setup = crate::commands::agent::resolve_turn(&mgr, &db, &target.unwrap_or_default()).await.map_err(msg)?;
     let msgs = vec![serde_json::json!({ "role": "user", "content": engines::rules::preview_prompt(&candidates, request) })];

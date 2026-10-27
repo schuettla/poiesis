@@ -265,7 +265,7 @@ impl<'a> Tools<'a> {
             "recall" => self.recall(args),
             "present" => self.present(args),
             "ask_user" => self.ask_user(args, gone, stop).await,
-            "remember" => self.remember(args),
+            "remember" => self.remember(args).await,
             app if APP_NAMES.contains(&app) => self.app(app, args, gone, stop).await,
             other => refused(format!("there is no tool called {other}.")),
         }
@@ -308,6 +308,7 @@ impl<'a> Tools<'a> {
             headless: self.headless,
             read_only: false,
             pool: &apps.pool,
+            request: Some(&self.task),
         };
         let call_id = format!("app_{}", uuid::Uuid::new_v4().simple());
         let out = relay_composio(&relay, &call_id, &apps.binding, tool, args).await;
@@ -366,7 +367,19 @@ impl<'a> Tools<'a> {
         self.recalled.fetch_add(1, Ordering::Relaxed);
         self.log("recall", &format!("searched history for {}: {}", self.engine, clip(&label, 80)));
         // It is the user's own text, and some of it was copied in from outside.
-        untrusted::wrap(&label, &body, &untrusted::scan(&body))
+        let scan = untrusted::scan(&body);
+        // `USE-8`: the quick check for what the scan missed. It has gone to the app
+        // already, so a flag lands in the activity log and nowhere else.
+        crate::agent::decide::filters::check_in_background(
+            crate::agent::decide::filters::Intake {
+                conversation_id: self.child_conversation_id.clone(),
+                label: format!("memory served to {}", self.engine),
+                step: None,
+            },
+            &body,
+            scan.risk,
+        );
+        untrusted::wrap(&label, &body, &scan)
     }
 
     // ---- present ----
@@ -468,7 +481,7 @@ impl<'a> Tools<'a> {
 
     // ---- remember ----
 
-    fn remember(&self, args: &Value) -> String {
+    async fn remember(&self, args: &Value) -> String {
         if self.suggested.load(Ordering::Relaxed) >= MAX_MEMORIES {
             return refused(format!("you have suggested {MAX_MEMORIES} things already. Put the rest in your report."));
         }
@@ -487,6 +500,14 @@ impl<'a> Tools<'a> {
         let scan = untrusted::scan(&text);
         if scan.risk >= 2 {
             self.log("memory_injection_refused", &format!("refused a suggestion from {}: risk {} ({})", self.engine, scan.risk, scan.flags.join(", ")));
+            return refused("that reads like an instruction to the assistant, and I only keep plain facts and preferences.");
+        }
+        // `USE-8`: the quick check refuses what the scan lets through, the same way.
+        if let Some(p) = crate::agent::decide::filters::refuses_proposal(&text, Some(&self.child_conversation_id)).await {
+            self.log(
+                "memory_injection_refused",
+                &format!("refused a suggestion from {}: the quick check says it reads like an instruction ({p:.2})", self.engine),
+            );
             return refused("that reads like an instruction to the assistant, and I only keep plain facts and preferences.");
         }
         let name = args.get("name").and_then(|n| n.as_str()).filter(|n| !n.trim().is_empty()).unwrap_or(&text);

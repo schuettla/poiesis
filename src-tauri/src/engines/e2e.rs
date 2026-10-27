@@ -452,6 +452,36 @@ async fn the_session_and_the_report_are_kept_with_the_child() {
     assert_eq!(rig.db.get_subagent_run(&run.id).unwrap().unwrap().paid_by.as_deref(), Some("plan"));
 }
 
+/// A job that never started still leaves the task and the reason in the child's
+/// conversation, so Open shows them after a restart.
+#[tokio::test]
+async fn a_job_that_never_started_keeps_the_task_and_why() {
+    let Some(rig) = Rig::new().await else { return };
+    let mut broken = rig.offered.clone();
+    broken.row.kind = "mystery".into();
+    let (run, conv) = rig.child("x");
+    let out = run_external(Request {
+        db: &rig.db,
+        perms: &rig.perms,
+        sink: &rig.sink,
+        run: &run,
+        offered: &broken,
+        child_conversation_id: &conv,
+        task: "plain task",
+        folder: rig.folder.path(),
+        folder_trust: Trust::Confirm,
+        headless: false,
+        resume: None,
+    })
+    .await;
+    assert_eq!(out.stop_reason, StopReason::Error);
+    assert!(out.text.contains("did not start"), "{}", out.text);
+    let msgs = rig.db.list_messages(&conv).unwrap();
+    assert_eq!(msgs.len(), 2);
+    assert_eq!((msgs[0].role.as_str(), msgs[0].content.as_str()), ("user", "plain task"));
+    assert_eq!((msgs[1].role.as_str(), msgs[1].content.as_str()), ("assistant", out.text.as_str()));
+}
+
 /// `CLI-10`: a run that fails says why, with the agent's own last words.
 #[tokio::test]
 async fn a_failed_run_keeps_the_agents_last_words_for_diagnostics() {
@@ -1278,6 +1308,25 @@ async fn codex_trust_picks_the_sandbox_and_nothing_secret_or_free_text_is_on_the
     let held = rig.reoffer();
     let (out, _) = rig.run_with(&held, "SCENARIO:report", Trust::Auto, None).await;
     assert_eq!(report_json(&out.text)["threadParams"]["sandbox"], "read-only", "Poiesis may edit freely here and the agent may not");
+}
+
+/// In an `auto` folder only Codex's sandbox keeps commands in the folder. On a
+/// Windows computer where it is not set up, every step is asked about instead,
+/// and the report says why.
+#[cfg(windows)]
+#[tokio::test]
+async fn codex_without_a_ready_sandbox_an_auto_folder_asks_about_every_step() {
+    let Some(rig) = Rig::codex().await else { return };
+    std::fs::write(rig.folder.path().join("sandbox-not-ready"), "").unwrap();
+    let out = rig.run("SCENARIO:report", Trust::Auto, false).await;
+    let p = &report_json(&out.text)["threadParams"];
+    assert_eq!((p["approvalPolicy"].as_str(), p["sandbox"].as_str()), (Some("untrusted"), Some("workspace-write")));
+    assert!(out.text.contains("sandbox is not set up"), "{}", out.text);
+
+    std::fs::remove_file(rig.folder.path().join("sandbox-not-ready")).unwrap();
+    let out = rig.run("SCENARIO:report", Trust::Auto, false).await;
+    assert_eq!(report_json(&out.text)["threadParams"]["approvalPolicy"], "on-request", "a ready sandbox changes nothing");
+    assert!(!out.text.contains("sandbox is not set up"));
 }
 
 /// A task that tries to close the fence it travels in cannot.

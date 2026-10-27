@@ -1,0 +1,102 @@
+.decide-sub {
+  margin: 16px 0 6px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+/* ---- the Decision model tab in Models ----
+   The same rows and headers as the Chat and Images tabs. Only the cloud rows carry
+   more than fits on one line (up to four chips and a note), so on this tab a row may
+   wrap, and the name never shrinks to "J...". */
+.decide-cloud .model-row {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.decide-cloud .model-row-name {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+.decide-cloud .model-row-chips {
+  flex-wrap: wrap;
+}
+.decide-cloud .model-row-cost {
+  white-space: normal;
+}
+
+.runtime-state-badge.decide-failed .dot {
+  background: var(--danger);
+}
+
+.decide-policy {
+  width: 100%;
+  margin-top: 10px;
+  border-collapse: collapse;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+}
+.decide-policy th,
+.decide-policy td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--paper-edge-2);
+}
+.decide-policy th {
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+
+.decide-calibration {
+  list-style: none;
+  margin: 6px 0 10px;
+  padding: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.decide-calibration li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+}
+
+.model-row.unavailable {
+  opacity: 0.6;
+}
+.decide-probe {
+  margin: 2px 0 0 28px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.decide-probe.bad {
+  color: var(--danger);
+}
+.decide-cloud-line {
+  margin: 6px 0 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+}
+.decide-cloud-line::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--ink-muted);
+}
+.decide-cloud-line.ok::before {
+  background: var(--ok);
+}
+.decide-cloud-line.warn::before {
+  background: var(--caution);
+}
+.decide-cloud-line.bad::before {
+  background: var(--danger);
+}
+.decide-policy label.disabled {
+  color: var(--ink-muted);
+}

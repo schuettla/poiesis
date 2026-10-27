@@ -16,7 +16,7 @@ export default function ModifierChips() {
   const clear = useAppStore((s) => s.clearTurnModifier);
   const makeDefault = useAppStore((s) => s.makeModifierDefault);
 
-  const chips: { key: keyof TurnModifiers; label: string; fromDefault?: boolean }[] = [];
+  const chips: { key: keyof TurnModifiers; label: string; fromDefault?: boolean; once?: boolean }[] = [];
   // `DEF-5`: a chip my default put there says so, and removing it is "not this
   // time": it comes back on the next message and the setting is untouched.
   if (mods.planFirst) {
@@ -28,6 +28,10 @@ export default function ModifierChips() {
   }
   if (mods.effort) chips.push({ key: "effort", label: `Effort: ${EFFORTS.find((e) => e.value === mods.effort)?.label ?? mods.effort}` });
   if (mods.maxSteps) chips.push({ key: "maxSteps", label: `Up to ${mods.maxSteps} steps` });
+  // `SEE-3`: what a composer hint was taken up on. Only ever for this message, so no default.
+  if (mods.web) chips.push({ key: "web", label: "Web search on", once: true });
+  if (mods.noHandover) chips.push({ key: "noHandover", label: "Do it yourself", once: true });
+  if (mods.asAddition) chips.push({ key: "asAddition", label: "As an addition", once: true });
   if (!chips.length) return null;
 
   return (
@@ -36,7 +40,7 @@ export default function ModifierChips() {
         <span className="modifier-chip" key={c.key}>
           <span className="modifier-chip-glyph" aria-hidden="true">◇</span>
           <span className="modifier-chip-label">{c.label}</span>
-          {!c.fromDefault && (
+          {!c.fromDefault && !c.once && (
             <button
               className="modifier-chip-default"
               title="Keep this as my default from now on"

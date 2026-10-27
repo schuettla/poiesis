@@ -408,6 +408,163 @@ fn search_blocking(
     Ok(rows)
 }
 
+// ---- the small inbox (`USE-6a`) ----
+
+/// The newest messages a first look keeps, and the most one look takes.
+pub const INBOX_KEEP: usize = 200;
+/// How much of a message one check reads off the server: the first part of an
+/// ordinary mail, never a long attachment.
+const TRIAGE_FETCH_BYTES: u32 = 65_536;
+
+/// A message as the inbox keeps it: no body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InboxEnvelope {
+    pub uid: u32,
+    pub message_id: Option<String>,
+    /// The sender's name, or the address when there is none.
+    pub from: String,
+    pub subject: String,
+    pub date: String,
+    /// The date in ms since 1970, when it could be read.
+    pub sent_at: Option<i64>,
+    pub unread: bool,
+}
+
+/// What one look at an INBOX found.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewMail {
+    pub uid_validity: Option<u32>,
+    /// The server renumbered the mailbox since the last look, so what was kept
+    /// for it no longer means anything.
+    pub reset: bool,
+    pub rows: Vec<InboxEnvelope>,
+}
+
+/// Header text with its encoded words (`=?utf-8?Q?Ana_Ruiz?=`) decoded. The
+/// envelope hands them over as the server stored them.
+fn decode_words(raw: &str) -> String {
+    let raw = raw.trim();
+    if !raw.contains("=?") {
+        return raw.to_string();
+    }
+    let probe = format!("Subject: {}\r\n\r\n", raw.replace(['\r', '\n'], " "));
+    mail_parser::MessageParser::default()
+        .parse(probe.as_bytes())
+        .and_then(|m| m.subject().map(str::to_string))
+        .unwrap_or_else(|| raw.to_string())
+}
+
+fn sender_of(a: &imap_proto::types::Address) -> String {
+    let name = a.name.map(|n| decode_words(&String::from_utf8_lossy(n))).unwrap_or_default();
+    let name = name.trim().trim_matches('"').trim().to_string();
+    if name.is_empty() {
+        address_str(a)
+    } else {
+        name
+    }
+}
+
+fn inbox_envelope(f: &imap::types::Fetch) -> InboxEnvelope {
+    let env = f.envelope();
+    let text = |b: Option<&[u8]>| b.map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+    let date = text(env.and_then(|e| e.date));
+    let sent_at = mail_parser::DateTime::parse_rfc822(&date).map(|d| d.to_timestamp().saturating_mul(1000));
+    InboxEnvelope {
+        uid: f.uid.unwrap_or(0),
+        message_id: env.and_then(|e| e.message_id).map(|m| String::from_utf8_lossy(m).trim().to_string()).filter(|m| !m.is_empty()),
+        from: env.and_then(|e| e.from.as_ref()).and_then(|addrs| addrs.first()).map(sender_of).unwrap_or_default(),
+        subject: decode_words(&text(env.and_then(|e| e.subject))),
+        date,
+        sent_at,
+        unread: !f.flags().iter().any(|fl| matches!(fl, imap::types::Flag::Seen)),
+    }
+}
+
+/// Which of the UIDs a search found are new: above the last one kept, newest
+/// first, at most `limit`. `N:*` always returns the last message, even when it is
+/// older than `N`, so the filter is not optional.
+fn new_uids(found: impl IntoIterator<Item = u32>, after: Option<u32>, limit: usize) -> Vec<u32> {
+    let mut uids: Vec<u32> = found.into_iter().filter(|u| after.is_none_or(|a| *u > a)).collect();
+    uids.sort_unstable_by(|a, b| b.cmp(a));
+    uids.truncate(limit);
+    uids
+}
+
+/// Fetch the envelopes of what arrived in INBOX since `after_uid`, or the newest
+/// `limit` when nothing was kept. `known_validity` is the mailbox's `UIDVALIDITY`
+/// at the last look: when it changed, the UIDs kept are meaningless, so this looks
+/// at the mailbox as a first look would and says so. Reads envelopes and flags,
+/// nothing else, and marks nothing read.
+pub fn fetch_new_blocking(
+    account: MailAccount,
+    password: String,
+    after_uid: Option<u32>,
+    known_validity: Option<u32>,
+    limit: usize,
+) -> Result<NewMail, String> {
+    let mut session = imap_connect(&account, &password)?;
+    let mailbox = session.select("INBOX").map_err(|e| format!("couldn't open INBOX: {e}"))?;
+    let uid_validity = mailbox.uid_validity;
+    let reset = known_validity.is_some() && uid_validity.is_some() && known_validity != uid_validity;
+    let after = if reset { None } else { after_uid };
+    let query = match after {
+        Some(a) => format!("UID {}:*", a.saturating_add(1)),
+        None => "ALL".to_string(),
+    };
+    let found = session.uid_search(query).map_err(|e| e.to_string())?;
+    let uids = new_uids(found, after, limit);
+    let mut rows: Vec<InboxEnvelope> = if uids.is_empty() {
+        Vec::new()
+    } else {
+        let set = uids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        let fetches = session.uid_fetch(&set, "(UID ENVELOPE FLAGS)").map_err(|e| e.to_string())?;
+        fetches.iter().map(inbox_envelope).collect()
+    };
+    let _ = session.logout();
+    rows.retain(|r| r.uid > 0);
+    rows.sort_by_key(|r| std::cmp::Reverse(r.uid));
+    Ok(NewMail { uid_validity, reset, rows })
+}
+
+/// The readable text of a parsed message: the plain part, or the HTML one with its
+/// markup taken out.
+fn body_of(message: &mail_parser::Message) -> String {
+    message
+        .body_text(0)
+        .map(|c| c.to_string())
+        .or_else(|| message.body_html(0).map(|h| strip_html(&h)))
+        .unwrap_or_default()
+}
+
+/// The text of several messages for a check, over one connection. Reads the first
+/// 64 KB of each with `BODY.PEEK`, so nothing is marked read. A message that is
+/// gone or will not parse comes back with no text, so the check judges it by its
+/// sender and subject and is never asked for again.
+pub fn triage_texts_blocking(
+    account: MailAccount,
+    password: String,
+    uids: Vec<u32>,
+) -> Result<Vec<(u32, String)>, String> {
+    let mut session = imap_connect(&account, &password)?;
+    session.select("INBOX").map_err(|e| format!("couldn't open INBOX: {e}"))?;
+    let mut out = Vec::with_capacity(uids.len());
+    for uid in uids {
+        let query = format!("(UID BODY.PEEK[]<0.{TRIAGE_FETCH_BYTES}>)");
+        let text = session
+            .uid_fetch(uid.to_string(), &query)
+            .ok()
+            .and_then(|fetches| {
+                let raw = fetches.iter().next()?.body()?;
+                let message = mail_parser::MessageParser::default().parse(raw)?;
+                Some(body_of(&message))
+            })
+            .unwrap_or_default();
+        out.push((uid, text));
+    }
+    let _ = session.logout();
+    Ok(out)
+}
+
 /// Flatten an HTML body to readable text.
 ///
 /// The naive version — drop everything between `<` and `>` — keeps the
@@ -539,11 +696,7 @@ fn read_blocking(account: MailAccount, password: String, folder: String, uid: u3
         .parse(raw)
         .ok_or("couldn't parse that message")?;
 
-    let body = message
-        .body_text(0)
-        .map(|c| c.to_string())
-        .or_else(|| message.body_html(0).map(|h| strip_html(&h)))
-        .unwrap_or_default();
+    let body = body_of(&message);
     let from_addr = message
         .from()
         .and_then(|f| f.first())
@@ -1011,6 +1164,49 @@ mod tests {
     #[test]
     fn tags_become_word_boundaries_not_joins() {
         assert_eq!(strip_html("<td>one</td><td>two</td>"), "one two");
+    }
+
+    /// `USE-T-5`: only what came after the last kept UID is fetched, newest first.
+    /// A search for `N:*` always returns the last message, so an old one that comes
+    /// back with it is dropped.
+    #[test]
+    fn only_new_uids_are_fetched_newest_first_and_capped() {
+        assert_eq!(new_uids([3, 9, 5, 7], None, 10), [9, 7, 5, 3]);
+        assert_eq!(new_uids([3, 9, 5, 7], None, 2), [9, 7]);
+        assert_eq!(new_uids([7, 8, 9], Some(7), 10), [9, 8]);
+        // Nothing new: the server still answers with its last message.
+        assert!(new_uids([7], Some(7), 10).is_empty());
+        assert!(new_uids([7], Some(12), 10).is_empty());
+        assert!(new_uids(Vec::<u32>::new(), None, 10).is_empty());
+    }
+
+    #[test]
+    fn encoded_words_in_a_subject_or_a_name_are_decoded_and_plain_text_is_left_alone() {
+        assert_eq!(decode_words("Contract draft"), "Contract draft");
+        assert_eq!(decode_words("=?utf-8?Q?Ana_Ruiz?="), "Ana Ruiz");
+        assert_eq!(decode_words("=?UTF-8?B?VmVydHJhZ3NlbnR3dXJm?="), "Vertragsentwurf");
+        assert_eq!(decode_words("  spaced  "), "spaced");
+        // A line break in a header cannot start a second header.
+        assert_eq!(decode_words("=?utf-8?Q?Hi?=\r\nBcc: someone@example.com"), "Hi Bcc: someone@example.com");
+    }
+
+    #[test]
+    fn a_sender_is_shown_by_name_and_by_address_when_there_is_no_name() {
+        let named = imap_proto::types::Address {
+            name: Some(b"=?utf-8?Q?Ana_Ruiz?="),
+            adl: None,
+            mailbox: Some(b"ana"),
+            host: Some(b"example.com"),
+        };
+        assert_eq!(sender_of(&named), "Ana Ruiz");
+        let quoted = imap_proto::types::Address { name: Some(b"\"GitHub\""), ..named_fields() };
+        assert_eq!(sender_of(&quoted), "GitHub");
+        let bare = imap_proto::types::Address { name: None, ..named_fields() };
+        assert_eq!(sender_of(&bare), "ana@example.com");
+    }
+
+    fn named_fields() -> imap_proto::types::Address<'static> {
+        imap_proto::types::Address { name: None, adl: None, mailbox: Some(b"ana"), host: Some(b"example.com") }
     }
 
     #[test]

@@ -37,6 +37,7 @@
   --cloud: #b5642e; /* oxidized copper — cloud model */
   --ok: #4a7a5e; /* completed timeline step dot */
   --danger: #a8453a; /* errors only */
+  --caution: #98650f; /* amber: a claim not confirmed (Verify), 5:1 on paper */
 
   /* code highlighting (Shiki's css-variables theme, `lib/highlight.ts`).
      Drawn from the functional hues above, darkened where needed so every
@@ -174,6 +175,7 @@
   --cloud: #d6884a;
   --ok: #7fb596;
   --danger: #d6776b;
+  --caution: #d9a441;
 
   --hl-token-keyword: #9ca6ee;
   --hl-token-string: #8fc0a1;

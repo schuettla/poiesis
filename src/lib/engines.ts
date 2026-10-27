@@ -3,6 +3,7 @@
 // copy stays in one place (Part VII of the plan).
 
 import type { EngineInfo, EnginePaidBy, EngineRoutePreview, EngineTryResult, EngineUseMode } from "./api";
+import { sureWord } from "./decisions";
 
 /** The wording for who pays. */
 export function paidByLabel(p: EnginePaidBy | null, model?: string | null): string | null {
@@ -77,6 +78,36 @@ export function becauseChip(because: string | null | undefined): string | null {
   if (because === "asked") return "you asked";
   if (because === "persona") return "its persona";
   return `because ${because}`;
+}
+
+/** `USE-UI-10`: the rule line of a handover card. One a quick decision matched
+ * before I ran says so, in words (`SEE-4`): sure, or "probably". One I cited says that.
+ * The number is `matchedTitle`, on the line's hover. */
+export function ruleLine(rule: { label: string; text: string; matched?: number | null }): string {
+  if (rule.matched == null) return `Because of your rule ${rule.label}: ${rule.text}`;
+  // A match is an unfitted number to the card: it can only hedge more.
+  const lead = sureWord(rule.matched, false) === "sure" ? "Matches" : "Probably matches";
+  return `${lead} your rule ${rule.label}: ${rule.text}`;
+}
+
+/** The hover on the Fleet row's dot and on a handover card's rule line. */
+export function matchedTitle(matched: number): string {
+  return `matched before I started (${matched.toFixed(2)})`;
+}
+
+/** **Try a request**: which path answered, so it is clear whether the quick
+ * decision or my chat model did. */
+export function answeredBy(p: Pick<EngineRoutePreview, "quick_ms">): string {
+  return p.quick_ms == null ? "asked my chat model" : `quick decision · ${p.quick_ms} ms`;
+}
+
+/** The muted counter under a rule once quick decisions have matched it. */
+export function matchCounter(c: { matched: number; declined: number } | undefined): string | null {
+  if (!c) return null;
+  const parts: string[] = [];
+  if (c.matched > 0) parts.push(`matched early ${c.matched}×`);
+  if (c.declined > 0) parts.push(`you said do it yourself ${c.declined}×`);
+  return parts.length ? parts.join(" · ") : null;
 }
 
 export const MODE_LABELS: Record<EngineUseMode, string> = {

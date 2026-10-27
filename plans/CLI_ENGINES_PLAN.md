@@ -20,7 +20,7 @@ seams that already exist.
 > serves to engines - **LRN** lessons from OpenMausBot that are not about CLIs -
 > **-UI** frontend - **-T** tests.
 >
-> **Status: draft v5. Phases 0-5 done 2026-10-20 and LRN-1..5 on 2026-10-23, see Part X (read it first when resuming). Gemini CLI removed, `CLI-P3`; Qwen Code removed 2026-10-23.** v5: detection made concrete (catalog
+> **Status: draft v5. Phases 0-5 done 2026-10-20 and LRN-1..5 on 2026-10-23, all committed (`6b1e851`); five review fixes on 2026-10-23, see Part X (read it first when resuming). Gemini CLI removed, `CLI-P3`; Qwen Code removed 2026-10-23.** v5: detection made concrete (catalog
 > `shared/engines.json`, install locations, PATH read fresh from the registry,
 > triggers, new-agent badge). v4: the invented `@` mention is replaced
 > by the existing `/` menu (`/delegate [agent] task`, `/external on|off`);
@@ -1567,7 +1567,7 @@ protocol.
 
 # Part X - Implementation status
 
-Last updated 2026-10-23 (Phases 0-5 done; LRN-1..5 built: see "LRN report"). This part records what is built and what was learned.
+Last updated 2026-10-23 (Phases 0-5 done; LRN-1..5 built; review fixes: see "Review report"). This part records what is built and what was learned.
 Read it before Parts I-IX when you resume. Where it disagrees with an earlier
 part, **this part wins**.
 
@@ -1582,15 +1582,48 @@ part, **this part wins**.
 | 4 - Codex driver, Usage "Agent apps", diagnostics | **Done 2026-10-20** (backend, frontend and tests; checked against a fake Codex, all five recordings and the **real Codex 0.163.0 through `delegate`'s path**; not yet by eye). See "Phase 4 report". |
 | 5 - MCPS-2 and proposals | **Done 2026-10-20.** RTE-6 and the four tools built for Claude Code, Codex and OpenCode. Real Claude Code and OpenCode pass; real Codex mounts and works but the model skips the tools about half the time (open item 1). See "Phase 5 report". |
 | LRN-1..5 - lessons that are not about CLIs | **LRN-1..5 all built 2026-10-23** (LRN-4 and the agent-type half of LRN-5 with Phase 2-4). Not built earlier because no phase touched their files (Part VIII had them "in any gap"). See "LRN report". |
+| Review 2026-10-23 | **Five bugs fixed** (OpenCode permission display, Codex sandbox on Windows, handover card and Stop, relative paths, a job that never started). Not committed yet. See "Review report". |
 
 Qwen Code was dropped from the plan on 2026-10-23 (Erich: no longer a goal). The catalog is
 Claude Code, Codex and OpenCode.
 
-Nothing is committed. The working tree already held many other uncommitted
-changes before this work. Phase 0 touched only `scripts/engine-rec.mjs`,
-`scripts/record-engine.mjs`, `scripts/record-acp.mjs`,
-`scripts/record-codex.mjs`, `fixtures/engines/` and this file. Phase 1 files
-are listed in "Phase 1 report".
+**Committed.** Phases 0-5 and LRN-1..5 are in commit `6b1e851`. The lines "Nothing is
+committed" in the reports below were true when each report was written; they are history now.
+The review fixes are not committed yet.
+
+## Review report: 2026-10-23
+
+A code review of the whole feature (backend, frontend, the plan against the code) found five
+bugs. All five are fixed, with tests where a test can reach them.
+
+| # | Bug | Fix | Test |
+|---|---|---|---|
+| 1 | **OpenCode permission panel could hide code.** `acp::tool_of` renamed any `execute` whose code contained `tools.poiesis.` to our tool with input `{}`, on the permission panel too. Code that called our tool *and* did something else would have been approved unseen. Also, an `execute` of kind `execute` with `code` and no `command` showed only its title. | The shortcut is for the timeline only (`tool_of`). A permission request uses the new `asked_tool_of`, which shows the call as sent. `execute` shows `command`, else `code`, else the title. An "other" tool's input is shown up to `SHOW_MAX` (was 1500 chars). | `acp::a_question_about_code_shows_the_code_even_when_it_calls_our_tool` |
+| 2 | **Codex sandbox on Windows was never checked.** In an `auto` folder Codex gets `on-request` + `workspace-write` and runs commands without asking; only its sandbox keeps them in the folder. The probe recorded `windowsSandbox/readiness` but no code read it. | On Windows, an `auto` run asks `windowsSandbox/readiness` (no params, as recorded) between `initialized` and `thread/start`/`thread/resume`. Anything but `ready`, or an error, makes the run use the `confirm` policy (`untrusted`), so every step is asked about, and the report says *"Codex's sandbox is not set up on this computer, so it had to ask before each step."* `setupStart` is still never called. New `ExternalOutcome.sandbox_off`. `fake-codex.mjs` answers readiness (`notConfigured` when the folder holds `sandbox-not-ready`). | `codex::only_a_ready_answer_counts_as_a_ready_sandbox`, `e2e::codex_without_a_ready_sandbox_an_auto_folder_asks_about_every_step` (Windows only) |
+| 3 | **The handover card ignored Stop.** `subagents::prepare_engine` waited on `rx.await` with no Stop check, so a stopped run waited for a click. | The wait also watches the parent run's cancel flag. On Stop the card is withdrawn (`PermissionGone`), the lead reads "The user stopped this run.", and no override is recorded (Stop is not "do it yourself"). | None: it needs a full `ToolContext`. On the manual list. |
+| 4 | **Relative paths counted as outside the folder.** `path_within_root` read a relative path from Poiesis's own working folder, so `src/a.rs` or `.` was "outside" and asked about. The "create or edit" word had the same mistake. | `approve::outside` joins the path to the agent's folder first (an absolute path is unchanged; `..` out of the folder is still outside). | `approve::a_relative_path_is_read_from_the_agents_folder` |
+| 5 | **A job that never started left no trace.** `run::fail` (for example `launch_for` failed) wrote nothing to the child's conversation. | New `run::keep_transcript`, used by both paths: the task and "X did not start: why" are kept. Usage is still written only for jobs that ran. | `e2e::a_job_that_never_started_keeps_the_task_and_why` |
+
+**Tests, as run at the end.** `cargo test --lib`: **1062 passed, 0 failed, 14 ignored** (5 new
+tests in this review). `cargo clippy --lib --tests`: no warning in the lines this review
+changed (the one it raised, `unwrap_or_default` in `prepare_engine`, is fixed). No frontend file
+changed; `npx tsc --noEmit` clean and `npx vitest run` 946 passed, 1 failed (the known
+`icons.test.ts`) before the fixes.
+
+**Still open from the review (not changed, on purpose):**
+- **Resume is never used.** `Request.resume` is `None` in the foreground and the background, so
+  the resume code in all three drivers (retry on "No conversation found", `session/load`,
+  `thread/resume`, "started fresh") runs only in tests. Decide: wire it (a second `/delegate` to
+  the same app in the same chat continues its session) or remove it.
+- `Capabilities.resume`, `.interrupt` and `.approvals` are set but never read.
+- `process::tests::the_child_env_has_no_poiesis_vars_and_no_provider_keys` sets process-wide env
+  vars while other tests run in parallel; it can make other tests flaky.
+- Not checked: what a real Codex answers to `windowsSandbox/readiness` on a computer where the
+  sandbox is not set up (only `ready` was recorded). Any other answer is treated as not ready,
+  which is the safe side.
+
+**Manual pass (add to the list for Erich):** open a handover card (suggest mode), press Stop,
+and check that the card goes away and the lead says it was stopped.
 
 ## LRN report: 2026-10-23
 

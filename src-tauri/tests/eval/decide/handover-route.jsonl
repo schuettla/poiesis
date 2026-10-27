@@ -1,0 +1,40 @@
+{"id": "route-01", "request": "Migrate the whole project from JavaScript to TypeScript across all modules.", "expect": "claude-code:U1"}
+{"id": "route-02", "request": "Implement the new billing feature across the API, the database layer and the UI.", "expect": "claude-code:U1"}
+{"id": "route-03", "request": "Upgrade the framework to the next major version and fix everything that breaks in the repo.", "expect": "claude-code:U1"}
+{"id": "route-04", "request": "Split the monolith service into three packages and update every import.", "expect": "claude-code:U1"}
+{"id": "route-05", "request": "Add pagination to all the list endpoints in this codebase and update the tests.", "expect": "claude-code:U1"}
+{"id": "route-06", "request": "Rewrite the authentication flow to use sessions instead of tokens in every service.", "expect": "claude-code:U1"}
+{"id": "route-07", "request": "Convert the repository from callbacks to async await everywhere.", "expect": "claude-code:U1"}
+{"id": "route-08", "request": "Introduce a plugin system into the app and port the three built in features to it.", "expect": "claude-code:U1"}
+{"id": "route-09", "request": "Write unit tests for the parser module.", "expect": "claude-code:U2"}
+{"id": "route-10", "request": "Refactor the payment class so it is easier to read and test.", "expect": "claude-code:U2"}
+{"id": "route-11", "request": "Add test coverage for the date helpers.", "expect": "claude-code:U2"}
+{"id": "route-12", "request": "Clean up the duplicated code in the two export functions.", "expect": "claude-code:U2"}
+{"id": "route-13", "request": "Write integration tests for the login endpoint.", "expect": "claude-code:U2"}
+{"id": "route-14", "request": "Extract the validation logic into its own function and cover it with tests.", "expect": "claude-code:U2"}
+{"id": "route-15", "request": "Refactor the settings screen component and add a snapshot test.", "expect": "claude-code:U2"}
+{"id": "route-16", "request": "Raise the coverage of the cache module above 80 percent.", "expect": "claude-code:U2"}
+{"id": "route-17", "request": "Write a script that renames all photos in a folder by their date.", "expect": "codex:U1"}
+{"id": "route-18", "request": "Fix the off by one error in the loop on line 40 of utils.py.", "expect": "codex:U1"}
+{"id": "route-19", "request": "Write a small script that merges these three CSV files.", "expect": "codex:U1"}
+{"id": "route-20", "request": "Make a one liner that counts the lines of code in the repo.", "expect": "codex:U1"}
+{"id": "route-21", "request": "Fix the typo in the error message in main.go.", "expect": "codex:U1"}
+{"id": "route-22", "request": "Write a quick bash script to back up my home folder to the NAS.", "expect": "codex:U1"}
+{"id": "route-23", "request": "Convert this JSON file to YAML with a short script.", "expect": "codex:U1"}
+{"id": "route-24", "request": "Patch the regex in the validator so it accepts plus signs in emails.", "expect": "codex:U1"}
+{"id": "route-25", "request": "What is the capital of Australia?", "expect": "none"}
+{"id": "route-26", "request": "Summarise my meeting notes from yesterday.", "expect": "none"}
+{"id": "route-27", "request": "What is on my calendar tomorrow?", "expect": "none"}
+{"id": "route-28", "request": "Find the PDF about the lease in my documents.", "expect": "none"}
+{"id": "route-29", "request": "Draft a polite email declining the invitation.", "expect": "none"}
+{"id": "route-30", "request": "Explain how a mortgage works.", "expect": "none"}
+{"id": "route-31", "request": "What did Marta write to me last week?", "expect": "none"}
+{"id": "route-32", "request": "Give me ideas for a birthday dinner.", "expect": "none"}
+{"id": "route-33", "request": "Can you take a look at it?", "expect": "unsure"}
+{"id": "route-34", "request": "Do the thing we talked about.", "expect": "unsure"}
+{"id": "route-35", "request": "Make it better.", "expect": "unsure"}
+{"id": "route-36", "request": "Fix it.", "expect": "unsure"}
+{"id": "route-37", "request": "Handle that for me.", "expect": "unsure"}
+{"id": "route-38", "request": "Same as before but different.", "expect": "unsure"}
+{"id": "route-39", "request": "Continue.", "expect": "unsure"}
+{"id": "route-40", "request": "Sort it out.", "expect": "unsure"}

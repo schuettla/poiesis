@@ -18,6 +18,7 @@ use std::sync::Mutex as StdMutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::agent::decide;
 use crate::agent::run::{run_agent, AgentEventSink};
 use crate::cloud::ChatEndpoint;
 use crate::commands::reflect::reflect_conversation_cmd;
@@ -89,17 +90,27 @@ pub struct Job {
     /// summary string was exactly that.
     #[serde(default)]
     pub runs: Vec<JobRun>,
+    /// `USE-7`: "only run if …", in plain words. Checked before each scheduled
+    /// run by the decision model over what the task would work on; a manual
+    /// "Run now" never checks it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_if: Option<String>,
 }
 
-/// One completed run of a task.
+/// One entry of a task's history: a completed run, or a run the condition skipped.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobRun {
     /// The conversation this run happened in — open it to read what it did.
+    /// Empty for a skip, which has no conversation.
     pub conversation_id: String,
     pub at: i64,
     /// One line for the task list, so the history is skimmable without
     /// opening every run.
     pub summary: String,
+    /// `USE-7`: set when the task's condition was judged not to hold, to the
+    /// probability that it did. The history shows such a row muted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<f32>,
 }
 
 /// How many runs a task remembers. Older conversations aren't deleted — they
@@ -121,6 +132,7 @@ fn seed_nightly_job() -> Job {
         built_in: true,
         source_conversation_id: None,
         runs: Vec::new(),
+        run_if: None,
     }
 }
 
@@ -227,7 +239,10 @@ impl SchedulerState {
 /// Run one job to completion and persist its new schedule + result. Shared by
 /// the ticker and the manual "Run now" command (SCH-UI-3), so both go through
 /// the same concurrency-1 guard.
-async fn execute_job(app: &AppHandle, job_id: &str) -> Result<String, String> {
+///
+/// `manual` is "Run now": a person asked for this run, so the task's own
+/// condition (`USE-7`) is not held against it.
+async fn execute_job(app: &AppHandle, job_id: &str, manual: bool) -> Result<String, String> {
     let db = app.state::<Db>();
     let sched = app.state::<SchedulerState>();
 
@@ -248,10 +263,12 @@ async fn execute_job(app: &AppHandle, job_id: &str) -> Result<String, String> {
     let built_in = job.built_in;
     let outcome = if built_in {
         RunOutcome::bare(run_nightly_reflection_digest(app, cancel).await)
+    } else if let Some(p) = if manual { None } else { skipped_by_condition(app, &job).await } {
+        RunOutcome::skipped(p)
     } else {
         run_custom_job(app, &mut job, cancel).await
     };
-    let result = outcome.summary;
+    let result = outcome.summary.clone();
 
     sched.finish();
 
@@ -264,16 +281,9 @@ async fn execute_job(app: &AppHandle, job_id: &str) -> Result<String, String> {
     let db = app.state::<Db>();
     let mut jobs = load_jobs(&db);
     if let Some(current) = jobs.iter_mut().find(|j| j.id == job_id) {
-        let now = crate::db::now_ms();
-        current.last_run_at = Some(now);
-        current.next_run_at = now + current.cadence.period_ms();
-        current.last_result = Some(result.clone());
-        if let Some(conversation_id) = outcome.conversation_id.clone() {
-            current.runs.insert(
-                0,
-                JobRun { conversation_id, at: now, summary: result.clone() },
-            );
-            current.runs.truncate(RUNS_KEPT);
+        record_run(current, &outcome, crate::db::now_ms());
+        if outcome.skipped.is_some() {
+            let _ = db.log_activity(None, "scheduler", &format!("task \u{201c}{}\u{201d} {result}", current.name));
         }
         let _ = save_jobs(&db, &jobs);
     }
@@ -398,13 +408,83 @@ fn compose_digest(read: usize, total: usize, learned: usize, proposed: usize) ->
 struct RunOutcome {
     summary: String,
     conversation_id: Option<String>,
+    /// `USE-7`: the task's condition was judged not to hold, with this probability,
+    /// so nothing ran.
+    skipped: Option<f32>,
 }
 
 impl RunOutcome {
     /// A run that never reached a conversation — no engine, no room to work.
     fn bare(summary: impl Into<String>) -> Self {
-        Self { summary: summary.into(), conversation_id: None }
+        Self { summary: summary.into(), conversation_id: None, skipped: None }
     }
+
+    fn skipped(p: f32) -> Self {
+        // Worded as an unfitted number, which can only hedge more: the skip does not carry
+        // whether the fit was there, and the number is on the row's hover.
+        Self { summary: decide::runif::skipped_note(p, false), conversation_id: None, skipped: Some(p) }
+    }
+}
+
+/// Write one run's bookkeeping onto the job as it is now.
+fn record_run(job: &mut Job, outcome: &RunOutcome, now: i64) {
+    job.next_run_at = now + job.cadence.period_ms();
+    let remember = |job: &mut Job, row: JobRun| {
+        job.runs.insert(0, row);
+        job.runs.truncate(RUNS_KEPT);
+    };
+    if let Some(p) = outcome.skipped {
+        // A skip is not a run: "since the last run" keeps measuring from the last
+        // real one, so what changed in between is still there next time.
+        remember(job, JobRun { conversation_id: String::new(), at: now, summary: outcome.summary.clone(), skipped: Some(p) });
+        return;
+    }
+    job.last_run_at = Some(now);
+    job.last_result = Some(outcome.summary.clone());
+    if let Some(conversation_id) = outcome.conversation_id.clone() {
+        remember(job, JobRun { conversation_id, at: now, summary: outcome.summary.clone(), skipped: None });
+    }
+}
+
+/// `USE-7`: whether a task's condition says to skip this run, and if so the
+/// probability that it held. `None` runs the task, and that is every case but a
+/// clear no: no condition, no engine, nothing to judge it over, an answer of the
+/// wrong shape.
+async fn skipped_by_condition(app: &AppHandle, job: &Job) -> Option<f32> {
+    let condition = job.run_if.as_deref().map(str::trim).filter(|c| !c.is_empty())?;
+    let input = condition_input(app, job).await?;
+    match decide::runif::check(condition, &input).await {
+        decide::runif::Due::Skip(p) => Some(p),
+        decide::runif::Due::Run => None,
+    }
+}
+
+/// What a condition is judged over: the task's folder, the pages its own words
+/// name (only while the web tool is on, the way the task itself could reach
+/// them) and what the last run said. `None` when there is nothing to read.
+async fn condition_input(app: &AppHandle, job: &Job) -> Option<String> {
+    let db = app.state::<Db>();
+    let mgr = app.state::<RuntimeManager>();
+    let listing = job.scope.as_deref().and_then(|dir| decide::runif::folder_listing(std::path::Path::new(dir), job.last_run_at));
+    let mut pages: Vec<(String, String)> = Vec::new();
+    if crate::agent::toolsets::Toolset::WebSearch.is_enabled(&db) {
+        let words = format!("{} {}", job.prompt, job.run_if.as_deref().unwrap_or(""));
+        for url in decide::runif::urls_in(&words) {
+            let read = tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                crate::agent::websearch::fetch_readable(&mgr.client, &url, decide::runif::PAGE_CHARS),
+            )
+            .await;
+            if let Ok(Ok(text)) = read {
+                if !text.trim().is_empty() {
+                    pages.push((url, text));
+                }
+            }
+        }
+    }
+    let now = crate::db::now_ms();
+    let last = job.last_run_at.zip(job.last_result.as_deref()).map(|(at, result)| (decide::runif::ago(now - at), result));
+    decide::runif::render_input(listing.as_deref(), &pages, last.as_ref().map(|(when, result)| (when.as_str(), *result)))
 }
 
 /// A user-defined task (SCH-2): one headless turn of the real agent loop in a
@@ -527,7 +607,7 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
     } else {
         text.chars().take(RESULT_CLIP).collect()
     };
-    RunOutcome { summary, conversation_id: Some(conversation_id) }
+    RunOutcome { summary, conversation_id: Some(conversation_id), skipped: None }
 }
 
 /// Background 60-second ticker (SCH-1) — the process-wide clock every job's
@@ -546,7 +626,7 @@ pub fn spawn_ticker(app: AppHandle) {
                 .map(|j| j.id);
             drop(db);
             if let Some(job_id) = due {
-                let _ = execute_job(&app, &job_id).await;
+                let _ = execute_job(&app, &job_id, false).await;
             }
         }
     });
@@ -572,6 +652,14 @@ pub struct JobInput {
     /// can link back to where the idea came from.
     #[serde(default)]
     pub source_conversation_id: Option<String>,
+    /// `USE-7`: the "only run if" condition; blank or absent means none.
+    #[serde(default)]
+    pub run_if: Option<String>,
+}
+
+/// A condition as it is stored: trimmed, and `None` when it is blank.
+fn clean_condition(raw: Option<String>) -> Option<String> {
+    raw.map(|c| c.trim().to_string()).filter(|c| !c.is_empty())
 }
 
 #[tauri::command]
@@ -595,6 +683,7 @@ pub fn create_scheduler_job_cmd(db: State<'_, Db>, input: JobInput) -> Result<Jo
         built_in: false,
         source_conversation_id: input.source_conversation_id,
         runs: Vec::new(),
+        run_if: clean_condition(input.run_if),
     };
     jobs.push(job.clone());
     save_jobs(&db, &jobs).map_err(PoiesisError::Message)?;
@@ -617,6 +706,7 @@ pub fn update_scheduler_job_cmd(
     existing.cadence = input.cadence;
     existing.scope = input.scope;
     existing.enabled = input.enabled;
+    existing.run_if = clean_condition(input.run_if);
     if input.enabled && !was_enabled {
         existing.next_run_at = crate::db::now_ms();
     }
@@ -639,7 +729,7 @@ pub fn delete_scheduler_job_cmd(db: State<'_, Db>, id: String) -> Result<(), Poi
 
 #[tauri::command]
 pub async fn run_scheduler_job_now_cmd(app: AppHandle, id: String) -> Result<String, PoiesisError> {
-    execute_job(&app, &id).await.map_err(PoiesisError::Message)
+    execute_job(&app, &id, true).await.map_err(PoiesisError::Message)
 }
 
 #[tauri::command]
@@ -708,6 +798,7 @@ mod tests {
             built_in: false,
             source_conversation_id: None,
             runs: Vec::new(),
+            run_if: None,
         });
         save_jobs(&db, &again).unwrap();
         let reloaded = load_jobs(&db);
@@ -727,6 +818,74 @@ mod tests {
         let nightly = reloaded.iter().find(|j| j.id == BUILT_IN_NIGHTLY_ID).unwrap();
         assert!(nightly.enabled);
         assert_eq!(nightly.last_result.as_deref(), Some("3 conversations, 1 learned, 1 pending"));
+    }
+
+    fn task() -> Job {
+        Job {
+            id: "t".into(),
+            name: "Releases".into(),
+            prompt: "Summarise new releases".into(),
+            cadence: Cadence::Daily,
+            scope: None,
+            enabled: true,
+            next_run_at: 0,
+            last_run_at: Some(1_000),
+            last_result: Some("Found v2.3.1".into()),
+            built_in: false,
+            source_conversation_id: None,
+            runs: Vec::new(),
+            run_if: Some("there is a new release".into()),
+        }
+    }
+
+    /// `USE-7`: a skip is a row in the history with the probability, and it is not
+    /// a run: the last real run, and what it said, stay what they were.
+    #[test]
+    fn a_skipped_run_is_logged_with_its_probability_and_is_not_a_run() {
+        let mut job = task();
+        record_run(&mut job, &RunOutcome::skipped(0.07), 50_000);
+        assert_eq!(job.next_run_at, 50_000 + Cadence::Daily.period_ms(), "it is looked at again next period");
+        assert_eq!((job.last_run_at, job.last_result.as_deref()), (Some(1_000), Some("Found v2.3.1")));
+        assert_eq!(job.runs.len(), 1);
+        let row = &job.runs[0];
+        assert_eq!((row.skipped, row.summary.as_str(), row.conversation_id.as_str()), (Some(0.07), "Skipped: the condition did not hold", ""));
+
+        // A real run after it moves the last run and has a conversation to open.
+        let real = RunOutcome { summary: "Found v2.4.0".into(), conversation_id: Some("c1".into()), skipped: None };
+        record_run(&mut job, &real, 90_000);
+        assert_eq!((job.last_run_at, job.last_result.as_deref()), (Some(90_000), Some("Found v2.4.0")));
+        assert_eq!(job.runs.len(), 2);
+        assert_eq!((job.runs[0].conversation_id.as_str(), job.runs[0].skipped), ("c1", None));
+    }
+
+    #[test]
+    fn the_history_keeps_ten_rows_skips_included() {
+        let mut job = task();
+        for i in 0..(RUNS_KEPT + 4) {
+            record_run(&mut job, &RunOutcome::skipped(0.1), i as i64);
+        }
+        assert_eq!(job.runs.len(), RUNS_KEPT);
+    }
+
+    #[test]
+    fn a_condition_is_stored_trimmed_and_a_blank_one_is_none() {
+        assert_eq!(clean_condition(Some("  new release \n".into())).as_deref(), Some("new release"));
+        assert_eq!(clean_condition(Some("   ".into())), None);
+        assert_eq!(clean_condition(None), None);
+    }
+
+    /// A task saved before conditions existed still loads, and one with none
+    /// writes nothing for it.
+    #[test]
+    fn an_older_task_without_a_condition_still_loads() {
+        let old = r#"{"id":"j","name":"n","prompt":"p","cadence":"daily","scope":null,"enabled":true,
+            "next_run_at":0,"last_run_at":null,"last_result":null,
+            "runs":[{"conversation_id":"c","at":5,"summary":"s"}]}"#;
+        let job: Job = serde_json::from_str(old).unwrap();
+        assert_eq!(job.run_if, None);
+        assert_eq!(job.runs[0].skipped, None);
+        let again = serde_json::to_string(&job).unwrap();
+        assert!(!again.contains("run_if") && !again.contains("skipped"), "{again}");
     }
 
     #[test]

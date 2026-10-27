@@ -19,6 +19,7 @@
 
 use futures_util::future::join_all;
 
+use crate::agent::decide::handover;
 use crate::agent::fleet::RunLimits;
 use crate::agent::run::{run_agent, RunContext};
 use crate::agent::toolsets::{set_step_note, ToolContext, Toolset};
@@ -444,6 +445,9 @@ struct EnginePick {
     /// `U2`, or `asked`.
     label: String,
     rule: Option<EngineRule>,
+    /// `USE-13`: how sure a quick decision was that this rule fit, before the
+    /// lead ran.
+    matched: Option<f32>,
 }
 
 /// Why a task is going to an agent app: a rule the lead cited, the user naming
@@ -482,17 +486,32 @@ async fn prepare_engine(
         return Err(rules::Block::Limit(o.guards.max_per_conversation).message(name));
     }
 
+    // `USE-13`: what the quick decision said about this turn before the lead ran.
+    // Only for a rule the lead cited: the user naming an agent, or a persona, is
+    // not something it matched.
+    let pre = (via == Via::Rule)
+        .then(|| ctx.delegation.and_then(|d| d.parent_run.prematch.lock().ok().and_then(|p| p.clone())))
+        .flatten();
+    let against = handover::against(pre.as_ref(), &o.row.id, &cite.label);
+    let (matched, doubt) = (against.matched, against.doubt);
+    if cite.needs_card && against.agreed {
+        // The user already said yes to this rule, at the card raised before the
+        // lead ran. The lead was told so; asking again would be asking twice.
+        cite.needs_card = false;
+    }
+
     let mut rule = cite.rule.clone();
     if cite.needs_card {
-        let id = format!("perm_{}", uuid::Uuid::new_v4());
-        let rx = ctx.perms.open_request(&id);
-        ctx.sink.send_permission(PermissionRequest::handover(
-            id,
-            name.clone(),
-            clip(&spec.task, 600),
-            rule.as_ref().map(|r| RuleRef { label: cite.label.clone(), text: r.text.clone() }),
-        ));
-        match rx.await.unwrap_or(Decision::Deny) {
+        let mut shown = rule.as_ref().map(|r| RuleRef::cited(cite.label.clone(), r.text.clone()));
+        if let (Some(r), Some(_)) = (shown.as_mut(), doubt) {
+            r.doubt = Some(handover::line_doubt(&cite.label));
+        }
+        // Stop takes the card away. It is not a "do it yourself", so no rule learns from it.
+        let stop = ctx.delegation.map(|d| d.parent_run.cancel.clone()).unwrap_or_default();
+        let Some(answer) = ask_handover(ctx.perms, ctx.sink, &stop, name, &spec.task, shown).await else {
+            return Err("The user stopped this run.".to_string());
+        };
+        match answer {
             Decision::Deny => {
                 if let Some(r) = &rule {
                     let _ = ctx.db.bump_engine_rule(&r.id, false);
@@ -511,6 +530,10 @@ async fn prepare_engine(
             }
             Decision::Once | Decision::Chat => {}
         }
+    } else if let Some(p) = doubt {
+        // No card to put it on (`auto`, or a rule the user said "always" to): the
+        // doubt is only written down. The rule is the user's and the lead may be right.
+        let _ = ctx.db.log_activity(Some(ctx.conversation_id), "decide", &format!("handover: {} ({p:.2})", handover::line_doubt(&cite.label)));
     }
     if let Some(r) = &rule {
         let _ = ctx.db.bump_engine_rule(&r.id, true);
@@ -522,7 +545,133 @@ async fn prepare_engine(
         let due = learn::record_asked(ctx.db, &o.row.id, &spec.task);
         learn::follow_up(ctx.db, ctx.client, ctx.local_endpoint, due).await;
     }
-    Ok(EnginePick { offered: o.clone(), label: cite.label, rule })
+    Ok(EnginePick { offered: o.clone(), label: cite.label, rule, matched })
+}
+
+/// The handover card, and the wait for the answer. `None` when Stop took the card
+/// away, which is not a "do it yourself": nothing is learned from it.
+async fn ask_handover(
+    perms: &crate::permissions::PermissionManager,
+    sink: &crate::agent::run::AgentEventSink,
+    stop: &CancelFlag,
+    engine: &str,
+    task: &str,
+    rule: Option<RuleRef>,
+) -> Option<Decision> {
+    let id = format!("perm_{}", uuid::Uuid::new_v4());
+    let rx = perms.open_request(&id);
+    sink.send_permission(PermissionRequest::handover(id.clone(), engine.to_string(), clip(task, 600), rule));
+    let stopped = async {
+        while !stop.is_cancelled() {
+            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        }
+    };
+    tokio::select! {
+        d = rx => Some(d.unwrap_or(Decision::Deny)),
+        _ = stopped => {
+            perms.resolve(&id, Decision::Deny);
+            sink.emit(AgentEvent::PermissionGone { id });
+            None
+        }
+    }
+}
+
+/// What the pre-match leaves for the run to do.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Early {
+    /// System lines for the lead, in order.
+    pub notes: Vec<String>,
+    /// The lead was told to hand this over, so Other agents must stay on the menu.
+    pub keep_agents: bool,
+}
+
+/// Who a pre-match is for: the run, the chat, and what the user said.
+pub struct EarlyCtx<'a> {
+    pub db: &'a Db,
+    pub perms: &'a crate::permissions::PermissionManager,
+    pub sink: &'a crate::agent::run::AgentEventSink,
+    pub client: &'a reqwest::Client,
+    pub local_endpoint: Option<&'a crate::cloud::ChatEndpoint>,
+    pub run: &'a crate::agent::fleet::RunHandle,
+    pub conversation_id: &'a str,
+    /// The user's message, which is what the card shows.
+    pub message: &'a str,
+}
+
+/// `USE-13`: act on a pre-match. A match of a rule the user has to confirm raises
+/// its handover card now, before the lead runs. *Hand it over* tells the lead the
+/// user agreed (the lead writes the task, since the app cannot see this chat), and
+/// *Do it yourself* tells it so and is counted as any other no is. A match of a
+/// rule that starts on its own only gives the lead a line.
+///
+/// Whatever happens, the run keeps the decision's numbers so the lead's own
+/// `delegate` call can be checked against them.
+pub async fn act_on_prematch(cx: &EarlyCtx<'_>, offered: &[Offered], verdict: &crate::agent::decide::Verdict) -> Early {
+    use crate::agent::decide::{control::Act, settle, Opts, Purpose};
+    let opts = Opts { conversation_id: Some(cx.conversation_id), run_id: Some(&cx.run.id) };
+    let Some(mut pre) = handover::Prematch::of(verdict, offered) else {
+        settle(verdict, Purpose::HandoverRoute, Act::Below, opts);
+        return Early::default();
+    };
+    let Some(picked) = pre.picked.clone() else {
+        settle(verdict, Purpose::HandoverRoute, Act::Below, opts);
+        *cx.run.prematch.lock().unwrap() = Some(pre);
+        return Early::default();
+    };
+    let Some((o, rule)) = offered
+        .iter()
+        .find(|o| o.row.id == picked.engine_id)
+        .and_then(|o| handover::rule_of(o, &picked.label).map(|r| (o, r.clone())))
+    else {
+        settle(verdict, Purpose::HandoverRoute, Act::Below, opts);
+        *cx.run.prematch.lock().unwrap() = Some(pre);
+        return Early::default();
+    };
+    settle(verdict, Purpose::HandoverRoute, Act::Go, opts);
+    let name = &o.row.display_name;
+    let option = format!("{}:{}", picked.engine_id, picked.label);
+    // `SEE-2`: said before the card, which waits for the person: the strip names who
+    // takes it and by which rule, and the receipt keeps the rule's own words.
+    crate::agent::run::publish_thought(cx.run, cx.sink, |t| {
+        t.handover = Some(crate::agent::decide::thought::Handing { agent: name.clone(), rule: picked.label.clone() });
+    });
+    crate::agent::decide::note(verdict, &format!("Matched your rule {}: {}", picked.label, rule.text));
+    let mut early = Early::default();
+
+    match handover::step(o, &rule) {
+        handover::Step::Hint => {
+            early.notes.push(handover::line_looks_like(name, &picked.label, picked.p));
+            early.keep_agents = true;
+        }
+        handover::Step::Card => {
+            let mut shown = RuleRef::cited(picked.label.clone(), rule.text.clone());
+            shown.matched = Some(picked.p);
+            match ask_handover(cx.perms, cx.sink, &cx.run.cancel, name, cx.message, Some(shown)).await {
+                // Stop: the run ends. No label, no count, no line to the lead.
+                None => {}
+                Some(Decision::Deny) => {
+                    let _ = cx.db.add_outcome(&verdict.id, handover::Label::Wrong.name(), Some(&option), handover::CARD_SOURCE);
+                    let _ = cx.db.bump_engine_rule(&rule.id, false);
+                    // `RTE-6`: the third no in 30 days raises a proposal about this rule.
+                    let due = learn::record_override(cx.db, &rule, cx.message);
+                    learn::follow_up(cx.db, cx.client, cx.local_endpoint, due).await;
+                    early.notes.push(handover::line_declined(name, &picked.label));
+                }
+                Some(answer) => {
+                    let _ = cx.db.add_outcome(&verdict.id, handover::Label::Right.name(), Some(&option), handover::CARD_SOURCE);
+                    // "Always for this": this rule stops asking. Not the whole agent.
+                    if answer == Decision::Forever {
+                        let _ = cx.db.save_engine_rule(&EngineRule { auto: true, ..rule.clone() });
+                    }
+                    pre.agreed = true;
+                    early.notes.push(handover::line_agreed(name, &picked.label));
+                    early.keep_agents = true;
+                }
+            }
+        }
+    }
+    *cx.run.prematch.lock().unwrap() = Some(pre);
+    early
 }
 
 /// The badge the Fleet row shows for an agent-app child.
@@ -543,6 +692,7 @@ fn badge(pick: &EnginePick) -> EngineBadge {
         because: Some(pick.label.clone()),
         because_text: pick.rule.as_ref().map(|r| r.text.clone()),
         can_steer,
+        matched: pick.matched,
     }
 }
 
@@ -970,6 +1120,9 @@ async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
         let headline = headline(outcome.stop_reason.as_str(), outcome.steps, secs);
         let text = outcome.text.trim();
         let text = if text.is_empty() { "(it produced no text)" } else { text };
+        if child.engine.is_some() {
+            flag_report(ctx, &child.agent, text);
+        }
 
         let _ = db.finish_subagent_run(
             &child.run.id,
@@ -1015,6 +1168,21 @@ async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
         ),
     );
     Ok(report.trim_end().to_string())
+}
+
+/// `USE-8`: an agent app's report is outside text for the lead. The frame below
+/// keeps it from posing as the harness; this asks the quick decision model, in the
+/// background, whether it also tries to instruct the assistant, and marks the step
+/// if so. It never changes what the lead was handed.
+fn flag_report(ctx: &ToolContext<'_>, agent: &str, text: &str) {
+    crate::agent::toolsets::flag_outside(
+        ctx.sink,
+        ctx.conversation_id,
+        ctx.call_id,
+        &format!("report from {agent}"),
+        text,
+        crate::agent::untrusted::scan(text).risk,
+    );
 }
 
 /// `LRN-4`: a child's words go inside the harness's frame (`Agent 2 (name) —
@@ -1179,6 +1347,9 @@ async fn collect_agents(
         let secs = ((row.ended_at.unwrap_or(row.started_at) - row.started_at).max(0) / 1000) as u64;
         let text = row.result.as_deref().unwrap_or("").trim();
         let text = if text.is_empty() { "(it produced no text)" } else { text };
+        if row.engine_id.is_some() {
+            flag_report(ctx, &row.agent, text);
+        }
         report.push_str(&format!(
             "Agent {} ({}) — {}\n{}\n\n",
             i + 1,
@@ -1510,5 +1681,266 @@ mod tests {
         assert_eq!(target, "2 agents");
         let (_, one) = describe("delegate", &serde_json::json!({ "tasks": [{ "task": "read the readme" }] }));
         assert_eq!(one, "general · read the readme");
+    }
+}
+
+/// `USE-T-4`: the handover pre-match, from a decision's answer to the card and the
+/// lines the lead reads. The ask itself needs a running engine and is not driven.
+#[cfg(test)]
+mod prematch_tests {
+    use super::*;
+    use crate::agent::decide::{Answer, BackendId, Verdict};
+    use crate::agent::fleet::Fleet;
+    use crate::agent::run::AgentEventSink;
+    use crate::db::decisions::NewDecision;
+    use crate::db::engines::EngineRow;
+    use crate::permissions::PermissionManager;
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+
+    const MESSAGE: &str = "refactor the billing module and add tests";
+
+    fn agents(mode: &str) -> (Db, Vec<Offered>) {
+        let db = Db::open_in_memory().unwrap();
+        let mut row = EngineRow::new("claude-code", "claude-code", "Claude Code");
+        row.found_path = Some("C:\\x\\claude.exe".into());
+        row.enabled = true;
+        row.signed_in = Some(true);
+        row.use_mode = mode.into();
+        db.insert_engine_if_absent(&row).unwrap();
+        db.save_engine_settings(&row).unwrap();
+        let offered = rules::candidates(&db);
+        (db, offered)
+    }
+
+    /// A verdict for the routing question, with the decision written to the log
+    /// so a label has something to attach to.
+    fn verdict(db: &Db, choice: &str, p: f32, calibrated: bool) -> Verdict {
+        let rest = (1.0 - p) / 5.0;
+        let probs: Vec<(String, f32)> = ["claude-code:U1", "claude-code:U2", "claude-code:U3", "claude-code:U4", "none", "unsure"]
+            .iter()
+            .map(|k| ((*k).to_string(), if *k == choice { p } else { rest }))
+            .collect();
+        let confidence = crate::agent::decide::confidence(&probs.iter().map(|(_, p)| *p).collect::<Vec<_>>());
+        let answer = Answer::Choice { choice: choice.into(), probs, confidence };
+        db.add_decision(&NewDecision {
+            id: "d1",
+            conversation_id: None,
+            run_id: None,
+            purpose: "handover-route",
+            backend: "local:Clef-flash",
+            model: "Clef-Flash-Q4_K_M",
+            ms: 41,
+            calibrated,
+            answers: &serde_json::json!({ "route": { "choice": choice, "probs": [[choice, p]], "confidence": confidence } }),
+            input_tokens: 10,
+            state_preview: &format!("The user's request:\n{MESSAGE}"),
+            state_hash: "h",
+            action: None,
+        })
+        .unwrap();
+        Verdict {
+            id: "d1".into(),
+            answers: BTreeMap::from([("route".to_string(), answer)]),
+            backend: BackendId::Local { model: "test".into() },
+            calibrated,
+            ms: 41,
+        }
+    }
+
+    fn recording_sink() -> (AgentEventSink, Arc<Mutex<Vec<serde_json::Value>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let writer = seen.clone();
+        let channel = tauri::ipc::Channel::new(move |body: tauri::ipc::InvokeResponseBody| {
+            if let tauri::ipc::InvokeResponseBody::Json(text) = body {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                    writer.lock().unwrap().push(v);
+                }
+            }
+            Ok(())
+        });
+        (AgentEventSink::new(channel), seen)
+    }
+
+    /// What the run saw while the pre-match acted.
+    struct Seen {
+        early: Early,
+        events: Vec<serde_json::Value>,
+        run: Arc<crate::agent::fleet::RunHandle>,
+    }
+
+    /// Run the pre-match. `answer` is what the person does at a card: a decision,
+    /// or `None` for Stop.
+    async fn act(db: &Db, offered: &[Offered], verdict: &Verdict, answer: Option<Decision>) -> Seen {
+        let (sink, events) = recording_sink();
+        let perms = PermissionManager::new();
+        let run = Fleet::new().open("conv", CancelFlag::new(), None, 0);
+        let client = reqwest::Client::new();
+        let cx = EarlyCtx {
+            db,
+            perms: &perms,
+            sink: &sink,
+            client: &client,
+            local_endpoint: None,
+            run: &run,
+            conversation_id: "conv",
+            message: MESSAGE,
+        };
+        let responder = async {
+            for _ in 0..300 {
+                let id = events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|e| e["type"] == "permission")
+                    .and_then(|e| e["request"]["id"].as_str().map(str::to_string));
+                if let Some(id) = id {
+                    match answer {
+                        Some(a) => perms.resolve(&id, a),
+                        None => run.cancel.cancel(),
+                    }
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        };
+        let (early, _) = tokio::join!(act_on_prematch(&cx, offered, verdict), responder);
+        let events = events.lock().unwrap().clone();
+        Seen { early, events, run }
+    }
+
+    fn cards(s: &Seen) -> Vec<&serde_json::Value> {
+        s.events.iter().filter(|e| e["type"] == "permission").collect()
+    }
+
+    #[tokio::test]
+    async fn suggest_mode_raises_the_card_before_the_lead_and_hand_it_over_tells_the_lead() {
+        let (db, offered) = agents("suggest");
+        let v = verdict(&db, "claude-code:U2", 0.91, true);
+        let s = act(&db, &offered, &v, Some(Decision::Once)).await;
+
+        let card = cards(&s)[0];
+        assert_eq!(card["request"]["capability"], "handover");
+        assert_eq!(card["request"]["engine"], "Claude Code");
+        assert_eq!(card["request"]["rule"]["label"], "U2");
+        let matched = card["request"]["rule"]["matched"].as_f64().unwrap();
+        assert!((matched - 0.91).abs() < 1e-3, "{card}");
+        assert!(card["request"]["rule"]["doubt"].is_null(), "no doubt on the rule it picked");
+
+        assert_eq!(s.early.notes.len(), 1);
+        assert!(s.early.notes[0].starts_with("The user agreed to hand this to Claude Code under their rule U2."), "{:?}", s.early.notes);
+        assert!(s.early.keep_agents, "the lead must still be able to call delegate");
+        assert!(s.run.prematch.lock().unwrap().as_ref().unwrap().agreed_to("claude-code", "U2"));
+        let labels = db.decisions_recent(10, None).unwrap().remove(0).outcomes;
+        assert_eq!(
+            (labels[0].label.as_str(), labels[0].value.as_deref(), labels[0].source.as_str()),
+            ("right", Some("claude-code:U2"), "handover-card")
+        );
+    }
+
+    #[tokio::test]
+    async fn do_it_yourself_counts_against_the_rule_tells_the_lead_and_writes_a_wrong_label() {
+        let (db, offered) = agents("suggest");
+        let v = verdict(&db, "claude-code:U2", 0.93, true);
+        let s = act(&db, &offered, &v, Some(Decision::Deny)).await;
+
+        assert_eq!(s.early.notes.len(), 1);
+        assert!(s.early.notes[0].ends_with("Do it yourself."), "{:?}", s.early.notes);
+        assert!(!s.early.keep_agents);
+        let rules = db.list_engine_rules("claude-code").unwrap();
+        let (_, u2) = rules::labels(&rules).into_iter().find(|(l, _)| l == "U2").unwrap();
+        assert_eq!((u2.hits, u2.overrides), (0, 1), "the same count RTE-4's card writes");
+        assert_eq!(db.engine_signals_since("claude-code", Some(&u2.id), "override", 0).unwrap().len(), 1);
+        let labels = db.decisions_recent(10, None).unwrap().remove(0).outcomes;
+        assert_eq!(labels[0].label, "wrong");
+        assert!(!s.run.prematch.lock().unwrap().as_ref().unwrap().agreed_to("claude-code", "U2"));
+    }
+
+    #[tokio::test]
+    async fn always_for_this_relaxes_that_one_rule_and_only_that_rule() {
+        let (db, offered) = agents("suggest");
+        let v = verdict(&db, "claude-code:U2", 0.93, true);
+        act(&db, &offered, &v, Some(Decision::Forever)).await;
+        let rules = db.list_engine_rules("claude-code").unwrap();
+        for (label, rule) in rules::labels(&rules) {
+            assert_eq!(rule.auto, label == "U2", "{label}");
+        }
+    }
+
+    /// The CLI_ENGINES review fix 3 path: Stop takes the early card away, and
+    /// nothing learns from it.
+    #[tokio::test]
+    async fn stop_withdraws_the_early_card_and_nothing_is_learned() {
+        let (db, offered) = agents("suggest");
+        let v = verdict(&db, "claude-code:U2", 0.93, true);
+        let s = act(&db, &offered, &v, None).await;
+
+        assert!(s.events.iter().any(|e| e["type"] == "permission_gone"), "{:?}", s.events);
+        assert!(s.early.notes.is_empty() && !s.early.keep_agents);
+        let rules = db.list_engine_rules("claude-code").unwrap();
+        assert!(rules.iter().all(|r| r.hits == 0 && r.overrides == 0));
+        assert!(db.decisions_recent(10, None).unwrap().remove(0).outcomes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn auto_mode_only_gives_the_lead_a_line_and_never_a_card() {
+        let (db, offered) = agents("auto");
+        let v = verdict(&db, "claude-code:U2", 0.91, true);
+        let s = act(&db, &offered, &v, Some(Decision::Once)).await;
+
+        assert!(cards(&s).is_empty());
+        assert_eq!(s.early.notes, vec!["This looks like the user's rule U2 for Claude Code (0.91). You still decide.".to_string()]);
+        assert!(s.early.keep_agents);
+        assert!(db.decisions_recent(10, None).unwrap().remove(0).outcomes.is_empty(), "nothing to label yet");
+    }
+
+    #[tokio::test]
+    async fn a_rule_the_user_said_always_to_is_treated_like_auto() {
+        let (db, _) = agents("suggest");
+        let mut rules = db.list_engine_rules("claude-code").unwrap();
+        rules[1].auto = true;
+        db.save_engine_rule(&rules[1]).unwrap();
+        let offered = rules::candidates(&db);
+        let s = act(&db, &offered, &verdict(&db, "claude-code:U2", 0.91, true), Some(Decision::Once)).await;
+        assert!(cards(&s).is_empty());
+        assert!(s.early.notes[0].starts_with("This looks like the user's rule U2"));
+    }
+
+    #[tokio::test]
+    async fn uncalibrated_below_the_bar_none_and_unsure_change_nothing() {
+        for (choice, p, calibrated) in [
+            ("claude-code:U2", 0.97, false),
+            ("claude-code:U2", 0.80, true),
+            ("none", 0.97, true),
+            ("unsure", 0.97, true),
+        ] {
+            let (db, offered) = agents("suggest");
+            let s = act(&db, &offered, &verdict(&db, choice, p, calibrated), Some(Decision::Once)).await;
+            assert!(cards(&s).is_empty(), "{choice} {p} {calibrated}");
+            assert_eq!(s.early, Early::default(), "{choice} {p} {calibrated}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_run_keeps_the_numbers_even_when_nothing_was_done() {
+        let (db, offered) = agents("suggest");
+        let v = verdict(&db, "none", 0.9, true);
+        let s = act(&db, &offered, &v, None).await;
+        let pre = s.run.prematch.lock().unwrap().clone().expect("kept for the lead's own delegate call");
+        assert!(pre.picked.is_none());
+        assert!(pre.score("claude-code", "U2").is_some());
+    }
+
+    /// What the lead's own `delegate` call is checked against.
+    #[tokio::test]
+    async fn the_lead_citing_the_picked_rule_after_a_yes_is_not_asked_again_but_another_rule_is() {
+        let (db, offered) = agents("suggest");
+        let s = act(&db, &offered, &verdict(&db, "claude-code:U2", 0.91, true), Some(Decision::Once)).await;
+        let pre = s.run.prematch.lock().unwrap().clone();
+        let same = handover::against(pre.as_ref(), "claude-code", "U2");
+        assert!(same.agreed && same.matched.is_some());
+        let other = handover::against(pre.as_ref(), "claude-code", "U1");
+        assert!(!other.agreed && other.matched.is_none(), "a different rule still asks");
+        assert_eq!(handover::against(None, "claude-code", "U2"), handover::Against::default());
     }
 }

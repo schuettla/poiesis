@@ -1,0 +1,30 @@
+{"id": "menu-01", "slice": "base", "request": "What's the latest stable version of Rust?", "needs": ["web_search"]}
+{"id": "menu-02", "slice": "base", "request": "Explain how a binary search works.", "needs": []}
+{"id": "menu-03", "slice": "base", "request": "Did Ana reply to my email about the contract?", "needs": ["mail"]}
+{"id": "menu-04", "slice": "base", "request": "Look up the train times to Porto and email them to Luis.", "needs": ["web_search", "mail"]}
+{"id": "menu-05", "slice": "base", "request": "Thanks, that is all for now.", "needs": []}
+{"id": "menu-06", "slice": "base", "request": "Open the status page in the browser and tell me if anything is down.", "needs": ["browser"]}
+{"id": "menu-07", "slice": "base", "request": "Run this and tell me the output: print(2 ** 40)", "needs": ["code_exec"]}
+{"id": "menu-08", "slice": "base", "request": "Draw a picture of a lighthouse at dusk.", "needs": ["image_gen"]}
+{"id": "menu-09", "slice": "base", "request": "Rewrite this sentence to be shorter: 'It is the case that we are in a position to begin.'", "needs": []}
+{"id": "menu-10", "slice": "base", "request": "Compute the standard deviation of 4, 8, 15, 16, 23, 42.", "needs": ["code_exec"]}
+{"id": "menu-11", "slice": "base", "request": "What does the error 'borrowed value does not live long enough' mean?", "needs": []}
+{"id": "menu-12", "slice": "base", "request": "Find news from today about the election and summarise it.", "needs": ["web_search"]}
+{"id": "menu-13", "slice": "base", "request": "Send my landlord a short message that the rent is paid.", "needs": ["mail"]}
+{"id": "menu-14", "slice": "base", "request": "Translate this paragraph into French.", "needs": []}
+{"id": "menu-15", "slice": "base", "request": "Make a logo for my bakery and put the price list from the web on a poster.", "needs": ["image_gen", "web_search"]}
+{"id": "menu-16", "slice": "apps", "request": "What's on my calendar tomorrow?", "needs": ["apps"]}
+{"id": "menu-17", "slice": "apps", "request": "Post in the team Slack channel that the release is out.", "needs": ["apps"]}
+{"id": "menu-18", "slice": "apps", "request": "Add a page to Notion with today's meeting notes.", "needs": ["apps"]}
+{"id": "menu-19", "slice": "apps", "request": "Which Slack channel is quietest? Then email me a summary.", "needs": ["apps", "mail"]}
+{"id": "menu-20", "slice": "apps", "request": "What is the capital of Portugal?", "needs": []}
+{"id": "menu-21", "slice": "apps", "request": "Why does my regular expression match too much?", "needs": []}
+{"id": "menu-22", "slice": "apps", "request": "Move my 3pm meeting to Friday.", "needs": ["apps"]}
+{"id": "menu-23", "slice": "apps", "request": "Give me a packing list for a weekend hike.", "needs": []}
+{"id": "menu-24", "slice": "delegate", "request": "Have Claude Code migrate the whole project to TypeScript.", "needs": ["subagents"]}
+{"id": "menu-25", "slice": "delegate", "request": "Ask Codex to write a quick script that renames these files.", "needs": ["subagents"]}
+{"id": "menu-26", "slice": "delegate", "request": "Research three queue libraries in parallel and compare them.", "needs": ["subagents"]}
+{"id": "menu-27", "slice": "delegate", "request": "What is a message queue?", "needs": []}
+{"id": "menu-28", "slice": "delegate", "request": "Fix the typo in the first line of the README.", "needs": []}
+{"id": "menu-29", "slice": "delegate", "request": "Refactor the billing module and write tests for it, while I look at the invoices in my mail.", "needs": ["subagents", "mail"]}
+{"id": "menu-30", "slice": "delegate", "request": "Give me a one-line summary of what an API is.", "needs": []}

@@ -1,3 +1,4 @@
+import type { SteerKind } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import type { Message } from "../../lib/types";
 import ImageByPath from "./ImageByPath";
@@ -11,21 +12,42 @@ function splitAction(text: string): { human: string; isAction: boolean } {
   return { human: text.slice(0, idx).trim(), isAction: true };
 }
 
+/** `USE-UI-2`: the words for what a quick decision read a mid-run message as. */
+const STEER_TAG: Record<SteerKind, string> = {
+  stop: "stop",
+  redirect: "redirect",
+  add: "addition",
+  question: "question",
+};
+
 export default function UserTurn({ message }: { message: Message }) {
   const { human, isAction } = splitAction(message.text);
   const viewArtifactByPath = useAppStore((s) => s.viewArtifactByPath);
+  const answerSteerStop = useAppStore((s) => s.answerSteerStop);
+  const steer = message.steer;
   return (
     <div className="turn-user">
       {/* `HRN-UI-1`: this went to a run that was already working, so it is
           not waiting for a next turn. Saying which of the two it is matters:
           "sending" still could be missed, "sent mid-run" was read. Rendered
           only when there is a mark — an empty row still carried its margin
-          and made the top padding visibly deeper than the bottom. */}
-      {message.midRun && (
+          and made the top padding visibly deeper than the bottom.
+          `USE-UI-2`: a held message has not been sent at all, so it says so. */}
+      {(message.midRun || steer) && (
         <div className="role">
-          <span className={`mid-run-mark ${message.midRun}`}>
-            {message.midRun === "pending" ? "sending…" : "sent mid-run"}
-          </span>
+          {message.midRun && (
+            <span className={`mid-run-mark ${message.midRun}`}>
+              {message.midRun === "pending" ? "sending…" : message.midRun === "held" ? "not sent yet" : "sent mid-run"}
+            </span>
+          )}
+          {steer && (
+            <span
+              className="steer-tag"
+              title={`Read as ${steer.kind === "add" ? "an addition" : `a ${steer.kind}`} (${steer.p.toFixed(2)})`}
+            >
+              {STEER_TAG[steer.kind]}
+            </span>
+          )}
         </div>
       )}
       {/* `SKC-2`: a skill command went out as `/name`, with that skill's
@@ -47,6 +69,19 @@ export default function UserTurn({ message }: { message: Message }) {
       {/* The chip already shows the words after the name, so the body would
           only say them twice. */}
       {human && !message.command && <div className="body">{human}</div>}
+      {/* `USE-UI-2`: a sure stop is not sent to the run. It asks first, and both
+          answers are labels for the decision that asked. */}
+      {message.midRun === "held" && steer && (
+        <div className="steer-stop" role="group" aria-label="Stop the run?">
+          <span className="steer-stop-q">Stop the run?</span>
+          <button className="btn-text" onClick={() => void answerSteerStop(message.id, true)}>
+            Stop
+          </button>
+          <button className="btn-text" onClick={() => void answerSteerStop(message.id, false)}>
+            Keep going
+          </button>
+        </div>
+      )}
       {/* The same reading the Rail puts at the end of a chat row: when. */}
       {message.createdAt > 0 && (
         <span className="turn-stamp" aria-hidden="true">

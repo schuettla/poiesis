@@ -488,6 +488,53 @@
   color: var(--ink);
 }
 
+/* `SEE-3`: what the composer read in the message, one line before the send button. It is
+   a flex item of the box's row and takes its width from the input, so the box keeps its
+   height whatever it says. */
+.composer-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 46%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  white-space: nowrap;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  line-height: 20px;
+  color: var(--ink-muted);
+}
+.composer-hint-arrow {
+  flex: none;
+}
+.composer-hint-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composer-hint-action,
+.composer-hint-x {
+  flex: none;
+  padding: 0;
+  font: inherit;
+  color: var(--ink-muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.composer-hint-action {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.composer-hint-action:hover,
+.composer-hint-action:focus-visible,
+.composer-hint-x:hover,
+.composer-hint-x:focus-visible {
+  color: var(--ink);
+}
+
 .composer .send {
   background: var(--ink);
   color: var(--paper);

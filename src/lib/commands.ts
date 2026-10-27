@@ -16,6 +16,7 @@ import { ranked } from "./fuzzy";
 import { EFFORTS } from "./effort";
 import { scheduleDraft } from "./when";
 import { parseGoalArgs } from "./goal";
+import { workspaceAvailable } from "./experiments";
 import { openVoice } from "./voice/controller";
 import type { Model } from "./types";
 
@@ -566,6 +567,10 @@ export async function applyControl(name: string, value: string, s: AppState): Pr
       s.clearTurnModifier("maxSteps");
       return done();
     }
+    // The row has no dialog to put a button in, so it says where to go (`EXP-3`).
+    if (name === "workspace" && value !== "off" && !s.workspaceMode && !workspaceAvailable(s)) {
+      return fail("Workspace is an experiment. Turn it on in Settings → Experiments.");
+    }
     return await HANDLERS[name](value, s);
   } catch (e) {
     return fail(String(e));
@@ -848,6 +853,19 @@ export const HANDLERS: Record<string, Handler> = {
   workspace: (args, s) => {
     const want = onOff(args);
     if (want === "bad") return fail("Say on or off.");
+    // `EXP-3`: while the experiment is off, turning it on is a pointer to where
+    // that is done. Off still works: nothing here ever traps someone in the mode.
+    if (want !== false && !s.workspaceMode && !workspaceAvailable(s)) {
+      return {
+        kind: "confirm",
+        title: "Workspace is an experiment",
+        body: "Turn it on in Settings → Experiments.",
+        confirmLabel: "Open Experiments",
+        run: async () => {
+          s.setView("experiments");
+        },
+      };
+    }
     // The mode can be on with the message stream showing. Asking for the
     // workspace then brings the canvas back rather than switching the mode off.
     if (s.workspaceMode && !s.workspaceShown && want !== false) {

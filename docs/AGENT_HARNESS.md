@@ -1,13 +1,17 @@
 # The agent harness
 
-*How Poiesis turns a message into work. Current as of 2026-09-14 (the working
-tree after commit `03cadad`, schema v29).*
+*How Poiesis turns a message into work. Current as of 2026-10-27 (the working
+tree after commit `6b1e851`, schema v42).*
 
 This describes the code as it stands, not a plan. The plans in
-[plans/](../plans/) state intent and carry per-item IDs (`HRN-4`, `CTX-3`,
-`SUB-5`, `COD-11`...); those IDs appear throughout the source as anchors back
-to the reasoning. Where a plan and this document disagree, this document
-describes what runs.
+[plans/](../plans/) and [plans/done/](../plans/done/) state intent and carry
+per-item IDs (`HRN-4`, `CTX-3`, `SUB-5`, `COD-11`, `CLI-4`, `MCG-3`, `DEC-5`,
+`USE-12`...); those IDs appear throughout the source as anchors back to the
+reasoning. Where a plan and this document disagree, this document describes
+what runs. Three things the plans describe are **not built**, and are marked
+where they would belong: the v4 "quiet stream" redesign of the quick-decision
+surfaces (§15), resuming an agent app's own session (§13), and the cognition
+plan (`COGNITION_PLAN.md`).
 
 ---
 
@@ -36,15 +40,23 @@ interactive entry point, still assembles the prompt it sends (§3).
 │                         classify → dispatch → record                     │
 │  agent/context.rs       prompt assembly in Rust + briefs + budgeting     │
 │  agent/log.rs           session log: replay, resume, fork, plans         │
-│  agent/toolsets.rs      15 built-in toolsets + MCP tools, one registry   │
+│  agent/toolsets.rs      16 built-in toolsets + MCP tools, one registry   │
 │  agent/*.rs             the toolsets, plus loop-owned tools (plan,       │
-│                         read_result) and the coding machinery            │
+│                         read_result, harness, ask_user, need_tools) and  │
+│                         the coding machinery                             │
+│  agent/decide/          the decision seam: fast answers that only add    │
+│                         caution (§15)                                    │
+│  agent/connector_gate   read / change / send for every MCP + Composio    │
+│  engines/               agent apps (Claude Code, Codex, ACP) as          │
+│                         delegation targets (§13)                         │
 │  permissions/ · autonomy.rs · memory/ · db/ (SQLite, FTS5, vectors)      │
 └──────────────────────────────────────────────────────────────────────────┘
                   │ loopback HTTP (per-session token)
-        llama-server · embedding server · reranking server · sd.cpp
+        llama-server · embedding · reranking · decision server · sd.cpp
+        voice (sherpa-onnx, in process) · agent-app children (stdio)
                   │ HTTPS (BYOK)
-        OpenAI · OpenRouter · Anthropic · MCP servers · IMAP/SMTP · CDP
+        OpenAI · OpenRouter (chat + decisions) · Anthropic · MCP servers ·
+        Composio Connect · IMAP/SMTP · CDP
 ```
 
 ---
@@ -61,6 +73,8 @@ opening message array and which limits apply.
 | `scheduler::run_job` (Tasks) | Rust: `context::gather` + `compose_system_prompt` + briefs | 12 steps, 600 s clock | yes |
 | `delegate` (foreground child) | `subagents.rs`: the task only, plus the agent type's prompt | `RunLimits::subagent`: 8 steps, 300 s, depth 0 | inherits |
 | `delegate { background: true }` | `background.rs`, same as above | same | always |
+| `delegate` to an **agent app** (Claude Code, Codex, OpenCode) | `engines::run::run_external`: the task fenced as data, the agent app's own system append | the app's timeout (`engines/run.rs::timeout`), at most `max_parallel` at once | follows the parent |
+| `/delegate [agent] <task>` | the same path, with the rules (not the guards) skipped | as above | no |
 
 `agent_chat_cmd` and `resume_run_cmd` both go through `execute_turn`, which
 opens a handle in the `Fleet`, builds a `RunContext::top`, runs the loop and
@@ -200,11 +214,15 @@ loop:
                  bump steps · RunProgress
   wrap_up set?   wrap_up_turn: one tool-free turn, then stop with that reason
   assemble       registry specs (+ read_result/search_result once something
-                 was kept, + plan when plan mode offers it)
+                 was kept, + plan when plan mode offers it, + harness /
+                 ask_user) · narrow_menu may hold tool groups back and offer
+                 need_tools (§15, Fast & slow thinking only)
   request        show plan → drive_turn → hide plan · stream or hold back
-                 prose · charge usage
+                 prose (feed_check hands the growing answer to the
+                 automatic check) · charge usage
   classify       → Stop(reason) | Calls(calls) | Again
-  dispatch_batch run calls (concurrent reads, ordered rest) · record results
+  dispatch_batch tool-call gate (§15) · connector gate (§14) · run calls
+                 (concurrent reads, ordered rest) · record results
 end: log answer + stop · record run_usage · RunEnded · RunOutcome
 ```
 
@@ -263,8 +281,12 @@ In order, for a `Final` turn with tools on:
    ends the run; the UI then shows "I did the steps above but ended without
    writing an answer".
 5. **Unfinished plan** (`PLN-2`): one note if the plan still has open items.
+   With Fast & slow thinking on, a decision first asks whether the answer just
+   written finishes an open item (`PlanDone`, `USE-5`), so the card does not
+   wait on the model remembering to tick it.
 6. **Unverified change** (`COD-12`): one note if the run edited project files
-   and never ran a check afterwards (§7.4).
+   and never ran a check afterwards (§7.4). With a decision model, an answer
+   that *claims* the change works is what raises it (`UnverifiedClaim`).
 7. Otherwise `Done` and `completed`.
 
 `ToolCalls` go to dispatch; `Cancelled` stops as `aborted`; an error stops as
@@ -277,15 +299,31 @@ In order, for a `Final` turn with tools on:
 1. Every enabled built-in toolset (`toolset.<id>.enabled`, else its default),
    intersected with the chat persona's allowlist, then with the parent's
    toolsets for a child. A persona or parent can narrow, never widen.
-2. `delegate` is removed when there is no depth left.
-3. Tools whose autonomy class is `Off` are removed (`memory`, `propose_soul_edit`,
-   `propose_skill`).
-4. `run_task` and `run_command` are removed when `coderun::advertised` says the
+2. A toolset that cannot work yet is dropped (`Toolset::ready`, `LRN-5`): Mail
+   with no account, Image generation with no engine or cloud backend, `decide`
+   with Fast & slow thinking off or no decision model. Its switch is not touched;
+   Settings → Tools shows the reason (`ToolsetInfo.needs`).
+3. `delegate` is removed when there is no depth left. Its spec is built from the
+   run's agent types (`subagents::tool_specs(types)`): `tasks[].agent` is an enum
+   of their names, an engine-backed type brings its rule block, and `because` is
+   required when the agent is an agent app (§13).
+4. Tools whose autonomy class is `Off` are removed (`memory`, `propose_soul_edit`,
+   `propose_skill`, send-kind connector tools under `app_send`).
+5. `run_task` and `run_command` are removed when `coderun::advertised` says the
    project cannot run them.
-5. `run_code`'s description gains the scripting guidance when `tools.script_rpc`
+6. `run_code`'s description gains the scripting guidance when `tools.script_rpc`
    is on.
-6. Enabled MCP connectors' cached tools are appended. Built-ins win name
-   collisions, then earlier connectors.
+7. Enabled MCP connectors' cached tools are appended. Built-ins win name
+   collisions, then earlier connectors. A Composio connector contributes only an
+   allowlist of its meta-tools (§14).
+8. The `harness` and `ask_user` tools (`agent/commands.rs`, `own_tools`) join a
+   run that has tools on, `harness` only with the verbs the autonomy ladder
+   leaves on (a child or an unattended run keeps only `compact`), `ask_user`
+   only where someone is watching.
+
+`narrow_menu` runs after all of this and never touches the registry: it filters
+only the specs sent for one request (§15), so dispatch and the text-form parser
+still know every tool.
 
 ### 4.8 Dispatch
 
@@ -366,12 +404,16 @@ the timeline, and executes it. It is not an Agent Skill (§6).
 | Mail (`mail`) | `list_mail` `read_mail` `search_mail` `send_mail` `reply_mail` | off | Direct IMAP/SMTP |
 | Browser (`browser`) | `browse` `browser_read` `browser_click` `browser_type` `browser_press` `browser_scroll` `browser_screenshot` | off | Installed Chrome/Edge over CDP |
 | Screen & apps (`system`) | `screenshot` `open_app` | off | Not GUI automation |
+| Sort many items (`decide`) | `classify` | on, but `ready` only with Fast & slow thinking on and a decision model (local file or a chosen cloud one) | §15 |
 
 Sensitive (flagged in Settings): Web search, Code execution, Run project tasks,
 Mail, Browser, Screen & apps.
 
 Loop-owned tools, not toolsets: `plan` (when `agent.plan_mode` is not `never`),
-`read_result` and `search_result` (once a result was kept).
+`read_result` and `search_result` (once a result was kept), `harness` and
+`ask_user` (§5.5), and `need_tools` (only while a tool group is held back,
+§15). Connected apps and MCP servers are not toolsets either: they join the
+registry from `connectors` and `mcp` (§14).
 
 ### 5.1 `ToolContext`
 
@@ -424,6 +466,11 @@ tool failure.
   stops a run and everything below it, never a sibling tree.
 - A child's permission prompt names who is asking and queues behind others.
 
+A delegation target can also be an **agent app**: the `delegate` branch in
+`subagents.rs` (`prepare_engine`) starts a child process instead of a
+`run_agent` call, with the same fleet handle, conversation, Fleet card, Stop
+and report. §13 covers it.
+
 ### 5.4 Plans
 
 [`agent/plan.rs`](../src-tauri/src/agent/plan.rs). The `plan` tool writes or
@@ -434,6 +481,42 @@ for dropping). Three rules: the plan shown is the plan the model works against
 its reason; the plan never gates a tool call. Each write emits `Plan`, records a
 `plan` row, and sets the step note to the current item. `agent.plan_mode` is
 `always`, `auto` (default) or `never`.
+
+### 5.5 Commands, and what the model may do to its own session
+
+[`shared/commands.json`](../shared/commands.json) is the one registry of `/`
+commands (about 45: name, aliases, group, argument shape, who may run it, what
+it needs). The frontend reads it for the menu (`lib/commands.ts`); the backend
+reads the same file for what the agent may call. Most commands bind to store
+actions that already existed; a few are new capabilities:
+
+- **`harness`** (`agent/commands.rs`): `compact` (clear old tool output the
+  model no longer needs verbatim), `suggest` (offer one of the user's slash
+  commands, at most once per command per chat), `switch_mode` (ask the user to
+  turn a mode on; `workspace` is offered only when the experiment is on) and
+  `schedule` (propose a task). Each is gated by an autonomy class: a verb whose
+  class is `Off` is not in the spec, and the user decides every proposal
+  (`HarnessProposal`, `Suggestion`).
+- **`ask_user`**: a real fork with 2-4 options; the run waits on the answer
+  (`Question` / `QuestionGone`). Not for permissions, which the panel handles.
+- **Plan first** (`/plan`): a run that reads and changes nothing until the user
+  approves its plan.
+- **Rewind** (`agent/rewind.rs`): a branch plus an optional file undo. The
+  original conversation is never edited; it gets one `rewound` row, the
+  strongest negative signal there is, which reflection reads.
+- **Goal** (`/goal`): the frontend loop keeps re-sending until
+  `agent/goal.rs`'s judge says the goal holds. The judge is tool-free and
+  deliberately hard to satisfy (prose, broken JSON or "met" with nothing to point
+  at is "not yet"). With a decision model the quick answer must agree before
+  "met", so it can only make the goal stricter. The loop stops on evidence, not
+  step count (`LRN-1`): two continuations in a row in which no tool call
+  finished without an error, or the same error in three different rounds,
+  ends it as `stalled` with the reason as a note in the chat.
+- **Checkup** (`agent/checkup.rs`): "is anything wrong with me", one first-person
+  line per area, each probed on its own with a 4 s timeout.
+- **Resume refuses to redo a send** (`LRN-2`): `log::outward_done` looks at the
+  run's rows first; if a mail was sent, a `git push` ran or a connector send
+  completed, "Continue where I stopped" does not start and says why.
 
 ---
 
@@ -722,7 +805,309 @@ blocks, under a timeout.
 
 ---
 
-## 13. The event protocol
+## 13. Agent apps (external engines)
+
+[`engines/`](../src-tauri/src/engines/). Claude Code, Codex and OpenCode (any
+ACP agent) are **delegation targets, not chat engines**. The loop, prompt
+assembly, memory, planning and folder trust stay Poiesis's; an agent app is a
+kind of agent type, so everything that makes a delegated child legible (its own
+conversation, the Fleet card, Stop, the report to the lead) is reused.
+
+```
+lead run_agent → delegate { tasks: [{ agent: "Claude Code", task, because }] }
+  └─ subagents::delegate
+       ├─ not an engine type → run_agent (§5.3)
+       └─ engine type → prepare_engine (guards, rules, handover card)
+            → engines::run::run_external
+                 ├─ driver spawns the process (scrubbed env, Job Object)
+                 ├─ stdout → driver.parse → AgentEvent on the child's sink
+                 ├─ approval → permission panel → Decision → driver.answer
+                 ├─ steer → driver.steer · Stop → interrupt, then kill
+                 └─ ExternalOutcome { text, session, usage, paid_by } → lead
+```
+
+- **Catalog and detection.** [`shared/engines.json`](../shared/engines.json)
+  names the agents and where to look (install paths, PATH read fresh from the
+  registry, the Claude Code that ships inside the VS Code extension). A row per
+  agent lives in `engines`; `probe` runs `--version` and the sign-in check;
+  `PaidBy` (`plan`, `api_key`, `own`, `free`) is what the user sees as the cost.
+- **Three drivers behind one trait** (`driver.rs`): `claude` (stream-JSON over
+  stdio; approvals through an MCP tool Poiesis hosts, `--permission-prompt-tool`),
+  `codex` (`app-server` JSON-RPC; approvals in-band) and `acp` (the Agent Client
+  Protocol; approvals in-band). Each declares `Capabilities` (resume, mid-turn
+  steer, interrupt, mounted tools, approval style); a missing ability is shown
+  as missing, never faked. Recordings of real sessions are fixtures
+  (`fixtures/engines/`) and a fake agent per protocol drives the end-to-end
+  tests.
+- **Environment.** `engines/process.rs::withheld_from_children` removes
+  `POIESIS_*`, every provider key and `COMPOSIO_API_KEY` from the child's
+  environment (`LRN-3`; stdio MCP servers get the same treatment). The child
+  runs under a Job Object that ends the tree on Stop.
+- **What the engine is told.** The task is fenced as data (`fenced_task`,
+  `defang`); a short system append says it is a delegate, headless or not, and
+  which Poiesis tools it has. A child's words reach the lead in a frame that
+  `escape_frame` defangs (`LRN-4`).
+- **Permissions: one panel.** An engine's request becomes a
+  `PermissionRequest` naming who is asking. Per folder trust, `effective_trust`
+  decides whether Codex runs with `on-request` + `workspace-write` (it asks
+  nothing, its sandbox keeps it in the folder) or `untrusted` (it asks about every
+  step); on Windows an `auto` run first asks `windowsSandbox/readiness` and falls
+  back to asking when it is anything but `ready`. Relative paths are read from
+  the agent's folder (`approve::outside`). A run in a background `/delegate`
+  reaches the panel too; an unattended one gets "left for you".
+- **When Poiesis hands work over (`RTE`).** Per agent: a **mode** (`on_request`,
+  `suggest` default, `auto`), **rules** (`engine_rules`: plain "use it for" /
+  "don't use it for" lines, 140 chars, each with a stable label `U1`, `A1`, a hit
+  and an override count), and **guards** (`guards_json`, checked in Rust: code
+  projects only, minimum trust, a cap per chat, projects where it never runs).
+  The lead sees the rule block in `delegate`'s spec and must cite one in
+  `because`; a missing, unknown or *avoid* citation is refused with the reason.
+  In `suggest` mode a **handover card** (`capability: "handover"`) asks first:
+  *Hand it over*, *Do it yourself* (refused; the rule's override count rises) or
+  *Always for this* (sets `engine_rules.auto` for that one rule). A headless
+  parent treats `suggest` as `on_request`. An explicit `/delegate <agent>` skips
+  mode and rules, never guards or `/external off` (`conversations.engines_off`).
+  Rules learn only by proposal (`engines/learn.rs`, target `engine-rule`): three
+  overrides in 30 days, or three `/delegate`s for work the lead kept, raises a
+  proposal the user accepts or declines. **Try a request** previews the route
+  (`engines_route_preview_cmd`, `RTE-7`), which with a decision model asks it
+  first and falls back to one chat call.
+- **They can use Poiesis's tools** (`MCPS`). The loopback port also serves
+  Streamable-HTTP MCP at `/<token>/mcp` (`agent/toolrpc.rs`). A per-run token
+  carries the exact specs it may call and works only while Poiesis runs the job.
+  `engines/tools.rs` offers four memory tools when the agent's *Let it use my
+  memory* switch is on, and Composio's four meta-tools when *Let it use my
+  connected apps* is on (`engines.app_tools`; separate, both off). An app call
+  from an agent runs `run.rs::relay_composio`, the same code the loop uses, so
+  persona grants, the read/change/send gate, the daily cap, redaction and usage
+  all apply (§14). `COMPOSIO_MANAGE_CONNECTIONS` is answered by Poiesis itself:
+  an agent cannot show a sign-in card.
+- **Cost and trail.** A `run_usage` row marks the agent app; Usage has an
+  *Agent apps* section. `engine_signals` records what the user did about
+  a handover (`override`, `asked`, `checked`), which feeds both the rule
+  proposals and the outcome labels in §15.2.
+
+**Not wired:** resuming an agent app's own session. `Request.resume` is `None`
+in both the foreground and the background; the resume branches in the three
+drivers run only in tests (`Capabilities.resume`, `.interrupt` and `.approvals`
+are set and not yet read). Real Codex mounts the tools but its model skips them
+about half the time; Claude Code and OpenCode do not.
+
+---
+
+## 14. Connected apps and the connector gate
+
+[`agent/connector_gate.rs`](../src-tauri/src/agent/connector_gate.rs),
+[`agent/app_calls.rs`](../src-tauri/src/agent/app_calls.rs),
+[`connectors/composio.rs`](../src-tauri/src/connectors/composio.rs). Every MCP
+connector (one the user added, or Composio) passes the same two checks before
+and after a call.
+
+**Output is outside text** (`MCG-1`). `call_mcp_tool` wraps every result and
+every error with `mark_untrusted`, so the "from outside" marker, the risk scan
+and the activity row come with it. For Composio, `redact_links` replaces any
+`composio.dev` sign-in address with "[sign-in link shown to the person]" first,
+on every output and error.
+
+**Three kinds of call** (`MCG-2`, `classify`). Precedence: a *send* by name
+(send, reply, forward, post, publish, tweet, invite, share, refund, charge,
+pay, transfer; or create/add/new with a message, comment, email, invoice,
+payment noun; `draft` is never a send) beats a *read* by the server's
+`readOnlyHint`, which beats a *read* by a leading verb (get, list, fetch,
+search, read, find, check, count...), and anything else is a *change*.
+`destructiveHint` never downgrades. A per-tool override (`tool_overrides`) is
+kept with the app's policy; loosening it asks first.
+
+**The gate** (`MCG-3`, `admit`), before the call:
+
+| Kind | Default | Policy (`connector_policy`, per connector and per Composio app) |
+|---|---|---|
+| Read | runs | `read_policy`: `run` or `ask` |
+| Change | asks every time | *Allow once / Always for this app's changes / No* |
+| Send | asks every time | *Send once / Up to N a day for this app / No*; cap default 25 (`app_send_log`, counted per **target**) |
+
+It asks through the same `PermissionRequest` panel (capability `app`), in first
+person, naming the app and account, with the arguments pretty-printed (capped at
+4 KB) as the `diff`. `app_send` is an autonomy class (`ask`); `Off` withdraws
+send-kind tools from the registry. **Unattended runs never hang:** reads run, a
+change runs only where the policy is already "always", a send only where the
+policy is "allow" and the cap holds; otherwise the reply is "I need you to
+approve this... I've left it for you" and the call waits in the inbox
+(`render_app_proposal` / `run_approved`). Plan-first treats anything but a read
+as a change.
+
+**Composio** (`CAP`). The key kind picks the mode and is never stored apart from
+the key (`mode_of`): a `ck_` **Connect** key talks to `connect.composio.dev/mcp`
+with `x-consumer-api-key`; an `ak_` developer key keeps the Project mode (session,
+link, `connected_accounts` REST). Either way:
+
+- The model is offered an **allowlist** of four meta-tools (search, get schemas,
+  multi-execute, manage connections). The workbench and bash tools and any new
+  upstream meta-tool stay hidden. The description names the connected apps and
+  adds the rule about mail ("use the mail tools; use connected apps for email
+  only if asked for that account").
+- `targets()` reads a `MULTI_EXECUTE` batch entry by entry. The call's kind is
+  the **strictest of its targets**; a batch across two apps asks once and names
+  both; an unreadable batch is refused with no call. Grants are checked first: a
+  persona with app grants may use only those (`persona_app_grants`; no rows means
+  every connected app).
+- **Connecting from the chat.** `COMPOSIO_MANAGE_CONNECTIONS` for an unconnected
+  app is read by `connect_request` (both the `{name, action}` and plain-slug
+  shapes); only `add` can lead to a **connect card** (a `connect` block). The
+  link is kept in memory for ten minutes and never written to the transcript.
+  Polling asks `list` about the waiting app; `add` is never used to check, since
+  it mints a new link each time. In Connect mode there is no account list, so the
+  mirror (`app_accounts`, one row per app or per account) is filled from answers,
+  from calls that succeed, and from **Check again**.
+- **Several accounts** per app (up to five working); with two or more, a target
+  must name one, and `app_calls::plan` stops it otherwise and tells the model
+  the names to choose from.
+- **Errors the model can act on** (`scope_hint`): a failed call that mentions
+  insufficient scopes gets one note saying reconnecting will not add them.
+- **Usage**: every target that ran is a `source = "composio"` row, with no cost.
+  `app_call_log` also feeds the outcome labels in §15.
+
+---
+
+## 15. Quick decisions (the decision engine)
+
+[`agent/decide/`](../src-tauri/src/agent/decide/). A small model answers small,
+closed questions (yes or no, pick one, rate on a scale), each answer carrying a
+probability, in tens of milliseconds. Callers ask through one seam and never see
+which engine answered. Everything that changes behaviour is an **experiment**
+(§15.5); the five original sites are the exception, a pure swap behind parity
+tests.
+
+### 15.1 The seam and the two engines
+
+`decide::ask` takes a `Purpose` and typed `Question`s and returns `Answer`s
+(`confidence` is one minus the normalised entropy, computed here for every
+answer). There are two backends:
+
+- **Local**: a `llama-server` started by `runtime/decideserver.rs` with the
+  decision model (Clef-flash 9B, or the larger Clef when the hardware allows)
+  and its projector, on `/v1/systemone`. One instance, lazy start, idle stop
+  after five minutes, placement Automatic / Graphics card / Processor
+  (`plan_fit` counts the loaded chat model and a local image backend). The
+  engine is pre-warmed when a chat turn starts. A **hot** purpose never waits for
+  a cold engine or runs on the processor: it returns `Deadline` and the caller
+  keeps its old path. A background purpose waits.
+- **Cloud**: OpenRouter's `/api/alpha/decisions` (`cloud.rs`) with the key
+  already in Providers, the pinned `canonical_slug`, and
+  `provider: { data_collection: "deny", zdr: true }` on every request. The
+  catalog is read live (`/models?output_modalities=decisions` plus the zero-
+  retention list, cached a day); a model with no zero-retention provider cannot
+  be picked; a probe checks a fixed three-question request and, for a model
+  that lists images, that it can read a picture. Errors are sorted into faults
+  (401/403 stops the cloud an hour, 402 ten minutes, 429/5xx falls back to this
+  computer and stops it after three in five minutes). Cost is kept per decision
+  (`decisions.cost_usd`).
+
+`policy::resolve_backend`: a purpose's own override, then `decide.backend`,
+then local. **A background purpose ignores the global choice** (mail triage, the
+reflection gate, the outside-text flag, `AppKind` on an unattended run): it
+stays on this computer unless the user opts that one in by name. With neither
+engine the seam returns `Unavailable` and every caller keeps its old behaviour.
+Text typed in the composer follows the backend choice, is held in memory only
+(`typing::hold`), and is written only when a hint is acted on or a send reuses
+it.
+
+### 15.2 The controller
+
+A table, not a formula (`policy.rs`): each of the 19 `Purpose`s has a row with a
+mode (Reflex, Assisted, Verify, Gate), the measure it reads (`PFalse`, a named
+option, the top `Level(n)`, the winner), a deadline (300 ms hot locally, 800 ms
+over the network), whether it is hot, whether it names an experiment (a purpose
+whose experiment is off is not asked), and its bars before and after
+calibration. `control.rs` holds budgets (twenty asks a turn, four reviews, 40
+sentences per check, with separate counts for the turn and for a check).
+**Uncalibrated means advisory:** a decision may only make things stricter or
+cheaper, never looser, until `calibration.rs` has fitted the purpose to the
+user's own outcomes. Calibrate now (`seed.rs`, labelled sets in
+`tests/eval/decide/`) and a weekly refit do that.
+
+**Outcomes beat rationalisations** (`outcomes.rs`). A decision is labelled by
+what the user did, read first from tables that already existed
+(`engine_signals`, `engine_rules`, `app_call_log`, connector overrides, goal
+status) and written to `decision_outcomes` only where nothing records the
+action: a held tool group that had to come back is `wrong`; one the run never
+missed is `weak_right`; a *No* to a question a rating raised is `right`.
+
+### 15.3 Where it runs in the loop (Fast & slow thinking)
+
+| Hook | What a decision does | Never |
+|---|---|---|
+| **Tool menu** (`narrow_menu`, `ToolSelect`, `USE-4`) | Per unit (an optional toolset, Connected apps, one MCP connector, Other agents) one yes-or-no question over the message and last reply; a confident *no* holds the unit out of the specs for this request only. `need_tools` brings a held unit back; a direct call to a held tool does too. | A child, a resumed run, a scheduled task, a run with tools off; File access, Recall, Memory, Skills, Workspace UI; `/delegate` keeps Other agents; a sign-in card in progress keeps Connected apps |
+| **Handover pre-match** (`prematch_turn`, `HandoverRoute`, `USE-13`) | Matches the message to the user's enabled "use it for" rules before the lead runs, as a note | Overrule a guard |
+| **Steering** (`SteerClass`, `USE-5`) | Reads a message sent mid-run as stop / redirect / addition / question | Hold anything but a *calibrated* stop at 0.9 or more (it asks the user) |
+| **Plan completion** (`PlanDone`) and **unverified claim** (`UnverifiedClaim`) | Whether the answer finishes an open item; whether it claims a change works when no check ran | Add more than one note per run |
+| **Tool-call gate** (`ToolRisk`, `AppKind`, `toolgate.rs`, `USE-12`) | Rates a call (harmless / small / serious / irreversible) and whether it is what the user asked for. Not asked-for or irreversible at 0.8 or more adds a question of its own; a milder doubt becomes a line on the question the tool raises anyway. A read the request did not call for is asked about; a connector tool the name calls harmless can be raised to a send (one answer per tool per day). Agent-app approvals get an in-scope line against the task handed over. | Open what a deterministic gate closes; add a question to an app call or agent app (only a line); an unattended run gets a refusal with the reason, never a hang |
+| **Skip a low-risk prompt** (`relax-prompts`) | One question only: writing or editing one file inside the attached folder, and only with a *calibrated* verdict (harmless and small at 0.95, in scope at 0.95) | Deletions, moves, paths outside the folder, sending, running, app calls, agent apps, handovers |
+| **Classify** (`agent::classify`, `USE-9`) | The `classify` tool: one closed question about up to 500 items, an answer and a confidence per row, a count per answer for the lead | Summarise (it reads 4000 characters per item) |
+| **Page check** (`pagecheck`, `USE-11`) | What the page the browser agent just reached shows; a login or captcha hands the browser to the person | |
+| **Answers check themselves** (`autocheck.rs`, `sentences.rs`, `verify.rs`, `SEE-1`) | The answer's text goes to a worker as it grows (`feed_check`); each final sentence is split (`sentences::split`, 40 cap), judged checkable (`ClaimCheckable`: fact or "I did this"), then matched against **this run's own tool results** (untrusted-risky ones left out) by distinctive-word similarity, and a verdict asked only when a passage is found. "I sent / ran / created" is matched against the run's calls that returned without an error. | Search or fetch (the deep check, **Check more deeply**, is the one that does) |
+| **Background filters** (`filters.rs`, `USE-8`) | Reflection gate (is there anything to learn from this conversation), outside-text flag | Block anything; the one blocking score is still the memory write |
+| **Task condition, mail triage** (`runif`, `mailtriage`, `USE-7`, `USE-6`) | Whether a scheduled task's "only run if" holds; kind, urgency and reply mark of a new mail in the small inbox (`mail_seen`, `mail_sync`) | Leave this computer unless opted in by name |
+
+A hot ask holds a guard from the moment it is made; a check ask (`lane.rs`)
+takes the check lock and sends only when no hot ask is in flight, so a person
+waiting is never behind a background check. The five original sites
+(`RET-4` sufficiency, memory scope, the reflection critic, the goal check, the
+rule preview) each ask first and keep their old call as the fallback.
+
+### 15.4 Visibility
+
+Every decision is logged: a `decisions` row (purpose, backend, ms, calibrated,
+answers with probabilities, tokens, a 200-character preview, a state hash, the
+action taken) and, when a conversation is known, a `decision` session-log row.
+Activity shows them in words, folded by the hour where one request asks dozens.
+In the chat, v3 puts what a decision did where it acted: a held-tools chip in the
+run bar (`ToolsHeld` / `ToolsBack`), a one-line thought strip above the first
+text and a receipt after it (`Thought`), the composer hint while typing, and
+marks and a trust line on sentences that are checked (the `poiesis-autocheck`
+app event, because the check outlives the run). A reason line sits on every kind
+of permission prompt. **Not built:** v4, which removes most of that from the
+stream and keeps one line when a statement looks wrong; the data and backend stay
+as described here.
+
+### 15.5 Experiments
+
+[`experiments.rs`](../src-tauri/src/experiments.rs) is the registry, mirrored to
+`lib/experiments.ts` through one command so the two cannot drift. State is
+`experiment.<id>` in settings; **both sides gate** (the backend before it
+advertises a tool or asks a purpose, the frontend before it shows an entry
+point). Each experiment names what it requires (`DecisionModel`, `Vision`, a
+provider, another experiment), what it records, and its graduation line.
+
+| Id | What it turns on |
+|---|---|
+| `fast-slow` | the hooks in §15.3 except mail triage and `relax-prompts`; Verify was folded into it in v3 |
+| `mail-triage` | the small inbox and its background fetch (needs a *local* decision model and a Mail account) |
+| `relax-prompts` | the skip path above (needs `fast-slow` and a calibrated backend) |
+| `workspace` | Workspace mode (migrated on if any conversation already used it) |
+
+Each card shows a 30-day report built from local data (`experiments_report.rs`)
+and **Reset its data**, which holds the loop it resets (a mail reset waits for a
+running look at the inbox). The user's own switches from other plans (an agent
+app's mode, *Let it use my memory*, connector policies) are ordinary settings,
+not experiments.
+
+---
+
+## 16. Voice
+
+`runtime/voice*.rs`, `lib/voice/`, `components/Voice*`. Voice is outside the loop:
+one in-process engine (`sherpa-onnx`) does voice-activity detection (Silero),
+recognition (Parakeet, or Moonshine on small machines) and synthesis (Kokoro,
+Piper), on the CPU, with no cloud model. A turn-taking state machine in the
+frontend decides when the user has stopped, lets them cut in, and stops playback.
+What it hears becomes an ordinary user turn through `agent_chat_cmd`, marked as
+spoken (the mark survives a fork); the reply is queued for playback as it
+streams (`playbackQueue.ts`). Models are fetched on demand from Settings → Runtime → Voice.
+
+---
+
+## 17. The event protocol
 
 `AgentEvent` ([`agent/mod.rs`](../src-tauri/src/agent/mod.rs)), tagged by
 `type`, is the backend→UI contract. `AgentEventSink` wraps the channel;
@@ -740,15 +1125,25 @@ blocks, under a timeout.
 | `KeptResult` | a big result behind a disclosure, with save |
 | `TaskStarted` / `TaskOutput` / `TaskEnded` | the task step: live last line, outcome, diagnostics, tail |
 | `Recall` / `Code` / `Untrusted` | disclosures on a step |
-| `Block` / `BlockUpdate` / `StateUpdate` | typed blocks and session state |
+| `UntrustedFlag` | the quick decision model thinks outside text reads like an instruction (`USE-8`); it arrives after the text went to the model, so it only marks the step |
+| `Block` / `BlockUpdate` / `StateUpdate` | typed blocks and session state (including the `connect` card for a connected app) |
 | `Artifact` | the Canvas; moves the sidebar to Artifacts |
 | `FileChanged` | tree mark, change set refresh; the first in a run moves the sidebar to Changes |
-| `Permission` | the consent panel (file, domain, screen, app, task, command) |
-| `MemoryWrite` / `Proposal` | toast with undo / a card to accept or decline |
+| `Permission` / `PermissionGone` | the consent panel (file, domain, screen, app, task, command, engine, handover, risk); a withdrawn question comes off it (a stop, an agent hanging up) |
+| `MemoryWrite` / `Proposal` | toast with undo / a card to accept or decline (self-changes, and engine-rule edits) |
+| `HarnessCommand` / `HarnessProposal` / `Suggestion` | what the agent did to its own session, a mode or schedule it asks the user to allow (the run does not wait), one `/` command it offers |
+| `Question` / `QuestionGone` | a fork the run is waiting on (`ask_user`), or one an agent app put to the person; the card comes off when it is no longer wanted |
+| `ToolsHeld` / `ToolsBack` | the run-bar chip for tool groups a quick decision left off the menu, and their return (by the model or by the user) |
+| `Thought` | the first-thought strip and its receipt (`SEE-2`) |
 | `Browser` | the live browser panel (replaced wholesale) |
 | `MailSent` | a receipt |
-| `SubSpawned` / `Sub` / `SubEnded` | the Fleet card and the Agents view |
+| `SubSpawned` / `Sub` / `SubEnded` | the Fleet card and the Agents view, for ordinary children and agent apps alike |
 | `Done` / `Cancelled` / `Error` | terminal states |
+
+Some things outlive a run, so they travel on the **app bus** instead of the run's
+channel: background agents re-emit their events there, media jobs deliver their
+result to the right turn after a reload, and the automatic answer check sends
+`poiesis-autocheck` (`progress`, `claim`, `done`).
 
 **The trust rule on the frontend.** An event may move the right sidebar
 (`setDockView`) but never open or focus a tab: a tab can take the chat the user
@@ -757,25 +1152,32 @@ diff tab.
 
 ---
 
-## 14. Signals the harness keeps about itself
+## 18. Signals the harness keeps about itself
 
 All local.
 
 | Table | Written by | Read by |
 |---|---|---|
-| `session_events` | the session log | resume, fork, plan restore, compaction history |
+| `session_events` | the session log | resume, fork, rewind, plan restore, compaction history |
 | `run_usage` | every run exit | Settings → Usage |
 | `subagent_runs` | delegation | Fleet card, Agents view |
 | `tool_stats` | every dispatched call (content-free) | reliability captions, tool cautions |
 | `tool_fixes` | fail-then-fix pairs | reflection (pruned at 30 days) |
 | `skill_runs` | per run, backfilled with failures | skill outcome reporting |
-| `activity_log` | file ops, tasks, MCP calls, untrusted intake, memory events | the Activity list |
-| `change_proposals` | anything gated to `ask` | proposal cards |
+| `activity_log` | file ops, tasks, MCP calls, untrusted intake, memory events, decisions of note | the Activity list |
+| `change_proposals` | anything gated to `ask` (including `engine-rule` edits) | proposal cards |
 | `file_trash` | every destructive file op | undo, Recent changes, the Changes view |
+| `engines`, `engine_rules`, `engine_signals` | Settings → External agents, `delegate`, the handover card | rule hit and override counts, rule proposals, outcome labels |
+| `connector_policy`, `app_send_log`, `app_call_log` | the connector gate and every connector call | Settings → Apps, the daily cap, Usage, outcome labels |
+| `app_accounts`, `persona_app_grants` | sign-ins, the persona editor | the connect card, the Composio description, the gate's grant check |
+| `decisions` | every decision, with its cost when the cloud answered | Activity, Usage, calibration |
+| `decision_outcomes` | where nothing else records what the user did | calibration (`CTL-4`) |
+| `verifications` | the answer check (`auto` or `deep`, one row a message) | the trust line and marks on a reload |
+| `mail_seen` | the small inbox's background fetch | the inbox and its triage marks |
 
 ---
 
-## 15. Extending it
+## 19. Extending it
 
 **A new toolset:** add a `Toolset` variant (and to `ALL`), a module with
 `tool_specs` / `handles` / `describe` / `execute`, and the match arms in
@@ -812,9 +1214,37 @@ send it. If it should move the sidebar, call `setDockView` on a transition only.
 **A change to the system prompt:** change `context.rs` and `store.ts` together
 and regenerate the golden (§3.1).
 
+**A new agent app:** an entry in `shared/engines.json`; if it speaks ACP, that is
+all the driver it needs (`acp.rs`), otherwise a driver implementing the trait in
+`engines/driver.rs`. Record a real session as a fixture first
+(`fixtures/engines/`), then write the parser from it, with a fake agent for the
+end-to-end test. Declare its `Capabilities` honestly. Do not add a Cargo or npm
+dependency to talk to one.
+
+**A new `/` command:** an entry in `shared/commands.json` (both sides read it) and
+a binding in `lib/commands.ts`. If the agent may use it too, give it a verb on
+`harness` and an autonomy class. There is no other composer syntax and none should
+be added.
+
+**A new question for the decision model (a new `Purpose`):** a variant and a row
+in `decide/policy.rs` (mode, measure, hot or background, deadline, bars, the
+experiment it sits behind), the question builder and the mapping from its answer
+back to the caller, a seed set in `tests/eval/decide/`, and a fallback that keeps
+today's behaviour when `ask` says no. Decide before writing it whether it can
+only make things stricter. A purpose that runs without the user asking is a
+background purpose and stays on this computer.
+
+**A new experiment:** an entry in `experiments.rs` (title, summary, what changes,
+what it records, requirements, graduation line) and a report in
+`experiments_report.rs`. Gate it on both sides.
+
+**A new connector gate rule:** `connector_gate::classify` for what a tool does,
+`app_calls::plan` for how a Composio batch is read, and a test built from a
+recorded reply (`fixtures/composio/`).
+
 ---
 
-## 16. Known limits
+## 20. Known limits
 
 - **The interactive prompt is still assembled on the frontend.** Rust has the
   byte-identical port and uses it for scheduled runs; `agent_chat_cmd` has not
@@ -832,4 +1262,35 @@ and regenerate the golden (§3.1).
   large repository is only partly covered.
 - **The Changes view only knows edits that went through the file tools.** A
   file changed by a task or a script is not in it.
-- **The agent can't see media it generated** (`SEE-1`, not built).
+- **The agent can't see media it generated** (the multimodal plan's `SEE-1`, not
+  built; unrelated to the dual-process plan's `SEE-*` items).
+- **Quick decisions are barely exercised on a real model.** The engine, the
+  OpenRouter backend, the policy table, calibration and every use were built
+  and tested against recordings, fakes and mock servers; the engine ran against a
+  real Clef-flash in step 2 and had one short hand use afterwards. Every
+  threshold in `policy.rs` (0.8, 0.6, 0.85, 0.95, the 0.5 similarity floor) is a
+  starting value, the seed sets were written by Claude and are unreviewed, no
+  request has reached OpenRouter, and the checklist run (step 20 of the plan)
+  has not been done. On a graphics card too small for the model,
+  hot purposes are skipped while someone is watching and only unattended runs
+  reach them (on the processor).
+- **The quick-decision surfaces are louder than intended.** The thought strip,
+  receipt, trust line and claim marks of v3 are built; the v4 plan to remove most
+  of them is not.
+- **Agent apps:** resume of an app's own session is unwired (§13); Codex skips
+  Poiesis's tools about half the time; what a real Codex answers to
+  `windowsSandbox/readiness` when the sandbox is not set up is unrecorded (any
+  answer but `ready` is treated as not ready); a `process` test sets
+  process-wide environment variables and can make others flaky.
+- **Connected apps:** Composio's own refusal for an unnamed account is
+  unrecorded, and a successful `add` and a `list` with two accounts have not been
+  recorded from a real `ck_` key. The in-chat connect card has not been tried for
+  real. A send that went out but was cut off before its result row was written
+  looks unfinished, so Resume would offer it again, and a send with an innocent
+  tool name is classified as a change.
+- **A connector has no field for an environment variable**, so a stdio MCP server
+  that needs a token the user exported inherits it; only `POIESIS_*` and the
+  model providers' keys are withheld.
+- **There is no mail inbox outside the `mail-triage` experiment.** Mail is still
+  fetched only when a tool asks; the small inbox and its background fetch exist
+  only with the experiment on, a local decision model and a Mail account.

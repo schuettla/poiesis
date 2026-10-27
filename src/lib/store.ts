@@ -43,7 +43,11 @@ import {
 import { save } from "@tauri-apps/plugin-dialog";
 import { proposedDraft, type TaskDraft } from "./when";
 import { afterRun as afterGoalRun, newGoal, openingTurn, type Goal, type GoalHost, type RoundEvidence } from "./goal";
+import { markReadsAsInstructions } from "./untrusted";
 import { budgetTurns, withSummary, KEEP_RECENT, KEEP_RECENT_WORKSPACE } from "./context";
+import { workspaceAvailable } from "./experiments";
+import type { VerifyEntry } from "./verify";
+import { emptyThought, type TurnThought } from "./thought";
 import { getSpeechBridge } from "./voice/bridge";
 import {
   EMPTY_PREFS,
@@ -294,6 +298,11 @@ export interface AppState {
   modelsSource: { source: string; label: string } | null;
   setModelsSource: (f: { source: string; label: string } | null) => void;
   openModelsFiltered: (f: { source: string; label: string }) => void;
+  /** A tab of Models to land on (the Decision model tab, from Experiments and Runtime).
+   * Models reads it once on arrival and clears it. */
+  modelsTabRequest: "chat" | "media" | "decide" | null;
+  openModelsTab: (tab: "chat" | "media" | "decide") => void;
+  clearModelsTabRequest: () => void;
   runtimeTab: RuntimeTab | null;
   openRuntime: (tab?: RuntimeTab) => void;
   providerFocus: string | null;
@@ -306,6 +315,17 @@ export interface AppState {
    * this agent with its settings open. */
   engineFocus: string | null;
   openEngines: (id?: string) => void;
+  /** `EXP-1`: the backend's experiments with their state; `null` until read. */
+  experiments: api.ExperimentInfo[] | null;
+  /** `EXP-UI-1`: the filter Activity opens with, set by a card's Details link
+   * and used once. */
+  activityFilter: string | null;
+  setActivityFilter: (filter: string | null) => void;
+  loadExperiments: () => Promise<void>;
+  /** Throws the backend's words when a requirement is missing. */
+  setExperiment: (id: string, on: boolean) => Promise<void>;
+  /** The Experiments screen was opened: its tab's dot goes away. */
+  markExperimentsSeen: () => void;
   /** Read what is known; no searching, no probing. */
   loadEngines: () => Promise<void>;
   /** Search and probe what is due (`force`: everything). Keeps the old list if it fails. */
@@ -360,7 +380,14 @@ export interface AppState {
   } | null;
   /** `HRN-UI-1`: say something to the run that is already working. Returns
    * false when there was no live run to say it to. */
-  steerActiveRun: (text: string) => Promise<boolean>;
+  steerActiveRun: (text: string, opts?: { asAddition?: boolean }) => Promise<boolean>;
+  /** `USE-UI-2`: the answer to "Stop the run?" under a mid-run message a quick
+   * decision held back as a sure stop. Stop is the ordinary Stop; Keep going sends
+   * the message on to the run. Either way it is a label for the decision. */
+  answerSteerStop: (messageId: string, stop: boolean) => Promise<void>;
+  /** `USE-UI-3`: reopen a ringed plan tick: the stored plan changes and the
+   * decision that ticked it is labelled wrong. */
+  reopenPlanItem: (messageId: string, index: number) => Promise<void>;
   /** `SUB-UI-1`: every delegated child this session knows about, by run id.
    * Live children are folded in from the stream; finished ones are rehydrated
    * from `subagent_runs` when a conversation opens. */
@@ -462,6 +489,13 @@ export interface AppState {
   startGoal: (conversationId: string, text: string, until: string) => Promise<void>;
   /** End the goal, and the turn that is running toward it. */
   stopGoal: (conversationId: string) => void;
+  /** `USE-UI-1`, `SEE-2`: put the tool groups a quick decision held back on this
+   * run's menu again, all of them or only `units`. Only while the run is going. */
+  restoreHeldTools: (conversationId: string, units?: string[]) => void;
+  /** `SEE-2`: "That was wrong" on a receipt row. Written as a label from the
+   * receipt, and shown on the row at once. `units` names the tool groups the
+   * person says were needed, for the tool-menu row. */
+  markReceiptWrong: (conversationId: string, runId: string, decisionId: string, units?: string[]) => Promise<void>;
   /** `UCM-9`: save the conversation as Markdown where the user chooses. Resolves
    * with the path, or `null` when they chose nowhere. */
   exportConversation: (conversationId: string) => Promise<string | null>;
@@ -739,6 +773,27 @@ export interface AppState {
   dismissIntroduction: () => Promise<void>;
   /** Start a new workspace conversation from a saved procedure (RCP-UI-2). */
   startFromSkill: (skill: api.SkillView) => Promise<void>;
+  /** `USE-UI-4`: a new chat that asks me to summarise one message of the Inbox. I
+   * read it with `read_mail` as I do for any mail. `account` is named only when
+   * the person has more than one. */
+  askAboutMail: (from: string, subject: string, account?: string) => Promise<void>;
+
+  // verify an answer (`USE-10`, `USE-UI-7`)
+  /** What each checked answer found, by message id. */
+  verifications: Record<string, VerifyEntry>;
+  /** The chats whose kept checks were read. */
+  verifyLoaded: Record<string, true>;
+  loadVerifications: (conversationId: string) => Promise<void>;
+  /** Check one answer of the open chat. Progress lands in `verifications`. */
+  verifyMessage: (messageId: string) => Promise<void>;
+  cancelVerify: () => void;
+  /** "This is right" or "This is wrong" on one claim. */
+  markClaim: (messageId: string, claimId: string, mark: "right" | "wrong") => Promise<void>;
+  /** `SEE-1`, **Review this**: the slower model reads one marked sentence against its passages. */
+  reviewClaim: (messageId: string, claimId: string) => Promise<void>;
+  /** Ask for a corrected answer from what the check found. A new message: the
+   * answer that was checked is never edited. */
+  reviseFromVerification: (messageId: string) => Promise<void>;
 
   // Agent Skills (SKL): discovered skills, for the system-prompt disclosure,
   // the Composer's `/` drop-up, and the Skills settings tab.
@@ -1225,6 +1280,15 @@ function persistPrefs(prefs: ModelPrefs) {
  * (e.g. React StrictMode double-invokes, or selecting then immediately sending).
  */
 let inflightLoad: { id: string; promise: Promise<void> } | null = null;
+
+/** `SEE-2`: a turn's quick decisions live in memory only, so a chat read again from the
+ * database keeps the ones this session already had: switching away and back must not take
+ * the receipt off an answer. */
+export function keepThoughts(before: Message[], loaded: Message[]): Message[] {
+  const thoughts = new Map(before.filter((m) => m.thought).map((m) => [m.id, m.thought!]));
+  if (thoughts.size === 0) return loaded;
+  return loaded.map((m) => (thoughts.has(m.id) && !m.thought ? { ...m, thought: thoughts.get(m.id) } : m));
+}
 
 function toMessage(m: api.DbMessage): Message {
   return {
@@ -1735,6 +1799,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   modelsSource: null,
   setModelsSource: (modelsSource) => set({ modelsSource }),
   openModelsFiltered: (modelsSource) => set({ modelsSource, view: "models" }),
+  modelsTabRequest: null,
+  openModelsTab: (modelsTabRequest) => set({ modelsTabRequest, modelsSource: null, view: "models" }),
+  clearModelsTabRequest: () => set({ modelsTabRequest: null }),
   runtimeTab: null,
   openRuntime: (tab) => set({ runtimeTab: tab ?? null, view: "runtime" }),
   providerFocus: null,
@@ -1743,6 +1810,26 @@ export const useAppStore = create<AppState>((set, get) => ({
   enginesNewlyFound: false,
   engineFocus: null,
   openEngines: (id) => set({ engineFocus: id ?? null, view: "engines" }),
+  experiments: null,
+  activityFilter: null,
+  setActivityFilter: (activityFilter) => set({ activityFilter }),
+  loadExperiments: async () => {
+    if (!api.inTauri()) return;
+    try {
+      applyExperiments(set, get, await api.experimentsList());
+    } catch {
+      // Left unread: Workspace stays available, as it was before experiments.
+    }
+  },
+  setExperiment: async (id, on) => {
+    applyExperiments(set, get, await api.setExperiment(id, on));
+  },
+  markExperimentsSeen: () => {
+    const list = get().experiments;
+    if (!list?.some((e) => e.is_new)) return;
+    set({ experiments: list.map((e) => ({ ...e, is_new: false })) });
+    api.experimentsSeen().catch(() => {});
+  },
   loadEngines: async () => {
     if (!api.inTauri()) return;
     try {
@@ -1794,6 +1881,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   setToolsEnabled: (toolsEnabled) => set({ toolsEnabled }),
   workspaceMode: false,
   setWorkspaceMode: (workspaceMode) => {
+    // `EXP-3`: every way of turning it on comes through here, so this is the one
+    // place that says no while the experiment is off.
+    if (workspaceMode && !workspaceAvailable(get())) return;
     // The flag lives on the conversation, so toggling pins (or unpins) the
     // active session and shows in the header + sidebar. Global state mirrors it
     // for the current view.
@@ -2016,6 +2106,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   goals: {},
   startGoal: async (conversationId, text, until) => {
+    // `CTL-3`: a new goal right after one judged met says the check was too
+    // quick. The backend decides whether that is what happened.
+    if (api.inTauri()) void api.recordGoalOutcome(conversationId, "new-goal").catch(() => {});
     const goal = newGoal(text, until);
     putGoal(set, conversationId, goal);
     // An ordinary turn, so everything an ordinary turn does is done for it.
@@ -2028,6 +2121,31 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Stopping the goal means stopping the work toward it, not letting a turn
     // run on that nobody wants.
     if (get().activeRun?.convId === conversationId) get().stopGenerating();
+  },
+  restoreHeldTools: (conversationId, units) => {
+    const summary = get().runSummaries[conversationId];
+    if (!summary?.live || !summary.held) return;
+    const out = summary.held.units
+      .map((u) => u.id)
+      .filter((id) => !summary.held!.back.includes(id) && (!units || units.includes(id)));
+    if (out.length === 0) return;
+    // Shown at once; the backend labels it and puts the tools back at the next step.
+    patchRunSummary(set, conversationId, (cur) => ({
+      held: cur.held ? { ...cur.held, back: [...new Set([...cur.held.back, ...out])] } : cur.held,
+    }));
+    patchThoughtOfRun(set, conversationId, summary.runId, (t) => ({ back: [...new Set([...t.back, ...out])] }));
+    if (api.inTauri()) void api.restoreTools(summary.runId, out).catch(() => {});
+  },
+  markReceiptWrong: async (conversationId, runId, decisionId, units) => {
+    if (api.inTauri()) {
+      const marks = units?.length ? units : [undefined];
+      await Promise.all(marks.map((u) => api.receiptWrong(decisionId, u))).catch(() => {});
+    }
+    patchThoughtOfRun(set, conversationId, runId, (t) => ({
+      decisions: t.decisions?.map((d) =>
+        d.id === decisionId ? { ...d, labels: [...d.labels, { label: "wrong" as const, value: null, source: "receipt" }] } : d
+      ),
+    }));
   },
   exportConversation: async (conversationId) => {
     if (!api.inTauri()) return null;
@@ -2986,7 +3104,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     // workspace flag onto the row it creates. A fresh chat has no folder yet,
     // hence the `null`.
     let treeJson: string | null = null;
-    if (api.inTauri()) {
+    // `EXP-3` (`RCP-UI-2`): a skill's workspace is offered only while the
+    // experiment is on. Off, the skill runs as an ordinary chat.
+    if (api.inTauri() && workspaceAvailable(get())) {
       try {
         treeJson = await api.skillSurface(skill.name, null);
       } catch {
@@ -3029,6 +3149,99 @@ export const useAppStore = create<AppState>((set, get) => ({
     // itself with the `skill` tool (SKL-2 stage 2), rather than us pasting a
     // body the user would then see twice.
     await get().sendMessage(`Use your "${skill.name}" skill.`);
+  },
+
+  askAboutMail: async (from, subject, account) => {
+    // Reading the message is a tool call, so tools have to be on for this chat.
+    set({ toolsEnabled: true });
+    await get().newConversation();
+    if (!get().activeConversationId) return;
+    set({ view: "chat" });
+    const where = account ? ` in my ${account} account` : "";
+    await get().sendMessage(`Summarise the mail from ${from}${where}, '${subject}'`);
+  },
+
+  verifications: {},
+  verifyLoaded: {},
+  loadVerifications: async (conversationId) => {
+    if (!api.inTauri() || get().verifyLoaded[conversationId]) return;
+    set((s) => ({ verifyLoaded: { ...s.verifyLoaded, [conversationId]: true } }));
+    try {
+      const checks = await api.verifyList(conversationId);
+      set((s) => {
+        const next = { ...s.verifications };
+        for (const check of checks) {
+          // A check running now is newer than what was kept.
+          if (next[check.message_id]?.running) continue;
+          next[check.message_id] = { running: false, progress: null, check, error: null };
+        }
+        return { verifications: next };
+      });
+    } catch {
+      // Left unread: the answers show without marks, and the next visit reads again.
+      set((s) => {
+        const { [conversationId]: _gone, ...rest } = s.verifyLoaded;
+        return { verifyLoaded: rest };
+      });
+    }
+  },
+  verifyMessage: async (messageId) => {
+    const s = get();
+    const convId = s.activeConversationId;
+    if (!convId || !api.inTauri() || s.verifications[messageId]?.running) return;
+    const patch = (p: Partial<VerifyEntry>) =>
+      set((st) => {
+        const before: VerifyEntry = st.verifications[messageId] ?? { running: false, progress: null, check: null, error: null };
+        return { verifications: { ...st.verifications, [messageId]: { ...before, ...p } } };
+      });
+    patch({ running: true, progress: null, error: null });
+    try {
+      await api.verifyMessage(
+        convId,
+        messageId,
+        (e) => {
+          if (e.type === "progress") {
+            const { type: _type, ...progress } = e;
+            patch({ progress });
+          } else if (e.type === "done") patch({ running: false, progress: null, check: e.check, error: null });
+          else if (e.type === "cancelled") patch({ running: false, progress: null });
+          else patch({ running: false, progress: null, error: e.message });
+        },
+        cloudTarget(),
+      );
+    } catch (err) {
+      patch({ running: false, progress: null, error: err instanceof Error ? err.message : String(err) });
+    }
+    // The command is over: whatever the events said, nothing is still running.
+    if (get().verifications[messageId]?.running) patch({ running: false, progress: null });
+  },
+  cancelVerify: () => {
+    const convId = get().activeConversationId;
+    if (convId && api.inTauri()) void api.verifyCancel(convId).catch(() => {});
+  },
+  markClaim: async (messageId, claimId, mark) => {
+    const claim = await api.verifyMark(messageId, claimId, mark);
+    set((s) => {
+      const entry = s.verifications[messageId];
+      if (!entry?.check) return {};
+      const claims = entry.check.claims.map((c) => (c.id === claimId ? claim : c));
+      return { verifications: { ...s.verifications, [messageId]: { ...entry, check: { ...entry.check, claims } } } };
+    });
+  },
+  reviewClaim: async (messageId, claimId) => {
+    const convId = get().activeConversationId;
+    if (!convId || !api.inTauri()) return;
+    const claim = await api.verifyReview(convId, messageId, claimId, cloudTarget());
+    set((s) => {
+      const entry = s.verifications[messageId];
+      if (!entry?.check) return {};
+      const claims = entry.check.claims.map((c) => (c.id === claimId ? claim : c));
+      return { verifications: { ...s.verifications, [messageId]: { ...entry, check: { ...entry.check, claims } } } };
+    });
+  },
+  reviseFromVerification: async (messageId) => {
+    const request = await api.verifyRevise(messageId);
+    await get().sendMessage(request);
   },
 
   contextBudget: DEFAULT_LOCAL_CTX,
@@ -3209,6 +3422,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     listenForSelfEvents(set, get);
     maybeDailyProfileTick(get);
     scheduleCatchUpReflection(get);
+    // Before the first chat opens, so a Workspace chat opens in the right layout
+    // at once rather than flipping. A local read; it does not hold startup up.
+    await get().loadExperiments();
     await get().setActiveConversation(conversations[0].id);
   },
 
@@ -3230,6 +3446,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     // A conversation carries its own workspace flag — switching sessions adopts
     // that session's layout (composed surface vs. classic message stream).
     const conv = get().conversations.find((c) => c.id === id);
+    // `EXP-3`: with the experiment off a Workspace chat opens as a normal one.
+    // Its flag is kept, so turning the experiment on brings the canvas back.
+    const inWorkspace = !!conv?.workspace && workspaceAvailable(get());
     // The Workbench belongs to the conversation, not the window: its folder,
     // tree, selection and change history all reset and reload with the session.
     // A media model is sticky across messages but not across conversations
@@ -3247,13 +3466,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeConversationId: id,
       view: "chat",
       ...(restoreChatModel ? { selectedModelId: get().lastChatModelId } : {}),
-      workspaceMode: !!conv?.workspace,
+      workspaceMode: inWorkspace,
       // The surface is a tool call, so a workspace chat needs tools, same as
       // turning the mode on (see setWorkspaceMode).
-      ...(conv?.workspace ? { toolsEnabled: true } : {}),
+      ...(inWorkspace ? { toolsEnabled: true } : {}),
       // Opening a workspace chat opens its canvas, not the stream behind it.
       workspaceShown: true,
-      surfaceUnseen: conv?.workspace ? withoutKey(get().surfaceUnseen, id) : get().surfaceUnseen,
+      surfaceUnseen: inWorkspace ? withoutKey(get().surfaceUnseen, id) : get().surfaceUnseen,
       // Item tabs stay open across a switch; each one remembers its own chat.
       // Only focus moves: the sidebar goes back to its overview. An item being
       // opened in that chat sets its focus right after this.
@@ -3366,7 +3585,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     set((s) => ({
       conversations: s.conversations.map((c) =>
-        c.id === id ? { ...c, messages } : c
+        c.id === id ? { ...c, messages: keepThoughts(c.messages, messages) } : c
       ),
       commandNotes: {
         ...s.commandNotes,
@@ -3818,7 +4037,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const baseSystemPrompt = persona?.system_prompt ?? get().systemPrompt;
     const { memory, matches, injectedFacts } = await recallForPrompt(get, sendOpts?.action ?? text);
     const effectiveSystemPrompt = composeSystemPrompt(baseSystemPrompt, {
-      conv: get().conversations.find((c) => c.id === convId),
+      // `EXP-3`: the same cut the backend makes (`experiments::in_workspace`).
+      conv: chatForPrompt(get(), convId),
       sessionState: get().sessionState[convId],
       toolsEnabled: get().toolsEnabled,
       surface: get().surfaces[convId],
@@ -3992,7 +4212,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (api.inTauri()) api.stopChat().catch(() => {});
   },
 
-  steerActiveRun: async (text) => {
+  steerActiveRun: async (text, opts) => {
     const body = text.trim();
     const run = get().activeRun;
     const convId = get().activeConversationId;
@@ -4022,8 +4242,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       ),
     }));
 
-    const delivered = await api.steerRun(run.runId, body).catch(() => false);
-    if (!delivered) {
+    // `SEE-3`: "Add it instead" says what the message is, so it is not read as a stop.
+    const outcome = await (opts?.asAddition ? api.steerRun(run.runId, body, true) : api.steerRun(run.runId, body)).catch(
+      (): api.SteerOutcome => ({ status: "gone" }),
+    );
+    if (outcome.status === "gone") {
       // The run ended in the gap between the keystroke and the send. Take the
       // message back off screen rather than leaving a turn nothing will read;
       // the composer resends it as an ordinary message.
@@ -4034,12 +4257,72 @@ export const useAppStore = create<AppState>((set, get) => ({
       }));
       return false;
     }
+    // `USE-5`: what a quick decision read the message as. A sure stop was not
+    // queued: it waits under the message for "Stop the run?". Anything else is
+    // already on its way and only gets its class as a tag.
+    const read = outcome.read;
+    patchAssistant(set, convId, msg.id, {
+      ...(read ? { steer: { kind: read.kind, p: read.p, decision: read.decision } } : {}),
+      ...(outcome.status === "held" ? { midRun: "held" as const } : {}),
+    });
     // A steer is a real user turn: it has to survive a reload, and the next
     // turn's context has to include it.
     await api
       .appendMessage({ conversationId: convId, role: "user", content: body })
       .catch(() => {});
     return true;
+  },
+
+  answerSteerStop: async (messageId, stop) => {
+    const convId = get().activeConversationId;
+    const msg = get()
+      .conversations.find((c) => c.id === convId)
+      ?.messages.find((m) => m.id === messageId);
+    if (!convId || !msg || msg.midRun !== "held" || !msg.steer) return;
+    // Both buttons go at once, so a second click cannot answer twice.
+    patchAssistant(set, convId, messageId, { midRun: stop ? undefined : "pending" });
+    api.steerAnswer(msg.steer.decision, stop).catch(() => {});
+    if (stop) {
+      get().stopGenerating();
+      return;
+    }
+    const run = get().activeRun;
+    const outcome =
+      run && run.convId === convId
+        ? await api.steerRun(run.runId, msg.text, true).catch((): api.SteerOutcome => ({ status: "gone" }))
+        : ({ status: "gone" } as api.SteerOutcome);
+    // The run ended while the question was open: the message stays as an
+    // ordinary turn nobody answered, like a steer the run never got round to.
+    if (outcome.status !== "queued") patchAssistant(set, convId, messageId, { midRun: undefined });
+  },
+
+  reopenPlanItem: async (messageId, index) => {
+    const convId = get().activeConversationId;
+    if (!convId || !api.inTauri()) return;
+    const ok = await api.reopenPlanItem(messageId, index).catch(() => false);
+    if (!ok) return;
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id !== convId
+          ? c
+          : {
+              ...c,
+              messages: c.messages.map((m) =>
+                m.id !== messageId || !m.plan
+                  ? m
+                  : {
+                      ...m,
+                      plan: {
+                        ...m.plan,
+                        items: m.plan.items.map((item, n) =>
+                          n === index ? { ...item, status: "todo" as const, judged: null } : item
+                        ),
+                      },
+                    }
+              ),
+            }
+      ),
+    }));
   },
 
   loadSubRuns: async (convId) => {
@@ -5220,6 +5503,44 @@ function patchAssistant(
 /** Patch one delegated child's live record (`SUB-UI-1`). Silently does nothing
  * for a run this session never saw — a stale event is not worth inventing a row
  * the user cannot open. */
+/** `SEE-1`: the automatic check of an answer tells the screen over the app event, because it
+ * outlives the run's stream. The answer is found by its run: until the turn is finalized its
+ * id is still the optimistic one. */
+export function applyAutoCheck(set: StoreSet, get: () => AppState, e: api.AutoCheckEvent) {
+  const s = get();
+  const msg = s.conversations.find((c) => c.id === e.conversation_id)?.messages.find((m) => m.thought?.runId === e.run_id);
+  const key = msg?.id ?? e.message_id;
+  const before = s.verifications[key];
+  // A deep check is the person's own, and it stands over this one.
+  if (before?.check?.mode === "deep" || (before?.running && before.progress?.phase !== "auto")) return;
+  const base: VerifyEntry = before ?? { running: false, progress: null, check: null, error: null };
+  let next: VerifyEntry | null;
+  if (e.type === "progress") {
+    next = { ...base, running: true, progress: { phase: "auto", done: e.done, total: e.total } };
+  } else if (e.type === "claim") {
+    const check: api.VerifyCheck = base.check ?? {
+      message_id: key,
+      conversation_id: e.conversation_id,
+      created_at: Date.now(),
+      claims: [],
+      note: null,
+      skipped: 0,
+      mode: "auto",
+      summary: null,
+    };
+    const claims = [...check.claims.filter((c) => c.id !== e.claim.id), e.claim];
+    const progress: api.VerifyProgress = base.progress?.phase === "auto" ? base.progress : { phase: "auto", done: 0, total: 0 };
+    next = { ...base, running: true, progress, check: { ...check, claims } };
+  } else {
+    next = e.check ? { running: false, progress: null, check: { ...e.check, message_id: key }, error: null } : null;
+  }
+  set((st) => {
+    if (next) return { verifications: { ...st.verifications, [key]: next } };
+    const { [key]: _gone, ...rest } = st.verifications;
+    return { verifications: rest };
+  });
+}
+
 function patchSubRun(set: StoreSet, runId: string, patch: Partial<SubRun>) {
   set((s) =>
     s.subRuns[runId]
@@ -5639,6 +5960,27 @@ function patchRunSummary(
   });
 }
 
+/** `SEE-2`: fold a change into the quick-decision record of the turn a run belongs to. */
+function patchThoughtOfRun(
+  set: StoreSet,
+  convId: string,
+  runId: string,
+  patch: (thought: TurnThought) => Partial<TurnThought>
+) {
+  set((s) => ({
+    conversations: s.conversations.map((c) =>
+      c.id !== convId
+        ? c
+        : {
+            ...c,
+            messages: c.messages.map((m) =>
+              m.thought?.runId === runId ? { ...m, thought: { ...m.thought, ...patch(m.thought) } } : m
+            ),
+          }
+    ),
+  }));
+}
+
 /** A note the agent's act put in the transcript. Not persisted here: the backend
  * wrote the `command` row itself, and a reload reads it back. */
 function pushAgentNote(set: StoreSet, convId: string, note: Omit<CommandNoteView, "id" | "at">) {
@@ -5689,6 +6031,9 @@ function goalHost(set: StoreSet, get: () => AppState): GoalHost {
     note: (id, text) =>
       get().recordCommand(id, { name: "goal", args: "", by: "agent", outcome: "done", note: text }),
     send: (_id, text) => get().sendMessage(text),
+    outcome: (id, event) => {
+      if (api.inTauri()) void api.recordGoalOutcome(id, event).catch(() => {});
+    },
   };
 }
 
@@ -5798,6 +6143,9 @@ export function turnRunOptions(
     if (sendOpts.skillArgs) turn.skillArgs = sendOpts.skillArgs;
   }
   if (sendOpts?.delegateTo) turn.delegateTo = sendOpts.delegateTo;
+  // `SEE-3`: what the composer's hint was taken up on, for this message alone.
+  if (mods.web) turn.web = true;
+  if (mods.noHandover) turn.noHandover = true;
   return Object.keys(turn).length ? turn : undefined;
 }
 
@@ -6001,6 +6349,11 @@ async function streamAssistantTurn(
                 },
               },
             }));
+            // `SEE-2`: the turn's quick decisions are read from the log when the
+            // run ends, whether or not anything was said before the first word.
+            patchAssistant(set, convId, assistantId, {
+              thought: { runId: e.run_id, from: Date.now(), back: [], thought: emptyThought() },
+            });
             break;
           case "run_progress":
             set((s) =>
@@ -6051,6 +6404,19 @@ async function streamAssistantTurn(
               plan: e.plan ?? cur.plan,
             }));
             get().refreshChanges(convId).catch(() => {});
+            // `SEE-2`: the strip becomes the receipt. What the quick decisions did
+            // is read back from the log, a moment after the last of them wrote.
+            if (api.inTauri()) {
+              const from = get().conversations.find((c) => c.id === convId)?.messages.find((m) => m.id === assistantId)?.thought?.from;
+              if (from !== undefined) {
+                const to = Date.now() + 1000;
+                patchThoughtOfRun(set, convId, e.run_id, () => ({ to }));
+                void api
+                  .runDecisions(convId, e.run_id, from - 5000, to)
+                  .then((decisions) => patchThoughtOfRun(set, convId, e.run_id, () => ({ decisions })))
+                  .catch(() => {});
+              }
+            }
             break;
           case "plan":
             // `PLN-UI-1`: the plan the model just wrote or revised. It goes on
@@ -6064,6 +6430,48 @@ async function streamAssistantTurn(
                 : {}
             );
             patchRunSummary(set, convId, () => ({ plan: e.plan }));
+            break;
+          case "tools_held":
+            // `USE-4`: the menu was narrowed for this turn.
+            patchRunSummary(set, convId, () => ({ held: { units: e.units, back: [] } }));
+            break;
+          case "tools_back":
+            patchRunSummary(set, convId, (cur) => ({
+              held: cur.held ? { ...cur.held, back: [...new Set([...cur.held.back, ...e.units])] } : cur.held,
+            }));
+            patchThoughtOfRun(set, convId, e.run_id, (t) => ({ back: [...new Set([...t.back, ...e.units])] }));
+            break;
+          case "thought":
+            // `SEE-2`: what the quick decisions understood, whole each time. The
+            // missing-engine line is said once for a conversation.
+            set((s) => {
+              const conv = s.conversations.find((c) => c.id === convId);
+              const said = !!conv?.messages.some((m) => m.id !== assistantId && m.thought?.thought.engine);
+              const thought = said ? { ...e.thought, engine: null } : e.thought;
+              const startedAt = s.runSummaries[convId]?.runId === e.run_id ? s.runSummaries[convId].startedAt : Date.now();
+              return {
+                conversations: s.conversations.map((c) =>
+                  c.id !== convId
+                    ? c
+                    : {
+                        ...c,
+                        messages: c.messages.map((m) =>
+                          m.id === assistantId
+                            ? {
+                                ...m,
+                                thought: {
+                                  runId: e.run_id,
+                                  from: m.thought?.runId === e.run_id ? m.thought.from : startedAt,
+                                  back: m.thought?.runId === e.run_id ? m.thought.back : [],
+                                  thought,
+                                },
+                              }
+                            : m
+                        ),
+                      }
+                ),
+              };
+            });
             break;
           case "steered":
             // The run picked up something typed at it mid-flight. Settle the
@@ -6483,6 +6891,17 @@ async function streamAssistantTurn(
             patchAssistant(set, convId, assistantId, { steps: [...steps] });
             break;
           }
+          case "untrusted_flag": {
+            // `USE-8`: the quick check arrives after the text did. It marks the
+            // source it is about; a report that had no `untrusted` event of its
+            // own (an agent app's) gets a source with no text to show.
+            const s = steps.find((x) => x.id === e.id);
+            if (s) {
+              s.untrusted = markReadsAsInstructions(s.untrusted, e.label, e.p);
+              patchAssistant(set, convId, assistantId, { steps: [...steps] });
+            }
+            break;
+          }
           case "untrusted": {
             // `TRU-UI-1`: a step can wrap more than one source (several
             // retrieved file excerpts in one `search_folder` call), so this
@@ -6559,7 +6978,7 @@ async function streamAssistantTurn(
           : {
               ...c,
               messages: c.messages.map((m) =>
-                m.midRun === "pending" ? { ...m, midRun: undefined } : m
+                m.midRun === "pending" || m.midRun === "held" ? { ...m, midRun: undefined } : m
               ),
             }
       ),
@@ -6587,6 +7006,13 @@ async function streamAssistantTurn(
             p.messageId === assistantId ? { ...p, messageId: persistedAssistantId } : p
           ),
         }));
+        // And so does the check of its sentences, which began while it streamed (`SEE-1`).
+        set((st) => {
+          const held = st.verifications[assistantId];
+          if (!held) return {};
+          const { [assistantId]: _moved, ...rest } = st.verifications;
+          return { verifications: { [persistedAssistantId]: held, ...rest } };
+        });
       }
     } catch {
       /* ignore */
@@ -6727,6 +7153,8 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
     const verb = e.stop_reason === "completed" ? "finished" : "stopped";
     set(() => ({ agentDoneToast: `The ${run.agent} agent ${verb}. Its report is in the turn that started it.` }));
   });
+  // `SEE-1`: each sentence of an answer is checked while it streams; the marks arrive here.
+  api.onAppEvent<api.AutoCheckEvent>("poiesis-autocheck", (e) => applyAutoCheck(set, get, e));
   api.onAppEvent<api.MemoryWriteEvent>("poiesis-memory-write", (e) => {
     get().refreshMemoryContext();
     get().refreshSelf();
@@ -6788,6 +7216,38 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
     }));
     get().refreshSelf();
   });
+}
+
+// ---- experiments (`EXP-1`) ----
+
+/** Store the list, and make the layout agree with it. Turning Workspace off
+ * takes the canvas away from a chat that was in it; turning it on brings it back.
+ * The chat's own flag is never touched here: nothing is lost either way. */
+function applyExperiments(
+  set: (p: Partial<AppState>) => void,
+  get: () => AppState,
+  experiments: api.ExperimentInfo[]
+) {
+  const available = workspaceAvailable({ experiments });
+  const s = get();
+  const conv = s.conversations.find((c) => c.id === s.activeConversationId);
+  const workspaceMode = !available ? false : conv ? !!conv.workspace : s.workspaceMode;
+  // Switching `fast-slow` on or off changes what a chat may show, so its kept checks are read again.
+  const verifyChanged =
+    s.experiments?.find((e) => e.id === "fast-slow")?.on !== experiments.find((e) => e.id === "fast-slow")?.on;
+  set({
+    experiments,
+    workspaceMode,
+    ...(workspaceMode && !s.workspaceMode ? { toolsEnabled: true, workspaceShown: true } : {}),
+    ...(verifyChanged ? { verifyLoaded: {}, verifications: {} } : {}),
+  });
+}
+
+/** The chat as the prompt should see it: a Workspace chat is only one while the
+ * experiment is on (the backend's `experiments::in_workspace`). */
+function chatForPrompt(s: AppState, convId: string): Conversation | undefined {
+  const conv = s.conversations.find((c) => c.id === convId);
+  return conv?.workspace && !workspaceAvailable(s) ? { ...conv, workspace: false } : conv;
 }
 
 // ---- external agent apps (`CLI-2`) ----

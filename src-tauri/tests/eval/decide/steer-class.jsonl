@@ -1,0 +1,40 @@
+{"id": "steer-01", "task": "Fix the failing tests in the payments module", "message": "stop", "expect": "stop"}
+{"id": "steer-02", "task": "Summarise the 40 PDFs in the research folder", "message": "actually, do it in Python instead", "expect": "redirect"}
+{"id": "steer-03", "task": "Refactor the settings page into smaller components", "message": "also add a short README", "expect": "add"}
+{"id": "steer-04", "task": "Write a migration for the new orders table", "message": "how long will this take?", "expect": "question"}
+{"id": "steer-05", "task": "Draft the release notes for version 3.2", "message": "no wait, forget it", "expect": "stop"}
+{"id": "steer-06", "task": "Convert the CSV exports to a single spreadsheet", "message": "forget the tests, fix the build first", "expect": "redirect"}
+{"id": "steer-07", "task": "Clean up the unused images in the assets folder", "message": "and please keep the changes small", "expect": "add"}
+{"id": "steer-08", "task": "Review the pull request on the auth service", "message": "which file are you editing now?", "expect": "question"}
+{"id": "steer-09", "task": "Fix the failing tests in the payments module", "message": "cancel that please", "expect": "stop"}
+{"id": "steer-10", "task": "Summarise the 40 PDFs in the research folder", "message": "change of plan: write the summary as a table", "expect": "redirect"}
+{"id": "steer-11", "task": "Refactor the settings page into smaller components", "message": "while you are there, fix the typo in the header", "expect": "add"}
+{"id": "steer-12", "task": "Write a migration for the new orders table", "message": "what does that error mean?", "expect": "question"}
+{"id": "steer-13", "task": "Draft the release notes for version 3.2", "message": "never mind, don't do it", "expect": "stop"}
+{"id": "steer-14", "task": "Convert the CSV exports to a single spreadsheet", "message": "use the staging database instead of production", "expect": "redirect"}
+{"id": "steer-15", "task": "Clean up the unused images in the assets folder", "message": "one more thing: include the date in the filename", "expect": "add"}
+{"id": "steer-16", "task": "Review the pull request on the auth service", "message": "are you using the cached results?", "expect": "question"}
+{"id": "steer-17", "task": "Fix the failing tests in the payments module", "message": "stop, that's the wrong folder", "expect": "stop"}
+{"id": "steer-18", "task": "Summarise the 40 PDFs in the research folder", "message": "no, I meant the other repository", "expect": "redirect"}
+{"id": "steer-19", "task": "Refactor the settings page into smaller components", "message": "also mention the pricing", "expect": "add"}
+{"id": "steer-20", "task": "Write a migration for the new orders table", "message": "why did you pick that library?", "expect": "question"}
+{"id": "steer-21", "task": "Draft the release notes for version 3.2", "message": "hold on, stop everything", "expect": "stop"}
+{"id": "steer-22", "task": "Convert the CSV exports to a single spreadsheet", "message": "instead of refactoring, just rename the function", "expect": "redirect"}
+{"id": "steer-23", "task": "Clean up the unused images in the assets folder", "message": "btw the config is in config/prod.toml", "expect": "add"}
+{"id": "steer-24", "task": "Review the pull request on the auth service", "message": "how many files are left?", "expect": "question"}
+{"id": "steer-25", "task": "Fix the failing tests in the payments module", "message": "abort", "expect": "stop"}
+{"id": "steer-26", "task": "Summarise the 40 PDFs in the research folder", "message": "switch to the German version of the page", "expect": "redirect"}
+{"id": "steer-27", "task": "Refactor the settings page into smaller components", "message": "and run the linter at the end", "expect": "add"}
+{"id": "steer-28", "task": "Write a migration for the new orders table", "message": "is it safe to close the laptop now?", "expect": "question"}
+{"id": "steer-29", "task": "Draft the release notes for version 3.2", "message": "ok that's enough, stop now", "expect": "stop"}
+{"id": "steer-30", "task": "Convert the CSV exports to a single spreadsheet", "message": "drop that approach and use the existing helper", "expect": "redirect"}
+{"id": "steer-31", "task": "Clean up the unused images in the assets folder", "message": "oh and use tabs, not spaces", "expect": "add"}
+{"id": "steer-32", "task": "Review the pull request on the auth service", "message": "what is the current step?", "expect": "question"}
+{"id": "steer-33", "task": "Fix the failing tests in the payments module", "message": "please stop, I changed my mind", "expect": "stop"}
+{"id": "steer-34", "task": "Summarise the 40 PDFs in the research folder", "message": "do the second file first, not the first", "expect": "redirect"}
+{"id": "steer-35", "task": "Refactor the settings page into smaller components", "message": "make sure it works on Windows too", "expect": "add"}
+{"id": "steer-36", "task": "Write a migration for the new orders table", "message": "did the tests pass so far?", "expect": "question"}
+{"id": "steer-37", "task": "Draft the release notes for version 3.2", "message": "don't continue", "expect": "stop"}
+{"id": "steer-38", "task": "Convert the CSV exports to a single spreadsheet", "message": "rather than a report, give me a list of bullet points", "expect": "redirect"}
+{"id": "steer-39", "task": "Clean up the unused images in the assets folder", "message": "include the 2023 numbers as well", "expect": "add"}
+{"id": "steer-40", "task": "Review the pull request on the auth service", "message": "which branch are you on?", "expect": "question"}

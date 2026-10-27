@@ -170,13 +170,54 @@ pub struct PermissionRequest {
     /// belongs to the agent app.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule: Option<RuleRef>,
+    /// `USE-11`: for a `"page"` card, the page that stopped the browser.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<PageRef>,
+    /// `USE-12`: one line under the question saying what a quick decision made of
+    /// the call, when it is worth the room: `Not what you asked for (0.88)`. Only a
+    /// flag gets one; a call that looks as the gate took it has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// `SEE-4`: the hover on that line, the same words with the number a quick
+    /// decision gave. The line itself has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_hover: Option<String>,
+}
+
+/// The page a `"page"` card shows (`USE-UI-9`): where it is, what the quick check
+/// took it for, and a picture of it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PageRef {
+    pub host: String,
+    /// `"login"`, `"captcha"` or `"unsure"`.
+    pub wall: String,
+    /// The screenshot's path on disk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screenshot: Option<String>,
+    /// What was seen and how sure, in a line.
+    pub note: String,
 }
 
 /// A rule as the handover card shows it: its label (`U2`) and its words.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RuleRef {
     pub label: String,
     pub text: String,
+    /// `USE-13`: the card was raised before the lead ran, because a quick decision
+    /// matched the message to this rule. How sure it was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched: Option<f32>,
+    /// `USE-13`: the lead cited this rule, and the quick decision had scored it
+    /// low. The line the card adds, in words.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doubt: Option<String>,
+}
+
+impl RuleRef {
+    /// A rule the lead cited, with nothing a quick decision said about it.
+    pub fn cited(label: String, text: String) -> Self {
+        Self { label, text, matched: None, doubt: None }
+    }
 }
 
 /// One app tool an `"app"` request runs. A correction applies from the next call;
@@ -197,12 +238,12 @@ pub struct AppTool {
 impl PermissionRequest {
     /// A scope request: "may I reach into this folder at all?"
     pub fn scope(id: String, summary: String, path: String, mode: Mode) -> Self {
-        Self { id, summary, path, mode, diff: None, in_folder: false, capability: None, argv: None, project: None, timeout_secs: None, remember: None, call_kind: None, cap: None, tools: None, engine: None, tool: None, rule: None }
+        Self { id, summary, path, mode, diff: None, in_folder: false, capability: None, argv: None, project: None, timeout_secs: None, remember: None, call_kind: None, cap: None, tools: None, engine: None, tool: None, rule: None, page: None, reason: None, reason_hover: None }
     }
 
     /// An operation confirm inside the already-attached folder.
     pub fn operation(id: String, summary: String, path: String, mode: Mode, diff: Option<String>) -> Self {
-        Self { id, summary, path, mode, diff, in_folder: true, capability: None, argv: None, project: None, timeout_secs: None, remember: None, call_kind: None, cap: None, tools: None, engine: None, tool: None, rule: None }
+        Self { id, summary, path, mode, diff, in_folder: true, capability: None, argv: None, project: None, timeout_secs: None, remember: None, call_kind: None, cap: None, tools: None, engine: None, tool: None, rule: None, page: None, reason: None, reason_hover: None }
     }
 
     /// `MCG-3`: a connected app's tool wants to run. `path` is the app's name,
@@ -234,6 +275,9 @@ impl PermissionRequest {
             engine: None,
             tool: None,
             rule: None,
+            page: None,
+            reason: None,
+            reason_hover: None,
         }
     }
 
@@ -259,6 +303,9 @@ impl PermissionRequest {
             engine: None,
             tool: None,
             rule: None,
+            page: None,
+            reason: None,
+            reason_hover: None,
         }
     }
 
@@ -293,6 +340,9 @@ impl PermissionRequest {
             engine: None,
             tool: None,
             rule: None,
+            page: None,
+            reason: None,
+            reason_hover: None,
         }
     }
 
@@ -326,6 +376,9 @@ impl PermissionRequest {
             engine: Some(engine),
             tool: Some(tool),
             rule: None,
+            page: None,
+            reason: None,
+            reason_hover: None,
         }
     }
 
@@ -351,7 +404,78 @@ impl PermissionRequest {
             engine: Some(engine),
             tool: None,
             rule,
+            page: None,
+            reason: None,
+            reason_hover: None,
         }
+    }
+
+    /// `USE-11`: "This page wants a login. Take over?". The answers map onto
+    /// `Decision`: `Once` opens a browser window for the person, `Deny` skips the
+    /// step, `Chat` says the page is fine and the agent goes on.
+    pub fn page_stop(id: String, summary: String, page: PageRef) -> Self {
+        Self {
+            id,
+            summary,
+            path: page.host.clone(),
+            mode: Mode::Read,
+            diff: None,
+            in_folder: false,
+            capability: Some("page".to_string()),
+            argv: None,
+            project: None,
+            timeout_secs: None,
+            remember: None,
+            call_kind: None,
+            cap: None,
+            tools: None,
+            engine: None,
+            tool: None,
+            rule: None,
+            page: Some(page),
+            reason: None,
+            reason_hover: None,
+        }
+    }
+
+    /// `USE-12`: a question a quick decision added before one of Poiesis's own
+    /// tools runs. `tool` is the tool's name, `arguments` what it would run with
+    /// (pretty JSON, like an app call's). `Once` runs it, `Deny` does not.
+    pub fn risk_ask(id: String, summary: String, tool: String, arguments: String, reason: String) -> Self {
+        Self {
+            id,
+            summary,
+            path: tool.clone(),
+            mode: Mode::Read,
+            diff: Some(arguments),
+            in_folder: false,
+            capability: Some("risk".to_string()),
+            argv: None,
+            project: None,
+            timeout_secs: None,
+            remember: None,
+            call_kind: None,
+            cap: None,
+            tools: None,
+            engine: None,
+            tool: Some(tool),
+            rule: None,
+            page: None,
+            reason: Some(reason),
+            reason_hover: None,
+        }
+    }
+
+    /// Put a reason line on a request built by one of the constructors above.
+    pub fn with_reason(mut self, reason: Option<String>) -> Self {
+        self.reason = reason;
+        self
+    }
+
+    /// `SEE-4`: the number behind the reason line, for its hover.
+    pub fn with_reason_hover(mut self, hover: Option<String>) -> Self {
+        self.reason_hover = hover;
+        self
     }
 }
 

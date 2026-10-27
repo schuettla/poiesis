@@ -437,6 +437,33 @@
   margin: 4px 0 20px;
 }
 
+/* The olive-tree drawing under "About the name": roots and a ring of stones, the
+   idea of a self that is kept and fenced. A plain figure, no frame beyond the
+   hairline the rest of About uses. */
+.about-plate {
+  margin: 20px 0 0;
+  max-width: 360px;
+}
+.about-plate img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+}
+[data-mode="dark"] .about-plate img {
+  filter: brightness(0.82) contrast(1.05);
+}
+.about-plate figcaption {
+  margin-top: 8px;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+
 /* `SUB-UI-7`: delegation's caps, under its own toggle. Indented to the same
    34px as the indexed-folder list, so it reads as belonging to the switch
    above rather than as a new section. */

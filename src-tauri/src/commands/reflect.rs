@@ -193,6 +193,18 @@ pub async fn reflect_conversation_cmd(
     let signals_text = if signals.is_empty() { "none".to_string() } else { signals.join(" ") };
     let was_rewound = crate::agent::log::was_rewound(&db, &conversation_id);
 
+    // `USE-8`: with no hard evidence that anything went wrong, a quick question
+    // first. A confident "nothing to learn" skips the drafting pass; anything else
+    // runs it as always. Skill revisions read `skill_runs`, not the transcript, so
+    // they are not part of what is skipped.
+    if !crate::agent::decide::filters::has_evidence(failures.len(), fixes.len(), signals.len(), was_rewound) {
+        if crate::agent::decide::filters::skip_reflection(&transcript, &conversation_id).await.is_some() {
+            let _ = db.log_activity(Some(&conversation_id), "reflect", "nothing to learn");
+            propose_skill_revisions(&mgr, &endpoint, &db, &conversation_id).await;
+            return Ok(Reflection::default());
+        }
+    }
+
     let prompt = format!(
         "Below is a finished conversation, the assistant's tool-failure counts, and any mistakes \
          it corrected itself within the conversation. Extract AT MOST {MAX_LESSONS} lessons about \
@@ -261,7 +273,7 @@ pub async fn reflect_conversation_cmd(
         // transcript before it is trusted. CRT-2: a draft that fails is not
         // discarded — it is demoted to a proposal regardless of the
         // configured rung, the same landing a lesson gets under `Ask`.
-        let verdict = critique(&mgr, &endpoint, &transcript, &draft).await;
+        let verdict = critique(&mgr, &endpoint, &transcript, &draft, &conversation_id).await;
         db.add_tool_stat(&model_name, "reflect.critic", &conversation_id, verdict.ok);
         if !verdict.ok {
             // `CRT-UI-1` shows the objection as the rationale, so it has to say
@@ -608,7 +620,14 @@ async fn critique(
     endpoint: &ChatEndpoint,
     transcript: &str,
     draft: &LessonDraft,
+    conversation_id: &str,
 ) -> CriticVerdict {
+    // `DEC-6`: the quick decision first (`Purpose::ReflectCritic`, a background
+    // purpose that only runs on this computer). With no decision engine, or no
+    // answer, the second local call below reviews it as it always did.
+    if let Some(decided) = decide_critique(transcript, draft, conversation_id).await {
+        return decided;
+    }
     // `CRT-4`: the bar is "would acting on this be wrong", not "can anything be
     // said against this". The first version of this prompt asked for ok:false on
     // ANY issue at all, which is a bar no lesson can clear — a reviewer can
@@ -643,6 +662,20 @@ async fn critique(
             reason: "the critic couldn't be reached".to_string(),
         },
     }
+}
+
+/// `DEC-6`: the critic's review as one choice among `ok`, `unsupported`,
+/// `unactionable` and `wrong`. `None` when no decision was made.
+async fn decide_critique(transcript: &str, draft: &LessonDraft, conversation_id: &str) -> Option<CriticVerdict> {
+    use crate::agent::decide::{ask, control, sites, Opts, Purpose};
+    let site = sites::critic(transcript, &draft.name, &draft.body);
+    let opts = Opts { conversation_id: Some(conversation_id), run_id: None };
+    let verdict = ask(&site.as_ask(), Purpose::ReflectCritic, opts).await.ok()?;
+    let critic = sites::critic_from(&verdict);
+    let act = if critic.is_some() { control::Act::Go } else { control::Act::Below };
+    crate::agent::decide::settle(&verdict, Purpose::ReflectCritic, act, opts);
+    let critic = critic?;
+    Some(CriticVerdict { ok: critic.ok, reason: critic.reason })
 }
 
 /// Parse a critic verdict, strictly first. A model that ignores the JSON

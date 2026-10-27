@@ -498,7 +498,9 @@ fn prompt_params(session: &str, turn: &ExternalTurn<'_>, job: Option<&Job<'_>>, 
 /// option's kind.
 async fn ask(port: &Port<'_>, id: Value, params: Value, cwd: PathBuf, stop: &CancelFlag) -> AskReply {
     let call = params.get("toolCall").cloned().unwrap_or(Value::Null);
-    let (tool, input, title) = tool_of(&call, &cwd);
+    // What is asked about is shown as it is: code that calls one of our tools
+    // can do anything else too, so it is never put on the panel as our tool.
+    let (tool, input, title) = asked_tool_of(&call, &cwd);
     let gone = CancelFlag::new();
     let verdict = port.decide(&tool, &input, &gone, stop).await;
     let options = options_of(&params);
@@ -576,6 +578,19 @@ fn rpc_error(err: &Value, before_prompt: bool) -> DriverError {
 /// Works on a `toolCall` of a permission request and on one built up from
 /// `tool_call` and `tool_call_update`.
 pub fn tool_of(call: &Value, cwd: &Path) -> (String, Value, String) {
+    // One of our tools (`MCPS-2`) reaches the timeline as OpenCode's own `execute`,
+    // with the call written as code: `tools.poiesis.recall({...})`.
+    let code = call.pointer("/rawInput/code").and_then(|c| c.as_str());
+    if let Some(name) = code.and_then(our_tool_in) {
+        let title = call.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string();
+        return (format!("mcp__poiesis__{name}"), json!({}), title);
+    }
+    asked_tool_of(call, cwd)
+}
+
+/// [`tool_of`] for a permission request: the call as the agent sent it, with no
+/// step renamed to one of ours.
+fn asked_tool_of(call: &Value, cwd: &Path) -> (String, Value, String) {
     let kind = call.get("kind").and_then(|k| k.as_str()).unwrap_or("other");
     let title = call.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string();
     let raw = call.get("rawInput").cloned().unwrap_or(Value::Null);
@@ -597,13 +612,9 @@ pub fn tool_of(call: &Value, cwd: &Path) -> (String, Value, String) {
             .map(absolute)
             .unwrap_or_default()
     };
-    // One of our tools (`MCPS-2`) reaches the timeline as OpenCode's own `execute`,
-    // with the call written as code: `tools.poiesis.recall({...})`.
-    if let Some(name) = text("code").and_then(our_tool_in) {
-        return (format!("mcp__poiesis__{name}"), json!({}), title);
-    }
     match kind {
-        "execute" => ("Bash".into(), json!({"command": text("command").unwrap_or(&title)}), title.clone()),
+        // A command, or code to run: what runs is shown, not the agent's title for it.
+        "execute" => ("Bash".into(), json!({"command": text("command").or_else(|| text("code")).unwrap_or(&title)}), title.clone()),
         "edit" => {
             let new = diff
                 .and_then(|d| d.get("newText").and_then(|t| t.as_str()))
@@ -1113,6 +1124,21 @@ mod tests {
         assert_eq!(tool_of(&call("await tools.poiesis.delete_everything()"), cwd).0, "execute");
         assert_eq!(tool_of(&call("await tools.github.recall({})"), cwd).0, "execute");
         assert_eq!(tool_of(&call("return 1 + 1;"), cwd).0, "execute");
+    }
+
+    /// A permission question about code that calls one of our tools shows the code.
+    /// The code could do more than call our tool, so it is never shown as ours.
+    #[test]
+    fn a_question_about_code_shows_the_code_even_when_it_calls_our_tool() {
+        let cwd = Path::new("C:\\proj");
+        let code = "await tools.poiesis.recall({query: 'x'});\nawait fs.rm('C:/', {recursive: true});";
+        let (tool, input, _) = asked_tool_of(&json!({"kind": "other", "name": "execute", "title": "execute", "rawInput": {"code": code}}), cwd);
+        assert_eq!(tool, "execute");
+        assert!(input["code"].as_str().unwrap().contains("fs.rm"), "{input}");
+        // Code under kind `execute` is shown as the command, not the title.
+        let (tool, input, _) = asked_tool_of(&json!({"kind": "execute", "title": "run it", "rawInput": {"code": code}}), cwd);
+        assert_eq!(tool, "Bash");
+        assert_eq!(input["command"], code);
     }
 
     #[test]

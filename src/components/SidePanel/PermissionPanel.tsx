@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useAppStore } from "../../lib/store";
 import type { AppTool, CallKind, Decision, PermissionRequest, ToolView } from "../../lib/api";
+import { matchedTitle, ruleLine } from "../../lib/engines";
 import { ToolChips } from "../Apps/ConnectorGate";
+import ImageByPath from "../Conversation/ImageByPath";
 import "./PermissionPanel.css";
 
 /** Widening scope: "may I reach into this folder at all?" */
@@ -106,6 +108,17 @@ function ArgumentList({ json }: { json: string }) {
   );
 }
 
+/** `USE-12`: what a quick decision noticed about the call, under the question. Only
+ * a flag has one: a call that looks as the gate took it gets no line. Words only; the
+ * number a quick decision gave is the hover (`SEE-4`). */
+function Reason({ text, hover }: { text?: string; hover?: string }) {
+  return text ? (
+    <p className="permission-reason" title={hover}>
+      {text}
+    </p>
+  ) : null;
+}
+
 function minutes(secs: number | undefined): string {
   if (!secs) return "";
   return secs % 60 === 0 ? `${secs / 60} min` : `${secs} s`;
@@ -138,6 +151,7 @@ function ExecutionPrompt({
         {agent ? `The ${agent} agent I started is asking` : isTask ? "Run a project task" : "Run a command"}
       </p>
       <p className="permission-summary">{request.summary}</p>
+      <Reason text={request.reason} hover={request.reason_hover} />
       {isTask ? (
         <code className="permission-command">{argv.join(" ")}</code>
       ) : (
@@ -195,6 +209,7 @@ function EnginePrompt({ request, onResolve }: { request: PermissionRequest; onRe
     <>
       <p className="permission-eyebrow">{request.engine} is asking</p>
       <p className="permission-summary">{request.summary}</p>
+      <Reason text={request.reason} hover={request.reason_hover} />
       {argv.length > 0 && (
         <ol className="permission-argv" aria-label="The command">
           {argv.map((token, i) => (
@@ -237,12 +252,17 @@ function HandoverPrompt({ request, onResolve }: { request: PermissionRequest; on
       <p className="permission-eyebrow">{request.summary}</p>
       {request.diff && <p className="permission-summary">“{request.diff}”</p>}
       {request.rule ? (
-        <p className="permission-where">
-          Because of your rule {request.rule.label}: {request.rule.text}
+        <p
+          className="permission-where"
+          title={request.rule.matched != null ? matchedTitle(request.rule.matched) : undefined}
+        >
+          {ruleLine(request.rule)}
         </p>
       ) : (
         <p className="permission-where">You asked for it.</p>
       )}
+      {/* `USE-13`: the lead cited a rule that a quick decision had scored low. */}
+      {request.rule?.doubt && <p className="permission-where">{request.rule.doubt}</p>}
       <div className="permission-actions">
         <button className="permission-btn primary" onClick={() => onResolve("once")}>
           Hand it over
@@ -261,6 +281,68 @@ function HandoverPrompt({ request, onResolve }: { request: PermissionRequest; on
           Change when I use {request.engine}
         </button>
       )}
+    </>
+  );
+}
+
+/**
+ * `USE-UI-8`: a quick decision added this question before one of Poiesis's own
+ * tools ran, because the call looked irreversible or not what was asked for. The
+ * line says which, and how sure. Two buttons: the call is either made or it is not,
+ * and the model is told why when it is not.
+ */
+function RiskPrompt({ request, onResolve }: { request: PermissionRequest; onResolve: (d: Decision) => void }) {
+  return (
+    <>
+      <p className="permission-eyebrow">Before I do this</p>
+      <p className="permission-summary">{request.summary}</p>
+      <Reason text={request.reason} hover={request.reason_hover} />
+      {request.diff && <ArgumentList key={request.id} json={request.diff} />}
+      <div className="permission-actions">
+        <button className="permission-btn primary" onClick={() => onResolve("once")}>
+          Go ahead
+        </button>
+        <button className="permission-btn deny" onClick={() => onResolve("deny")}>
+          Don't do it
+        </button>
+      </div>
+    </>
+  );
+}
+
+/**
+ * `USE-UI-9`: the browser agent reached a login, a captcha or a page the quick
+ * check could not place, and stopped. The card shows the page, so the person can
+ * see what the agent saw. **Open browser** opens a window on the agent's own
+ * profile on this page; the agent carries on when it is closed. The small link is
+ * for a wrong stop: the page is fine, and it is written down as such.
+ */
+function PagePrompt({ request, onResolve }: { request: PermissionRequest; onResolve: (d: Decision) => void }) {
+  const page = request.page;
+  return (
+    <>
+      <p className="permission-eyebrow">The browser stopped on {page?.host ?? request.path}</p>
+      <p className="permission-summary">{request.summary}</p>
+      {page?.screenshot && (
+        <div className="permission-shot">
+          <ImageByPath path={page.screenshot} alt={`The page at ${page.host}`} className="permission-shot-img" />
+        </div>
+      )}
+      {page && <p className="permission-where">{page.note}</p>}
+      <p className="permission-where">
+        A window opens on this page. Sign in or finish the check there, then close it and I carry on.
+      </p>
+      <div className="permission-actions permission-actions-spaced">
+        <button className="permission-btn primary" onClick={() => onResolve("once")}>
+          Open browser
+        </button>
+        <button className="permission-btn" onClick={() => onResolve("deny")}>
+          Skip this step
+        </button>
+      </div>
+      <button className="permission-fold" onClick={() => onResolve("chat")}>
+        This page is fine, carry on
+      </button>
     </>
   );
 }
@@ -330,8 +412,20 @@ export default function PermissionPanel() {
   // lead started, and the answer is a different one depending on which.
   const agent = permissionAgents[request.id];
 
-  if (request.capability === "engine" || request.capability === "handover") {
-    const Prompt = request.capability === "engine" ? EnginePrompt : HandoverPrompt;
+  if (
+    request.capability === "engine" ||
+    request.capability === "handover" ||
+    request.capability === "page" ||
+    request.capability === "risk"
+  ) {
+    const Prompt =
+      request.capability === "engine"
+        ? EnginePrompt
+        : request.capability === "page"
+          ? PagePrompt
+          : request.capability === "risk"
+            ? RiskPrompt
+            : HandoverPrompt;
     return (
       <div className="side-panel" role="dialog" aria-label="Permission request">
         <div className="side-panel-inner">
@@ -377,6 +471,7 @@ export default function PermissionPanel() {
                 : "Poiesis Agent is asking"}
           </p>
           <p className="permission-summary">{request.summary}</p>
+          <Reason text={request.reason} hover={request.reason_hover} />
           {request.diff && <ArgumentList key={request.id} json={request.diff} />}
           {request.tools && request.tools.length > 0 && <ToolKinds key={`kinds-${request.id}`} tools={request.tools} />}
           <div className="permission-actions">
@@ -420,6 +515,7 @@ export default function PermissionPanel() {
             detail that matters (which document, which domain) — there's
             nothing for the panel to restate. */}
         <p className="permission-summary">{request.summary}</p>
+        <Reason text={request.reason} hover={request.reason_hover} />
         {!capability && (
           <p className="permission-path">
             {request.path}

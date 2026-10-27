@@ -74,6 +74,7 @@
         <a href="#memory">Memory</a>
         <a href="#control">Control</a>
         <a href="#agents">Agents</a>
+        <a href="#apps">Apps</a>
         <a href="#private">Privacy</a>
         <a href="#faq">FAQ</a>
       </nav>
@@ -118,6 +119,8 @@
             <div class="hero-facts">
               <span>Windows 10 and 11</span>
               <span>Runs local models</span>
+              <span>Talks and listens on your machine</span>
+              <span>Works with Claude Code and Codex</span>
               <span>Your own cloud keys, if you want them</span>
               <span>MIT license</span>
             </div>
@@ -141,15 +144,21 @@
       <!-- ================= IDEA ================= -->
       <section class="band" id="idea" aria-labelledby="idea-h">
         <div class="wrap">
-          <div data-reveal>
-            <span class="eyebrow">The idea</span>
-            <h2 class="h2" id="idea-h">A system that keeps making itself.</h2>
-            <p class="lede">
-              Most assistants forget you when the chat ends, and nobody repairs them but their
-              makers. Poiesis does the work of staying useful. It writes down what it learns. It
-              reads back over its own mistakes. It notices when a part is broken and works around
-              it. And it never does any of this in the dark.
-            </p>
+          <div class="feature">
+            <div data-reveal>
+              <span class="eyebrow">The idea</span>
+              <h2 class="h2" id="idea-h">A system that keeps making itself.</h2>
+              <p class="lede">
+                Most assistants forget you when the chat ends, and nobody repairs them but their
+                makers. Poiesis does the work of staying useful. It writes down what it learns. It
+                reads back over its own mistakes. It notices when a part is broken and works around
+                it. And it never does any of this in the dark.
+              </p>
+            </div>
+            <figure class="plate" data-reveal>
+              <img src="img/01-pygmalion.webp" width="552" height="552" alt="Ink drawing of Pygmalion in his studio, finishing a marble figure whose own hand has started to carve back." loading="lazy" decoding="async" />
+              <figcaption>Pygmalion, and a figure that has begun to carve back.</figcaption>
+            </figure>
           </div>
 
           <div class="cells" data-reveal>
@@ -231,7 +240,7 @@
       <!-- ================= MEMORY ================= -->
       <section class="band canvas" id="memory" aria-labelledby="memory-h">
         <div class="wrap">
-          <div class="split flip">
+          <div class="feature flip">
             <div data-reveal>
               <span class="eyebrow">Memory</span>
               <h2 class="h2" id="memory-h">What it knows about you is a folder of text files.</h2>
@@ -246,6 +255,12 @@
                 <li><span><strong>Memory can belong to a project.</strong> A fact learned in one project stays in that project. A note with no tag is shared everywhere.</span></li>
               </ul>
             </div>
+            <figure class="plate" data-reveal>
+              <img src="img/04-athena-olive.webp" width="552" height="552" alt="Ink drawing of Athena's olive tree on the Acropolis. A low ring of stones circles the trunk, and the roots spread below the ground as a network." loading="lazy" decoding="async" />
+              <figcaption>Athena's olive tree: roots below, a ring of stones around it.</figcaption>
+            </figure>
+          </div>
+          <div class="below">
             <div class="panel files" data-reveal id="files">
               <div class="tree" role="tablist" aria-label="Memory files" aria-orientation="vertical">
                 <div class="dir">memory/</div>
@@ -373,7 +388,7 @@
       <!-- ================= AGENTS ================= -->
       <section class="band" id="agents" aria-labelledby="agents-h">
         <div class="wrap">
-          <div class="split flip">
+          <div class="feature">
             <div data-reveal>
               <span class="eyebrow">Agents and plans</span>
               <h2 class="h2" id="agents-h">Work you can watch, steer and stop.</h2>
@@ -388,6 +403,12 @@
                 <li><span><strong>Type while it works.</strong> Your message lands between steps, never in the middle of a tool call.</span></li>
               </ul>
             </div>
+            <figure class="plate" data-reveal>
+              <img src="img/07-hephaestus.webp" width="552" height="552" alt="Ink drawing of Hephaestus at his forge, hammering at an anvil while two self-moving golden handmaidens work beside him." loading="lazy" decoding="async" />
+              <figcaption>Hephaestus and his self-moving handmaidens, at work in parallel.</figcaption>
+            </figure>
+          </div>
+          <div class="below">
             <div class="stack" data-reveal>
               <section class="card" aria-label="My plan">
                 <div class="card-head"><span class="t">My plan</span><span>2 of 4 done</span></div>
@@ -425,8 +446,125 @@
         </div>
       </section>
 
+      <!-- ================= PARTNERS ================= -->
+      <section class="band canvas" id="partners" aria-labelledby="partners-h">
+        <div class="wrap">
+          <div class="split">
+            <div data-reveal>
+              <span class="eyebrow">Agent apps</span>
+              <h2 class="h2" id="partners-h">Hand a long coding job to the agent you already pay for.</h2>
+              <p class="prose">
+                Claude Code, Codex and OpenCode are good at big jobs in a project. If you have one
+                installed, Poiesis can give it a task and keep the conversation, your memory and the
+                last word. It appears in the same Agents list as the helpers Poiesis starts itself,
+                so you can open it, read it live, answer its questions and stop it.
+              </p>
+              <ul class="points">
+                <li><span><strong>You write the rules.</strong> For each agent you choose when Poiesis may use it: only when you ask, suggest it and you confirm, or on its own. Plain lines such as &ldquo;Running the tests and fixing what fails&rdquo; say what it is for.</span></li>
+                <li><span><strong>One place to say yes.</strong> When an agent app wants to run a command or edit a file, the question comes to Poiesis&rsquo;s own panel and says who is asking.</span></li>
+                <li><span><strong>Sealed off from your keys.</strong> It starts without your cloud keys, and can use your memory or your connected apps only if you switch that on for it.</span></li>
+              </ul>
+            </div>
+            <div class="panel demo" data-reveal aria-label="A handover card">
+              <div class="sec">
+                <div class="cap">I would like to hand this to Claude Code</div>
+                <div class="said">Make the failing tests in this project pass.<small>Because: Running the tests or the build and fixing what fails</small></div>
+              </div>
+              <div class="sec">
+                <div class="cap">Claude Code &middot; your plan &middot; in the invoices folder</div>
+                <div class="cta" style="margin: 0; gap: 8px">
+                  <button class="btn btn-primary btn-sm" type="button">Hand it over</button>
+                  <button class="btn btn-secondary btn-sm" type="button">Do it yourself</button>
+                  <button class="btn-text" type="button">Always for this</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= APPS ================= -->
+      <section class="band" id="apps" aria-labelledby="apps-h">
+        <div class="wrap">
+          <div class="split">
+            <div class="panel demo" data-reveal aria-label="A connected app asks before it sends">
+              <div class="sec">
+                <div class="cap">Post to Slack (acme): #general</div>
+                <div class="said">The Q3 numbers are in, summary attached.<small>A send, so I ask every time</small></div>
+              </div>
+              <div class="sec">
+                <div class="cta" style="margin: 0; gap: 8px">
+                  <button class="btn btn-primary btn-sm" type="button">Send once</button>
+                  <button class="btn btn-secondary btn-sm" type="button">Up to 25 a day for Slack</button>
+                  <button class="btn-text" type="button">No</button>
+                </div>
+              </div>
+            </div>
+            <div data-reveal>
+              <span class="eyebrow">Connected apps</span>
+              <h2 class="h2" id="apps-h">Notion, Slack, Calendar and hundreds more. Nothing goes out unseen.</h2>
+              <p class="prose">
+                Ask for something in an app that is not connected yet and a card appears in the
+                chat. You sign in, and it carries on. Connections run through your own Composio
+                account, with your own key, so there is no Poiesis server in between.
+              </p>
+              <ul class="points">
+                <li><span><strong>Read, change or send.</strong> Reading runs. A change asks. A send (a post, a reply, a payment) asks every time, or up to a daily limit you set.</span></li>
+                <li><span><strong>Nobody there, nothing sent.</strong> A scheduled task never sends on its own. It leaves the approval in your inbox.</span></li>
+                <li><span><strong>Words from outside are data.</strong> What an app returns is marked as coming from outside, and sign-in links never reach the model.</span></li>
+                <li><span><strong>Limit it per persona.</strong> A writing persona can use Notion and nothing else. Several accounts per app are fine; it has to say which.</span></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= QUICK ================= -->
+      <section class="band canvas" id="quick" aria-labelledby="quick-h">
+        <div class="wrap">
+          <div data-reveal>
+            <span class="eyebrow">Experiments</span>
+            <h2 class="h2" id="quick-h">A fast mind for the small questions.</h2>
+            <p class="lede">
+              Most of what an agent should ask before acting is small: does this message need the
+              web, is this what you asked for, did it really run the tests. A small model on your
+              machine answers those in a fraction of a second, so the large one does not have to.
+              It is off until you switch it on in Settings, Experiments.
+            </p>
+          </div>
+          <div class="cells" data-reveal>
+            <div class="cell">
+              <span class="n">01</span>
+              <h3>Leaner turns</h3>
+              <p>It holds back tools a message clearly does not need. The model can ask for one back, and so can you.</p>
+            </div>
+            <div class="cell">
+              <span class="n">02</span>
+              <h3>Care before acting</h3>
+              <p>A call that looks irreversible, or not what you asked for, gets a question of its own. It only ever adds caution.</p>
+            </div>
+            <div class="cell">
+              <span class="n">03</span>
+              <h3>Honest answers</h3>
+              <p>Each sentence is checked against what the run actually read or did. &ldquo;I ran the tests&rdquo; is flagged if no step did.</p>
+            </div>
+            <div class="cell">
+              <span class="n">04</span>
+              <h3>Sorting at scale</h3>
+              <p>Ask one question about 500 files or tickets and get a table with a confidence for every row.</p>
+            </div>
+          </div>
+          <p class="after" data-reveal>
+            The small model runs on your computer. You can choose a cloud one instead; it only
+            uses providers that keep nothing, and background questions stay on your machine unless
+            you opt one in. It starts out careful and learns how sure it can be from what you
+            actually do, never from asking a model whether it was right.
+          </p>
+        </div>
+      </section>
+
       <!-- ================= PRIVATE ================= -->
-      <section class="band canvas" id="private" aria-labelledby="private-h">
+      <section class="band" id="private" aria-labelledby="private-h">
         <div class="wrap">
           <div class="split">
             <div data-reveal>
@@ -466,6 +604,9 @@
               <div class="offrow"><b>Browser</b><span class="badge">Off</span><p>Uses your installed Chrome or Edge in its own profile. A new site asks first.</p></div>
               <div class="offrow"><b>Screen and apps</b><span class="badge">Off</span><p>A screenshot, or opening an app by name. Both ask first.</p></div>
               <div class="offrow"><b>Project tasks</b><span class="badge">Off</span><p>Runs your build and tests in the project folder, with caps on time and memory.</p></div>
+              <div class="offrow"><b>Connected apps</b><span class="badge">Off</span><p>Needs your Composio key. Reads run; a change asks; a send asks every time.</p></div>
+              <div class="offrow"><b>Agent apps</b><span class="badge">Off</span><p>Poiesis only suggests one, and you confirm. It never gets your keys.</p></div>
+              <div class="offrow"><b>Quick decisions</b><span class="badge">Off</span><p>An experiment. The cloud version is yours to choose, and keeps nothing.</p></div>
             </div>
           </div>
 
@@ -487,11 +628,20 @@
       </section>
 
       <!-- ================= REACH ================= -->
-      <section class="band" id="reach" aria-labelledby="reach-h">
+      <section class="band canvas" id="reach" aria-labelledby="reach-h">
         <div class="wrap">
-          <div data-reveal>
-            <span class="eyebrow">Reach</span>
-            <h2 class="h2" id="reach-h">It makes things, and you can teach it more.</h2>
+          <div class="feature flip">
+            <div data-reveal>
+              <span class="eyebrow">Reach</span>
+              <h2 class="h2" id="reach-h">It makes things, and you can teach it more.</h2>
+              <p class="lede">
+                Ask for a picture, hand it a procedure, connect another app. It builds what the job needs.
+              </p>
+            </div>
+            <figure class="plate" data-reveal>
+              <img src="img/03-daedalus.webp" width="552" height="552" alt="Ink drawing of Daedalus in his workshop, assembling a wing among sketches, tools and small clockwork machines." loading="lazy" decoding="async" />
+              <figcaption>Daedalus in his workshop, with his notes pinned to the wall.</figcaption>
+            </figure>
           </div>
           <div class="trio" data-reveal>
             <article class="tile">
@@ -532,8 +682,47 @@ npx -y @modelcontextprotocol/
 https://example.com/mcp</pre>
               </div>
               <div class="txt">
-                <h3>Other apps through MCP.</h3>
-                <p>Connect any Model Context Protocol server, remote or local, and its tools join the toolbox. Tokens are kept in the Windows credential store.</p>
+                <h3>Your own MCP servers.</h3>
+                <p>Connect any Model Context Protocol server, remote or local, and its tools join the toolbox behind the same read, change and send checks. Tokens are kept in the Windows credential store.</p>
+              </div>
+            </article>
+          </div>
+          <div class="trio" data-reveal style="margin-top: 24px">
+            <article class="tile">
+              <div class="art">
+                <div class="media-wait">
+                  <span class="mk"><i class="orbdot"></i>Listening</span>
+                  <span class="bar"></span>
+                  <button class="btn-text" type="button">Stop</button>
+                </div>
+              </div>
+              <div class="txt">
+                <h3>Talk to it.</h3>
+                <p>Speak, and it answers out loud. Cut in whenever you like. Hearing and speaking run on your own machine, with no cloud model.</p>
+              </div>
+            </article>
+            <article class="tile">
+              <div class="art">
+<pre class="codebox"><span class="k">/plan</span>   read, change nothing
+<span class="k">/goal</span>   keep going until true
+<span class="k">/rewind</span> go back, keep files
+<span class="k">/btw</span>    ask on the side</pre>
+              </div>
+              <div class="txt">
+                <h3>A button for doing things.</h3>
+                <p>The <b>/</b> menu beside the plus runs about 45 commands: branch, rewind, set a goal, hand off a job, connect an app. The agent can offer one when it would help, and you decide.</p>
+              </div>
+            </article>
+            <article class="tile">
+              <div class="art">
+<pre class="codebox"><span class="k">A new version is ready</span>
+Install now, or later?
+Nothing installs
+until you say so.</pre>
+              </div>
+              <div class="txt">
+                <h3>Updates that ask.</h3>
+                <p>Installed copies check for new releases themselves and always ask before installing one. Your data and memory carry over.</p>
               </div>
             </article>
           </div>
@@ -541,7 +730,7 @@ https://example.com/mcp</pre>
       </section>
 
       <!-- ================= CODE ================= -->
-      <section class="band canvas" id="code" aria-labelledby="code-h">
+      <section class="band" id="code" aria-labelledby="code-h">
         <div class="wrap">
           <div class="split">
             <div data-reveal>
@@ -628,11 +817,11 @@ https://example.com/mcp</pre>
           <div class="faq" data-reveal>
             <details>
               <summary>Does it work offline?</summary>
-              <div class="ans">Yes, for chat with a local model, memory, reading your folders, recall and making images on your device. Downloads, web search, the browser, mail and cloud models need the internet.</div>
+              <div class="ans">Yes, for chat with a local model, memory, reading your folders, recall, voice and making images on your device. Downloads, web search, the browser, mail, connected apps, agent apps that call their own cloud, and cloud models need the internet.</div>
             </details>
             <details>
               <summary>What leaves my computer?</summary>
-              <div class="ans">Nothing, unless you use something that needs the network: web search, the browser, mail, a cloud model, or a download of an engine or model. Those are labelled, and the tools start off. Telemetry is off by default, contains no content, and stays on your PC.</div>
+              <div class="ans">Nothing, unless you use something that needs the network: web search, the browser, mail, a connected app, an agent app, a cloud model, cloud quick decisions, or a download of an engine or model. Those are labelled, and the tools start off. Telemetry is off by default, contains no content, and stays on your PC.</div>
             </details>
             <details>
               <summary>Can it change or delete my files?</summary>
@@ -644,7 +833,23 @@ https://example.com/mcp</pre>
             </details>
             <details>
               <summary>Which models can I use?</summary>
-              <div class="ans">Local models through llama.cpp, with the right engine for your hardware chosen for you. You can also add your own key for OpenAI, OpenRouter or Anthropic. Images and video come from an on-device engine or from OpenRouter or OpenAI with your key.</div>
+              <div class="ans">Local models through llama.cpp, with the right engine for your hardware chosen for you. You can also add your own key for OpenAI, OpenRouter or Anthropic, and any of them can be your default. Images and video come from an on-device engine or from OpenRouter or OpenAI with your key.</div>
+            </details>
+            <details>
+              <summary>Can it use Claude Code or Codex?</summary>
+              <div class="ans">Yes, if you have them installed. Claude Code, Codex and OpenCode can each take a job from Poiesis, which keeps the conversation and the final word. You set when it may hand work over, and their questions come to Poiesis&rsquo;s own permission panel. They run on your own plan or key, and Poiesis shows who pays.</div>
+            </details>
+            <details>
+              <summary>Which apps can it connect to?</summary>
+              <div class="ans">Hundreds, through your own Composio account: calendars, Slack, Notion, Linear, Sheets and more. You paste your own key and sign in to each app. Reads run, changes ask, and sends ask every time. You can also add any MCP server yourself.</div>
+            </details>
+            <details>
+              <summary>What are quick decisions?</summary>
+              <div class="ans">An optional experiment. A small decision model answers short yes-or-no questions in a fraction of a second: which tools a message needs, whether a step is what you asked for, whether an answer matches what the run actually did. It can only add caution, never remove a safeguard you set. It is off by default.</div>
+            </details>
+            <details>
+              <summary>Can I talk to it?</summary>
+              <div class="ans">Yes. Voice mode listens and answers out loud, and you can interrupt it. Speech recognition and synthesis run on your computer, so no cloud model is needed.</div>
             </details>
             <details>
               <summary>Is it free?</summary>

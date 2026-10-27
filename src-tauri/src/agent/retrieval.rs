@@ -302,8 +302,26 @@ async fn rerank_top(ctx: &ToolContext<'_>, query: &str, scored: &mut [Scored]) -
     }
 }
 
+/// `DEC-6`: the same question as a decision (`Purpose::RetSufficiency`).
+/// `None` means no decision was made, and the caller asks the old way.
+async fn decide_sufficiency(
+    ctx: &ToolContext<'_>,
+    query: &str,
+    excerpts: &str,
+) -> Option<super::decide::sites::Sufficiency> {
+    let site = super::decide::sites::sufficiency(query, excerpts);
+    let opts = super::decide::Opts { conversation_id: Some(ctx.conversation_id), run_id: None };
+    let verdict = super::decide::ask(&site.as_ask(), super::decide::Purpose::RetSufficiency, opts).await.ok()?;
+    let got = super::decide::sites::sufficiency_from(&verdict);
+    // Either side of 0.5 is an answer, not a doubt: the decision was acted on.
+    let act = if got.is_some() { super::decide::control::Act::Go } else { super::decide::control::Act::Below };
+    super::decide::settle(&verdict, super::decide::Purpose::RetSufficiency, act, opts);
+    got
+}
+
 /// `RET-4`: one local-model call asking whether the closest excerpts actually
-/// answer the question, only spent when the top score is already weak.
+/// answer the question, only spent when the top score is already weak. Since
+/// `DEC-6` this is the fallback for when no decision engine answers.
 /// `None` (can't tell — no local model, or the call failed) is treated as
 /// "no" by the caller: a weak score we can't corroborate stays a warning.
 async fn judges_sufficient(
@@ -491,6 +509,7 @@ async fn search_folder(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Resul
     // closest excerpts actually answer the question rather than just share
     // its subject. Can't corroborate ⇒ treat the weak score as the warning.
     let mut warn = false;
+    let mut chance: Option<f32> = None;
     if best < SUFFICIENCY_THRESHOLD {
         let sample = final_hits
             .iter()
@@ -498,9 +517,18 @@ async fn search_folder(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Resul
             .map(|s| clip(&s.hit.text, EXCERPT_CAP))
             .collect::<Vec<_>>()
             .join("\n---\n");
-        let sufficient = match ctx.local_endpoint {
-            Some(endpoint) => judges_sufficient(ctx.client, endpoint, query, &sample).await,
-            None => None,
+        // `DEC-6`: the quick decision first. When there is no decision engine,
+        // or it is not ready in time, the local chat model is asked as before.
+        let decided = decide_sufficiency(ctx, query, &sample).await;
+        let sufficient = match decided {
+            Some(s) => {
+                chance = Some(s.p);
+                Some(s.enough)
+            }
+            None => match ctx.local_endpoint {
+                Some(endpoint) => judges_sufficient(ctx.client, endpoint, query, &sample).await,
+                None => None,
+            },
         };
         warn = sufficient != Some(true);
     }
@@ -563,8 +591,12 @@ async fn search_folder(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Resul
     if warn {
         out.push_str(
             "Note: these excerpts may only share the subject of the question, not answer it — \
-             don't present them as a confident answer unless they clearly do.\n\n",
+             don't present them as a confident answer unless they clearly do.",
         );
+        if let Some(p) = chance {
+            out.push_str(&format!(" A quick check put the chance that they answer it at {:.0}%.", p * 100.0));
+        }
+        out.push_str("\n\n");
     }
     out.push_str(&format!("Found in {folder_name}:\n"));
     for (i, s) in final_hits.iter().enumerate() {

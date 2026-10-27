@@ -596,3 +596,73 @@ CREATE TABLE IF NOT EXISTS session_events (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_session_events_seq ON session_events(conversation_id, seq);
 CREATE INDEX IF NOT EXISTS idx_session_events_run ON session_events(run_id);
+
+-- `CTL-3`: every decision the small model made, whether or not a conversation
+-- asked for it, so what it said can be set beside what happened next. The state
+-- is not kept, only a short preview and a hash. A conversation's rows go with it.
+CREATE TABLE IF NOT EXISTS decisions (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+  run_id          TEXT,
+  purpose         TEXT NOT NULL,
+  backend         TEXT NOT NULL,           -- 'local:<model name>'
+  model           TEXT NOT NULL,           -- the file stem: the key a calibration is fitted under
+  ms              INTEGER NOT NULL,
+  calibrated      INTEGER NOT NULL DEFAULT 0,
+  answers_json    TEXT NOT NULL,           -- each answer with its probabilities; '{}' when nothing was answered
+  input_tokens    INTEGER NOT NULL DEFAULT 0,
+  state_preview   TEXT NOT NULL DEFAULT '',
+  state_hash      TEXT NOT NULL DEFAULT '',
+  action          TEXT,                    -- what the controller did with it (`CTL-2`)
+  at              INTEGER NOT NULL,
+  cost_usd        REAL,                    -- what the cloud charged (v40); NULL for a local decision
+  note            TEXT                     -- v41 (`SEE-2`): what it changed, in words, when it acted or was shown
+);
+CREATE INDEX IF NOT EXISTS idx_decisions_at ON decisions(at);
+CREATE INDEX IF NOT EXISTS idx_decisions_conv ON decisions(conversation_id, purpose, at);
+
+-- What the user and the runtime did afterwards (`CTL-3`). Written only for
+-- labels nothing else records; the ones that live in `engine_signals` and the
+-- connector tables are read from there when calibration runs.
+CREATE TABLE IF NOT EXISTS decision_outcomes (
+  id          TEXT PRIMARY KEY,
+  decision_id TEXT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
+  label       TEXT NOT NULL,               -- right | wrong | weak_right | weak_wrong | corrected
+  value       TEXT,                        -- the right answer, for 'corrected'
+  source      TEXT NOT NULL,               -- which observation wrote it
+  at          INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_decision_outcomes_one ON decision_outcomes(decision_id, source);
+
+-- The inbox of `mail-triage` (`USE-6a`, schema v38): one row per message seen in a
+-- mail account's INBOX, with what the decision model said about it. Never the
+-- body: a body is read for a check and dropped. Rows go after 30 days.
+CREATE TABLE IF NOT EXISTS mail_seen (
+  account_id  TEXT NOT NULL REFERENCES mail_accounts(id) ON DELETE CASCADE,
+  uid         INTEGER NOT NULL,
+  message_id  TEXT,
+  from_addr   TEXT NOT NULL DEFAULT '',
+  subject     TEXT NOT NULL DEFAULT '',
+  date        TEXT NOT NULL DEFAULT '',   -- as the server wrote it
+  sent_at     INTEGER,                    -- that date in ms, when it could be read
+  unread      INTEGER NOT NULL DEFAULT 0,
+  triage_json TEXT,                       -- null until a check ran
+  triaged_at  INTEGER,
+  fetched_at  INTEGER NOT NULL,
+  PRIMARY KEY (account_id, uid)
+);
+CREATE INDEX IF NOT EXISTS idx_mail_seen_fetched ON mail_seen(fetched_at);
+
+-- The result of checking one assistant message against evidence (`verify`,
+-- `USE-10`, schema v39): its claims with their verdicts and passages, as JSON. One
+-- row a message; checking again replaces it. It goes with the message.
+CREATE TABLE IF NOT EXISTS verifications (
+  message_id      TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  claims_json     TEXT NOT NULL,
+  note            TEXT,                       -- what the check could not do, in words
+  skipped         INTEGER NOT NULL DEFAULT 0, -- opinions left out
+  created_at      INTEGER NOT NULL,
+  mode            TEXT NOT NULL DEFAULT 'deep' -- v41 (`SEE-1`): 'auto' (checked as it streamed) or 'deep' (Check more deeply)
+);
+CREATE INDEX IF NOT EXISTS idx_verifications_conv ON verifications(conversation_id);

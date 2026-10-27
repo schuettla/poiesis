@@ -16,6 +16,7 @@ const deleteEngineRule = vi.fn();
 const reorderEngineRules = vi.fn();
 const resetEngineRules = vi.fn();
 const previewEngineRoute = vi.fn();
+const prematchCounts = vi.fn();
 vi.mock("../../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/api")>()),
   inTauri: () => true,
@@ -26,6 +27,7 @@ vi.mock("../../lib/api", async (importOriginal) => ({
   reorderEngineRules: (...a: unknown[]) => reorderEngineRules(...a),
   resetEngineRules: (...a: unknown[]) => resetEngineRules(...a),
   previewEngineRoute: (...a: unknown[]) => previewEngineRoute(...a),
+  prematchCounts: () => prematchCounts(),
 }));
 
 import RuleList, { RecentJobs, TryRequest } from "./RuleList";
@@ -93,6 +95,7 @@ beforeEach(() => {
     m.mockReset();
     m.mockResolvedValue([engine()]);
   }
+  prematchCounts.mockReset().mockResolvedValue([]);
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -214,6 +217,30 @@ describe("When I use it", () => {
     expect(text()).toContain("starts without asking");
   });
 
+  it("says how often a quick decision matched a rule early, under that rule only", async () => {
+    prematchCounts.mockResolvedValue([
+      { rule: "claude-code:U2", matched: 12, declined: 1 },
+      { rule: "codex:U2", matched: 9, declined: 9 },
+    ]);
+    show(engine());
+    await settle();
+    const counters = Array.from(container.querySelectorAll(".rule-uses")).map((c) => c.textContent);
+    expect(counters).toEqual(["matched early 12\u00d7 \u00b7 you said do it yourself 1\u00d7"]);
+    const row = Array.from(container.querySelectorAll(".rule-item")).find((li) => li.textContent?.includes("Anything that runs the tests"))!;
+    expect(row.textContent).toContain("matched early 12");
+  });
+
+  it("shows no counter when no quick decision has matched anything, or the read fails", async () => {
+    show(engine());
+    await settle();
+    expect(container.querySelector(".rule-uses")).toBeNull();
+    prematchCounts.mockRejectedValue(new Error("no"));
+    show(engine({ id: "codex", rules: [rule({ engine_id: "codex" })] }));
+    await settle();
+    expect(container.querySelector(".rule-uses")).toBeNull();
+    expect(text()).toContain("A change across many files");
+  });
+
   it("pressing the auto mark asks again next time", async () => {
     show(engine({ rules: [rule({ auto: true })] }));
     await act(async () => button(/starts without asking/).click());
@@ -311,6 +338,23 @@ describe("Try a request", () => {
     expect(container.querySelector("[role=status]")?.textContent).toContain(
       "I'd hand this to Claude Code, because of U1. I'd ask you first.",
     );
+  });
+
+  it("says whether the quick decision or my chat model answered", async () => {
+    const answer = { agent: "Claude Code", label: "U1", rule_text: "x", consequence: "ask", blocked: null };
+    previewEngineRoute.mockResolvedValue({ ...answer, quick_ms: 41 });
+    act(() => root.render(<TryRequest />));
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="A request to try"]')!;
+    await act(async () => type(input, "Rename it everywhere"));
+    await act(async () => button("Try").click());
+    await settle();
+    expect(container.querySelector("[role=status]")?.textContent).toContain("quick decision \u00b7 41 ms");
+
+    previewEngineRoute.mockResolvedValue({ ...answer, quick_ms: null });
+    await act(async () => button("Try").click());
+    await settle();
+    expect(container.querySelector("[role=status]")?.textContent).toContain("asked my chat model");
+    expect(container.querySelector("[role=status]")?.textContent).not.toContain("quick decision");
   });
 
   it("shows why it could not answer", async () => {

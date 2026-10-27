@@ -477,6 +477,7 @@ export type AgentEvent =
       tail: string;
     }
   | { type: "untrusted"; id: string; label: string; risk: number; flags: string[]; text: string }
+  | { type: "untrusted_flag"; id: string; label: string; p: number }
   | { type: "proposal"; id: string; target: string; rationale: string }
   | { type: "file_changed"; op: string; path: string; undo_token: string }
   | { type: "browser"; state: BrowserPanelState }
@@ -524,6 +525,14 @@ export type AgentEvent =
    * current state cannot drift out of step with the model's copy. */
   | { type: "plan"; run_id: string; plan: PlanView }
   | { type: "steered"; run_id: string; text: string }
+  /** `USE-4`: a quick decision left these tool groups off this turn's menu.
+   * `p` is how likely the model thought each was needed. */
+  | { type: "tools_held"; run_id: string; units: HeldTool[] }
+  /** `SEE-2`: what the quick decisions understood before the first word. The
+   * whole thing every time, so a strip rebuilt from it cannot drift. */
+  | { type: "thought"; run_id: string; thought: Thought }
+  /** `USE-4`: some of them are back. `by` is `model` or `you`. */
+  | { type: "tools_back"; run_id: string; units: string[]; by: "model" | "you" }
   /** `AGC-4`: I did something to my own session (cleared old tool output). The
    * backend has already written the `command` row; this is for the transcript
    * and the Orb. */
@@ -645,13 +654,27 @@ export interface PermissionRequest {
   /** `BRW-3`/`SYS-1`: set for a non-filesystem capability request —
    * `"domain"` | `"screen"` | `"open-app"` — instead of a folder request.
    * `path` carries the domain/app name. */
-  capability?: "domain" | "screen" | "open-app" | "task" | "command" | "app" | "engine" | "handover";
+  capability?: "domain" | "screen" | "open-app" | "task" | "command" | "app" | "engine" | "handover" | "page" | "risk";
+  /** `USE-12`: one line a quick decision found worth saying about the call, shown
+   * under the question: `Flagged: this is not what you asked for`. Words only (`SEE-4`).
+   * A `risk` card is one that decision added before a tool ran; `tool` names the tool and
+   * `diff` its arguments. */
+  reason?: string;
+  /** `SEE-4`: the hover on that line, with the number the quick decision gave. */
+  reason_hover?: string;
+  /** `USE-11`: for a `page` card, the page that stopped the browser: where it is,
+   * what the quick check took it for (`wall`), the screenshot's path and a line
+   * saying what was seen and how sure. */
+  page?: { host: string; wall: "login" | "captcha" | "unsure"; screenshot?: string; note: string };
   /** `CLI-6`: the agent app that is asking ("Claude Code"), for `engine` and `handover`. */
   engine?: string;
   /** The agent's own word for what it wants to do (`Bash`, `Edit`). */
   tool?: string;
-  /** `RTE-4`: for a `handover` card, the rule that makes the lead think this fits. */
-  rule?: { label: string; text: string };
+  /** `RTE-4`: for a `handover` card, the rule that makes the lead think this fits.
+   * `matched` (`USE-13`): a quick decision matched the message to it before the lead
+   * ran, and how sure it was. `doubt`: the lead cited it and that decision had scored
+   * it low, in words. */
+  rule?: { label: string; text: string; matched?: number; doubt?: string };
   /** `MCG-UI-1`: for an `"app"` request, what the call does. A send is drawn in
    * the outbound colour. `path` is the app's name, `diff` its arguments as JSON. */
   call_kind?: CallKind;
@@ -757,6 +780,32 @@ export interface TurnRunOptions {
   planFirst?: boolean;
   /** `PLF-4`: the plan the user approved. The run starts from it, unrestricted. */
   approvedPlan?: PlanView;
+  /** `SEE-3`: Web search for this message alone. */
+  web?: boolean;
+  /** `SEE-3`: no handover rule is matched; the lead does it itself. */
+  noHandover?: boolean;
+}
+
+/** `SEE-3`: the one line the composer may show under what is typed. */
+export interface ComposerHint {
+  kind: "stop" | "handover" | "web";
+  /** The line, in words. */
+  text: string;
+  /** The hover: the same, with the number. */
+  title: string;
+  /** The button's label. */
+  action: string;
+  /** The decision that said it, for the label a click writes. */
+  decision: string;
+  p: number;
+}
+
+export function composerHint(conversationId: string, text: string, runId?: string): Promise<ComposerHint | null> {
+  return invoke<ComposerHint | null>("composer_hint_cmd", { conversationId, text, runId: runId ?? null });
+}
+
+export function composerHintLabel(decisionId: string, kind: ComposerHint["kind"], taken: boolean): Promise<void> {
+  return invoke<void>("composer_hint_label_cmd", { decisionId, kind, taken });
 }
 
 export function agentChat(
@@ -893,6 +942,9 @@ export interface GoalCheck {
   evidence: string;
   /** What is left. Empty when `met`. */
   next: string;
+  /** `DEC-6`: how likely the quick decision judged the goal to hold, 0 to 1.
+   * Absent when the check came from the written answer alone. */
+  p?: number;
 }
 
 export const goalCheck = (conversationId: string, objective: string, until: string, target?: ChatTarget) =>
@@ -921,8 +973,75 @@ export const checkup = (target?: ChatTarget) =>
  * Resolves `false` when the run finished between the keystroke and the send —
  * the caller then sends it as an ordinary next message instead.
  */
-export const steerRun = (runId: string, text: string): Promise<boolean> =>
-  invoke<boolean>("steer_run_cmd", { runId, text });
+/** `USE-4`: one tool group a quick decision left off the menu. */
+export interface HeldTool {
+  id: string;
+  label: string;
+  p: number;
+}
+
+/** `SEE-2`: a tool group left off that the person had turned on, in words, with
+ * the words of the click that puts it back. */
+export interface LeftOut {
+  id: string;
+  words: string;
+  action: string;
+}
+
+/** `SEE-2`: what the quick decisions understood about a turn, in the person's terms. */
+export interface Thought {
+  /** `on the web`, `in your files`, `in Google Calendar`. */
+  looking: string[];
+  /** The menu was asked about and the message needs nothing off it. */
+  direct: boolean;
+  left_out: LeftOut[];
+  /** Every group left off, with what its specs would have cost the prompt. */
+  held: { id: string; tokens: number }[];
+  handover: { agent: string; rule: string } | null;
+  ms: number;
+  /** The decision engine was not there to ask: `cold` (installed, not running yet), `cpu`
+   * (running on the processor, which a turn does not wait for) or `unavailable` (none set up). */
+  engine: "cold" | "cpu" | "unavailable" | null;
+}
+
+/** `USE-UI-1`: put these held-back groups back on a run's menu. Returns how
+ * many came back (0 when the run is over). */
+export const restoreTools = (runId: string, units: string[]): Promise<number> =>
+  invoke<number>("restore_tools_cmd", { runId, units });
+
+/** `USE-5`: what a quick decision read a message to a running agent as. */
+export type SteerKind = "stop" | "redirect" | "add" | "question";
+
+export interface SteerRead {
+  kind: SteerKind;
+  /** How likely the winning class is. */
+  p: number;
+  /** A fitted, sure stop: the message was held back to ask "Stop the run?". */
+  ask_stop: boolean;
+  /** For the label the answer writes. */
+  decision: string;
+}
+
+/** `queued`: the run reads it at its next step. `held`: it waits for the answer
+ * to "Stop the run?". `gone`: the run ended before the send. */
+export interface SteerOutcome {
+  status: "queued" | "held" | "gone";
+  read?: SteerRead;
+}
+
+/** `alreadyRead` skips the read, for a message the user just answered "Keep
+ * going" to. */
+export const steerRun = (runId: string, text: string, alreadyRead?: boolean): Promise<SteerOutcome> =>
+  invoke<SteerOutcome>("steer_run_cmd", alreadyRead ? { runId, text, alreadyRead } : { runId, text });
+
+/** `USE-UI-2`: the answer to "Stop the run?", as the label the decision learns from. */
+export const steerAnswer = (decisionId: string, stopped: boolean) =>
+  invoke<void>("steer_answer_cmd", { decisionId, stopped });
+
+/** `USE-UI-3`: reopen a ringed plan tick in the stored plan and label the
+ * decision wrong. `false` when there was nothing to reopen. */
+export const reopenPlanItem = (messageId: string, index: number) =>
+  invoke<boolean>("reopen_plan_item_cmd", { messageId, index });
 
 /** `AGC-3`: what the user answered to a question a run is waiting on. */
 export interface QuestionAnswer {
@@ -1309,6 +1428,26 @@ export function onAppEvent<T>(name: string, handler: (payload: T) => void): void
   listen<T>(name, (e) => handler(e.payload)).catch(() => {
     /* the app still works without the announcement */
   });
+}
+
+/** [`onAppEvent`] for a screen that comes and goes: returns the way to stop
+ * listening, so a closed screen does not keep reloading itself. */
+export function listenAppEvent<T>(name: string, handler: (payload: T) => void): () => void {
+  if (!inTauri()) return () => {};
+  let off: (() => void) | null = null;
+  let closed = false;
+  listen<T>(name, (e) => handler(e.payload))
+    .then((stop) => {
+      if (closed) stop();
+      else off = stop;
+    })
+    .catch(() => {
+      /* the screen still works without the announcement */
+    });
+  return () => {
+    closed = true;
+    off?.();
+  };
 }
 
 /** A durable-self write announced outside a chat stream (REF-3). Same shape as
@@ -1839,6 +1978,304 @@ export function downloadRerankModel(
   });
 }
 
+// ---- decision model (`DEC`): quick decisions ----
+
+export type DecideState = "idle" | "starting" | "ready" | "failed";
+
+/** `DEC-UI-2`'s status line. */
+export interface DecideStatus {
+  state: DecideState;
+  model_installed: boolean;
+  model_name: string | null;
+  /** On the graphics card, when it is running. */
+  gpu: boolean | null;
+  vision: boolean | null;
+  median_ms: number | null;
+  error: string | null;
+}
+
+/** Where a model would run beside what is loaded now. */
+export type DecideFit = "gpu" | "cpu" | "wont-fit";
+
+/** `DEC-UI-1`: one decision model in the catalog. */
+export interface DecideModelRow {
+  name: string;
+  note: string;
+  size_label: string;
+  size_mb: number;
+  /** The library row when it is installed. */
+  id: string | null;
+  installed: boolean;
+  is_default: boolean;
+  fit: DecideFit;
+}
+
+export interface DecideModels {
+  models: DecideModelRow[];
+  /** The chat model loaded now, for "next to Qwen3.5-4B". */
+  chat_model: string | null;
+  placement: DecidePlacement;
+}
+
+export type DecidePlacement = "auto" | "gpu" | "cpu";
+
+/** One row of the read-only table under Advanced. */
+export interface DecidePolicyRow {
+  purpose: string;
+  label: string;
+  background: boolean;
+  skipped_if_not_ready: boolean;
+  deadline_s: number;
+  /** `CTL-1`: how far a decision is trusted on its own. */
+  mode: "reflex" | "assisted" | "verify" | "gate";
+  impact: "cheap" | "visible" | "costly" | "irreversible";
+  escalate: "none" | "evidence" | "slow" | "user";
+  /** The bar once a fit backs the numbers, and the one in force until then. */
+  act_at_calibrated: number;
+  act_at_uncalibrated: number;
+  /** What happens below the bar, in words. */
+  below: string;
+  experiment: string | null;
+  /** `cloud` when the person allowed this purpose to use the cloud by name. */
+  backend_override: "cloud" | null;
+}
+
+/** `CTL-4`: what one purpose's calibration says. */
+export interface CalibrationFit {
+  t: number;
+  ece: number;
+  n: number;
+  fitted_at: number;
+}
+
+export interface CalibrationReport {
+  purpose: string;
+  label: string;
+  fit: CalibrationFit | null;
+  calibrated: boolean;
+  /** The error before the fit, set by a run that just happened. */
+  ece_before: number | null;
+  /** Labels written since the fit, which a refit would use. */
+  new_labels: number;
+}
+
+export interface CalibrateProgress {
+  purpose: string;
+  done: number;
+  total: number;
+}
+
+/** `CTL-UI-1`: one decision, as the Activity screen shows it. */
+export interface DecisionLabel {
+  label: "right" | "wrong" | "weak_right" | "weak_wrong" | "corrected";
+  value: string | null;
+  source: string;
+}
+
+export interface DecisionEntry {
+  id: string;
+  conversation_id: string | null;
+  run_id: string | null;
+  purpose: string;
+  /** The words the screen uses for the question (`Purpose::label`). */
+  label: string;
+  /** Runs without the user asking: the screen groups these by the hour. */
+  background: boolean;
+  /** The experiment the purpose belongs to, for the filter chips. */
+  experiment: string | null;
+  /** `local:<model name>`. */
+  backend: string;
+  model: string;
+  ms: number;
+  calibrated: boolean;
+  /** Each answer: `{ p }`, `{ choice, probs, confidence }` or `{ score, probs, confidence }`. */
+  answers: Record<string, DecisionAnswer>;
+  input_tokens: number;
+  state_preview: string;
+  /** `acted`, `default`, `escalated:slow`, `budget:decisions`, `blocked`, or null. */
+  action: string | null;
+  at: number;
+  /** `SEE-2`: what the decision changed, in words, when it acted or was shown. */
+  note?: string | null;
+  outcomes: unknown[];
+  labels: DecisionLabel[];
+}
+
+export interface DecisionAnswer {
+  p?: number;
+  choice?: string;
+  score?: number;
+  probs?: ([string, number] | number)[];
+  confidence?: number;
+}
+
+export const decideStatus = () => invoke<DecideStatus>("decide_status_cmd");
+export const decideModels = () => invoke<DecideModels>("decide_models_cmd");
+export const decidePolicy = () => invoke<DecidePolicyRow[]>("decide_policy_cmd");
+export const decisionsList = (limit = 200, purpose?: string) =>
+  invoke<DecisionEntry[]>("decisions_list_cmd", { limit, purpose: purpose ?? null });
+/** `USE-UI-5`: the answer a person picked for a row of a sorted list. Resolves to
+ * `right` when it is the model's own answer and `corrected` when it is another. */
+export const classifyCorrect = (decisionId: string, answer: string) =>
+  invoke<"right" | "corrected">("classify_correct_cmd", { decisionId, answer });
+/** `SEE-2`: the receipt of one turn: its decisions and the unattached ones made
+ * while it ran. A decision with a `note` acted or was shown. */
+export const runDecisions = (conversationId: string, runId: string, fromMs: number, toMs: number) =>
+  invoke<DecisionEntry[]>("run_decisions_cmd", { conversationId, runId, fromMs, toMs });
+/** `SEE-2`: "That was wrong" on a receipt row. `value` is the tool group the person
+ * says was needed, for the tool-menu row. */
+export const receiptWrong = (decisionId: string, value?: string) =>
+  invoke<boolean>("receipt_wrong_cmd", { decisionId, value: value ?? null });
+/** `SEE-2`: the strip's Start, for a decision engine that is not running. */
+export const decideStart = () => invoke<void>("decide_start_cmd");
+export const decideCalibration = () => invoke<CalibrationReport[]>("decide_calibration_cmd");
+export function calibrateDecide(onProgress: (p: CalibrateProgress) => void): Promise<CalibrationReport[]> {
+  const ch = new Channel<CalibrateProgress>();
+  ch.onmessage = onProgress;
+  return invoke<CalibrationReport[]>("calibrate_decide_cmd", { onProgress: ch });
+}
+/** `CTL-3`: something happened to a goal the decision had judged. */
+export const recordGoalOutcome = (conversationId: string, event: "stalled" | "exhausted" | "new-goal") =>
+  invoke<string | null>("record_goal_outcome_cmd", { conversationId, event });
+export const setDefaultDecideModel = (id: string) => invoke<void>("set_default_decide_model_cmd", { id });
+export const deleteDecideModel = (id: string) => invoke<void>("delete_decide_model_cmd", { id });
+export const setDecidePlacement = (placement: DecidePlacement) =>
+  invoke<void>("set_decide_placement_cmd", { placement });
+
+// ---- the cloud half of the decision model (`DEC-5`, `DEC-5a`) ----
+
+/** What one Test found out about a cloud model. */
+export interface CloudProbe {
+  at: number;
+  ok: boolean;
+  ms: number;
+  /** Whether a picture was read. `null`: not tried (a text-only model). */
+  vision: boolean | null;
+  error: string | null;
+}
+
+/** `DEC-UI-1`: one decision model in OpenRouter's catalog. */
+export interface CloudDecisionModel {
+  id: string;
+  /** What is pinned: a dated version when the model has one. */
+  slug: string;
+  name: string;
+  /** Tokens, 0 when the catalog does not say. */
+  context: number;
+  images: boolean;
+  /** USD per million input tokens. Output is free. */
+  price_per_mtok: number | null;
+  free: boolean;
+  /** Some provider of it keeps nothing. Without one the model is greyed. */
+  zdr: boolean;
+  /** The local catalog entry with the same weights, if any. */
+  same_as_local: string | null;
+  featured: boolean;
+  selected: boolean;
+  probe: CloudProbe | null;
+}
+
+export interface CloudDecisionCatalog {
+  key_set: boolean;
+  models: CloudDecisionModel[];
+  fetched_at: number | null;
+  error: string | null;
+  selected: string;
+  backend: "local" | "cloud";
+}
+
+export type CloudState = "ready" | "no-key" | "key" | "credits" | "overloaded" | "no-endpoint";
+
+/** `DEC-UI-2`'s cloud line. */
+export interface CloudDecisionStatus {
+  backend: "local" | "cloud";
+  model: string;
+  key_set: boolean;
+  state: CloudState;
+  /** Epoch ms when a stop ends. */
+  until: number | null;
+  median_ms: number | null;
+}
+
+/** `CTL-UI-2`: answered decisions by where they were asked. */
+export interface DecisionUsageRow {
+  backend: "local" | "openrouter";
+  model: string;
+  count: number;
+  cost_usd: number;
+  input_tokens: number;
+  avg_ms: number;
+}
+
+export const decideCloudCatalog = (refresh = false) =>
+  invoke<CloudDecisionCatalog>("decide_cloud_catalog_cmd", { refresh });
+export const decideCloudProbe = (slug: string) => invoke<CloudProbe>("decide_cloud_probe_cmd", { slug });
+export const decideCloudSelect = (slug: string) => invoke<void>("decide_cloud_select_cmd", { slug });
+export const setDecideBackend = (backend: "local" | "cloud") => invoke<void>("set_decide_backend_cmd", { backend });
+export const setDecidePurposeCloud = (purpose: string, allow: boolean) =>
+  invoke<void>("set_decide_purpose_cloud_cmd", { purpose, allow });
+export const decideCloudStatus = () => invoke<CloudDecisionStatus>("decide_cloud_status_cmd");
+export const decideUsage = (days: number) => invoke<DecisionUsageRow[]>("decide_usage_cmd", { days });
+
+/** Download a catalog model and its picture reader, then check that it can make
+ * decisions. A file that can't is removed again and the promise rejects with
+ * the words to show. */
+export function downloadDecideModel(
+  name: string,
+  onProgress: (p: DownloadProgress) => void
+): Promise<ModelEntry> {
+  const ch = new Channel<DownloadProgress>();
+  ch.onmessage = onProgress;
+  return invoke<ModelEntry>("download_decide_model_cmd", { name, onProgress: ch });
+}
+
+// ---- experiments (`EXP`): the registry is the backend's, mirrored here ----
+
+export type ExperimentStage = "early" | "beta";
+
+/** One thing an experiment needs, and whether this computer has it. */
+export interface ExperimentRequirement {
+  kind: "decision-model" | "vision" | "provider" | "experiment" | "mail-account";
+  label: string;
+  met: boolean;
+  /** The settings view that fixes it, when there is one. */
+  fix_view: string | null;
+}
+
+export interface ExperimentInfo {
+  id: string;
+  title: string;
+  summary: string;
+  what_changes: string[];
+  records: string;
+  stage: ExperimentStage;
+  graduation: string;
+  on: boolean;
+  requires: ExperimentRequirement[];
+  /** Every requirement is met, so the switch may be turned on. */
+  can_turn_on: boolean;
+  /** Not seen on the Experiments screen yet. */
+  is_new: boolean;
+}
+
+export const experimentsList = () => invoke<ExperimentInfo[]>("experiments_list_cmd");
+/** Turning on is checked again by the backend and rejects with the words to show. */
+export const setExperiment = (id: string, on: boolean) =>
+  invoke<ExperimentInfo[]>("set_experiment_cmd", { id, on });
+export const experimentsSeen = () => invoke<void>("experiments_seen_cmd");
+
+/** `EXP-4`: what an experiment did in the last 30 days. */
+export interface ExperimentReport {
+  days: number;
+  /** Short facts, joined with a dot on the card. Empty when nothing happened. */
+  lines: string[];
+  /** What "Reset its data" would remove. Zero: there is nothing to reset. */
+  records: number;
+}
+export const experimentReport = (id: string) => invoke<ExperimentReport>("experiment_report_cmd", { id });
+/** Forgets what the experiment recorded; the switch stays. Answers with the report after. */
+export const resetExperiment = (id: string) => invoke<ExperimentReport>("experiment_reset_cmd", { id });
+
 // ---- folder indexing (Perception, IDX) ----
 
 export interface SkippedFile {
@@ -2153,6 +2590,9 @@ export interface EngineBadge {
   because_text: string | null;
   /** It can take a message while it works. */
   can_steer: boolean;
+  /** `USE-13`: a quick decision matched the message to this rule before the lead
+   * ran, and how sure it was. Live only: it is not saved with the job. */
+  matched?: number | null;
 }
 
 export interface EngineGuards {
@@ -2196,6 +2636,19 @@ export interface EngineRoutePreview {
   rule_text: string | null;
   consequence: "ask" | "start" | "only_when_asked" | null;
   blocked: string | null;
+  /** `USE-UI-10`: how long the quick decision took, when it answered. `null`
+   * means my chat model was asked. */
+  quick_ms?: number | null;
+}
+
+/** `USE-UI-10`: how a rule fared when a quick decision matched it before I ran. */
+export interface PrematchCount {
+  /** `<agent id>:<label>`, for example `claude-code:U2`. */
+  rule: string;
+  /** You said Hand it over or Always for this. */
+  matched: number;
+  /** You said Do it yourself. */
+  declined: number;
 }
 
 /** Any subset of the editable settings. An empty string clears a text value. */
@@ -2274,6 +2727,7 @@ export const continueEngineJob = (runId: string) =>
   invoke<{ command: string; opened: boolean; error: string | null }>("engines_continue_cmd", { runId });
 /** "This shouldn't have gone to Claude Code": stops it and counts a no on the rule. */
 export const undoEngineHandover = (runId: string) => invoke<boolean>("engines_undo_handover_cmd", { runId });
+export const prematchCounts = () => invoke<PrematchCount[]>("engines_prematch_counts_cmd");
 /** **Try a request**: one cheap call on the chosen model. Guards are applied in Rust. */
 export const previewEngineRoute = (text: string, target?: ChatTarget) =>
   invoke<EngineRoutePreview>("engines_route_preview_cmd", { text, target: target ?? null });
@@ -2821,14 +3275,20 @@ export interface ScheduledJob {
   source_conversation_id: string | null;
   /** The last few runs, newest first. */
   runs: JobRun[];
+  /** `USE-7`: "only run if …", in plain words. Absent when there is none. */
+  run_if?: string | null;
 }
 
-/** One completed run. Each is a real conversation in the rail — open it to
- *  read what the task actually did, rather than trusting a summary line. */
+/** One entry of a task's history. A completed run is a real conversation in the
+ *  rail — open it to read what the task actually did, rather than trusting a
+ *  summary line. A skipped one (`skipped` set) has no conversation. */
 export interface JobRun {
   conversation_id: string;
   at: number;
   summary: string;
+  /** `USE-7`: the condition was judged not to hold, with this probability, so
+   *  nothing ran. */
+  skipped?: number;
 }
 
 export interface ScheduledJobInput {
@@ -2838,6 +3298,7 @@ export interface ScheduledJobInput {
   scope: string | null;
   enabled: boolean;
   source_conversation_id?: string | null;
+  run_if?: string | null;
 }
 
 /** What the Rail shows while a job runs (SCH-UI-4). */
@@ -2910,6 +3371,191 @@ export const testMailAccount = (id: string) => invoke<MailTestResult>("test_mail
 export const setMailAccountEnabled = (id: string, enabled: boolean) =>
   invoke<void>("set_mail_account_enabled_cmd", { id, enabled });
 export const deleteMailAccount = (id: string) => invoke<void>("delete_mail_account_cmd", { id });
+
+// ---- the small inbox (USE-6a, USE-UI-4) ----
+
+/** One message of the Inbox and what the check said about it. A part the model was
+ * not sure of is null, and the screen shows nothing for it. */
+export interface InboxRow {
+  account_id: string;
+  account_label: string;
+  uid: number;
+  from: string;
+  subject: string;
+  date: string;
+  /** When it was sent, in ms; when it was fetched if the date could not be read. */
+  sent_at: number | null;
+  unread: boolean;
+  /** A check looked at it, even when it found nothing to show. */
+  checked: boolean;
+  category: string | null;
+  category_p: number | null;
+  /** 1 (can wait) to 4 (urgent). */
+  urgency: number | null;
+  urgency_p: number | null;
+  /** The probability that a reply is wanted, when it is a likely yes. */
+  reply: number | null;
+  /** The person set the kind themselves. */
+  retagged: boolean;
+}
+
+export interface InboxLastLook {
+  at: number;
+  fetched: number;
+  triaged: number;
+  /** One line for each account that could not be read. */
+  errors: string[];
+}
+
+export interface InboxView {
+  /** Mail triage is on. */
+  on: boolean;
+  /** A decision model is installed. Without one nothing gets a tag. */
+  decision_model: boolean;
+  rows: InboxRow[];
+  last: InboxLastLook | null;
+  every_minutes: number;
+  /** A look is running now. */
+  syncing: boolean;
+  categories: string[];
+}
+
+export interface MailCategories {
+  categories: string[];
+  defaults: string[];
+}
+
+/** Told to the screen when a look found mail or a check wrote a tag. */
+export const MAIL_INBOX_EVENT = "poiesis-mail-inbox";
+
+export const mailInbox = (accountId?: string | null) =>
+  invoke<InboxView>("mail_inbox_cmd", { accountId: accountId ?? null });
+/** Look now. Null when Mail triage is off or a look is already running. */
+export const mailSyncNow = () => invoke<InboxLastLook | null>("mail_sync_now_cmd");
+/** Set, change or clear (null) the kind of one message. The change is a label the
+ * calibration reads. Rejects with the words to show. */
+export const mailRetag = (accountId: string, uid: number, category: string | null) =>
+  invoke<InboxRow>("mail_retag_cmd", { accountId, uid, category });
+export const mailCategories = () => invoke<MailCategories>("mail_categories_cmd");
+/** An empty list puts the default one back. */
+export const setMailCategories = (categories: string[]) =>
+  invoke<MailCategories>("set_mail_categories_cmd", { categories });
+
+// ---- verify an answer (`USE-10`) ----
+
+/** What a check found about one claim. `unchecked` is a claim nothing was said about.
+ * `undone` (`SEE-1`) is a sentence that says the assistant did something and no step
+ * of the run did it. */
+export type Finding = "supported" | "refuted" | "insufficient" | "conflicting" | "unchecked" | "undone";
+
+export interface VerifyPassage {
+  text: string;
+  /** A site, a page title or a file name. */
+  source: string;
+  url: string | null;
+  /** The date the source gives, `YYYY-MM-DD`. */
+  date: string | null;
+  retrieved_at: number;
+  /** `read` is something the turn read that is not a page or a file (mail, an app, an
+   * agent's report); `run` is the run's own steps (`SEE-1`). */
+  via: "cited" | "folder" | "web" | "read" | "run";
+}
+
+export interface VerifyClaim {
+  id: string;
+  /** One sentence that states one fact. */
+  text: string;
+  /** The words of the answer that state it, as plain text. Empty when not found. */
+  quote: string;
+  source: string | null;
+  /** 1 to 3: how much the answer leans on it. */
+  importance: number;
+  kind: string;
+  finding: Finding;
+  /** How sure the quick verdict was of its own answer. */
+  p: number | null;
+  how: "fast" | "reviewed" | "none" | "ledger";
+  /** The finding stands: the model was sure of it, or a review made it. */
+  settled: boolean;
+  fast: Finding | null;
+  slow: Finding | null;
+  reason: string | null;
+  passages: VerifyPassage[];
+  decision: string | null;
+  mark: "right" | "wrong" | null;
+}
+
+/** What an automatic check counted (`SEE-1`), for the trust line and the receipt. */
+export interface CheckSummary {
+  /** Final sentences the check took. */
+  sentences: number;
+  /** Sentences it asked the decision model about, and the ones that answered. */
+  asked: number;
+  answered: number;
+  /** Sentences past the 40 it takes. */
+  over: number;
+  /** Passages this turn read, and the sources they came from. */
+  pool: number;
+  sources: number;
+  /** With nothing read: sentences that read like a fact and were left unchecked. */
+  factual: number;
+}
+
+export interface VerifyCheck {
+  message_id: string;
+  conversation_id: string;
+  created_at: number;
+  claims: VerifyClaim[];
+  note: string | null;
+  /** Opinions left out. */
+  skipped: number;
+  /** `auto` is the check every answer gets while it streams; `deep` is the one asked for. */
+  mode: "auto" | "deep";
+  summary: CheckSummary | null;
+}
+
+export type VerifyProgress =
+  | { phase: "reading" }
+  | { phase: "checking"; done: number; total: number }
+  | { phase: "reviewing"; done: number; total: number }
+  /** `SEE-1`: the automatic check, sentence by sentence as the answer arrives. */
+  | { phase: "auto"; done: number; total: number };
+
+/** `SEE-1`: what the automatic check tells the screen over the app event
+ * `poiesis-autocheck`, because it outlives the run's own stream. */
+export type AutoCheckEvent =
+  | { type: "progress"; conversation_id: string; message_id: string; run_id: string; done: number; total: number }
+  | { type: "claim"; conversation_id: string; message_id: string; run_id: string; claim: VerifyClaim }
+  | { type: "done"; conversation_id: string; message_id: string; run_id: string; check: VerifyCheck | null };
+
+export type VerifyEvent =
+  | ({ type: "progress" } & VerifyProgress)
+  | { type: "done"; check: VerifyCheck }
+  | { type: "cancelled" }
+  | { type: "error"; message: string };
+
+/** Check one answer. Reports through `onEvent` and resolves when the check is over. */
+export function verifyMessage(
+  conversationId: string,
+  messageId: string,
+  onEvent: (e: VerifyEvent) => void,
+  target?: ChatTarget
+): Promise<void> {
+  const ch = new Channel<VerifyEvent>();
+  ch.onmessage = onEvent;
+  return invoke<void>("verify_message_cmd", { conversationId, messageId, target, onEvent: ch });
+}
+export const verifyCancel = (conversationId: string) => invoke<void>("verify_cancel_cmd", { conversationId });
+export const verifyList = (conversationId: string) => invoke<VerifyCheck[]>("verify_list_cmd", { conversationId });
+/** "This is right" or "This is wrong". It is a label the calibration reads. */
+export const verifyMark = (messageId: string, claimId: string, mark: "right" | "wrong") =>
+  invoke<VerifyClaim>("verify_mark_cmd", { messageId, claimId, mark });
+/** `SEE-1`, **Review this**: the slower model reads one marked sentence against the passages
+ * it was judged on, and the claim comes back with what it said. */
+export const verifyReview = (conversationId: string, messageId: string, claimId: string, target?: ChatTarget) =>
+  invoke<VerifyClaim>("verify_review_cmd", { conversationId, messageId, claimId, target });
+/** The words that ask for a corrected answer, written from what the check found. */
+export const verifyRevise = (messageId: string) => invoke<string>("verify_revise_cmd", { messageId });
 
 // ---- Agent Skills (SKL) ----
 
@@ -3016,6 +3662,9 @@ export interface PlanItem {
   why?: string | null;
   /** True for an item added after the plan was first written. */
   added?: boolean;
+  /** `USE-5`: a quick decision judged the item finished from the answer, with
+   * this probability. Set only with `done`; shown as a ringed tick. */
+  judged?: number | null;
 }
 
 /** One run's plan. `revisions` counts rewrites, not status changes — rewriting

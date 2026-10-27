@@ -4,16 +4,19 @@
 //! visible timeline of steps as it goes (CHT-9).
 
 pub mod artifacts;
+pub mod autocheck;
 pub mod background;
 pub mod browser;
 pub mod changes;
 pub mod checkup;
+pub mod classify;
 pub mod codeexec;
 pub mod coderun;
 pub mod commands;
 pub mod app_calls;
 pub mod connector_gate;
 pub mod context;
+pub mod decide;
 mod context_golden;
 pub mod diagnostics;
 pub mod diff;
@@ -28,6 +31,7 @@ pub mod index;
 pub mod ledger;
 pub mod log;
 pub mod mail;
+pub mod mail_sync;
 pub mod memory_skill;
 pub mod phash;
 pub mod plan;
@@ -39,6 +43,7 @@ pub mod results;
 pub mod rewind;
 pub mod retrieval;
 pub mod run;
+pub mod sentences;
 pub mod sandbox;
 pub mod screen;
 pub mod skillpack;
@@ -48,6 +53,7 @@ pub mod toolsets;
 pub mod toolrpc;
 pub mod trash;
 pub mod untrusted;
+pub mod verify;
 pub mod websearch;
 
 use serde::{Deserialize, Serialize};
@@ -77,6 +83,10 @@ pub struct EngineBadge {
     /// The app can take a message while it works. When it cannot, the steer box
     /// says it will be passed on at the next step.
     pub can_steer: bool,
+    /// `USE-13`: a quick decision matched the message to this rule before the lead
+    /// ran, and how sure it was. The Fleet row's dot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched: Option<f32>,
 }
 
 /// Events streamed to the UI during an agent run. The frontend renders Step*
@@ -208,6 +218,15 @@ pub enum AgentEvent {
         flags: Vec<String>,
         /// The raw (unwrapped) text, for the step's on-demand disclosure.
         text: String,
+    },
+    /// The quick decision model says outside text a step read reads like an
+    /// instruction to the assistant (`USE-8`). It arrives after the text went to
+    /// the model, so it only marks the step; nothing is blocked. `p` is the
+    /// probability, 0 to 1.
+    UntrustedFlag {
+        id: String,
+        label: String,
+        p: f32,
     },
     /// The agent proposed a self-change (SOUL-2 / RCP-2); `target` as in
     /// `change_proposals`. Never applied without the user saying yes.
@@ -342,6 +361,18 @@ pub enum AgentEvent {
     /// A mid-run instruction was picked up and is now part of the transcript
     /// (`HRN-2`). The UI settles its optimistic "sent mid-run" mark on this.
     Steered { run_id: String, text: String },
+    /// `USE-4`: a quick decision left these tool groups off this turn's menu.
+    /// `p` is how likely the model thought each was needed. Sent once, before the
+    /// first request.
+    ToolsHeld { run_id: String, units: Vec<decide::tools::HeldView> },
+    /// `USE-4`: some of them are back on the menu. `by` is `model` (it asked, or
+    /// called one) or `you` (the chip).
+    ToolsBack { run_id: String, units: Vec<String>, by: String },
+    /// `SEE-2`: what the quick decisions understood before the slow model's first
+    /// word: where it will look, what it left out, who takes it. The whole thing
+    /// each time, so the strip rebuilt from it cannot drift. Not sent when there is
+    /// nothing to say.
+    Thought { run_id: String, thought: decide::thought::Thought },
     /// `AGC-4`: the agent did something to its own session — cleared old tool
     /// output, say. The same shape as a user's traced command, so one
     /// `CommandNote` speaks for either. The backend has already written the

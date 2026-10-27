@@ -85,10 +85,16 @@ async fn backfill_scope(mgr: &RuntimeManager, db: &Db, mem: &MemoryStore) {
     };
     let endpoint = ChatEndpoint::OpenAi { base_url, api_key: Some(token), model: None };
     for f in missing.into_iter().take(3) {
-        let scope =
-            crate::agent::memory_skill::classify_scope(&mgr.client, &endpoint, &f.name, &f.description, &f.body)
-                .await
-                .unwrap_or_else(|| "global".to_string());
+        let scope = crate::agent::memory_skill::scope_for(
+            &mgr.client,
+            Some(&endpoint),
+            &f.name,
+            &f.description,
+            &f.body,
+            None,
+        )
+        .await
+        .unwrap_or_else(|| "global".to_string());
         let _ = mem.set_fact_scope(db, &f.name, &scope);
     }
 }

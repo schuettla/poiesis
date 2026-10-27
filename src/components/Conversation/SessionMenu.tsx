@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAppStore } from "../../lib/store";
+import { workspaceAvailable } from "../../lib/experiments";
 import ConfirmDialog from "../Confirm/ConfirmDialog";
 import ProjectMenuItems from "./ProjectMenuItems";
 
@@ -16,6 +17,7 @@ export default function SessionMenu() {
   const scheduleConversation = useAppStore((s) => s.scheduleConversation);
   const workspaceMode = useAppStore((s) => s.workspaceMode);
   const setWorkspaceMode = useAppStore((s) => s.setWorkspaceMode);
+  const workspaceOffered = useAppStore((s) => workspaceAvailable(s));
   const setEnginesOff = useAppStore((s) => s.setEnginesOff);
   const anyEngine = useAppStore((s) => s.engines.some((e) => e.enabled && e.delegate_ready));
   const [open, setOpen] = useState(false);
@@ -40,18 +42,23 @@ export default function SessionMenu() {
           <div className="row-menu-backdrop" onClick={() => setOpen(false)} />
           <div className="row-menu" role="menu">
             {/* The mode is the chat's own, so it is changed from the chat's own
-                menu as well as by `/workspace`. */}
-            <button
-              className="row-menu-item"
-              role="menuitem"
-              onClick={() => {
-                setOpen(false);
-                setWorkspaceMode(!workspaceMode);
-              }}
-            >
-              {workspaceMode ? "Turn off Workspace mode" : "Turn on Workspace mode"}
-            </button>
-            <hr className="row-menu-sep" />
+                menu as well as by `/workspace`. An experiment (`EXP-3`): not
+                offered until it has been turned on in Settings. */}
+            {workspaceOffered && (
+              <>
+                <button
+                  className="row-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(false);
+                    setWorkspaceMode(!workspaceMode);
+                  }}
+                >
+                  {workspaceMode ? "Turn off Workspace mode" : "Turn on Workspace mode"}
+                </button>
+                <hr className="row-menu-sep" />
+              </>
+            )}
             {/* Turn this chat into something I do on a schedule. The moment
                 you want a task is usually just after you had the agent do the
                 thing once, by hand — which is this chat. */}

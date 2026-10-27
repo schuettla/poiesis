@@ -127,7 +127,7 @@ fn render_ui(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, 
         .get_conversation(ctx.conversation_id)
         .ok()
         .flatten()
-        .is_some_and(|c| c.workspace);
+        .is_some_and(|c| crate::experiments::in_workspace(ctx.db, &c));
     if !in_mode {
         return Err("This chat is not in Workspace mode, so there is no interface to compose. Answer in the chat instead.".into());
     }

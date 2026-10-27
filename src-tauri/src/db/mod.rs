@@ -19,9 +19,15 @@ pub mod index_roots;
 pub mod phash;
 /// External agent apps (`CLI-1`).
 pub mod engines;
+/// The decision log and its outcome labels (`CTL-3`).
+pub mod decisions;
+/// The inbox rows of mail triage (`USE-6a`).
+pub mod mail_seen;
+/// The result of checking an answer against evidence (`USE-10`).
+pub mod verifications;
 
 const SCHEMA: &str = include_str!("schema.sql");
-pub const SCHEMA_VERSION: i64 = 36;
+pub const SCHEMA_VERSION: i64 = 42;
 
 /// The rationale a skill-revision proposal is written with (`OUT-2`). Only
 /// display text — the proposal is *identified* by its `skill-revision` target,
@@ -1245,6 +1251,25 @@ impl Db {
             // apps through Poiesis. Off for every agent that exists already.
             Self::add_column(&conn, "engines", "app_tools", "INTEGER NOT NULL DEFAULT 0")?;
         }
+        // v37 (`CTL-3`): `decisions` and `decision_outcomes` are new tables that
+        // SCHEMA above creates; the version is bumped below.
+        // v38 (`USE-6a`): `mail_seen` is a new table that SCHEMA above creates.
+        // v39 (`USE-10`): `verifications` is a new table that SCHEMA above creates.
+        if current < 40 {
+            // v40 (`DEC-5`, `CTL-UI-2`): what the cloud charged for a decision.
+            Self::add_column(&conn, "decisions", "cost_usd", "REAL")?;
+        }
+        if current < 41 {
+            // v41 (`SEE-2`, `SEE-1`): what a decision changed, in words, for the
+            // receipt; and whether a check of an answer was the automatic one or
+            // the deep one. A check kept before this was a deep one.
+            Self::add_column(&conn, "decisions", "note", "TEXT")?;
+            Self::add_column(&conn, "verifications", "mode", "TEXT NOT NULL DEFAULT 'deep'")?;
+        }
+        if current < 42 {
+            // v42 (`SEE-1`): what an automatic check counted, as JSON, for the trust line.
+            Self::add_column(&conn, "verifications", "summary", "TEXT")?;
+        }
         //
         // v24 (`OBS-2`): `run_usage` is created by SCHEMA above and has no
         // columns to add to an existing table, so there is nothing to do here
@@ -1293,6 +1318,12 @@ impl Db {
         Ok(())
     }
 
+    pub fn delete_setting(&self, key: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
     // ---- conversations ----
 
     pub fn create_conversation(
@@ -1337,6 +1368,27 @@ impl Db {
             params![id, workspace as i64],
         )?;
         Ok(())
+    }
+
+    /// Is there any conversation pinned to workspace mode? (`EXP-3`'s migration.)
+    pub fn has_workspace_conversation(&self) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let found: i64 = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM conversations WHERE workspace = 1)",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(found != 0)
+    }
+
+    /// Workspace chats that were used since `since` (epoch ms), for the report.
+    pub fn workspace_conversations_since(&self, since: i64) -> Result<i64, DbError> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(
+            "SELECT COUNT(*) FROM conversations WHERE workspace = 1 AND updated_at >= ?1",
+            [since],
+            |r| r.get(0),
+        )?)
     }
 
     // ---- working folder ----
@@ -1838,6 +1890,24 @@ impl Db {
             .query_row("SELECT context_json FROM messages WHERE id = ?1", [id], |r| r.get(0))
             .ok();
         Ok(row.flatten())
+    }
+
+    /// The plan a message was finalised with (`PLN-UI-5`), as stored. `None` for
+    /// no such message and for one that had no plan.
+    pub fn message_plan_json(&self, id: &str) -> Result<Option<String>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<Option<String>> =
+            conn.query_row("SELECT plan_json FROM messages WHERE id = ?1", [id], |r| r.get(0)).ok();
+        Ok(row.flatten())
+    }
+
+    /// Replace a message's stored plan. Only for a change made after the run, such
+    /// as the user reopening a ticked item (`USE-UI-3`): `finalize_message` is the
+    /// writer while a turn is live. Returns whether a message was updated.
+    pub fn set_message_plan(&self, id: &str, plan_json: &str) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute("UPDATE messages SET plan_json = ?2 WHERE id = ?1", params![id, plan_json])?;
+        Ok(n > 0)
     }
 
     /// One conversation by id — used to resolve the active persona and rolling
@@ -2667,6 +2737,27 @@ impl Db {
         )?;
         let rows = stmt
             .query_map([run_id], |r| {
+                Ok(SessionEvent {
+                    seq: r.get(0)?,
+                    kind: r.get(1)?,
+                    payload_json: r.get(2)?,
+                    created_at: r.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// The rows one run wrote after sequence number `after`, oldest first. The automatic
+    /// check of an answer reads the turn's tool results as the log grows (`SEE-1`).
+    pub fn session_events_for_run_after(&self, run_id: &str, after: i64) -> Result<Vec<SessionEvent>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT seq, kind, payload_json, created_at FROM session_events
+             WHERE run_id = ?1 AND seq > ?2 ORDER BY seq",
+        )?;
+        let rows = stmt
+            .query_map(params![run_id, after], |r| {
                 Ok(SessionEvent {
                     seq: r.get(0)?,
                     kind: r.get(1)?,
@@ -5842,6 +5933,37 @@ mod tests {
     /// with new ids and the old id names nothing here.
     /// `VTN-7`: a turn is typed until it is marked, the mark survives a reload,
     /// and a fork carries it.
+    /// `USE-UI-3`: a stored plan can be read back and replaced after the turn, and
+    /// a message with no plan, or no such message, reads as none.
+    #[test]
+    fn a_messages_stored_plan_can_be_read_and_replaced() {
+        let db = Db::open_in_memory().unwrap();
+        let conv = db.create_conversation("Plan", None, false).unwrap();
+        let answer = db
+            .append_message(
+                &conv.id,
+                &NewMessage {
+                    role: "assistant".into(),
+                    content: "done".into(),
+                    model_name: None,
+                    model_provenance: None,
+                    steps_json: None,
+                    attachments: vec![],
+                },
+            )
+            .unwrap();
+        assert_eq!(db.message_plan_json(&answer.id).unwrap(), None);
+        assert_eq!(db.message_plan_json("nope").unwrap(), None);
+        assert!(!db.set_message_plan("nope", "{}").unwrap());
+
+        db.finalize_message(&answer.id, "done", None, None, None, Some(r#"{"items":[],"revisions":0}"#)).unwrap();
+        assert_eq!(db.message_plan_json(&answer.id).unwrap().as_deref(), Some(r#"{"items":[],"revisions":0}"#));
+        assert!(db.set_message_plan(&answer.id, r#"{"items":[],"revisions":1}"#).unwrap());
+        assert_eq!(db.message_plan_json(&answer.id).unwrap().as_deref(), Some(r#"{"items":[],"revisions":1}"#));
+        // The answer itself is untouched by the plan change.
+        assert_eq!(db.list_messages(&conv.id).unwrap()[0].content, "done");
+    }
+
     #[test]
     fn a_spoken_turn_stays_marked_and_a_fork_keeps_the_mark() {
         let db = Db::open_in_memory().unwrap();

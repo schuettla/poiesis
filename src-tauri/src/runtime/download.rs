@@ -69,7 +69,7 @@ pub struct ResolvedAsset {
 ///
 /// The prefix is what separates an engine zip from the CUDA DLL package that
 /// sits beside it in the same release: since upstream dropped the `cu`
-/// discriminator, `llama-b10333-bin-win-cuda-12.4-x64.zip` and
+/// discriminator, `llama-b11418-bin-win-cuda-12.4-x64.zip` and
 /// `cudart-llama-bin-win-cuda-12.4-x64.zip` share every substring that matters.
 fn name_matches(name: &str, prefix: &str, keywords: &[&str]) -> bool {
     let lower = name.to_ascii_lowercase();
@@ -313,16 +313,19 @@ mod tests {
     /// `PINNED_BUILD_TAG` whenever the pin moves.
     const PINNED_WIN_ASSETS: &[&str] = &[
         "cudart-llama-bin-win-cuda-12.4-x64.zip",
-        "cudart-llama-bin-win-cuda-13.3-x64.zip",
-        "llama-b10333-bin-win-cpu-arm64.zip",
-        "llama-b10333-bin-win-cpu-x64.zip",
-        "llama-b10333-bin-win-cuda-12.4-x64.zip",
-        "llama-b10333-bin-win-cuda-13.3-x64.zip",
-        "llama-b10333-bin-win-hip-radeon-x64.zip",
-        "llama-b10333-bin-win-opencl-adreno-arm64.zip",
-        "llama-b10333-bin-win-openvino-2026.2.1-x64.zip",
-        "llama-b10333-bin-win-sycl-x64.zip",
-        "llama-b10333-bin-win-vulkan-x64.zip",
+        "cudart-llama-bin-win-cuda-13.4-arm64.zip",
+        "cudart-llama-bin-win-cuda-13.4-x64.zip",
+        "llama-b11418-bin-win-cpu-arm64.zip",
+        "llama-b11418-bin-win-cpu-x64.zip",
+        "llama-b11418-bin-win-cuda-12.4-x64.zip",
+        "llama-b11418-bin-win-cuda-13.4-arm64.zip",
+        "llama-b11418-bin-win-cuda-13.4-x64.zip",
+        "llama-b11418-bin-win-opencl-adreno-arm64.zip",
+        "llama-b11418-bin-win-openvino-2026.4.1-x64.zip",
+        "llama-b11418-bin-win-rocm-10.0-x64.zip",
+        "llama-b11418-bin-win-sycl-x64.zip",
+        "llama-b11418-bin-win-vulkan-arm64.zip",
+        "llama-b11418-bin-win-vulkan-x64.zip",
     ];
 
     fn engine_asset(backend: Backend) -> Option<&'static str> {
@@ -336,12 +339,12 @@ mod tests {
     #[test]
     fn engine_keywords_resolve_real_pinned_assets() {
         let cases = [
-            (Backend::Cuda12, "llama-b10333-bin-win-cuda-12.4-x64.zip"),
-            (Backend::Cuda13, "llama-b10333-bin-win-cuda-13.3-x64.zip"),
-            (Backend::Vulkan, "llama-b10333-bin-win-vulkan-x64.zip"),
-            (Backend::Sycl, "llama-b10333-bin-win-sycl-x64.zip"),
-            (Backend::Hip, "llama-b10333-bin-win-hip-radeon-x64.zip"),
-            (Backend::Cpu, "llama-b10333-bin-win-cpu-x64.zip"),
+            (Backend::Cuda12, "llama-b11418-bin-win-cuda-12.4-x64.zip"),
+            (Backend::Cuda13, "llama-b11418-bin-win-cuda-13.4-x64.zip"),
+            (Backend::Vulkan, "llama-b11418-bin-win-vulkan-x64.zip"),
+            (Backend::Sycl, "llama-b11418-bin-win-sycl-x64.zip"),
+            (Backend::Hip, "llama-b11418-bin-win-rocm-10.0-x64.zip"),
+            (Backend::Cpu, "llama-b11418-bin-win-cpu-x64.zip"),
         ];
         for (backend, expected) in cases {
             assert_eq!(
@@ -370,7 +373,7 @@ mod tests {
     fn cudart_keywords_resolve_the_matching_dll_package() {
         let cases = [
             (Backend::Cuda12, "cudart-llama-bin-win-cuda-12.4-x64.zip"),
-            (Backend::Cuda13, "cudart-llama-bin-win-cuda-13.3-x64.zip"),
+            (Backend::Cuda13, "cudart-llama-bin-win-cuda-13.4-x64.zip"),
         ];
         for (backend, expected) in cases {
             let kw = backend.cudart_keywords().unwrap();

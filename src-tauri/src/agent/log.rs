@@ -98,6 +98,35 @@ pub fn last_plan(db: &Db, conversation_id: &str) -> Option<super::plan::Plan> {
         .and_then(|r| serde_json::from_str::<super::plan::Plan>(&r.payload_json).ok())
 }
 
+/// `DEC-7`: the log's name for one decision.
+pub const DECISION_KIND: &str = "decision";
+
+/// One decision as it goes into the log (`DEC-7`). The state itself is not
+/// kept: a short preview and a hash are enough to tell two asks apart.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DecisionRecord {
+    pub id: String,
+    pub purpose: String,
+    pub backend: String,
+    pub ms: u32,
+    pub calibrated: bool,
+    /// Each answer with its probabilities.
+    pub answers: serde_json::Value,
+    pub input_tokens: u32,
+    pub state_preview: String,
+    pub state_hash: String,
+    /// What the controller did with it (`CTL-2`); nothing yet.
+    #[serde(default)]
+    pub action: Option<String>,
+}
+
+/// Record a decision. Best effort, like every other write here: a decision that
+/// was made but not logged was still made.
+pub fn record_decision(db: &Db, conversation_id: &str, run_id: Option<&str>, record: &DecisionRecord) {
+    let Ok(payload) = serde_json::to_value(record) else { return };
+    let _ = db.append_session_event(conversation_id, run_id, DECISION_KIND, &payload);
+}
+
 /// `REG-4`: the log's name for a command that changed something.
 pub const COMMAND_KIND: &str = "command";
 
@@ -316,10 +345,12 @@ pub fn replay(db: &Db, run_id: &str) -> Vec<serde_json::Value> {
     let mut out = Vec::new();
     for row in rows {
         // `command` and `rewound` are records *about* the conversation, like
-        // `summary`: the model must never see its own command trace.
+        // `summary`: the model must never see its own command trace. A
+        // `decision` is the same kind of record: the model is not shown the
+        // questions the runtime asked on its behalf.
         if matches!(
             row.kind.as_str(),
-            "steer" | "stop" | COMPACTION_KIND | PLAN_KIND | COMMAND_KIND | REWOUND_KIND
+            "steer" | "stop" | COMPACTION_KIND | PLAN_KIND | COMMAND_KIND | REWOUND_KIND | DECISION_KIND
         ) {
             continue;
         }
@@ -543,6 +574,41 @@ mod tests {
 
         let replayed = replay(&db, "run-1");
         assert_eq!(replayed.len(), 2, "only the prompt and the answer: {replayed:?}");
+    }
+
+    /// `DEC-7`: a decision is logged against its run, and a resumed run never
+    /// sees it in its transcript.
+    #[test]
+    fn a_decision_is_logged_and_replay_skips_it() {
+        let db = db();
+        let conversation_id = conv(&db);
+        let log = SessionLog::new(&db, &conversation_id, "run-1");
+        log.prompt(&[serde_json::json!({ "role": "user", "content": "go" })]);
+        record_decision(
+            &db,
+            &conversation_id,
+            Some("run-1"),
+            &DecisionRecord {
+                id: "d1".into(),
+                purpose: "ret-sufficiency".into(),
+                backend: "local:Clef-flash".into(),
+                ms: 41,
+                calibrated: false,
+                answers: serde_json::json!({ "enough": { "p": 0.9 } }),
+                input_tokens: 334,
+                state_preview: "Question: ...".into(),
+                state_hash: "0123456789abcdef".into(),
+                action: None,
+            },
+        );
+        log.appended(&serde_json::json!({ "role": "assistant", "content": "done" }));
+
+        assert_eq!(replay(&db, "run-1").len(), 2, "the decision is not part of the transcript");
+        let rows = db.session_events_for_run("run-1").unwrap();
+        let row = rows.iter().find(|r| r.kind == DECISION_KIND).expect("the decision row is there");
+        let back: DecisionRecord = serde_json::from_str(&row.payload_json).unwrap();
+        assert_eq!(back.purpose, "ret-sufficiency");
+        assert_eq!(back.input_tokens, 334);
     }
 
     fn answered(name: &str, args: &str, outcome: &str, note: Option<&str>) -> CommandTrace {

@@ -1,0 +1,572 @@
+{
+ "data": [
+  {
+   "id": "baseten/mammoth-1:free",
+   "canonical_slug": "baseten/mammoth-1-20261021",
+   "name": "Baseten: Mammoth 1 (free)",
+   "context_length": 16384,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "baseten/elephant-1:free",
+   "canonical_slug": "baseten/elephant-1-20261021",
+   "name": "Baseten: Elephant 1 (free)",
+   "context_length": 16384,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "nace-ai/drex-max",
+   "canonical_slug": "nace-ai/drex-max-20261016",
+   "name": "Nace.AI: Drex Max",
+   "context_length": 262144,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000006",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "perplexity/pplx-decider-flash-v1.2",
+   "canonical_slug": "perplexity/pplx-decider-flash-v1.2-20261016",
+   "name": "Perplexity: Decider Flash V1.2",
+   "context_length": 262144,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000001",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "perplexity/pplx-decider-v1.2",
+   "canonical_slug": "perplexity/pplx-decider-v1.2-20261016",
+   "name": "Perplexity: Decider V1.2",
+   "context_length": 262144,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000002",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "~perplexity/pplx-decider-flash-latest",
+   "canonical_slug": "~perplexity/pplx-decider-flash-latest",
+   "name": "Perplexity: Decider Flash Latest",
+   "context_length": 262144,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000001",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "respan/span-02",
+   "canonical_slug": "respan/span-02-20261015",
+   "name": "Respan: Span-02",
+   "context_length": 131072,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000001",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "liquid/d1-ultra",
+   "canonical_slug": "liquid/d1-ultra-20261015",
+   "name": "LiquidAI: d1-ultra",
+   "context_length": 32768,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.000000042",
+    "completion": "0",
+    "input_cache_read": "0.000000042"
+   }
+  },
+  {
+   "id": "typesafe/jev-1.14",
+   "canonical_slug": "typesafe/jev-1.14-20261014",
+   "name": "TypeSafe: Jev 1.14",
+   "context_length": 262144,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.000000042",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "~perplexity/pplx-decider-latest",
+   "canonical_slug": "~perplexity/pplx-decider-latest",
+   "name": "Perplexity: Decider Latest",
+   "context_length": 262144,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000002",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "scaledown/classify-1",
+   "canonical_slug": "scaledown/classify-1-20260928",
+   "name": "ScaleDown: Classify-1",
+   "context_length": 1000000,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image",
+     "file"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000004",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "nace-ai/drex-v2.0",
+   "canonical_slug": "nace-ai/drex-v2.0-20261009",
+   "name": "Nace.AI: Drex v2.0",
+   "context_length": 131072,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000006",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "microsoft/microsoft-decision-1",
+   "canonical_slug": "microsoft/microsoft-decision-1-20261009",
+   "name": "Microsoft: Microsoft-Decision-1",
+   "context_length": 32768,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.000000042",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "nace-ai/drex-v1.5",
+   "canonical_slug": "nace-ai/drex-v1.5-20261009",
+   "name": "Nace.AI: Drex v1.5",
+   "context_length": 131072,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000004",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "cloudflare/clef-omni",
+   "canonical_slug": "cloudflare/clef-omni-20261009",
+   "name": "Cloudflare: Clef Omni",
+   "context_length": 65536,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image",
+     "audio",
+     "video"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000015",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "upstage/solar-decide-flash",
+   "canonical_slug": "upstage/solar-decide-flash-20261008",
+   "name": "Upstage: Solar Decide Flash",
+   "context_length": 524288,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000005",
+    "completion": "0",
+    "input_cache_read": "0.00000005"
+   }
+  },
+  {
+   "id": "openai/gpt-6-luna-decisions",
+   "canonical_slug": "openai/gpt-6-luna-decisions-20261006",
+   "name": "OpenAI: GPT-6 Luna Decisions",
+   "context_length": 1050000,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.0000001",
+    "completion": "0",
+    "web_search": "0.01",
+    "input_cache_read": "0",
+    "input_cache_write": "0"
+   }
+  },
+  {
+   "id": "liquid/d1",
+   "canonical_slug": "liquid/d1-20260930",
+   "name": "LiquidAI: d1",
+   "context_length": 65536,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000002",
+    "completion": "0",
+    "input_cache_read": "0.00000002"
+   }
+  },
+  {
+   "id": "cloudflare/clef-flash",
+   "canonical_slug": "cloudflare/clef-flash",
+   "name": "Cloudflare: Clef Flash",
+   "context_length": 24576,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.000000019",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "cloudflare/clef",
+   "canonical_slug": "cloudflare/clef",
+   "name": "Cloudflare: Clef",
+   "context_length": 65537,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.000000042",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "togethercomputer/tev1-4b-experimental",
+   "canonical_slug": "togethercomputer/tev1-4b-experimental-20260923",
+   "name": "Together: Tev1 4B Experimental",
+   "context_length": 32768,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.000000042",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "inception/mercury-decide",
+   "canonical_slug": "inception/mercury-decide-20260930",
+   "name": "Inception: Mercury Decide",
+   "context_length": 65536,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000002",
+    "completion": "0",
+    "input_cache_read": "0"
+   }
+  },
+  {
+   "id": "inception/mercury-decide:free",
+   "canonical_slug": "inception/mercury-decide-20260930",
+   "name": "Inception: Mercury Decide (free)",
+   "context_length": 65536,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "upstage/solar-decide",
+   "canonical_slug": "upstage/solar-decide-20260928",
+   "name": "Upstage: Solar Decide",
+   "context_length": 524288,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000005",
+    "completion": "0",
+    "input_cache_read": "0.00000005"
+   }
+  },
+  {
+   "id": "respan/span-01",
+   "canonical_slug": "respan/span-01-20260925",
+   "name": "Respan: Span-01",
+   "context_length": 0,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.00000002",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "respan/span-01-lite",
+   "canonical_slug": "respan/span-01-lite-20260925",
+   "name": "Respan: Span-01 Lite",
+   "context_length": 0,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "respan/span-01-lite:free",
+   "canonical_slug": "respan/span-01-lite-20260925",
+   "name": "Respan: Span-01 Lite (free)",
+   "context_length": 0,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "jaredpalmer/kev-4b",
+   "canonical_slug": "jaredpalmer/kev-4b-20260924",
+   "name": "Jared Palmer: Kev 4B",
+   "context_length": 8192,
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.000000042",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "~typesafe/jev-latest",
+   "canonical_slug": "~typesafe/jev-latest",
+   "name": "TypeSafe: Jev Latest",
+   "context_length": 262144,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.000000042",
+    "completion": "0"
+   }
+  },
+  {
+   "id": "typesafe/jev-1.13",
+   "canonical_slug": "typesafe/jev-1.13-20260917",
+   "name": "TypeSafe: Jev 1.13",
+   "context_length": 262144,
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "decisions"
+    ]
+   },
+   "pricing": {
+    "prompt": "0.000000042",
+    "completion": "0"
+   }
+  }
+ ]
+}

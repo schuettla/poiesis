@@ -1,0 +1,40 @@
+{"id": "mem-01", "name": "units", "description": "Distance units", "body": "Always give distances in kilometres.", "expect": "global"}
+{"id": "mem-02", "name": "tone", "description": "Reply tone", "body": "I prefer short answers without small talk.", "expect": "global"}
+{"id": "mem-03", "name": "language", "description": "Language", "body": "Reply in German unless I write in another language.", "expect": "global"}
+{"id": "mem-04", "name": "format", "description": "Formatting", "body": "Use plain text, no markdown tables.", "expect": "global"}
+{"id": "mem-05", "name": "name", "description": "Preferred name", "body": "Call me Sam, not Samuel.", "expect": "global"}
+{"id": "mem-06", "name": "dates", "description": "Date format", "body": "Write dates as day month year, for example 5 March 2025.", "expect": "global"}
+{"id": "mem-07", "name": "honesty", "description": "Honesty", "body": "Say so when you are not sure instead of guessing.", "expect": "global"}
+{"id": "mem-08", "name": "spelling", "description": "Spelling", "body": "Use British spelling.", "expect": "global"}
+{"id": "mem-09", "name": "sources", "description": "Sources", "body": "Always say where a fact came from.", "expect": "global"}
+{"id": "mem-10", "name": "steps", "description": "Explanations", "body": "Explain steps in order, one at a time.", "expect": "global"}
+{"id": "mem-11", "name": "currency", "description": "Currency", "body": "Show money in euros.", "expect": "global"}
+{"id": "mem-12", "name": "brevity", "description": "Length", "body": "Keep every answer under 150 words unless I ask for more.", "expect": "global"}
+{"id": "mem-13", "name": "timezone", "description": "Timezone", "body": "My timezone is Central European Time.", "expect": "global"}
+{"id": "mem-14", "name": "jargon", "description": "Jargon", "body": "Avoid jargon and explain terms the first time you use them.", "expect": "global"}
+{"id": "mem-15", "name": "code-style", "description": "Code style", "body": "I use tabs, not spaces, in every project.", "expect": "global"}
+{"id": "mem-16", "name": "dog", "description": "Pet", "body": "My dog Bruno is allergic to chicken.", "expect": "topical"}
+{"id": "mem-17", "name": "garden", "description": "Garden", "body": "My tomatoes are in the south bed and need watering every second day.", "expect": "topical"}
+{"id": "mem-18", "name": "car", "description": "Car", "body": "My car is a 2016 Golf diesel and the service is due every 15000 km.", "expect": "topical"}
+{"id": "mem-19", "name": "project-x", "description": "Project X", "body": "Project X uses PostgreSQL and the deploy runs from the main branch.", "expect": "topical"}
+{"id": "mem-20", "name": "recipe", "description": "Pasta", "body": "For my carbonara I use guanciale, pecorino and no cream.", "expect": "topical"}
+{"id": "mem-21", "name": "running", "description": "Training plan", "body": "My marathon plan peaks at 60 km per week in week 12.", "expect": "topical"}
+{"id": "mem-22", "name": "cabin", "description": "Cabin", "body": "The cabin wifi password is Lakeside2024 and the firewood is in the shed.", "expect": "topical"}
+{"id": "mem-23", "name": "boss", "description": "Manager", "body": "My manager Priya likes weekly summaries on Friday afternoon.", "expect": "topical"}
+{"id": "mem-24", "name": "mortgage", "description": "Mortgage", "body": "The mortgage rate is fixed at 3.9 percent until 2031.", "expect": "topical"}
+{"id": "mem-25", "name": "guitar", "description": "Guitar", "body": "I am learning Blackbird by the Beatles, fingerstyle, in drop D.", "expect": "topical"}
+{"id": "mem-26", "name": "flight", "description": "Trip", "body": "The flight to Lisbon leaves on 3 June at 07:15 from terminal 2.", "expect": "topical"}
+{"id": "mem-27", "name": "allergy", "description": "Cooking", "body": "When I cook for my sister, leave out nuts.", "expect": "topical"}
+{"id": "mem-28", "name": "book", "description": "Reading", "body": "I am reading Middlemarch and want chapter summaries without spoilers.", "expect": "topical"}
+{"id": "mem-29", "name": "server", "description": "Home server", "body": "The home server runs Debian and backs up to the NAS at 2 am.", "expect": "topical"}
+{"id": "mem-30", "name": "kids", "description": "School", "body": "Lena has swimming on Tuesdays and piano on Thursdays.", "expect": "topical"}
+{"id": "mem-31", "name": "note1", "description": "Misc", "body": "Remember this.", "expect": "unsure"}
+{"id": "mem-32", "name": "note2", "description": "Thing", "body": "It is better that way.", "expect": "unsure"}
+{"id": "mem-33", "name": "note3", "description": "Idea", "body": "Maybe later.", "expect": "unsure"}
+{"id": "mem-34", "name": "note4", "description": "Preference", "body": "I like the other one more.", "expect": "unsure"}
+{"id": "mem-35", "name": "note5", "description": "Reminder", "body": "Do what we said before.", "expect": "unsure"}
+{"id": "mem-36", "name": "note6", "description": "Note", "body": "Same as last time.", "expect": "unsure"}
+{"id": "mem-37", "name": "note7", "description": "Todo", "body": "Check it.", "expect": "unsure"}
+{"id": "mem-38", "name": "note8", "description": "Opinion", "body": "That was fine.", "expect": "unsure"}
+{"id": "mem-39", "name": "note9", "description": "Rule", "body": "Not that one.", "expect": "unsure"}
+{"id": "mem-40", "name": "note10", "description": "Memo", "body": "Use the usual.", "expect": "unsure"}

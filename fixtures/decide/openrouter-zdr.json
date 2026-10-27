@@ -1,0 +1,108 @@
+{
+ "data": [
+  {
+   "model_id": "baseten/mammoth-1:free",
+   "provider_name": "BaseTen"
+  },
+  {
+   "model_id": "baseten/elephant-1:free",
+   "provider_name": "BaseTen"
+  },
+  {
+   "model_id": "nace-ai/drex-max",
+   "provider_name": "DeepInfra"
+  },
+  {
+   "model_id": "perplexity/pplx-decider-flash-v1.2",
+   "provider_name": "Perplexity"
+  },
+  {
+   "model_id": "perplexity/pplx-decider-v1.2",
+   "provider_name": "Perplexity"
+  },
+  {
+   "model_id": "liquid/d1-ultra",
+   "provider_name": "Liquid"
+  },
+  {
+   "model_id": "cloudflare/clef-flash",
+   "provider_name": "DeepInfra"
+  },
+  {
+   "model_id": "typesafe/jev-1.14",
+   "provider_name": "TypeSafe"
+  },
+  {
+   "model_id": "jaredpalmer/kev-4b",
+   "provider_name": "Phala"
+  },
+  {
+   "model_id": "cloudflare/clef",
+   "provider_name": "DeepInfra"
+  },
+  {
+   "model_id": "nace-ai/drex-v1.5",
+   "provider_name": "DeepInfra"
+  },
+  {
+   "model_id": "nace-ai/drex-v2.0",
+   "provider_name": "DeepInfra"
+  },
+  {
+   "model_id": "cloudflare/clef-omni",
+   "provider_name": "Cloudflare"
+  },
+  {
+   "model_id": "microsoft/microsoft-decision-1",
+   "provider_name": "Azure"
+  },
+  {
+   "model_id": "cloudflare/clef-flash",
+   "provider_name": "PrimeIntellect"
+  },
+  {
+   "model_id": "cloudflare/clef",
+   "provider_name": "PrimeIntellect"
+  },
+  {
+   "model_id": "upstage/solar-decide-flash",
+   "provider_name": "Upstage"
+  },
+  {
+   "model_id": "liquid/d1",
+   "provider_name": "Liquid"
+  },
+  {
+   "model_id": "cloudflare/clef-flash",
+   "provider_name": "Cloudflare"
+  },
+  {
+   "model_id": "cloudflare/clef",
+   "provider_name": "Cloudflare"
+  },
+  {
+   "model_id": "togethercomputer/tev1-4b-experimental",
+   "provider_name": "Together"
+  },
+  {
+   "model_id": "inception/mercury-decide",
+   "provider_name": "Inception"
+  },
+  {
+   "model_id": "scaledown/classify-1",
+   "provider_name": "ScaleDown"
+  },
+  {
+   "model_id": "upstage/solar-decide",
+   "provider_name": "Upstage"
+  },
+  {
+   "model_id": "jaredpalmer/kev-4b",
+   "provider_name": "SiliconFlow"
+  },
+  {
+   "model_id": "typesafe/jev-1.13",
+   "provider_name": "TypeSafe"
+  }
+ ]
+}
