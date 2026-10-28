@@ -221,6 +221,14 @@ pub async fn run_cycle<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<LastSync
         match got {
             Ok(new_mail) => {
                 last.fetched += keep(&db, &account.id, &new_mail, now_ms());
+                // `INT-2`: a reminder waiting for this sender is ready for the next turn.
+                // A renumbered mailbox hands back old mail as new, which says nothing.
+                if let (false, Some(mem)) = (new_mail.reset, app.try_state::<crate::memory::MemoryStore>()) {
+                    let senders: Vec<String> = new_mail.rows.iter().map(|r| r.from.clone()).collect();
+                    for name in mem.mail_arrived(&db, &senders) {
+                        let _ = db.log_activity(None, "mail", &format!("a message came for the reminder {name}"));
+                    }
+                }
                 let _ = app.emit(EVENT, ());
             }
             Err(e) => last.errors.push(format!("{}: {e}", account.label)),

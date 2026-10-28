@@ -35,6 +35,15 @@ vi.mock("../../lib/api", async (importOriginal) => ({
       { file: "2-facts-old-coffee", collection: "facts", name: "old-coffee", description: "Drank coffee", at: 2 },
       { file: "3-lessons-check-it", collection: "lessons", name: "check-it", description: "Check it", at: 3 },
     ]),
+  listIntentions: () =>
+    Promise.resolve([
+      { name: "remind-call-anna", task: "call Anna", when: 'When you are in the project "Book"', state: "waiting", created: "2026-10-27" },
+      { name: "remind-answer", task: "answer Bo", when: "When Bo writes, and a message has come in", state: "ready", created: "2026-10-27" },
+    ]),
+  forgetMemoryFact: (name: string) => {
+    calls.push(["forget", name]);
+    return Promise.resolve("token");
+  },
   restoreMemoryFact: (file: string) => {
     calls.push(["restore", file]);
     return Promise.resolve();
@@ -47,7 +56,7 @@ vi.mock("../../lib/api", async (importOriginal) => ({
 }));
 
 import { useAppStore } from "../../lib/store";
-import { Evidence, LetGo, RecentChanges, Unsure } from "./BeliefSections";
+import { Evidence, LetGo, RecentChanges, ThingsIWillDo, Unsure } from "./BeliefSections";
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -124,6 +133,22 @@ describe("Unsure", () => {
     act(() => root.render(<Unsure version={0} onChanged={() => {}} />));
     await flush();
     expect(button("Still true")).toBeTruthy();
+  });
+});
+
+describe("ThingsIWillDo", () => {
+  it("lists what I will remind you of with when in words, and drops one", async () => {
+    let changed = 0;
+    act(() => root.render(<ThingsIWillDo version={0} onChanged={() => void changed++} />));
+    await flush();
+    expect(container.textContent).toContain("Things I'll do");
+    expect(container.textContent).toContain("Remind you: call Anna");
+    expect(container.textContent).toContain('When you are in the project "Book"');
+    expect(container.textContent).toContain("When Bo writes, and a message has come in");
+    click(container.querySelectorAll("button")[1]);
+    await flush();
+    expect(calls).toEqual([["forget", "remind-answer"]]);
+    expect(changed).toBe(1);
   });
 });
 

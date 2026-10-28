@@ -19,6 +19,9 @@ function leadFor(op: string, collection: string): string {
     // `BLF-2`: the relation check at the write site, said plainly (IV.9).
     case "merge":
       return "I knew that already";
+    // `INT-1`: a thing to do later, not a note.
+    case "remind":
+      return "I'll remind you";
     case "forget":
       return lesson ? "I forgot a lesson" : "I forgot that";
     case "update":
@@ -244,6 +247,7 @@ export default function MemoryToast() {
   // (PRO-9) — clean the same way a save is.
   const canUndo =
     toast.op === "save" ||
+    toast.op === "remind" ||
     toast.op === "forget" ||
     toast.op === "always" ||
     isProfile ||

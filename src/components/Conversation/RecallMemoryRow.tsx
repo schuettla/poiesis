@@ -30,7 +30,9 @@ export default function RecallMemoryRow({
   const [text, setText] = useState("");
   const [pressed, setPressed] = useState<Pressed>(null);
   const [error, setError] = useState("");
-  const isFact = hit.kind !== "lesson";
+  const isFact = hit.kind !== "lesson" && hit.kind !== "intention";
+  // `INT-2`: a reminder fired once and is done; it has nothing to correct.
+  const isReminder = hit.kind === "intention";
 
   async function outdate() {
     const now = text.trim();
@@ -70,7 +72,7 @@ export default function RecallMemoryRow({
             from that chat
           </button>
         )}
-        {pressed === null && !asking && (
+        {pressed === null && !asking && !isReminder && (
           <>
             {isFact && (
               <button className="recall-act" onClick={() => setAsking(true)}>

@@ -150,6 +150,50 @@ pub async fn recall_for(
     // `CUE-1`: the chat the turn is in, for the names its notes hold.
     conversation_id: Option<&str>,
 ) -> RecallResult {
+    let mut result = recalled(mgr, embed_mgr, db, mem, query, project, conversation_id).await;
+    // `INT-2`: a reminder fires in a real turn, the one a chat is in; a search of
+    // memory with no chat does not use it up.
+    if let Some(conversation_id) = conversation_id.filter(|_| !query.trim().is_empty()) {
+        remind(db, mem, &mut result, query, project, conversation_id);
+    }
+    result
+}
+
+/// `INT-2`: tell the turn what the person asked to be reminded of, once. Each
+/// reminder is one line under its own heading in the index and one hit for the
+/// timeline, so the person sees it was brought up and why.
+fn remind(db: &Db, mem: &MemoryStore, result: &mut RecallResult, query: &str, project: Option<&str>, conversation_id: &str) {
+    let fired = mem.fire_due(db, project, query, conversation_id);
+    if fired.is_empty() {
+        return;
+    }
+    result.index.push_str(crate::memory::intention::REMINDERS_HEADER);
+    for f in &fired {
+        result.index.push_str(&format!("- {}\n", f.line));
+        let _ = db.log_activity(Some(conversation_id), "memory", &format!("reminded {}", f.name));
+    }
+    result.matches.extend(fired.into_iter().map(|f| SearchHit {
+        source: "memory".to_string(),
+        conversation_id: f.source_conversation.filter(|id| db.get_conversation(id).ok().flatten().is_some()),
+        title: f.name,
+        created_at: date_ms(&f.created),
+        snippet: f.description,
+        kind: Some(crate::memory::intention::KIND.to_string()),
+        path: None,
+        why: Some(f.why),
+    }));
+}
+
+/// `recall_for` before reminders: the notes and lessons this turn gets.
+async fn recalled(
+    mgr: &RuntimeManager,
+    embed_mgr: &EmbedManager,
+    db: &Db,
+    mem: &MemoryStore,
+    query: &str,
+    project: Option<&str>,
+    conversation_id: Option<&str>,
+) -> RecallResult {
     backfill_scope(mgr, db, mem).await;
 
     let Ok(Some(model)) = db.default_model_by_role("embed") else {
@@ -547,6 +591,10 @@ pub fn remember_fact_cmd(
     if body.is_empty() {
         return Err(PoiesisError::Message("Tell me what to remember.".into()));
     }
+    // `INT-1`: "remind me ... when ..." is a thing to do later, not a note.
+    if let Some(reminder) = crate::memory::intention::parse_reminder(body) {
+        return remember_reminder(&mem, &db, conversation_id.as_deref(), body, reminder.map_err(PoiesisError::Message)?);
+    }
     let stem: String = body.split_whitespace().take(6).collect::<Vec<_>>().join(" ");
     let first_line = body.lines().next().unwrap_or(body);
     let description: String = first_line.chars().take(120).collect();
@@ -592,6 +640,109 @@ pub fn remember_fact_cmd(
     };
     let _ = db.log_activity(conversation_id.as_deref(), "memory", &logged);
     Ok(RememberedFact { name: saved.name, description, outcome: outcome.into(), other })
+}
+
+/// `INT-UI-1`: one thing I will do, for the Memory tab.
+#[derive(Debug, Serialize)]
+pub struct IntentionRow {
+    pub name: String,
+    /// What I will remind you of.
+    pub task: String,
+    /// When, in words: "When you are in the project \"Book\"".
+    pub when: String,
+    /// `waiting`, or `ready` when the mail it waits for has come in.
+    pub state: String,
+    pub created: String,
+}
+
+/// Everything still to do. Dropping one is `forget_memory_fact_cmd`, which can be undone.
+#[tauri::command]
+pub fn list_intentions_cmd(mem: State<'_, MemoryStore>, db: State<'_, Db>) -> Vec<IntentionRow> {
+    mem.intentions()
+        .into_iter()
+        .filter_map(|f| {
+            let trigger = f.trigger_of()?;
+            let project = match &trigger {
+                crate::memory::intention::Trigger::Project(id) => db.get_project(id).ok().flatten().map(|p| p.name),
+                _ => None,
+            };
+            let ready = f.status.as_deref() == Some("ready");
+            let mut when = format!("When {}", trigger.when_words(project.as_deref()));
+            if ready {
+                when.push_str(", and a message has come in");
+            }
+            Some(IntentionRow {
+                name: f.name,
+                task: f.description,
+                when,
+                state: if ready { "ready" } else { "waiting" }.to_string(),
+                created: f.created,
+            })
+        })
+        .collect()
+}
+
+/// `INT-1`: save what `/remember remind me ...` asked for. A reminder for a time is
+/// not saved here: the schedule holds times, so the outcome is `schedule` and the
+/// caller opens the task form with the words filled in.
+fn remember_reminder(
+    mem: &MemoryStore,
+    db: &Db,
+    conversation_id: Option<&str>,
+    original: &str,
+    reminder: crate::memory::intention::Reminder,
+) -> Cmd<RememberedFact> {
+    use crate::memory::intention::{Cond, Trigger};
+    let trigger = match reminder.cond {
+        Cond::Time(when) => {
+            return Ok(RememberedFact {
+                name: String::new(),
+                description: reminder.task,
+                outcome: "schedule".into(),
+                other: Some(when),
+            });
+        }
+        Cond::Topic(words) => Trigger::Topic(words),
+        Cond::Mail(from) => Trigger::Mail(from),
+        Cond::Project(name) => {
+            let wanted = name.to_lowercase();
+            let projects = db.list_projects(false).map_err(err)?;
+            let found = projects
+                .iter()
+                .find(|p| p.name.to_lowercase() == wanted)
+                .or_else(|| projects.iter().find(|p| p.name.to_lowercase().contains(&wanted)));
+            let Some(project) = found else {
+                return Err(PoiesisError::Message(format!("I do not know a project called \"{name}\".")));
+            };
+            Trigger::Project(project.id.clone())
+        }
+    };
+    let project_name = match &trigger {
+        Trigger::Project(id) => db.get_project(id).ok().flatten().map(|p| p.name),
+        _ => None,
+    };
+    let when = trigger.when_words(project_name.as_deref());
+    let stem: String = reminder.task.split_whitespace().take(6).collect::<Vec<_>>().join(" ");
+    let description: String = reminder.task.chars().take(120).collect();
+    let mut attempt = 0;
+    let name = loop {
+        let name = if attempt == 0 { format!("remind {stem}") } else { format!("remind {stem} {}", attempt + 1) };
+        let fact = Fact {
+            name,
+            description: description.clone(),
+            source_conversation: conversation_id.map(str::to_string),
+            body: original.to_string(),
+            trigger: Some(trigger.render()),
+            ..Default::default()
+        };
+        match mem.save_intention(db, &fact) {
+            Ok(name) => break name,
+            Err(e) if e.contains("exists") && attempt < 20 => attempt += 1,
+            Err(e) => return Err(PoiesisError::Message(e)),
+        }
+    };
+    let _ = db.log_activity(conversation_id, "memory", &format!("save {name}"));
+    Ok(RememberedFact { name, description, outcome: "reminder".into(), other: Some(when) })
 }
 
 /// The user overriding a fact's scope by hand (`SCP-UI-1`) — they are the
@@ -1193,6 +1344,7 @@ pub async fn resolve_change_proposal_cmd(
                     evidence: Vec::new(),
                     valid_from: None,
                     fires: None,
+                    trigger: None,
                     // A lesson the user accepted from the review queue is not
                     // fenced to a project: they were shown it out of context
                     // and said yes to it as a standing lesson.
@@ -1882,6 +2034,7 @@ mod tests {
             evidence: Vec::new(),
             valid_from: None,
             fires: None,
+            trigger: None,
             project: None,
         }
     }
@@ -2013,5 +2166,66 @@ mod tests {
         assert!(!notes.text.contains("forgotten-fact"), "a name with no file must be dropped, not guessed at");
         let soul = layers.iter().find(|l| l.label.starts_with("Soul")).unwrap();
         assert!(soul.text.is_empty(), "soul_present: false must not leak the current soul text");
+    }
+
+    fn empty_recall() -> RecallResult {
+        RecallResult { index: "- [a] (fact) likes tea\n".into(), matches: Vec::new(), injected_facts: Vec::new() }
+    }
+
+    fn remembered(mem: &MemoryStore, db: &Db, text: &str) -> Result<RememberedFact, String> {
+        let reminder = crate::memory::intention::parse_reminder(text).expect("a reminder")?;
+        remember_reminder(mem, db, None, text, reminder).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn a_reminder_that_fires_is_one_line_under_its_heading_and_one_hit_and_only_once() {
+        let (mem, db, _tmp) = store();
+        remembered(&mem, &db, "remind me to call the dentist when we talk about teeth").unwrap();
+
+        let mut quiet = empty_recall();
+        remind(&db, &mem, &mut quiet, "what is the weather", None, "c1");
+        assert!(!quiet.index.contains("Reminders") && quiet.matches.is_empty());
+
+        let mut hit = empty_recall();
+        remind(&db, &mem, &mut hit, "my teeth hurt", None, "c1");
+        assert!(hit.index.contains("## Reminders") && hit.index.contains("call the dentist"));
+        assert!(hit.index.starts_with("- [a] (fact) likes tea"), "the notes come first");
+        assert_eq!(hit.matches.len(), 1);
+        assert_eq!(hit.matches[0].kind.as_deref(), Some("intention"));
+        assert!(hit.matches[0].why.as_deref().unwrap().contains("\"teeth\" comes up"));
+
+        let mut again = empty_recall();
+        remind(&db, &mem, &mut again, "my teeth hurt", None, "c2");
+        assert!(!again.index.contains("Reminders"), "told once");
+    }
+
+    #[test]
+    fn remember_saves_a_reminder_by_project_name_and_hands_a_time_to_the_schedule() {
+        let (mem, db, _tmp) = store();
+        let project = db.create_project("Book", None).unwrap();
+
+        let saved = remembered(&mem, &db, "remind me to send the draft when I open the project book").unwrap();
+        assert_eq!(saved.outcome, "reminder");
+        assert_eq!(saved.other.as_deref(), Some("you are in the project \"Book\""));
+        let kept = mem.read(&saved.name).unwrap();
+        assert_eq!(kept.trigger, Some(format!("project:{}", project.id)));
+        assert_eq!(mem.fire_due(&db, Some(&project.id), "hello", "c1").len(), 1);
+
+        let err = remembered(&mem, &db, "remind me to send the draft when I open the project Missing").unwrap_err();
+        assert!(err.contains("do not know a project called \"Missing\""));
+
+        let later = remembered(&mem, &db, "remind me to buy milk tomorrow").unwrap();
+        assert_eq!((later.outcome.as_str(), later.other.as_deref()), ("schedule", Some("tomorrow")));
+        assert_eq!(later.description, "buy milk");
+        assert!(mem.intentions().is_empty(), "a time is the schedule's, not a note");
+    }
+
+    #[test]
+    fn two_reminders_with_the_same_words_get_two_names() {
+        let (mem, db, _tmp) = store();
+        let a = remembered(&mem, &db, "remind me to call Anna when Bo writes").unwrap();
+        let b = remembered(&mem, &db, "remind me to call Anna when Cy writes").unwrap();
+        assert_ne!(a.name, b.name);
+        assert_eq!(mem.intentions().len(), 2);
     }
 }

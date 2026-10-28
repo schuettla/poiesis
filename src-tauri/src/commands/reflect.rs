@@ -579,6 +579,7 @@ async fn reflect_pass(
                     evidence: Vec::new(),
                     valid_from: None,
                     fires: None,
+                    trigger: None,
                 };
                 if mem.save_lesson(&db, &fact).is_err() {
                     continue;
@@ -1075,6 +1076,7 @@ mod tests {
             evidence: Vec::new(),
             valid_from: None,
             fires: None,
+            trigger: None,
         };
         mem.save_lesson(&db, &lesson).unwrap();
         let refs = crate::commands::memory::ContextRefs { lessons: vec!["check-header".into()], ..Default::default() };

@@ -142,7 +142,7 @@ impl MemoryStore {
     }
 
     /// Rewrite one entry's frontmatter in place, under the lock.
-    fn rewrite(&self, collection: &str, name: &str, change: impl FnOnce(&mut Fact)) -> Result<(), String> {
+    pub(super) fn rewrite(&self, collection: &str, name: &str, change: impl FnOnce(&mut Fact)) -> Result<(), String> {
         let name = slugify(name)?;
         let _guard = self.lock.lock().unwrap();
         let path = self.path_for(collection, &name);

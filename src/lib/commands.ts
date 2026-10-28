@@ -14,7 +14,7 @@ import { cloudTarget, useAppStore, type AppState } from "./store";
 import * as api from "./api";
 import { ranked } from "./fuzzy";
 import { EFFORTS } from "./effort";
-import { scheduleDraft } from "./when";
+import { proposedDraft, scheduleDraft } from "./when";
 import { parseGoalArgs } from "./goal";
 import { workspaceAvailable } from "./experiments";
 import { openVoice } from "./voice/controller";
@@ -758,6 +758,30 @@ export const HANDLERS: Record<string, Handler> = {
     if (!text) return { kind: "needsArg" };
     if (!api.inTauri()) return fail("I can only keep notes in the desktop app.");
     const saved = await api.rememberFact(activeId(s), text);
+    // `INT-1`: a reminder for a time is the schedule's. Nothing was saved; the task
+    // form opens with the words in it, as for a schedule I proposed.
+    if (saved.outcome === "schedule") {
+      const id = activeId(s);
+      const conv = s.conversations.find((c) => c.id === id);
+      useAppStore.setState({
+        taskDraft: proposedDraft(conv?.title ?? "New task", id ?? "", saved.other ?? undefined, saved.description),
+      });
+      s.setView("tasks");
+      return done(`opened a task for “${saved.description}”`);
+    }
+    if (saved.outcome === "reminder") {
+      useAppStore.setState({
+        memoryToast: {
+          op: "remind",
+          name: saved.name,
+          description: `${saved.description}, when ${saved.other ?? "it comes up"}`,
+          collection: "facts",
+          undoToken: "",
+        },
+      });
+      void s.refreshSelf();
+      return done(`will remind you about “${saved.description}”`);
+    }
     // The same toast, and the same Undo, as a fact I saved myself (`MEM-UI-3`).
     // `BLF-2`: when it replaced or disputed an older note, the toast says so and
     // its Undo puts the older note back (`other` rides in `undoToken`).

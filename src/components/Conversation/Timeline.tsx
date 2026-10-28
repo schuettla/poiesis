@@ -28,6 +28,7 @@ function chipLabel(m: SearchHit): string {
   if (m.source === "chat") return "earlier chat";
   if (m.source === "file") return "from your files";
   if (m.kind === "lesson") return "◆ learned";
+  if (m.kind === "intention") return "◆ reminder";
   return "◆ remembered";
 }
 

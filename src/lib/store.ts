@@ -4039,7 +4039,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       ? state.personas.find((p) => p.id === conv.personaId)
       : undefined;
     const baseSystemPrompt = persona?.system_prompt ?? get().systemPrompt;
-    const { memory, matches, injectedFacts } = await recallForPrompt(get, sendOpts?.action ?? text);
+    const { memory, matches, injectedFacts } = await recallForPrompt(get, sendOpts?.action ?? text, convId);
     const effectiveSystemPrompt = composeSystemPrompt(baseSystemPrompt, {
       // `EXP-3`: the same cut the backend makes (`experiments::in_workspace`).
       conv: chatForPrompt(get(), convId),
@@ -5854,7 +5854,8 @@ function reflectOnLeaving(get: () => AppState, nextId?: string) {
  */
 async function recallForPrompt(
   get: () => AppState,
-  query: string
+  query: string,
+  convId: string
 ): Promise<{
   memory: api.MemoryContext | undefined;
   matches: api.SearchHit[];
@@ -5875,7 +5876,7 @@ async function recallForPrompt(
   }
   if (!api.inTauri()) return { memory: mc, matches: [], injectedFacts: [] };
   try {
-    const { index, matches, injected_facts } = await api.recallFor(query);
+    const { index, matches, injected_facts } = await api.recallFor(query, convId);
     return { memory: { ...mc, index }, matches, injectedFacts: injected_facts };
   } catch {
     return { memory: mc, matches: [], injectedFacts: [] };

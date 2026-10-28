@@ -28,14 +28,15 @@ pub fn tool_specs() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "memory",
-                "description": "Manage durable memory about the user that persists across ALL conversations. op:save stores a NEW fact (name, description, type, text required). op:update rewrites one fact's text. op:forget deletes a fact. op:read returns a fact's full text — do this before relying on details of an indexed fact. Save ONLY durable, user-relevant facts (preferences, standing decisions, stable personal/project facts). NEVER save task state, opinions, or anything the user hasn't confirmed. When in doubt, don't save.",
+                "description": "Manage durable memory about the user that persists across ALL conversations. op:save stores a NEW fact (name, description, type, text required). op:update rewrites one fact's text. op:forget deletes a fact. op:read returns a fact's full text — do this before relying on details of an indexed fact. Save ONLY durable, user-relevant facts (preferences, standing decisions, stable personal/project facts). NEVER save task state, opinions, or anything the user hasn't confirmed. When in doubt, don't save. type:intention saves something the user asked to be reminded of: description is what to remind them of, trigger is when. It is told once, then done.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "op": { "type": "string", "enum": ["save", "update", "forget", "read"] },
                         "name": { "type": "string", "description": "short-kebab-case-slug" },
                         "description": { "type": "string", "description": "one line for the index" },
-                        "type": { "type": "string", "enum": ["preference", "fact", "decision", "project"] },
+                        "type": { "type": "string", "enum": ["preference", "fact", "decision", "project", "intention"] },
+                        "trigger": { "type": "string", "description": "type:intention only, when to remind the user: project:<id>, topic:<words> or mail:<sender>. For a time use the harness tool with name schedule instead" },
                         "text": { "type": "string", "description": "the fact body, under 1500 chars" },
                         "expires_in_days": { "type": "integer", "description": "optional, op:save only: forget this fact automatically after N days, for something you know is transient" }
                     },
@@ -232,6 +233,9 @@ async fn memory_op(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<St
                 .and_then(|t| t.as_str())
                 .filter(|t| !t.trim().is_empty())
                 .unwrap_or("fact");
+            if kind == crate::memory::intention::KIND {
+                return save_intention(ctx, name, description, text, args);
+            }
             // No local model loaded ⇒ leave it unclassified rather than reach
             // for the turn's cloud endpoint; `backfill_scope` retries locally.
             let scope =
@@ -339,6 +343,25 @@ async fn memory_op(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<St
     }
 }
 
+/// `INT-1`: something to remind the user of when its trigger comes up. It is
+/// not held against what is believed (a reminder is not a belief) and it has no
+/// scope to ask for; a trigger that is a time is sent to the schedule.
+fn save_intention(ctx: &ToolContext<'_>, name: &str, description: &str, text: &str, args: &serde_json::Value) -> Result<String, String> {
+    let saved = ctx.memory.save_intention(
+        ctx.db,
+        &Fact {
+            name: name.to_string(),
+            description: description.to_string(),
+            body: text.to_string(),
+            source_conversation: Some(ctx.conversation_id.to_string()),
+            trigger: Some(required(args, "trigger")?.to_string()),
+            ..Default::default()
+        },
+    )?;
+    announce(ctx, "save", &saved, description, "");
+    Ok(format!("Saved a reminder \"{saved}\". I will tell the user once, when its trigger comes up."))
+}
+
 /// Every self-write is visible: a timeline event the UI turns into an undoable
 /// toast, plus a line in the activity log the user can audit later. `undo_token`
 /// carries the trash filename for a `forget`, so its Undo restores rather than
@@ -392,6 +415,14 @@ fn propose_soul_edit(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_memory_tool_offers_intentions_with_a_trigger() {
+        let specs = tool_specs();
+        let props = &specs[0]["function"]["parameters"]["properties"];
+        assert!(props["type"]["enum"].as_array().unwrap().iter().any(|t| t == "intention"));
+        assert!(props["trigger"]["description"].as_str().unwrap().contains("harness"), "a time goes to the schedule");
+    }
 
     #[test]
     fn transient_markers_are_caught() {

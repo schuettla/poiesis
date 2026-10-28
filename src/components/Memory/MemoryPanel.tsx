@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import * as api from "../../lib/api";
 import { cloudTarget, useAppStore, useExpert } from "../../lib/store";
-import { Evidence, LetGo, RecentChanges, Unsure } from "./BeliefSections";
+import { Evidence, LetGo, RecentChanges, ThingsIWillDo, Unsure } from "./BeliefSections";
 import "./Memory.css";
 
 /** How long the undo strip stays after a delete. */
@@ -460,6 +460,8 @@ export default function MemoryPanel() {
           )}
         </div>
       ))}
+
+      <ThingsIWillDo version={version} onChanged={() => void refresh()} />
 
       {earlier.length > 0 && (
         <details className="memory-earlier">

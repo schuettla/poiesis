@@ -89,6 +89,22 @@ describe("a recalled entry", () => {
     expect(button("Not relevant here")).toBeUndefined();
   });
 
+  it("shows a reminder that fired with its reason and nothing to correct", () => {
+    const reminder: SearchHit = {
+      ...fact,
+      title: "remind-call-anna",
+      kind: "intention",
+      snippet: "call Anna",
+      why: 'you asked me to remind you when you are in the project "Book"',
+      conversation_id: null,
+    };
+    act(() => root.render(<RecallMemoryRow hit={reminder} label="◆ reminder" date="saved" />));
+    expect(text()).toContain("call Anna");
+    expect(text()).toContain("you asked me to remind you when you are in the project");
+    expect(button("Outdated")).toBeUndefined();
+    expect(button("Not relevant here")).toBeUndefined();
+  });
+
   it("offers a lesson no Outdated: it is not a belief", () => {
     act(() => root.render(<RecallMemoryRow hit={lesson} label="◆ learned" date="saved" />));
     expect(button("Outdated")).toBeUndefined();

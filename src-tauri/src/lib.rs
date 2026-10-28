@@ -243,6 +243,7 @@ pub fn run() {
             commands::memory::list_memory_facts_cmd,
             commands::memory::update_memory_fact_cmd,
             commands::memory::remember_fact_cmd,
+            commands::memory::list_intentions_cmd,
             commands::memory::set_fact_scope_cmd,
             commands::memory::forget_memory_fact_cmd,
             commands::memory::restore_memory_fact_cmd,

@@ -424,6 +424,7 @@ mod tests {
             evidence: Vec::new(),
             valid_from: None,
             fires: None,
+            trigger: None,
             project: None,
         }
     }

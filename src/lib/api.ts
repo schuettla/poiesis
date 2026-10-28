@@ -1410,7 +1410,9 @@ export interface RecallResult {
   injected_facts: string[];
 }
 
-export const recallFor = (query: string) => invoke<RecallResult>("recall_for_cmd", { query });
+/** `conversationId` scopes recall to the chat's project and lets a reminder fire (`INT-2`). */
+export const recallFor = (query: string, conversationId?: string) =>
+  invoke<RecallResult>("recall_for_cmd", { query, conversationId });
 
 // ---- context manifest (WHY): what shaped one answer ----
 
@@ -1525,9 +1527,22 @@ export const setSoul = (text: string) => invoke<void>("set_soul_cmd", { text });
 export interface RememberedFact {
   name: string;
   description: string;
-  outcome: "new" | "merged" | "replaced" | "contested";
+  outcome: "new" | "merged" | "replaced" | "contested" | "reminder" | "schedule";
+  /** For `reminder`, when it will fire in words; for `schedule`, the time as typed
+   * (`INT-1`: a time is the schedule's, so nothing is saved). */
   other: string | null;
 }
+
+/** `INT-UI-1`: one thing I will do, with its trigger in words. */
+export interface IntentionRow {
+  name: string;
+  task: string;
+  when: string;
+  state: "waiting" | "ready";
+  created: string;
+}
+
+export const listIntentions = () => invoke<IntentionRow[]>("list_intentions_cmd");
 
 /** `UCM-5`: the user writing a fact down themselves. Not behind the `facts`
  * autonomy rung — that rung is about what I may write unasked. */

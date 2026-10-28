@@ -16,7 +16,7 @@ commit per phase.
 | 4 - The daily tidy-up | done (see notes) | 2026-10-27 |
 | 5 - Lessons that fire, and rehearsal | done (see notes) | 2026-10-27 |
 | 6 - The self-improvement loop | done (see notes) | 2026-10-27 |
-| 7 - Intentions | not started | |
+| 7 - Intentions | done (see notes) | 2026-10-28 |
 | 8 - Self-model | not started | |
 | 9 - Project setup | not started | |
 
@@ -529,6 +529,56 @@ commit per phase.
 - **Felt check not run here.** Needs the app and a model: let a tool call fail and be
   fixed in two chats until its lesson is learned twice, leave the app idle, and look for a
   card on the Lessons tab with the "I tried fixes" line above it.
+
+### Phase 7 notes
+
+- **INT-1, intention facts.** New `memory/intention.rs`. An intention is a fact of kind
+  `intention` with a `trigger` line in its frontmatter: `project:<id>`, `topic:<words>`
+  or `mail:<sender>`. Its status runs waiting (none), `ready` (the mail came) and `done`
+  (told once). It is saved with `save` and not `save_checked`, so it is never held
+  against a belief. `MemoryStore::list()` no longer returns intentions (cards, tidy-up,
+  counts); `intentions()` does. The `memory` tool takes `type: intention` and a
+  `trigger`. A trigger that is a time is refused with the way to the schedule: use the
+  `harness` tool with `name: schedule`, which already asks the person (`TIME`).
+- **`/remember`.** `remind me <what> when <condition>` is read apart by plain rules
+  (`parse_reminder`): "when I open the project X", "when we talk about X" / "X comes up",
+  "when Anna writes". A time (with or without "when": "... tomorrow", "... on Friday",
+  "... every month") is not saved: the command returns outcome `schedule` and the
+  frontend opens the task form with the words in it, as for a schedule I proposed. A
+  reminder that does not read is an error that teaches the form, never a note that would
+  never fire. A project is found by name. The toast says "I'll remind you: ..., when ..."
+  and its Undo forgets the reminder.
+- **INT-2, firing.** `recall_for` (the one function both prompt paths call) fires after
+  the notes are recalled, in a turn that has a chat and a message: a project reminder
+  when the chat is in that project, a topic reminder when the message carries every word
+  of the topic (a word and the same word with up to three letters added match), and any
+  `ready` mail reminder. Each is one line under "Reminders" in the index, one hit for the
+  timeline ("◆ reminder", why: "you asked me to remind you when ..."), an activity log
+  line, and then `done` with the chat as its evidence. A search of memory with no chat
+  uses nothing up. `mail_sync::run_cycle` marks a mail reminder `ready` when a new
+  message's sender matches; the next turn tells it once. A renumbered mailbox is ignored.
+  The prompt block around the index did not change, so the golden did not move.
+- **Chat window.** `recallFor` now passes the chat id, so the chat-window path scopes to
+  the chat's project and can fire reminders; before it passed only the query.
+- **INT-UI-1.** The Memory tab has **Things I'll do** (after the fact cards, before
+  Earlier versions): "Remind you: call Anna", when in words, **Drop** (sets it aside, so
+  it is under Let go). In the turn it is the existing recall chip with the label
+  "◆ reminder" and the reason; it offers no Outdated or Not relevant.
+- **Deviations.** (a) Topic matching is by words, not by meaning: the plan's "topic:
+  <words>" fires on `recall_for`, but no embedding is used, so it is deterministic. (b)
+  `/remember` is read by rules, not by the decision model (none is wired for it). (c) A
+  mail reminder is told at the next turn, not at the moment the mail arrives: mail sync
+  has no turn to speak in. (d) The timeline line is the recall chip, not a separate row.
+  (e) An intention is not tagged to a project even when saved inside one: its trigger says
+  where it applies.
+- **Checks.** `cargo test --lib`: 1664 pass; the 7 stable failures and 2 flaky `db` fork
+  tests fail as before (the fork test also fails with this phase stashed). `vitest`: all
+  pass except the old `ThoughtStrip` failure. `tsc`: only the old `AgentRun.tsx` error.
+  Clippy: the same 80 warnings with and without this phase, none in the new code.
+- **Felt check not run here.** Needs the app and a model: type `/remember remind me to
+  send the draft when I open the project Book`, open a chat in that project and send a
+  message; look for the "◆ reminder" chip and the model saying it. Then open the Memory
+  tab: the line is gone from "Things I'll do".
 
 **What v2 changes.** v1 described a second memory system beside the one that
 exists: a new `episodes` table, a new `memory_uses` table, a new

@@ -128,6 +128,48 @@ export function Unsure({ version, onChanged }: { version: number; onChanged: () 
   );
 }
 
+/**
+ * `INT-UI-1`: what I said I would do later, each with when in words. Drop sets it
+ * aside like any note, so it can be brought back under Let go.
+ */
+export function ThingsIWillDo({ version, onChanged }: { version: number; onChanged: () => void }) {
+  const [items, setItems] = useState<api.IntentionRow[]>([]);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!api.inTauri()) return;
+    api.listIntentions().then(setItems).catch(() => setItems([]));
+  }, [version]);
+
+  async function drop(name: string) {
+    setError("");
+    try {
+      await api.forgetMemoryFact(name);
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  if (items.length === 0) return null;
+  return (
+    <section className="memory-todo" aria-label="Things I'll do">
+      <h3 className="memory-section-title">Things I'll do</h3>
+      {error && <p className="memory-error">{error}</p>}
+      {items.map((i) => (
+        <div className="memory-card" key={i.name}>
+          <p className="memory-desc">Remind you: {i.task}</p>
+          <p className="memory-last-used">{i.when}</p>
+          <div className="memory-card-actions">
+            <button className="btn-text danger" onClick={() => void drop(i.name)}>
+              Drop
+            </button>
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 /** What was forgotten or pruned, still on disk and still recoverable (G9). */
 export function LetGo({
   collection,

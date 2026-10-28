@@ -6,11 +6,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getMcpPrompt = vi.fn();
+const rememberFact = vi.fn();
 
 vi.mock("./api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api")>()),
   inTauri: () => true,
   getMcpPrompt: (...args: unknown[]) => getMcpPrompt(...args),
+  rememberFact: (...args: unknown[]) => rememberFact(...args),
+  getMemoryContext: () => Promise.resolve({ soul: "", about_you: "", index: "", fact_count: 0 }),
 }));
 
 import { commandViews, parseCommandLine, parsePromptArgs, runCommand } from "./commands";
@@ -51,6 +54,8 @@ beforeEach(() => {
     changeSets: {},
     commandNotes: {},
     taskDraft: null,
+    memoryToast: null,
+    view: "chat",
     startGoal,
     stopGoal,
     exportConversation,
@@ -113,6 +118,34 @@ describe("/goal (GOL-1)", () => {
     const spec = commandViews(useAppStore.getState()).find((v) => v.name === "goal");
     expect(spec).toMatchObject({ who: "user", trace: true });
     expect(spec?.agentClass).toBeUndefined();
+  });
+});
+
+describe("/remember reminders (INT-1)", () => {
+  it("a reminder for a time opens the task form with the words in it and saves no note", async () => {
+    rememberFact.mockResolvedValue({ name: "", description: "buy milk", outcome: "schedule", other: "tomorrow" });
+    const r = await run("/remember remind me to buy milk tomorrow");
+    expect(r).toMatchObject({ kind: "done" });
+    const s = useAppStore.getState();
+    expect(s.view).toBe("tasks");
+    expect(s.taskDraft).toMatchObject({ prompt: "buy milk", conversationId: "c1" });
+    expect(s.memoryToast).toBeNull();
+  });
+
+  it("a reminder for an event says when, in the toast that can take it back", async () => {
+    rememberFact.mockResolvedValue({
+      name: "remind-call-anna",
+      description: "call Anna",
+      outcome: "reminder",
+      other: 'you are in the project "Book"',
+    });
+    const r = await run("/remember remind me to call Anna when I open the project Book");
+    expect(r).toMatchObject({ kind: "done" });
+    expect(useAppStore.getState().memoryToast).toMatchObject({
+      op: "remind",
+      name: "remind-call-anna",
+      description: 'call Anna, when you are in the project "Book"',
+    });
   });
 });
 

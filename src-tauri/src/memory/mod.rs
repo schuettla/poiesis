@@ -34,6 +34,9 @@ pub mod recipe_legacy;
 /// Beliefs with evidence: the relation check at the write sites (`BLF-2`).
 pub mod belief;
 
+/// Things I was asked to do later, fired by a trigger (`INT-1`/`INT-2`).
+pub mod intention;
+
 /// Collections that hold entry files. Procedures used to be a third one; they
 /// are skills now (`SKL-5`), which live outside `memory/` entirely — they are
 /// files the user can hand to another agent, not part of this self.
@@ -205,6 +208,11 @@ pub struct Fact {
     /// Lessons only.
     #[serde(default)]
     pub fires: Option<Fires>,
+    /// `INT-1`: when an intention fires, `project:<id> | topic:<words> | mail:<sender>`.
+    /// Intentions only. Its status runs `None` (waiting), `ready` (the mail came),
+    /// `done` (told once).
+    #[serde(default)]
+    pub trigger: Option<String>,
 }
 
 /// `HAB-1`/`HAB-2`: when a lesson speaks up, and what it checks afterwards.
@@ -511,6 +519,7 @@ fn parse_entry(name: &str, text: &str) -> Fact {
     let mut evidence: Vec<String> = Vec::new();
     let mut valid_from = None;
     let (mut fires_on, mut fires_when, mut check) = (None, None, None);
+    let mut trigger = None;
 
     for line in header.lines() {
         let Some((key, value)) = line.split_once(':') else { continue };
@@ -543,7 +552,9 @@ fn parse_entry(name: &str, text: &str) -> Fact {
             // An unrecognized value reads as absent, like `scope`: a typo must
             // not hide an entry (a bad `status`) or hedge it for ever.
             "confidence" if matches!(value.as_str(), "low" | "medium" | "high") => confidence = Some(value),
-            "status" if matches!(value.as_str(), "active" | "contested" | "superseded") => status = Some(value),
+            "status" if matches!(value.as_str(), "active" | "contested" | "superseded" | "ready" | "done") => {
+                status = Some(value)
+            }
             "supersedes" => supersedes = Some(value),
             "superseded_by" => superseded_by = Some(value),
             "evidence" => {
@@ -553,6 +564,7 @@ fn parse_entry(name: &str, text: &str) -> Fact {
             "fires_on" => fires_on = Some(value),
             "fires_when" => fires_when = Some(value),
             "check" => check = Some(value),
+            "trigger" => trigger = Some(value),
             _ => {}
         }
     }
@@ -584,6 +596,7 @@ fn parse_entry(name: &str, text: &str) -> Fact {
         valid_from,
         // `check` and `fires_when` mean nothing without a tool to fire on.
         fires: fires_on.map(|on| Fires { on, when: fires_when, check }),
+        trigger,
     }
 }
 
@@ -704,8 +717,11 @@ fn render_entry(f: &Fact) -> String {
             }
         }
     }
+    if let Some(trigger) = &f.trigger {
+        out.push_str(&format!("trigger: {}\n", one_line(trigger)));
+    }
     if !f.evidence.is_empty() {
-        out.push_str(&format!("evidence: {}\n", f.evidence.iter().map(|e| one_line(e).replace(',', "")).collect::<Vec<_>>().join(", ")));
+        out.push_str(&format!("evidence:{}\n", f.evidence.iter().map(|e| one_line(e).replace(',', "")).collect::<Vec<_>>().join(", ")));
     }
     out.push_str("---\n");
     out.push_str(f.body.trim());
@@ -878,8 +894,12 @@ impl MemoryStore {
         std::fs::remove_file(self.dir.join(".quarantine").join(file)).map_err(|e| e.to_string())
     }
 
+    /// The notes about the user. Intentions are things to do, not beliefs, so they
+    /// are not here: `intentions` lists them.
     pub fn list(&self) -> Vec<Fact> {
-        self.list_in(FACTS)
+        let mut all = self.list_in(FACTS);
+        all.retain(|f| !f.is_intention());
+        all
     }
 
     pub fn read_in(&self, collection: &str, name: &str) -> Option<Fact> {
@@ -1759,6 +1779,7 @@ mod tests {
             evidence: Vec::new(),
             valid_from: None,
             fires: None,
+            trigger: None,
             project: None,
         }
     }
