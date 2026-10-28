@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../lib/store";
 import { NEW_PROJECT_NAME } from "../lib/types";
+import { similarProject, type SimilarProject } from "../lib/api";
 import type { FolderTrust } from "../lib/types";
 import ConfirmDialog from "../components/Confirm/ConfirmDialog";
 import "./ProjectView.css";
@@ -100,6 +101,81 @@ function InstructionsField({
   );
 }
 
+const dismissedKey = (projectId: string) => `pv-offer-dismissed:${projectId}`;
+
+function wasDismissed(projectId: string): boolean {
+  try {
+    return localStorage.getItem(dismissedKey(projectId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** `PRJ-S1`: a project with no instructions yet that looks like another one
+ * offers that one's instructions. Only the instructions travel; facts never do.
+ * Asked again whenever the name or instructions change, so naming the project
+ * is what brings the offer. */
+function SimilarOffer({
+  projectId,
+  name,
+  hasInstructions,
+  onCopy,
+}: {
+  projectId: string;
+  name: string;
+  hasInstructions: boolean;
+  onCopy: (from: { name: string; instructions: string }) => void;
+}) {
+  const projects = useAppStore((s) => s.projects);
+  const [found, setFound] = useState<SimilarProject | null>(null);
+  const [dismissed, setDismissed] = useState(() => wasDismissed(projectId));
+
+  useEffect(() => {
+    setDismissed(wasDismissed(projectId));
+  }, [projectId]);
+
+  useEffect(() => {
+    let live = true;
+    if (hasInstructions) {
+      setFound(null);
+      return;
+    }
+    similarProject(projectId)
+      .then((s) => live && setFound(s))
+      .catch(() => live && setFound(null));
+    return () => {
+      live = false;
+    };
+  }, [projectId, name, hasInstructions]);
+
+  const other = found && projects.find((p) => p.id === found.project_id);
+  if (dismissed || hasInstructions || !found || !other?.instructions?.trim()) return null;
+  return (
+    <section className="pv-section pv-offer" aria-label="A project like this one">
+      <p className="pv-hint">
+        This looks like <strong>{other.name}</strong> ({found.why}). Start with its instructions? Its notes stay
+        where they are.
+      </p>
+      <button className="pv-action" onClick={() => onCopy({ name: other.name, instructions: other.instructions ?? "" })}>
+        Copy its instructions
+      </button>
+      <button
+        className="pv-quiet"
+        onClick={() => {
+          setDismissed(true);
+          try {
+            localStorage.setItem(dismissedKey(projectId), "1");
+          } catch {
+            // Not remembered; it asks again next time.
+          }
+        }}
+      >
+        Not now
+      </button>
+    </section>
+  );
+}
+
 /**
  * `PRJ-UI-4`: the project view.
  *
@@ -151,6 +227,13 @@ export default function ProjectView() {
           name={project.name}
           fresh={project.name === NEW_PROJECT_NAME}
           onCommit={(next) => renameProject(projectId, next)}
+        />
+
+        <SimilarOffer
+          projectId={projectId}
+          name={project.name}
+          hasInstructions={!!project.instructions?.trim()}
+          onCopy={(from) => setProjectInstructions(projectId, from.instructions)}
         />
 
         <section className="pv-section">

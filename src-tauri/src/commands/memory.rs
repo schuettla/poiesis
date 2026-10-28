@@ -251,7 +251,11 @@ async fn recalled(
         .and_then(|id| db.get_session_state(id).ok().flatten())
         .map(|state| crate::agent::episode::state_entities(&state))
         .unwrap_or_default();
-    let cues = crate::memory::Cues::from_turn(&query, session_names);
+    let mut cues = crate::memory::Cues::from_turn(&query, session_names);
+    // `PRJ-S1`: what helped in this project's finished chats ranks higher in it.
+    if let Some(p) = project {
+        cues.proven = crate::agent::projectsetup::proven_lessons(db, p);
+    }
     let set = mem.recall_with_cues(db, Some((&vectors[0], &model_name, dim)), project, &cues);
     let _ = db.touch_memory_usage(FACTS, &set.injected_facts);
     let matches = set

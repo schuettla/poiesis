@@ -18,7 +18,7 @@ commit per phase.
 | 6 - The self-improvement loop | done (see notes) | 2026-10-27 |
 | 7 - Intentions | done (see notes) | 2026-10-28 |
 | 8 - Self-model | done (see notes) | 2026-10-28 |
-| 9 - Project setup | not started | |
+| 9 - Project setup | done (see notes) | 2026-10-28 |
 
 ### Phase 0 notes
 
@@ -619,6 +619,42 @@ commit per phase.
 - **Felt check not run here.** Needs the app and enough history: five finished mail chats
   that failed or were abandoned make mail weak; the Self header then says so, and a new
   chat that has used a mail tool carries the "About my own work" line.
+
+### Phase 9 notes
+
+- **PRJ-S1, the boost.** New `agent/projectsetup.rs`. `proven_lessons(db, project)` reads
+  the answers of the project's conversations that ended `done` (`context_json`) and
+  collects the lessons that reached them or fired in them. `recall_with_cues` gets them as
+  `Cues::proven` and ranks such a lesson 1.25 times higher among the retrieved ones, in
+  that project only; its reason on the chip reads "it helped in finished chats in this
+  project" unless a more specific reason (a name the turn used) already applies. No model
+  call, no table.
+- **PRJ-S1, the offer.** `similar_project_cmd` returns another project whose instructions
+  could be copied, and why. It looks only at projects with instructions, and only for a
+  project that has none. Looking alike needs a shared name word (not a common one such as
+  "project" or "notes") or folders that share a parent; the kind of work of the first chats
+  adds to the score and the reason but never makes a match alone. The project view shows
+  "This looks like <name> (<why>). Start with its instructions? Its notes stay where they
+  are." with **Copy its instructions** and **Not now**. The offer asks again when the
+  project is renamed, so naming a new project is what brings it. **Not now** is remembered
+  per project in the browser's storage. Only the instructions are copied; facts never
+  travel.
+- **Deviations.** (a) Skills are not boosted: nothing ranks skills (the model is shown the
+  list), and ordering it would change prompt bytes. Firing lessons are not ranked either (they
+  fire at the tool call), so only lessons that are retrieved by meaning gain from the
+  boost. (b) A project has no persona of its own (the persona is on each conversation), so
+  there is none to copy; the offer copies the instructions. (c) The offer shows whenever
+  the project has no instructions, not only in an empty project, because the first chats
+  are what tell the kind of work. (d) No embedding is used for "looks like": names and
+  folders only.
+- **Checks.** `cargo test --lib`: 1687 pass (7 new); the 7 stable failures remain, and one
+  flaky `db` fork test failed in this run. `vitest`: all pass except the old
+  `ThoughtStrip` failure. `tsc`: only the old `AgentRun.tsx` error. Clippy: nothing in the new
+  code.
+- **Felt check not run here.** Needs the app: make a project "Taxes 2024" with
+  instructions, then a new project and name it "Taxes 2025". The offer should appear above
+  Instructions; Copy fills the field. In a project with finished chats where a lesson
+  helped, the lesson's chip should say it helped there.
 
 **What v2 changes.** v1 described a second memory system beside the one that
 exists: a new `episodes` table, a new `memory_uses` table, a new

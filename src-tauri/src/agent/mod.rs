@@ -41,6 +41,7 @@ pub mod plan;
 pub mod present;
 pub mod preview;
 pub mod project;
+pub mod projectsetup;
 pub mod recall;
 pub mod results;
 pub mod rewind;

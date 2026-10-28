@@ -293,11 +293,14 @@ pub struct RecalledEntry {
 pub struct Cues {
     pub message_names: Vec<String>,
     pub session_names: Vec<String>,
+    /// `PRJ-S1`: lessons that reached answers in this project's finished (`done`)
+    /// conversations. They rank a little higher here.
+    pub proven: std::collections::HashSet<String>,
 }
 
 impl Cues {
     pub fn from_turn(message: &str, session_entities: Vec<String>) -> Cues {
-        Cues { message_names: names_in(message), session_names: session_entities }
+        Cues { message_names: names_in(message), session_names: session_entities, proven: Default::default() }
     }
 
     /// If this fact is about something the turn names, why, in words.
@@ -350,6 +353,10 @@ fn why_of(f: &Fact, project: Option<&str>, cues: &Cues) -> String {
     }
     format!("about {}", f.name.replace('-', " "))
 }
+
+/// How much a lesson that helped in this project's finished conversations is
+/// ranked up there (`PRJ-S1`).
+const PROVEN_BOOST: f32 = 1.25;
 
 /// How much to trust an item's record when ranking: 1 for one that is not
 /// judged yet (under three chances), otherwise twice its usefulness, so a
@@ -1574,7 +1581,12 @@ impl MemoryStore {
                 continue;
             }
             hit.why = why_of(&entry, project, cues);
-            lessons.push((hit.score * usefulness_factor(lesson_credit.get(&entry.name)), hit));
+            let proven = cues.proven.contains(&entry.name);
+            if proven && hit.why.starts_with("about ") {
+                hit.why = "it helped in finished chats in this project".to_string();
+            }
+            let boost = if proven { PROVEN_BOOST } else { 1.0 };
+            lessons.push((hit.score * usefulness_factor(lesson_credit.get(&entry.name)) * boost, hit));
         }
         lessons.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         lessons.truncate(SEM_LESSON_K);
@@ -1846,6 +1858,25 @@ mod tests {
         assert_eq!(set.retrieved[0].why, "you named Anna");
         assert!(set.index.contains("anna-contact"), "it reaches the prompt, not only the list");
         assert!(set.injected_facts.contains(&"anna-contact".to_string()));
+    }
+
+    #[test]
+    fn a_lesson_that_helped_in_this_projects_finished_chats_ranks_higher_there() {
+        let (s, db, _tmp) = store();
+        for (name, deg) in [("l1", 0.0), ("l2", 25.0), ("l3", 35.0), ("l4", 45.0)] {
+            lesson_vec(&s, &db, name, deg);
+        }
+        let query = vec![1.0, 0.0];
+        let names = |set: &RecallSet| set.retrieved.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
+
+        let plain = s.recall_with_cues(&db, Some((&query, "m1", 2)), Some("p-1"), &Cues::default());
+        assert_eq!(names(&plain), ["l1", "l2", "l3"]);
+
+        let cues = Cues { proven: ["l4".to_string()].into(), ..Cues::default() };
+        let set = s.recall_with_cues(&db, Some((&query, "m1", 2)), Some("p-1"), &cues);
+        assert_eq!(names(&set), ["l1", "l2", "l4"], "the proven one passes the closer l3");
+        let why = &set.retrieved.iter().find(|r| r.name == "l4").unwrap().why;
+        assert_eq!(why, "it helped in finished chats in this project");
     }
 
     #[test]

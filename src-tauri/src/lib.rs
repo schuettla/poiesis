@@ -518,6 +518,7 @@ pub fn run() {
             commands::projects::create_project_cmd,
             commands::projects::rename_project_cmd,
             commands::projects::set_project_instructions_cmd,
+            commands::projects::similar_project_cmd,
             commands::projects::set_project_root_cmd,
             commands::projects::set_project_trust_cmd,
             commands::projects::set_project_archived_cmd,

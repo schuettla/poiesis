@@ -53,6 +53,31 @@ impl Db {
         Ok(rows)
     }
 
+    /// The `context_json` of every answer in the conversations of a project that
+    /// ended `done`: what reached the answers that went well there (`PRJ-S1`).
+    pub fn done_contexts_of_project(&self, project_id: &str) -> Result<Vec<String>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT m.context_json FROM messages m JOIN conversations c ON c.id = m.conversation_id
+             WHERE c.project_id = ?1 AND c.outcome = 'done' AND m.role = 'assistant' AND m.context_json IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([project_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// The task kinds of a project's encoded conversations, oldest conversation
+    /// first, one entry per conversation (`PRJ-S1`). `unknown` is left out.
+    pub fn task_kinds_of_project(&self, project_id: &str) -> Result<Vec<String>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT task_kind FROM conversations
+             WHERE project_id = ?1 AND encode_version > 0 AND task_kind IS NOT NULL AND task_kind <> 'unknown'
+             ORDER BY created_at ASC, rowid ASC",
+        )?;
+        let rows = stmt.query_map([project_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// `(ok, failed)` calls of one tool in a conversation between two times.
     /// `to` is exclusive; `None` means no end.
     pub fn tool_results_between(

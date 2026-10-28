@@ -56,6 +56,15 @@ pub fn set_project_instructions_cmd(
     db.set_project_instructions(&id, instructions.as_deref()).map_err(err)
 }
 
+/// `PRJ-S1`: another project this one looks like, whose instructions could be
+/// copied. `None` when this project has instructions of its own or nothing looks
+/// like it. The screen reads the other project's name and instructions from the
+/// project list it already holds.
+#[tauri::command]
+pub fn similar_project_cmd(db: State<'_, Db>, id: String) -> Option<crate::agent::projectsetup::Similar> {
+    crate::agent::projectsetup::similar_project(&db, &id)
+}
+
 /// `PRJ-3a`: give a project a working folder, or with `None` take it away.
 /// Removing it leaves the project and every one of its sessions in place —
 /// the folder was a property, and dropping a property is not leaving.

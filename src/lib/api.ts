@@ -1542,6 +1542,15 @@ export interface IntentionRow {
   created: string;
 }
 
+/** `PRJ-S1`: another project this one looks like, whose instructions could be copied. */
+export interface SimilarProject {
+  project_id: string;
+  /** In words: "both have \"taxes\" in the name". */
+  why: string;
+}
+
+export const similarProject = (id: string) => invoke<SimilarProject | null>("similar_project_cmd", { id });
+
 export const listIntentions = () => invoke<IntentionRow[]>("list_intentions_cmd");
 
 /** `UCM-5`: the user writing a fact down themselves. Not behind the `facts`
