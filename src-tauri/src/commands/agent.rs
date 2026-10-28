@@ -419,6 +419,7 @@ pub async fn side_question_cmd(
                 tools_enabled: false,
                 model_name: &setup.model_name,
                 query: &question,
+                attended: true,
             },
         )
         .await,

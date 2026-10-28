@@ -74,9 +74,18 @@ fn tool_cue(cue: Option<&str>) -> Option<&str> {
     cue?.trim().strip_prefix("tool:").map(str::trim).filter(|t| !t.is_empty())
 }
 
-/// Credit every item that reached an answer of this conversation. Returns how
-/// many items were credited. Safe to call on a conversation without any
-/// recorded context: it credits nothing.
+/// The settings key that says how far this conversation has been credited: the
+/// time of the newest answer or press already counted.
+fn credited_key(conversation_id: &str) -> String {
+    format!("credit.upto.{conversation_id}")
+}
+
+/// Credit every item that reached an answer of this conversation, from where
+/// the last call stopped. Returns how many items were credited. Safe to call
+/// again: answers and presses already counted are not counted twice, and the
+/// ones that came since are (a person who comes back to a chat after its first
+/// reflection still teaches me). Safe on a conversation without any recorded
+/// context: it credits nothing.
 pub fn credit_conversation(db: &Db, mem: &MemoryStore, conversation_id: &str) -> usize {
     let messages = db.list_messages(conversation_id).unwrap_or_default();
     let answers: Vec<(usize, ContextRefs)> = messages
@@ -91,19 +100,42 @@ pub fn credit_conversation(db: &Db, mem: &MemoryStore, conversation_id: &str) ->
     if answers.is_empty() {
         return 0;
     }
+    let done_upto: Option<i64> =
+        db.get_setting(&credited_key(conversation_id)).ok().flatten().and_then(|v| v.parse().ok());
+    let is_new = |at: i64| done_upto.is_none_or(|w| at > w);
+    let mut newest = done_upto.unwrap_or(i64::MIN);
 
     // Answers after the point the user went back to were abandoned.
     let rewound_from = rewind_point(db, conversation_id, &messages);
-    // Entries the user pressed a button on, with the time of the press.
-    let pressed: Vec<(String, i64)> = crate::agent::log::commands(db, conversation_id)
+    let carries = |refs: &ContextRefs, name: &str| {
+        refs.facts.iter().any(|n| n == name) || refs.lessons.iter().any(|n| n == name) || refs.fired.iter().any(|n| n == name)
+    };
+    // Entries the user pressed a button on, each with the answer it belongs to:
+    // the last answer before the press that carried the entry, however many
+    // answers came between.
+    let pressed: Vec<(String, i64, usize)> = crate::agent::log::commands(db, conversation_id)
         .into_iter()
         .filter(|r| r.trace.name == OUTDATED || r.trace.name == NOT_RELEVANT)
-        .map(|r| (r.trace.args.trim().to_string(), r.at))
+        .filter_map(|r| {
+            let name = r.trace.args.trim().to_string();
+            let owner = answers
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, (i, refs))| messages[*i].created_at <= r.at && carries(refs, &name))
+                .map(|(n, _)| n)?;
+            Some((name, r.at, owner))
+        })
         .collect();
 
     let mut tallies: HashMap<(&'static str, String), Tally> = HashMap::new();
     for (n, (i, refs)) in answers.iter().enumerate() {
         let msg = &messages[*i];
+        let fresh = is_new(msg.created_at);
+        let presses: Vec<&(String, i64, usize)> = pressed.iter().filter(|(_, at, owner)| *owner == n && is_new(*at)).collect();
+        if !fresh && presses.is_empty() {
+            continue;
+        }
         let until = answers.get(n + 1).map(|(next, _)| messages[*next].created_at);
         let (hurt_w, helped_w) = surprise(sureness(db, conversation_id, msg.created_at, until.unwrap_or(i64::MAX)));
 
@@ -117,41 +149,45 @@ pub fn credit_conversation(db: &Db, mem: &MemoryStore, conversation_id: &str) ->
             .chain(refs.fired.iter().filter(|name| !refs.lessons.contains(name)).map(|name| (LESSONS, name)));
         for (collection, name) in items {
             let Some(entry) = mem.read_in(collection, name) else { continue };
+            let hurt_by_press = presses.iter().any(|(arg, _, _)| arg == name);
+            if !fresh && !hurt_by_press {
+                continue;
+            }
             let t = tallies.entry((collection, name.clone())).or_default();
-            t.chances += 1;
             t.last_at = t.last_at.max(msg.created_at);
 
-            if collection == LESSONS {
-                let tool = tool_cue(entry.cue.as_deref()).or(entry.fires.as_ref().map(|f| f.on.as_str()));
-                if let Some(tool) = tool {
-                    let (ok, failed) =
-                        db.tool_results_between(conversation_id, tool, msg.created_at, until).unwrap_or((0, 0));
-                    let gone_back = rewound_from.is_some_and(|from| *i > from);
-                    if failed > 0 || gone_back {
-                        t.hurt += hurt_w;
-                    } else if ok > 0 {
-                        t.helped += helped_w;
+            if fresh {
+                t.chances += 1;
+                if collection == LESSONS {
+                    let tool = tool_cue(entry.cue.as_deref()).or(entry.fires.as_ref().map(|f| f.on.as_str()));
+                    if let Some(tool) = tool {
+                        let (ok, failed) =
+                            db.tool_results_between(conversation_id, tool, msg.created_at, until).unwrap_or((0, 0));
+                        let gone_back = rewound_from.is_some_and(|from| *i > from);
+                        if failed > 0 || gone_back {
+                            t.hurt += hurt_w;
+                        } else if ok > 0 {
+                            t.helped += helped_w;
+                        }
                     }
                 }
             }
-
-            // The press belongs to the last answer that carried the entry.
-            let carried_after = answers
-                .iter()
-                .skip(n + 1)
-                .any(|(_, later)| later.facts.contains(name) || later.lessons.contains(name) || later.fired.contains(name));
-            let hurt_by_press = pressed
-                .iter()
-                .any(|(arg, at)| arg == name && *at >= msg.created_at && until.is_none_or(|u| *at < u) && !carried_after);
             if hurt_by_press {
                 t.hurt += hurt_w;
             }
+        }
+        newest = newest.max(msg.created_at);
+        for (_, at, _) in &presses {
+            newest = newest.max(*at);
         }
     }
 
     let count = tallies.len();
     for ((collection, name), t) in tallies {
         let _ = db.add_memory_credit(collection, &name, t.chances, t.helped, t.hurt, t.last_at);
+    }
+    if newest > i64::MIN {
+        let _ = db.set_setting(&credited_key(conversation_id), &newest.to_string());
     }
     count
 }
@@ -476,6 +512,56 @@ mod tests {
         credit_conversation(&w.db, &w.mem, &w.conv);
         let c = credit_of(&w, "facts", "lives-in-hamburg");
         assert_eq!((c.chances, c.helped, c.hurt), (1, 0, 1));
+    }
+
+    /// A press on an older answer's chip, after a newer answer that did not carry
+    /// the entry, still counts against it.
+    #[test]
+    fn a_press_after_a_later_answer_still_hurts_the_entry_it_was_on() {
+        let w = world();
+        lesson(&w, "be-brief", None);
+        answer(&w, &["be-brief"], &[], 100);
+        answer(&w, &[], &[], 200);
+        let _ = w.db.append_session_event(
+            &w.conv,
+            None,
+            crate::agent::log::COMMAND_KIND,
+            &serde_json::json!({ "name": NOT_RELEVANT, "args": "be-brief", "by": "user", "outcome": "done" }),
+        );
+        w.db.exec_for_tests("UPDATE session_events SET created_at = 250", []);
+        credit_conversation(&w.db, &w.mem, &w.conv);
+        let c = credit_of(&w, "lessons", "be-brief");
+        assert_eq!((c.chances, c.hurt), (1, 1));
+    }
+
+    /// Credit picks up where it stopped: what came after the first reflection is
+    /// counted, and nothing is counted twice.
+    #[test]
+    fn credit_counts_new_answers_and_presses_once_after_the_first_pass() {
+        let w = world();
+        lesson(&w, "check-header", Some("tool:read_file"));
+        answer(&w, &["check-header"], &[], 100);
+        tool(&w, "read_file", true, 120);
+        credit_conversation(&w.db, &w.mem, &w.conv);
+        credit_conversation(&w.db, &w.mem, &w.conv);
+        let c = credit_of(&w, "lessons", "check-header");
+        assert_eq!((c.chances, c.helped, c.hurt), (1, 1, 0), "asking again counts nothing twice");
+
+        // The person comes back: a new answer that fails, and a press on it.
+        answer(&w, &["check-header"], &[], 300);
+        tool(&w, "read_file", false, 320);
+        let _ = w.db.append_session_event(
+            &w.conv,
+            None,
+            crate::agent::log::COMMAND_KIND,
+            &serde_json::json!({ "name": OUTDATED, "args": "check-header", "by": "user", "outcome": "done" }),
+        );
+        w.db.exec_for_tests("UPDATE session_events SET created_at = 350", []);
+        credit_conversation(&w.db, &w.mem, &w.conv);
+        let c = credit_of(&w, "lessons", "check-header");
+        assert_eq!((c.chances, c.helped, c.hurt), (2, 1, 2));
+        credit_conversation(&w.db, &w.mem, &w.conv);
+        assert_eq!(credit_of(&w, "lessons", "check-header").hurt, 2);
     }
 
     #[test]

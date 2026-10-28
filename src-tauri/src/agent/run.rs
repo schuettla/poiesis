@@ -3617,6 +3617,8 @@ impl TurnCtx<'_> {
                 fired.push(lesson.clone());
             }
             drop(fired);
+            // A lesson that fires is in use: the tidy-up must not read it as idle.
+            let _ = self.db.touch_memory_usage(crate::memory::LESSONS, std::slice::from_ref(&lesson));
             self.sink.emit(AgentEvent::Fired { id: call_id.to_string(), lesson, line });
         }
         spoken.text

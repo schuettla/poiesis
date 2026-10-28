@@ -102,9 +102,29 @@ pub fn topic_in(topic: &str, message: &str) -> bool {
 
 /// Is this the sender a mail trigger is about? `header` is the From line as it
 /// arrives (a name and an address).
+///
+/// - An address (`anna@example.com`) must be the sender's address.
+/// - A domain (`@example.com`) must end the sender's address.
+/// - A name must appear as whole words: "Anna" is "Anna Berg" and
+///   `anna.berg@...`, never "Hannah" or "Joanna".
 pub fn sender_is(wanted: &str, header: &str) -> bool {
     let wanted = wanted.trim().to_lowercase();
-    !wanted.is_empty() && header.to_lowercase().contains(&wanted)
+    let header = header.to_lowercase();
+    if wanted.is_empty() {
+        return false;
+    }
+    let address = match (header.rfind('<'), header.rfind('>')) {
+        (Some(a), Some(b)) if a < b => header[a + 1..b].trim().to_string(),
+        _ => header.trim().to_string(),
+    };
+    if wanted.starts_with('@') {
+        return address.ends_with(&wanted);
+    }
+    if wanted.contains('@') {
+        return address == wanted;
+    }
+    let words: Vec<&str> = header.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    wanted.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).all(|w| words.contains(&w))
 }
 
 impl Fact {
@@ -478,6 +498,14 @@ mod tests {
         assert!(sender_is("@example.com", "Bo <bo@example.com>"));
         assert!(!sender_is("anna", "Bo <bo@example.com>"));
         assert!(!sender_is("  ", "Bo <bo@example.com>"));
+        // A name is a whole word, never a piece of another name.
+        assert!(!sender_is("anna", "Hannah Schmidt <hannah@x.de>"));
+        assert!(!sender_is("anna", "Joanna <jo@x.de>"));
+        assert!(sender_is("anna berg", "Anna Berg <ab@x.de>"));
+        // An address is the sender's address, a domain ends it.
+        assert!(sender_is("anna.berg@example.com", "Anna <Anna.Berg@example.com>"));
+        assert!(!sender_is("anna@example.com", "Hanna <hanna@example.com>"));
+        assert!(!sender_is("@example.com", "Bo <bo@example.com.evil.org>"));
     }
 
     #[test]

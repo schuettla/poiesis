@@ -656,6 +656,39 @@ commit per phase.
   Instructions; Copy fills the field. In a project with finished chats where a lesson
   helped, the lesson's chip should say it helped there.
 
+### Review fixes (after Phase 9)
+
+A code review of Phases 0 to 9 found ten problems. All are fixed, each with a test:
+
+1. **Beliefs.** Words that say who a fact is about or how it is phrased ("user", "name",
+   "called", ...) no longer make two facts related. The person's newer word replaces an
+   old fact by itself only at an overlap of 0.5 or more; a looser contradiction is marked
+   contested and asked about under Unsure.
+2. **Lesson use.** A lesson that reaches a prompt (wholesale or retrieved) or fires at a
+   tool now updates `memory_usage`, so the tidy-up no longer reads lessons in daily use as
+   idle and lets them go after 120 days.
+3. **Reminders in scheduled runs.** `recall_for` takes `attended`; a scheduled run passes
+   `false` and neither uses up a reminder nor gets the "About my own work" line.
+4. **Mail sender.** A name matches as whole words ("Anna" is not "Hannah" or "Joanna"),
+   an address must be the sender's address, a domain must end it.
+5. **Improver.** Chats of kind `unknown` are not a problem to fix (the filter named
+   "other", which never occurs).
+6. **Credit, presses.** A press belongs to the last answer before it that carried the
+   entry, however many answers came between.
+7. **Credit, later turns.** Credit keeps how far it got (`credit.upto.<chat>` in
+   settings) and runs on every reflection: new answers and presses are counted, nothing
+   twice.
+8. **Live outcome.** An improvement is judged from when it was applied (`applied_at`,
+   stamped into `rehearsal_json` on accept), not from when it was drafted.
+9. **Stop.** A tidy-up the person stopped waits for its next period; only one input
+   interrupted stays due at once.
+10. **Turn cost.** The kind of a turn is read from tools, artifacts and folder only
+    (three small reads), not the whole encoding pass.
+
+Checks: `cargo test --lib` 1695 pass, the same 7 stable and 2 flaky failures as before;
+`vitest` only the old `ThoughtStrip` failure; `tsc` only the old `AgentRun.tsx` error;
+clippy: no new warnings.
+
 **What v2 changes.** v1 described a second memory system beside the one that
 exists: a new `episodes` table, a new `memory_uses` table, a new
 `memory/habits/` store, a new `intentions` table, a new `improvements` table, a

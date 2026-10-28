@@ -107,6 +107,7 @@ async fn backfill_scope(mgr: &RuntimeManager, db: &Db, mem: &MemoryStore) {
 fn wholesale(db: &Db, mem: &MemoryStore, project: Option<&str>) -> RecallResult {
     let set = mem.recall_for_project(db, None, project);
     let _ = db.touch_memory_usage(FACTS, &set.injected_facts);
+    let _ = db.touch_memory_usage(LESSONS, &set.injected_lessons);
     RecallResult { index: set.index, matches: Vec::new(), injected_facts: set.injected_facts }
 }
 
@@ -130,7 +131,8 @@ pub async fn recall_for_cmd(
         .as_deref()
         .and_then(|id| db.conversation_project(id).ok().flatten())
         .map(|p| p.id);
-    Ok(recall_for(&mgr, &embed_mgr, &db, &mem, &query, project.as_deref(), conversation_id.as_deref()).await)
+    // The chat window: the person typed this message.
+    Ok(recall_for(&mgr, &embed_mgr, &db, &mem, &query, project.as_deref(), conversation_id.as_deref(), true).await)
 }
 
 /// The body of `recall_for_cmd`, callable without a Tauri `State`.
@@ -140,6 +142,7 @@ pub async fn recall_for_cmd(
 /// recalling different memories than a typed message, which is exactly the drift
 /// that track exists to end. Anything that fails here degrades to the whole
 /// index rather than to no memory at all.
+#[allow(clippy::too_many_arguments)]
 pub async fn recall_for(
     mgr: &RuntimeManager,
     embed_mgr: &EmbedManager,
@@ -149,15 +152,32 @@ pub async fn recall_for(
     project: Option<&str>,
     // `CUE-1`: the chat the turn is in, for the names its notes hold.
     conversation_id: Option<&str>,
+    // A person is in this turn and will read the answer. A scheduled run is not:
+    // it must not use up a reminder, and it gets no line about my own work.
+    attended: bool,
 ) -> RecallResult {
     let mut result = recalled(mgr, embed_mgr, db, mem, query, project, conversation_id).await;
-    // `INT-2`: a reminder fires in a real turn, the one a chat is in; a search of
-    // memory with no chat does not use it up.
-    if let Some(conversation_id) = conversation_id.filter(|_| !query.trim().is_empty()) {
-        remind(db, mem, &mut result, query, project, conversation_id);
-        watch_myself(db, &mut result, conversation_id);
-    }
+    turn_extras(db, mem, &mut result, query, project, conversation_id, attended);
     result
+}
+
+/// What a turn gets on top of the notes (`INT-2`, `MET-2`): reminders that are due,
+/// and the line about a kind of work I am weak at. Only in a real turn: a chat, a
+/// message, and a person who reads the answer. A search of memory with no chat,
+/// or a scheduled run nobody watches, uses no reminder up.
+fn turn_extras(
+    db: &Db,
+    mem: &MemoryStore,
+    result: &mut RecallResult,
+    query: &str,
+    project: Option<&str>,
+    conversation_id: Option<&str>,
+    attended: bool,
+) {
+    if let Some(conversation_id) = conversation_id.filter(|_| attended && !query.trim().is_empty()) {
+        remind(db, mem, result, query, project, conversation_id);
+        watch_myself(db, result, conversation_id);
+    }
 }
 
 /// The heading of the line a weak kind of work adds to the index (`MET-2`).
@@ -258,6 +278,7 @@ async fn recalled(
     }
     let set = mem.recall_with_cues(db, Some((&vectors[0], &model_name, dim)), project, &cues);
     let _ = db.touch_memory_usage(FACTS, &set.injected_facts);
+    let _ = db.touch_memory_usage(LESSONS, &set.injected_lessons);
     let matches = set
         .retrieved
         .iter()
@@ -2219,6 +2240,32 @@ mod tests {
         let mut again = empty_recall();
         remind(&db, &mem, &mut again, "my teeth hurt", None, "c2");
         assert!(!again.index.contains("Reminders"), "told once");
+    }
+
+    /// A lesson that reaches a prompt is in use, so the tidy-up does not read it
+    /// as idle (it reads `memory_usage`, which only facts used to write).
+    #[test]
+    fn a_lesson_that_reaches_the_prompt_is_marked_as_used() {
+        let (mem, db, _tmp) = store();
+        mem.save_lesson(&db, &fact("check-header", "lesson")).unwrap();
+        assert!(db.memory_usage_map(LESSONS).unwrap().is_empty());
+        let set = wholesale(&db, &mem, None);
+        assert!(set.index.contains("check-header"));
+        assert!(db.memory_usage_map(LESSONS).unwrap().contains_key("check-header"));
+    }
+
+    /// A scheduled run reads the prompt with nobody watching: it must not use up a
+    /// reminder the person is waiting for.
+    #[test]
+    fn a_run_nobody_watches_does_not_use_up_a_reminder() {
+        let (mem, db, _tmp) = store();
+        remembered(&mem, &db, "remind me to call the dentist when we talk about teeth").unwrap();
+        let mut unattended = empty_recall();
+        turn_extras(&db, &mem, &mut unattended, "my teeth hurt", None, Some("job"), false);
+        assert!(!unattended.index.contains("Reminders"));
+        let mut attended = empty_recall();
+        turn_extras(&db, &mem, &mut attended, "my teeth hurt", None, Some("chat"), true);
+        assert!(attended.index.contains("call the dentist"), "still there for the person");
     }
 
     /// `n` finished conversations of one kind and outcome.

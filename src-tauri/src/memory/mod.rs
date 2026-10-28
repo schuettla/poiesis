@@ -384,6 +384,9 @@ pub struct RecallSet {
     pub index: String,
     pub retrieved: Vec<RecalledEntry>,
     pub injected_facts: Vec<String>,
+    /// The lessons that reached the prompt, wholesale or retrieved: the tidy-up
+    /// reads their last use from this (`memory_usage`).
+    pub injected_lessons: Vec<String>,
 }
 
 /// `memory/PROFILE.md` (`PRO-1`): the agent's own synthesis of how this user
@@ -1490,11 +1493,14 @@ impl MemoryStore {
             }
             let mut lessons: Vec<Fact> = self.list_in(LESSONS).into_iter().filter(&eligible).collect();
             most_useful_first(&mut lessons, &lesson_credit);
+            let mut injected_lessons = Vec::new();
             if !lessons.is_empty() {
                 index.push_str(LESSONS_HEADER);
-                index.push_str(&Self::index_section(&lessons, INDEX_CAP_LESSONS).0);
+                let (block, kept) = Self::index_section(&lessons, INDEX_CAP_LESSONS);
+                index.push_str(&block);
+                injected_lessons = kept;
             }
-            return RecallSet { index, retrieved: Vec::new(), injected_facts };
+            return RecallSet { index, retrieved: Vec::new(), injected_facts, injected_lessons };
         };
 
         // SCP: only global-scoped (or not-yet-classified) facts stay
@@ -1609,7 +1615,8 @@ impl MemoryStore {
             }
         }
 
-        RecallSet { index, retrieved, injected_facts }
+        let injected_lessons = retrieved.iter().filter(|r| r.kind == "lesson").map(|r| r.name.clone()).collect();
+        RecallSet { index, retrieved, injected_facts, injected_lessons }
     }
 
     pub fn write_index(&self) {

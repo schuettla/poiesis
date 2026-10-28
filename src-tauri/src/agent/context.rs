@@ -518,6 +518,9 @@ pub struct GatherOpts<'a> {
     /// This turn's user message, used to scope memory recall to what is
     /// actually being asked about.
     pub query: &'a str,
+    /// A person reads this turn's answer. `false` for a scheduled run, which must
+    /// not use up a reminder (`INT-2`).
+    pub attended: bool,
 }
 
 /// Read the whole system prompt's worth of state out of the database.
@@ -557,6 +560,7 @@ pub async fn gather(
                     .map(|p| p.id)
                     .as_deref(),
                 Some(opts.conversation_id),
+                opts.attended,
             )
             .await;
         inputs.memory_index = Some(recalled.index);
@@ -1084,7 +1088,7 @@ mod tests {
     }
 
     fn opts<'a>(conversation_id: &'a str, tools_enabled: bool) -> GatherOpts<'a> {
-        GatherOpts { conversation_id, tools_enabled, model_name: "local", query: "do the thing" }
+        GatherOpts { conversation_id, tools_enabled, model_name: "local", query: "do the thing", attended: true }
     }
 
     /// A conversation with no persona falls back to the user's own prompt, and a

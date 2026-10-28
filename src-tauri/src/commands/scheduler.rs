@@ -213,6 +213,10 @@ pub struct RunningJob {
     pub built_in: bool,
     #[serde(skip)]
     cancel: CancelFlag,
+    /// The person pressed Stop. A pass stopped on purpose waits for its next
+    /// period; only one that input interrupted stays due at once.
+    #[serde(skip)]
+    stopped: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Concurrency 1 (SCH-1): one local GPU serialises generation anyway, so at
@@ -270,12 +274,18 @@ impl SchedulerState {
             manual,
             built_in: job.built_in,
             cancel: cancel.clone(),
+            stopped: Default::default(),
         });
         Some(cancel)
     }
 
-    fn finish(&self) {
-        *self.running.lock().unwrap() = None;
+    /// End the run. Returns whether the person stopped it with Stop.
+    fn finish(&self) -> bool {
+        self.running
+            .lock()
+            .unwrap()
+            .take()
+            .is_some_and(|r| r.stopped.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     pub fn status(&self) -> Option<RunningJob> {
@@ -287,6 +297,7 @@ impl SchedulerState {
     pub fn stop(&self) -> bool {
         match self.running.lock().unwrap().as_ref() {
             Some(r) => {
+                r.stopped.store(true, std::sync::atomic::Ordering::Relaxed);
                 r.cancel.cancel();
                 true
             }
@@ -330,7 +341,12 @@ async fn execute_job(app: &AppHandle, job_id: &str, manual: bool) -> Result<Stri
     };
     let result = outcome.summary.clone();
 
-    sched.finish();
+    // Stop means stop: a pass the person ended is not "unfinished" and does not
+    // start again two quiet minutes later.
+    let mut outcome = outcome;
+    if sched.finish() {
+        outcome.unfinished = false;
+    }
 
     // Re-read rather than writing back the snapshot loaded before the run: a
     // run takes minutes, and anything the user created, edited, disabled or
@@ -705,6 +721,8 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
             tools_enabled: true,
             model_name: &model_name,
             query: &job.prompt,
+            // A scheduled run: nobody reads it as it happens.
+            attended: false,
         },
     )
     .await;
@@ -1216,6 +1234,12 @@ mod tests {
         let custom = sched.try_start(&Job { built_in: false, ..seed_nightly_job() }, false).unwrap();
         sched.note_input(true);
         assert!(!custom.is_cancelled(), "your own tasks are never stopped by input");
+        assert!(!sched.finish(), "input is not Stop");
+
+        let pass = sched.try_start(&seed_nightly_job(), false).unwrap();
+        assert!(sched.stop());
+        assert!(pass.is_cancelled());
+        assert!(sched.finish(), "Stop is remembered until the run ends");
     }
 
     #[test]

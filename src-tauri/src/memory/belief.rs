@@ -33,9 +33,25 @@ const TOP: usize = 5;
 /// about the same thing. Low on purpose: "lives in Hamburg" and "lives in Berlin"
 /// share one word in three, and a false alarm only costs a question under Unsure.
 const RELATED: f32 = 0.3;
+/// Overlap from which the person's own newer word replaces the old entry by
+/// itself. Under it, a contradiction is only marked contested, so a loose match
+/// never hides a belief without a question.
+const REPLACE_BY_USER: f32 = 0.5;
+
+/// Words that say nothing about what a fact is about: who it is about, and how
+/// facts are usually phrased. "User's name is Anna" and "User's dog is called
+/// Rex" share "user" and "name" and are still about different things.
+const FILLER: [&str; 17] = [
+    "user", "users", "name", "named", "called", "the", "and", "has", "have", "had", "about", "with", "for", "from",
+    "that", "this", "their",
+];
 
 fn words(s: &str) -> HashSet<String> {
-    s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() > 2).map(str::to_string).collect()
+    s.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 2 && !FILLER.contains(w))
+        .map(str::to_string)
+        .collect()
 }
 
 /// The text with case and punctuation gone, so "Prefers tea." equals "prefers tea".
@@ -132,7 +148,7 @@ impl MemoryStore {
         let Some((old, relation)) = related.into_iter().next() else {
             return Ok(Saved { name: self.save(db, f)?, outcome: Outcome::New });
         };
-        if relation == Relation::Refines || by_user {
+        if relation == Relation::Refines || (by_user && overlap(f, &old) >= REPLACE_BY_USER) {
             let name = self.replace_fact(db, &old.name, f)?;
             Ok(Saved { name, outcome: Outcome::Replaced(old.name) })
         } else {
@@ -335,18 +351,41 @@ mod tests {
     #[test]
     fn a_contradiction_from_the_user_replaces_and_keeps_the_old_version() {
         let (_d, s, db) = store();
-        s.save(&db, &fact("prefers-tea", "Prefers tea", "Prefers tea.")).unwrap();
-        let saved = s.save_checked(&db, &fact("prefers-coffee", "Prefers coffee", "Prefers coffee."), true).unwrap();
+        s.save(&db, &fact("prefers-tea", "Prefers tea black", "Prefers tea black.")).unwrap();
+        let saved = s.save_checked(&db, &fact("prefers-tea-milk", "Prefers tea milk", "Prefers tea with milk."), true).unwrap();
         assert_eq!(saved.outcome, Outcome::Replaced("prefers-tea".into()));
-        let now = s.read("prefers-coffee").unwrap();
+        let now = s.read("prefers-tea-milk").unwrap();
         assert_eq!(now.supersedes.as_deref(), Some("prefers-tea"));
         assert_eq!(now.valid_from.as_deref(), Some(today().as_str()));
         assert!(now.status.is_none());
-        assert_eq!(s.list().iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["prefers-coffee"]);
+        assert_eq!(s.list().iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["prefers-tea-milk"]);
         let earlier = s.list_superseded(FACTS);
         assert_eq!(earlier.len(), 1);
-        assert_eq!(earlier[0].superseded_by.as_deref(), Some("prefers-coffee"));
-        assert!(!s.index_markdown().contains("prefers-tea"));
+        assert_eq!(earlier[0].superseded_by.as_deref(), Some("prefers-tea-milk"));
+        assert!(!s.index_markdown().contains("[prefers-tea]"));
+    }
+
+    /// A loose match never hides a belief by itself, even on the person's word:
+    /// it is asked about under Unsure instead.
+    #[test]
+    fn a_loose_contradiction_from_the_user_is_contested_not_replaced() {
+        let (_d, s, db) = store();
+        s.save(&db, &fact("prefers-tea", "Prefers tea", "Prefers tea.")).unwrap();
+        let saved = s.save_checked(&db, &fact("prefers-coffee", "Prefers coffee", "Prefers coffee."), true).unwrap();
+        assert_eq!(saved.outcome, Outcome::Contested("prefers-tea".into()));
+        assert_eq!(s.list().len(), 2);
+    }
+
+    /// Who a fact is about and how it is phrased do not make two facts one.
+    #[test]
+    fn facts_that_share_only_filler_words_are_unrelated() {
+        let name = fact("user-name", "User's name is Anna", "User's name is Anna.");
+        let dog = fact("dog-name", "User's dog is called Rex", "User's dog is called Rex.");
+        assert_eq!(relation(&dog, &name), Relation::Unrelated);
+        let (_d, s, db) = store();
+        s.save(&db, &name).unwrap();
+        assert_eq!(s.save_checked(&db, &dog, true).unwrap().outcome, Outcome::New);
+        assert!(s.read("user-name").unwrap().superseded_by.is_none());
     }
 
     #[test]

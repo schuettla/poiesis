@@ -92,8 +92,17 @@ pub fn kinds(db: &Db, now: i64) -> Vec<KindStat> {
 
 /// The kind of work a conversation is in so far, by the same rules the encoding
 /// pass uses at the end. `None` while it cannot be told.
+///
+/// Only what the kind rules read (tools, artifacts, folder): three small reads,
+/// not the whole encoding pass, because this runs on every turn once a kind is weak.
 pub fn kind_now(db: &Db, conversation_id: &str) -> Option<&'static str> {
-    let kind = episode::task_kind(&episode::gather(db, conversation_id));
+    let signals = episode::Signals {
+        tools: db.tools_used_in(conversation_id).unwrap_or_default(),
+        artifacts: db.list_artifacts(conversation_id).unwrap_or_default().into_iter().map(|a| a.kind).collect(),
+        folder: db.conversation_folder(conversation_id).ok().and_then(|(f, _)| f).is_some(),
+        ..Default::default()
+    };
+    let kind = episode::task_kind(&signals);
     (kind != episode::UNKNOWN).then_some(kind)
 }
 
@@ -289,6 +298,21 @@ mod tests {
         assert_eq!(weak_kind_of(&db, &chat, now), None, "this chat is code work, not mail");
         chats(&db, "code", FAILED, 6);
         assert_eq!(weak_kind_of(&db, &chat, now).as_deref(), Some("code"));
+    }
+
+    /// The light read gives the same kind as the full encoding rules.
+    #[test]
+    fn the_kind_now_matches_the_encoding_rules() {
+        let db = Db::open_in_memory().unwrap();
+        let mail = db.create_conversation("Mail", None, false).unwrap().id;
+        db.add_tool_stat("m", "list_mail", &mail, true);
+        let plain = db.create_conversation("Chat", None, false).unwrap().id;
+        for chat in [&mail, &plain] {
+            let full = episode::task_kind(&episode::gather(&db, chat));
+            assert_eq!(kind_now(&db, chat).unwrap_or(episode::UNKNOWN), full);
+        }
+        assert_eq!(kind_now(&db, &mail), Some("mail"));
+        assert_eq!(kind_now(&db, &plain), None);
     }
 
     #[test]

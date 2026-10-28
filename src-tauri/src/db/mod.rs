@@ -3103,6 +3103,17 @@ impl Db {
             "UPDATE change_proposals SET status = ?2 WHERE id = ?1",
             params![id, status],
         )?;
+        // `IMP-5`: an improvement is judged from the moment it took effect, not from
+        // when it was drafted, so the time it was applied goes with what the
+        // replays showed.
+        if status == "applied" {
+            conn.execute(
+                "UPDATE change_proposals SET rehearsal_json = json_set(rehearsal_json, '$.applied_at', ?2)
+                 WHERE id = ?1 AND rehearsal_json IS NOT NULL AND json_valid(rehearsal_json)
+                   AND json_type(rehearsal_json) = 'object'",
+                params![id, now_ms()],
+            )?;
+        }
         Ok(())
     }
 

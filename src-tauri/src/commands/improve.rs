@@ -165,7 +165,7 @@ pub fn problems(db: &Db, mem: &MemoryStore, now: i64) -> Vec<Problem> {
     let mut kinds: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for e in db.episodes_since(now - WINDOW_DAYS * DAY_MS).unwrap_or_default() {
         if matches!(e.outcome.as_deref(), Some("failed" | "abandoned")) {
-            if let Some(kind) = e.task_kind.filter(|k| !k.trim().is_empty() && k != "other") {
+            if let Some(kind) = e.task_kind.filter(|k| !k.trim().is_empty() && k != crate::agent::episode::UNKNOWN) {
                 kinds.entry(kind).or_default().push(e.went_wrong.unwrap_or_default());
             }
         }
@@ -545,17 +545,24 @@ fn tool_of_row(r: &ChangeProposal) -> Option<String> {
     serde_json::from_str::<Value>(r.rehearsal_json.as_deref()?).ok()?["tool"].as_str().map(str::to_string)
 }
 
+/// When an improvement was applied, as `resolve_change_proposal` stamped it.
+fn applied_at(r: &ChangeProposal) -> Option<i64> {
+    serde_json::from_str::<Value>(r.rehearsal_json.as_deref()?).ok()?["applied_at"].as_i64()
+}
+
 /// How an applied fix held up: `held` when the tool did not need fixing again in a
 /// later conversation, `failed` when it did. Read from the fix log, not from a model.
 pub fn fill_live_outcomes(db: &Db, now: i64) -> usize {
     let fixes = db.tool_fix_log().unwrap_or_default();
     let mut filled = 0;
     for r in db.list_improvements().unwrap_or_default() {
-        if r.status != "applied" || r.live_outcome.is_some() || r.created_at > now - JUDGE_AFTER_DAYS * DAY_MS {
+        // From when it took effect: failures while it waited to be accepted are not its own.
+        let since = applied_at(&r).unwrap_or(r.created_at);
+        if r.status != "applied" || r.live_outcome.is_some() || since > now - JUDGE_AFTER_DAYS * DAY_MS {
             continue;
         }
         let Some(tool) = tool_of_row(&r) else { continue };
-        let again = fixes.iter().any(|f| f.tool_name == tool && f.created_at > r.created_at);
+        let again = fixes.iter().any(|f| f.tool_name == tool && f.created_at > since);
         if db.set_live_outcome(&r.id, if again { "failed" } else { "held" }).is_ok() {
             filled += 1;
         }
@@ -857,6 +864,28 @@ mod tests {
         assert_eq!(ps[0].moments[0].conversation_id, w.conv);
     }
 
+    /// Chats that fit no kind are not a kind of task to fix, and the word
+    /// "unknown" is never shown to the person.
+    #[test]
+    fn unknown_tasks_that_go_wrong_are_not_a_problem() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open_in_memory().unwrap();
+        let mem = MemoryStore::new(dir.path()).unwrap();
+        let ended = |kind: &str| {
+            let id = db.create_conversation("A chat", None, false).unwrap().id;
+            db.save_episode_rules(&id, "abandoned", kind, "{}").unwrap();
+            db.save_episode_draft(&id, "goal", "digest", "", "it went wrong", "[]").unwrap();
+        };
+        ended("unknown");
+        ended("unknown");
+        assert!(problems(&db, &mem, crate::db::now_ms()).iter().all(|p| p.source != Source::TaskKind));
+        ended("mail");
+        ended("mail");
+        let ps = problems(&db, &mem, crate::db::now_ms());
+        let kinds: Vec<&str> = ps.iter().filter(|p| p.source == Source::TaskKind).map(|p| p.cue.as_str()).collect();
+        assert_eq!(kinds, ["mail tasks keep going wrong"]);
+    }
+
     #[test]
     fn told_twice_comes_first_and_the_same_cue_is_one_problem() {
         let w = world();
@@ -1094,6 +1123,22 @@ mod tests {
         // Too soon to say, or not applied: left alone.
         let young = w.db.add_improvement("habit", Some("x"), "{}", "why", None, "applied", "cue2", "check", "g2", &rj).unwrap();
         assert_eq!(fill_live_outcomes(&w.db, young.created_at + DAY_MS), 0);
+    }
+
+    /// A failure while the fix still waited to be accepted is not held against it.
+    #[test]
+    fn a_fix_is_judged_from_when_it_was_applied_not_when_it_was_drafted() {
+        let w = world();
+        let rj = json!({ "rehearsed": true, "tool": "read_table", "verdict": "helped" }).to_string();
+        let r = w.db.add_improvement("habit", Some("check-header"), "{}", "why", None, "pending", "cue", "check", "g", &rj).unwrap();
+        w.db.exec_for_tests("UPDATE change_proposals SET created_at = 0 WHERE id = ?1", rusqlite::params![r.id]);
+        // The fix in `world` happened while it was pending; it is accepted now.
+        w.db.resolve_change_proposal(&r.id, "applied").unwrap();
+        let row = rows(&w).into_iter().find(|x| x.id == r.id).unwrap();
+        let at = applied_at(&row).expect("the time it was applied is kept");
+        assert_eq!(fill_live_outcomes(&w.db, at + DAY_MS), 0, "too soon after it took effect");
+        assert_eq!(fill_live_outcomes(&w.db, at + 20 * DAY_MS), 1);
+        assert_eq!(rows(&w).iter().find(|x| x.id == r.id).unwrap().live_outcome.as_deref(), Some("held"));
     }
 
     #[test]

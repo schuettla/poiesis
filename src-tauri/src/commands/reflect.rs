@@ -146,14 +146,10 @@ fn candidates_json(candidates: &[LessonDraft], saved: &[LessonDraft], proposed: 
 }
 
 /// `EPI-2` steps 1 to 3 and credit: the part of encoding that needs no model.
-/// Credit runs once per conversation and encoding version, so asking for a
-/// reflection again does not count the same answers twice.
+/// Credit picks up where it stopped last time, so asking for a reflection again
+/// does not count the same answers twice, and a chat the person came back to
+/// has its new answers counted.
 fn encode_by_rules(db: &Db, mem: &MemoryStore, conversation_id: &str) {
-    let first_time = db
-        .episode(conversation_id)
-        .ok()
-        .flatten()
-        .is_some_and(|e| e.encode_version < crate::db::episodes::ENCODE_VERSION);
     let signals = crate::agent::episode::gather(db, conversation_id);
     if signals.messages == 0 {
         return;
@@ -164,9 +160,7 @@ fn encode_by_rules(db: &Db, mem: &MemoryStore, conversation_id: &str) {
         crate::agent::episode::task_kind(&signals),
         &crate::agent::episode::signals_json(&signals),
     );
-    if first_time {
-        crate::agent::credit::credit_conversation(db, mem, conversation_id);
-    }
+    crate::agent::credit::credit_conversation(db, mem, conversation_id);
 }
 
 /// The critic's answer for one draft (`CRT-1`). `reason` is only meaningful
