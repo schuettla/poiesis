@@ -197,6 +197,23 @@ impl Db {
             .collect())
     }
 
+    /// How the conversations worked on since `since` (ms) ended, by task kind
+    /// and outcome: `(task_kind, outcome, count)`. Only encoded conversations
+    /// with a known kind and outcome (`MET-1`).
+    pub fn outcomes_by_kind(&self, since: i64) -> Result<Vec<(String, String, i64)>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT task_kind, outcome, COUNT(*) FROM conversations
+             WHERE encode_version > 0 AND updated_at >= ?1
+               AND task_kind IS NOT NULL AND task_kind <> 'unknown' AND outcome IS NOT NULL
+             GROUP BY task_kind, outcome",
+        )?;
+        let rows = stmt
+            .query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// The credit of one collection, by name.
     pub fn memory_credit_map(&self, collection: &str) -> Result<std::collections::HashMap<String, Credit>, DbError> {
         let conn = self.conn.lock().unwrap();

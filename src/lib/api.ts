@@ -1704,6 +1704,28 @@ export interface Vitality {
   unsure: number;
   last_reflection: number | null;
   tool_health: ToolHealth[];
+  /** How finished conversations ended, per kind of work (`MET-1`). */
+  kinds: KindStat[];
+  /** How well the decision model's stated confidence held, per purpose (`MET-1`). */
+  confidence: ConfidenceRow[];
+  /** One or two sentences about how I do, rebuilt weekly; empty until a kind is judged (`MET-UI-1`). */
+  portrait: string;
+}
+
+export interface KindStat {
+  kind: string;
+  done: number;
+  partial: number;
+  failed: number;
+  abandoned: number;
+  strength: "unknown" | "weak" | "steady" | "strong";
+}
+
+export interface ConfidenceRow {
+  purpose: string;
+  ece: number;
+  labels: number;
+  calibrated: boolean;
 }
 
 /** What one reflection pass produced. `saved` is in effect now; `proposed` is

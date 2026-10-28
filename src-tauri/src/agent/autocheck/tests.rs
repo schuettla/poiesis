@@ -339,6 +339,35 @@ async fn only_a_sure_refutation_is_reviewed_by_itself_and_at_most_two() {
     assert!(judge.notes.lock().unwrap().iter().any(|n| n.contains("contradicted by trip.md")));
 }
 
+/// `MET-2`: in a kind of work I am weak at, more refutations start a review by
+/// themselves, and one that is not quite as sure does too.
+#[tokio::test]
+async fn in_a_weak_kind_of_work_more_and_less_sure_refutations_are_reviewed() {
+    let texts = [HOTEL, TOWER, FLIGHT, "The tower opened in 1889 in Paris."];
+    let mut judge = Fake { review_reply: Some(r#"{"verdict":"refuted","reason":"Evidence 1 says 120."}"#.into()), ..Fake::default() };
+    for t in texts {
+        judge.readings.insert(t.into(), Reading::Fact { p: 0.95 });
+    }
+    judge.findings.insert(HOTEL.into(), (claims::REFUTED, 0.95));
+    judge.findings.insert(TOWER.into(), (claims::REFUTED, 0.9));
+    judge.findings.insert(FLIGHT.into(), (claims::REFUTED, 0.9));
+    judge.findings.insert(texts[3].into(), (claims::REFUTED, 0.75));
+    let pool = pool_of(&[
+        call(1, "c1", "read_file", serde_json::json!({ "path": "trip.md" })),
+        result(2, "c1", "The hotel costs 120 euros a night. The Eiffel Tower is 330 metres tall. We fly on 14 March. The tower opened in 1889."),
+    ]);
+    let mut check = Check { careful: true, ..Default::default() };
+    let out = run_all(&judge, &mut check, &pool, false, &texts).await;
+    assert_eq!(*judge.reviewed.lock().unwrap(), [HOTEL, TOWER, FLIGHT, texts[3]], "four reviews, the last on a 0.75 refutation");
+    assert!(out.iter().all(|c| c.as_ref().unwrap().how == "reviewed"));
+
+    // The same answer in a kind I am not weak at: two reviews, and 0.75 is not sure enough.
+    let judge = Fake { review_reply: judge.review_reply.clone(), findings: judge.findings.clone(), readings: judge.readings.clone(), ..Fake::default() };
+    let mut check = Check::default();
+    run_all(&judge, &mut check, &pool, false, &texts).await;
+    assert_eq!(*judge.reviewed.lock().unwrap(), [HOTEL, TOWER]);
+}
+
 #[tokio::test]
 async fn a_refutation_that_is_not_sure_is_left_to_the_card() {
     let mut judge = Fake::default();

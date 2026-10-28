@@ -13,6 +13,8 @@
 //!   on: hurt. The tool did not run: no effect.
 //! - **Anything the user pressed Outdated or Not relevant on** (a command trace
 //!   in the session log): hurt, on the last answer that carried it.
+//! - **Surprise** (`MET-2`): a failure after a turn whose decisions were sure counts
+//!   double, and so does a success after a turn whose decisions were unsure.
 //! - Nothing else. A fact that was merely in the prompt is a chance and not a
 //!   help: this build cannot tell that the answer used it, and a guess here
 //!   would rank memory by noise.
@@ -34,6 +36,37 @@ struct Tally {
     helped: i64,
     hurt: i64,
     last_at: i64,
+}
+
+/// A turn's decisions were this sure or surer on average: a failure after them is
+/// a surprise (`MET-2`, III.7).
+pub const SURE: f32 = 0.85;
+/// ...and this unsure or less: a success after them is a surprise.
+pub const UNSURE: f32 = 0.6;
+
+/// How sure the decision model was in `[from, to)` of this conversation: the
+/// mean of the top probability of each answered decision. `None` when it was
+/// not asked, and then nothing is a surprise.
+fn sureness(db: &Db, conversation_id: &str, from: i64, to: i64) -> Option<f32> {
+    let tops: Vec<f32> = db
+        .decisions_between(conversation_id, from, to)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|d| crate::agent::decide::calibration::probs_of(&d.answers))
+        .filter_map(|(_, probs)| probs.into_iter().reduce(f32::max))
+        .collect();
+    (!tops.is_empty()).then(|| tops.iter().sum::<f32>() / tops.len() as f32)
+}
+
+/// What one `hurt` and one `helped` count for after a turn the model was this
+/// sure about: a failure it was sure about counts double, and so does a success
+/// it was unsure about. Everything else counts once.
+fn surprise(sure: Option<f32>) -> (i64, i64) {
+    match sure {
+        Some(s) if s >= SURE => (2, 1),
+        Some(s) if s <= UNSURE => (1, 2),
+        _ => (1, 1),
+    }
 }
 
 /// The tool a lesson is cued to, when it is.
@@ -72,6 +105,7 @@ pub fn credit_conversation(db: &Db, mem: &MemoryStore, conversation_id: &str) ->
     for (n, (i, refs)) in answers.iter().enumerate() {
         let msg = &messages[*i];
         let until = answers.get(n + 1).map(|(next, _)| messages[*next].created_at);
+        let (hurt_w, helped_w) = surprise(sureness(db, conversation_id, msg.created_at, until.unwrap_or(i64::MAX)));
 
         let items = refs
             .facts
@@ -94,9 +128,9 @@ pub fn credit_conversation(db: &Db, mem: &MemoryStore, conversation_id: &str) ->
                         db.tool_results_between(conversation_id, tool, msg.created_at, until).unwrap_or((0, 0));
                     let gone_back = rewound_from.is_some_and(|from| *i > from);
                     if failed > 0 || gone_back {
-                        t.hurt += 1;
+                        t.hurt += hurt_w;
                     } else if ok > 0 {
-                        t.helped += 1;
+                        t.helped += helped_w;
                     }
                 }
             }
@@ -110,7 +144,7 @@ pub fn credit_conversation(db: &Db, mem: &MemoryStore, conversation_id: &str) ->
                 .iter()
                 .any(|(arg, at)| arg == name && *at >= msg.created_at && until.is_none_or(|u| *at < u) && !carried_after);
             if hurt_by_press {
-                t.hurt += 1;
+                t.hurt += hurt_w;
             }
         }
     }
@@ -280,6 +314,69 @@ mod tests {
         credit_conversation(&w.db, &w.mem, &w.conv);
         let c = credit_of(&w, "lessons", "check-header");
         assert_eq!((c.chances, c.helped, c.hurt), (1, 0, 1));
+    }
+
+    /// A decision the model made in this conversation at `at`, with `p` for its yes.
+    fn decided(w: &World, id: &str, p: f64, at: i64) {
+        let answers = serde_json::json!({ "goal": { "p": p } });
+        w.db.add_decision(&crate::db::decisions::NewDecision {
+            id,
+            conversation_id: Some(&w.conv),
+            run_id: None,
+            purpose: "goal-met",
+            backend: "local",
+            model: "m",
+            ms: 1,
+            calibrated: false,
+            answers: &answers,
+            input_tokens: 1,
+            state_preview: "",
+            state_hash: id,
+            action: None,
+        })
+        .unwrap();
+        w.db.set_decision_at(id, at);
+    }
+
+    /// `MET-2`: credit of a lesson cued to `read_file`, after a turn whose decision
+    /// said `p`, when the tool then ran `ok` or failed.
+    fn after_decision(p: Option<f64>, ok: bool) -> (i64, i64) {
+        let w = world();
+        lesson(&w, "check-header", Some("tool:read_file"));
+        answer(&w, &["check-header"], &[], 100);
+        if let Some(p) = p {
+            decided(&w, "d1", p, 110);
+        }
+        tool(&w, "read_file", ok, 120);
+        credit_conversation(&w.db, &w.mem, &w.conv);
+        let c = credit_of(&w, "lessons", "check-header");
+        (c.helped, c.hurt)
+    }
+
+    #[test]
+    fn a_failure_the_decision_model_was_sure_about_counts_double() {
+        assert_eq!(after_decision(Some(0.95), false), (0, 2));
+        assert_eq!(after_decision(Some(0.7), false), (0, 1), "not sure enough to be a surprise");
+        assert_eq!(after_decision(None, false), (0, 1), "no decision, no surprise");
+    }
+
+    #[test]
+    fn a_success_the_decision_model_was_unsure_about_counts_double() {
+        assert_eq!(after_decision(Some(0.5), true), (2, 0));
+        assert_eq!(after_decision(Some(0.95), true), (1, 0), "a sure success is no surprise");
+        assert_eq!(after_decision(None, true), (1, 0));
+    }
+
+    #[test]
+    fn a_decision_from_another_turn_is_not_this_turns_surprise() {
+        let w = world();
+        lesson(&w, "check-header", Some("tool:read_file"));
+        answer(&w, &["check-header"], &[], 100);
+        answer(&w, &[], &[], 200);
+        decided(&w, "later", 0.95, 250);
+        tool(&w, "read_file", false, 120);
+        credit_conversation(&w.db, &w.mem, &w.conv);
+        assert_eq!(credit_of(&w, "lessons", "check-header").hurt, 1);
     }
 
     #[test]

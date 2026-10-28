@@ -46,6 +46,7 @@ pub mod results;
 pub mod rewind;
 pub mod retrieval;
 pub mod run;
+pub mod selfmodel;
 pub mod sentences;
 pub mod sandbox;
 pub mod screen;

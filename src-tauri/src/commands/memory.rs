@@ -155,8 +155,26 @@ pub async fn recall_for(
     // memory with no chat does not use it up.
     if let Some(conversation_id) = conversation_id.filter(|_| !query.trim().is_empty()) {
         remind(db, mem, &mut result, query, project, conversation_id);
+        watch_myself(db, &mut result, conversation_id);
     }
     result
+}
+
+/// The heading of the line a weak kind of work adds to the index (`MET-2`).
+const MY_WORK_HEADER: &str = "\nAbout my own work:\n";
+
+/// `MET-2`: in a kind of work I often get wrong, say so to myself once per turn.
+/// One line in the index, like a reminder: check before going on, and ask one
+/// short question early when the request is unclear. A kind I am not weak at adds
+/// nothing, so the index of a turn in it is the same as before.
+fn watch_myself(db: &Db, result: &mut RecallResult, conversation_id: &str) {
+    let Some(kind) = crate::agent::selfmodel::weak_kind_of(db, conversation_id, crate::db::now_ms()) else { return };
+    result.index.push_str(MY_WORK_HEADER);
+    result.index.push_str(&format!(
+        "- My {} work has often gone wrong. Check each step before going on, and ask one short question early if the request is unclear.\n",
+        crate::agent::selfmodel::words(&kind)
+    ));
+    let _ = db.log_activity(Some(conversation_id), "memory", &format!("careful with {kind} work"));
 }
 
 /// `INT-2`: tell the turn what the person asked to be reminded of, once. Each
@@ -2197,6 +2215,38 @@ mod tests {
         let mut again = empty_recall();
         remind(&db, &mem, &mut again, "my teeth hurt", None, "c2");
         assert!(!again.index.contains("Reminders"), "told once");
+    }
+
+    /// `n` finished conversations of one kind and outcome.
+    fn finished(db: &Db, kind: &str, outcome: &str, n: usize) {
+        for _ in 0..n {
+            let id = db.create_conversation("done", None, false).unwrap().id;
+            db.save_episode_rules(&id, outcome, kind, "{}").unwrap();
+        }
+    }
+
+    #[test]
+    fn a_weak_kind_of_work_adds_one_line_and_any_other_adds_nothing() {
+        let (_mem, db, _tmp) = store();
+        let chat = db.create_conversation("now", None, false).unwrap().id;
+        db.set_conversation_folder(&chat, Some("/tmp/x")).unwrap();
+
+        let mut plain = empty_recall();
+        watch_myself(&db, &mut plain, &chat);
+        assert_eq!(plain.index, empty_recall().index, "nothing is weak yet");
+
+        finished(&db, "mail", "failed", 6);
+        let mut other = empty_recall();
+        watch_myself(&db, &mut other, &chat);
+        assert_eq!(other.index, empty_recall().index, "this chat is code work, and mail is the weak one");
+
+        finished(&db, "code", "failed", 6);
+        let mut weak = empty_recall();
+        watch_myself(&db, &mut weak, &chat);
+        assert!(weak.index.starts_with("- [a] (fact) likes tea"), "the notes come first");
+        assert!(weak.index.contains("About my own work") && weak.index.contains("code and file work"));
+        assert!(weak.index.contains("ask one short question early"));
+        assert!(weak.matches.is_empty(), "a line for me, not a hit for the timeline");
     }
 
     #[test]

@@ -2231,6 +2231,7 @@ async fn run_agent_inner(
                 client: client.clone(),
                 endpoint: endpoint.clone(),
                 cancel: run.cancel.clone(),
+                careful: super::selfmodel::weak_kind_of(db, conversation_id, crate::db::now_ms()).is_some(),
             }));
         }
     }

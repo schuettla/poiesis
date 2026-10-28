@@ -17,7 +17,7 @@ commit per phase.
 | 5 - Lessons that fire, and rehearsal | done (see notes) | 2026-10-27 |
 | 6 - The self-improvement loop | done (see notes) | 2026-10-27 |
 | 7 - Intentions | done (see notes) | 2026-10-28 |
-| 8 - Self-model | not started | |
+| 8 - Self-model | done (see notes) | 2026-10-28 |
 | 9 - Project setup | not started | |
 
 ### Phase 0 notes
@@ -579,6 +579,46 @@ commit per phase.
   send the draft when I open the project Book`, open a chat in that project and send a
   message; look for the "◆ reminder" chip and the model saying it. Then open the Memory
   tab: the line is gone from "Things I'll do".
+
+### Phase 8 notes
+
+- **MET-1, the self-model.** New `agent/selfmodel.rs`. `Vitality` gains `kinds` (per task
+  kind: done, partial, failed, abandoned and a `strength`), `confidence` (the decision
+  calibration fits that exist for the model in play: purpose, ECE, label count, whether it
+  counts as calibrated) and `portrait`. The counts come from the outcome and task kind the
+  encoding pass wrote on each conversation (`db::outcomes_by_kind`, last 60 days, kinds and
+  outcomes that are `unknown` do not count). A kind is judged after 5 conversations: **weak**
+  at 40% or more failed or abandoned, **strong** at 80% or more done with 10% or fewer bad,
+  otherwise **steady**.
+- **MET-2, behaviour.** (a) In a turn whose chat is in a weak kind (`weak_kind_of`: the kind
+  the conversation is in so far, by the encoding rules), `recall_for` adds one line under
+  "About my own work" in the index: check each step, ask one short question early if the
+  request is unclear. A strong or steady kind adds nothing, so those turns are byte for
+  byte as before and the golden did not move. (b) The automatic answer check starts slow
+  reviews by itself on up to 4 refutations instead of 2, and a refutation counts at 0.7
+  instead of 0.85 (`Check::careful`, `Start::careful`). That check runs only when the "Fast
+  & slow thinking" experiment is on, as before. (c) Surprise in credit: a turn's decisions
+  are read (`db::decisions_between`); when their mean top probability is 0.85 or more, a
+  `hurt` counts 2; when it is 0.6 or less, a `helped` counts 2. A turn with no decision
+  counts as before.
+- **MET-UI-1.** The Self header shows the portrait between the narrative and the counts
+  strip: for example "I'm reliable with mail. I often get reports wrong on the first try,
+  so I check that work before I go on." Words, no numbers. It is rebuilt at most weekly
+  (`self.portrait` in `settings`) and is not shown until a kind is judged.
+- **Deviations.** (a) The kind of a turn is known from what the chat has done so far (tools
+  used, the folder), so the first message of a new chat in no folder gets no extra care;
+  the plan's "earlier clarifying question" is a line to myself, not a forced question. (b)
+  Calibration is per model and purpose, not per task kind, so `confidence` sits beside
+  `kinds` and the portrait does not use it. (c) "Sure" for surprise is the mean over the
+  turn's decisions of any purpose, since credit has no link from one lesson to one
+  decision. (d) The portrait speaks of the three kinds the encoder knows (mail, code and
+  file work, reports); finer kinds need a finer encoder.
+- **Checks.** `cargo test --lib`: 1679 pass (15 new); the 7 stable failures and 2 flaky `db`
+  fork tests fail as before. `vitest`: all pass except the old `ThoughtStrip` failure.
+  `tsc`: only the old `AgentRun.tsx` error. Clippy: nothing in the new code.
+- **Felt check not run here.** Needs the app and enough history: five finished mail chats
+  that failed or were abandoned make mail weak; the Self header then says so, and a new
+  chat that has used a mail tool carries the "About my own work" line.
 
 **What v2 changes.** v1 described a second memory system beside the one that
 exists: a new `episodes` table, a new `memory_uses` table, a new

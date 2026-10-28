@@ -47,6 +47,10 @@ pub const DEEP: &str = "deep";
 
 /// Slow reviews an answer starts by itself.
 pub const AUTO_REVIEWS: usize = 2;
+/// In a kind of work I am weak at (`MET-2`): more reviews, and a refutation need
+/// not be quite as sure to start one.
+pub const CAREFUL_REVIEWS: usize = 4;
+pub const CAREFUL_SURE: f32 = 0.7;
 /// How alike a sentence and a passage must be, as the share of the sentence's
 /// distinctive words the passage has.
 pub const FLOOR: f32 = 0.5;
@@ -658,6 +662,8 @@ pub struct Check {
     pub claims: Vec<Claim>,
     pub summary: Summary,
     reviews: usize,
+    /// The answer is in a kind of work I am weak at (`MET-2`).
+    pub careful: bool,
 }
 
 impl Check {
@@ -774,11 +780,12 @@ impl Check {
             return Some(c);
         }
         // Only a refutation the model is sure of starts the slow review by itself, two an answer.
-        let sure_refuted = fast.finding == REFUTED && fast.p >= claims::SURE;
+        let (sure_at, cap) = if self.careful { (CAREFUL_SURE, CAREFUL_REVIEWS) } else { (claims::SURE, AUTO_REVIEWS) };
+        let sure_refuted = fast.finding == REFUTED && fast.p >= sure_at;
         if sure_refuted {
             judge.note(&v.id, &format!("Marked a sentence as contradicted by {}", c.passages[0].source));
         }
-        if sure_refuted && self.reviews < AUTO_REVIEWS && matches!(judge.settle(&v, Act::Below), Action::Escalated(_)) {
+        if sure_refuted && self.reviews < cap && matches!(judge.settle(&v, Act::Below), Action::Escalated(_)) {
             self.reviews += 1;
             let reply = judge.review(text, &c.passages).await;
             match reply.as_deref().and_then(parse_review) {
@@ -830,6 +837,8 @@ pub struct Start {
     pub client: reqwest::Client,
     pub endpoint: crate::cloud::ChatEndpoint,
     pub cancel: crate::runtime::proxy::CancelFlag,
+    /// `MET-2`: the conversation is in a kind of work I am weak at.
+    pub careful: bool,
 }
 
 impl Stream {
@@ -951,7 +960,7 @@ mod live {
         mut rx: tokio::sync::mpsc::UnboundedReceiver<Job>,
         unchecked: Arc<AtomicBool>,
     ) {
-        let Start { conversation_id, run_id, message_id, client, endpoint, cancel } = start;
+        let Start { conversation_id, run_id, message_id, client, endpoint, cancel, careful } = start;
         let judge = Asking {
             conversation_id: conversation_id.clone(),
             run_id: run_id.clone(),
@@ -960,7 +969,7 @@ mod live {
             cancel: cancel.clone(),
         };
         decide::begin_auto_check(&conversation_id);
-        let mut check = Check::default();
+        let mut check = Check { careful, ..Default::default() };
         let mut pool = Pool::default();
         let mut total = 0usize;
         let mut finished = false;

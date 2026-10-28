@@ -34,6 +34,13 @@ pub struct Vitality {
     pub last_reflection: Option<i64>,
     /// 7-day per-tool reliability for the model in play (HEAL-2).
     pub tool_health: Vec<ToolStatRow>,
+    /// `MET-1`: how finished conversations ended, per kind of work.
+    pub kinds: Vec<crate::agent::selfmodel::KindStat>,
+    /// `MET-1`: how well the decision model's stated confidence held, per purpose.
+    pub confidence: Vec<crate::agent::selfmodel::Confidence>,
+    /// `MET-UI-1`: one or two sentences about how I do, rebuilt weekly. Empty
+    /// until a kind has been judged.
+    pub portrait: String,
 }
 
 #[tauri::command]
@@ -53,8 +60,11 @@ pub async fn get_vitality_cmd(
         _ => mgr.engine_model_name().await,
     };
     let tool_health = model
-        .and_then(|m| db.tool_health(&m, 7).ok())
+        .as_deref()
+        .and_then(|m| db.tool_health(m, 7).ok())
         .unwrap_or_default();
+    let confidence = model.as_deref().map(|m| crate::agent::selfmodel::confidence(&db, m)).unwrap_or_default();
+    let now = crate::db::now_ms();
 
     Ok(Vitality {
         facts: mem.list().len(),
@@ -67,6 +77,9 @@ pub async fn get_vitality_cmd(
         unsure: mem.list().iter().filter(|f| f.status.as_deref() == Some("contested")).count(),
         last_reflection: db.last_reflection().ok().flatten(),
         tool_health,
+        kinds: crate::agent::selfmodel::kinds(&db, now),
+        confidence,
+        portrait: crate::agent::selfmodel::portrait_now(&db, now),
     })
 }
 

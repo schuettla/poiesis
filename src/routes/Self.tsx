@@ -55,6 +55,7 @@ export default function Self() {
           <div className="self-narrative">
             <h1>Self</h1>
             <p className="lede">{narrative(days, facts, lessonCount, skillCount)}</p>
+            {vitality?.portrait && <p className="self-portrait">{vitality.portrait}</p>}
             <p className="self-strip">
               {facts} facts · {lessonCount} lessons · {skillCount} skills · {pending} pending
               {unsure > 0 && ` · ${unsure} I'm unsure about`}

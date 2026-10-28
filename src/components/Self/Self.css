@@ -18,6 +18,12 @@
 .self-header .lede {
   margin-bottom: 10px;
 }
+/* `MET-UI-1`: how I do, in a sentence or two, between the narrative and the counts. */
+.self-portrait {
+  margin: 0 0 10px;
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
 .self-strip {
   /* Carries the gap down to the tab row, which sits outside the header. */
   margin: 0 0 14px;

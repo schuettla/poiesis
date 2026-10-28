@@ -161,6 +161,19 @@ impl Db {
         Ok(rows)
     }
 
+    /// Every answered decision made in one conversation in `[from_ms, to_ms)`,
+    /// oldest first, without labels (`MET-2`: how sure the model was in a turn).
+    pub fn decisions_between(&self, conversation_id: &str, from_ms: i64, to_ms: i64) -> Result<Vec<DecisionRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {COLUMNS} FROM decisions
+             WHERE conversation_id = ?1 AND answers_json != '{{}}' AND at >= ?2 AND at < ?3
+             ORDER BY at ASC, rowid ASC"
+        ))?;
+        let rows = stmt.query_map(params![conversation_id, from_ms, to_ms], decision_row)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Newest first, each with its outcome labels. `purpose` narrows it.
     pub fn decisions_recent(&self, limit: i64, purpose: Option<&str>) -> Result<Vec<DecisionRow>, DbError> {
         let conn = self.conn.lock().unwrap();
