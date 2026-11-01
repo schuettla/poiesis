@@ -364,6 +364,7 @@ export default function MemoryPanel() {
       <RecentChanges collection="facts" version={version} />
       <Unsure version={version} onChanged={() => void refresh()} />
 
+      <h3 className="memory-section-title">What I know</h3>
       {facts.length > 0 && (
         <input
           className="field-input memory-search"
@@ -376,9 +377,13 @@ export default function MemoryPanel() {
       )}
 
       {facts.length === 0 && (
-        <p className="empty-hint">
-          Nothing remembered yet. Facts appear here when you confirm a lasting preference in chat.
-        </p>
+        <div className="memory-empty">
+          <strong>Nothing remembered yet</strong>
+          <span>
+            Facts appear here when you confirm a lasting preference in chat, or tell me with{" "}
+            <code>/remember</code>.
+          </span>
+        </div>
       )}
 
       {shown.map((f) => (

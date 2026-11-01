@@ -22,6 +22,23 @@ const ATTRIBUTIONS = [
   { name: "Model weights", license: "Per-model (shown on each model)", what: "e.g. Llama Community, Apache-2.0" },
 ];
 
+// The website's account of the same thing (website/index.html, "The idea" and
+// the sections after it), in the app's own register.
+const HARNESS_CELLS = [
+  { title: "Remembers", text: "Facts about you and lessons from its mistakes, kept as plain files on your disk." },
+  { title: "Reflects", text: "When a chat ends it reads it back. A lesson is kept only if it's worth keeping." },
+  { title: "Repairs", text: "A file it can't read is set aside, not deleted. A tool that keeps failing is planned around." },
+  { title: "Checks itself", text: "A change that makes it worse is put back, and you're told." },
+];
+
+const HARNESS_POINTS = [
+  { lead: "Plans, then works.", text: "A big job gets a plan it ticks off. A wide one is handed to helper agents you can open, steer or stop." },
+  { lead: "Asks before it acts.", text: "Reading runs, a change asks, a send asks every time. Folders are deny-by-default." },
+  { lead: "Shows what it changed.", text: "Edits come as a patch you can undo, and every write to its own memory shows a notice with an Undo." },
+  { lead: "Works with other agents.", text: "Claude Code, Codex and OpenCode can take a job, and their questions come to Poiesis's own panel." },
+  { lead: "Local first.", text: "Models run on your machine. Cloud models need your own key and are always marked." },
+];
+
 export default function About() {
   const [version, setVersion] = useState("");
   const setView = useAppStore((s) => s.setView);
@@ -34,38 +51,38 @@ export default function About() {
   return (
     <div className="surface">
       <div className="surface-inner">
-        <div className="about-mark">
-          <PoiesisMark size={64} />
-        </div>
         <h1>About</h1>
-        <p className="lede">Details about this install, and the open-source software it's built on.</p>
 
-        <section className="setting-block">
-          <h2 className="setting-title">Poiesis Agent</h2>
-          <p className="setting-help">A local-first, agentic desktop LLM application.</p>
-          <p className="setting-readout">{version ? `Version ${version}` : "Browser preview"}</p>
-          <p className="setting-readout">Platform: Windows desktop (Tauri)</p>
-          <button className="settings-self-link" onClick={() => setView("workingdir")}>
-            See what's in my working folder, and how big it is →
-          </button>
+        <section className="about-hero">
+          <div className="about-mark">
+            <PoiesisMark size={72} />
+          </div>
+          <div>
+            <h2 className="about-name">Poiesis Agent</h2>
+            <p className="about-tagline">The agent that tends to itself.</p>
+            <p className="about-meta">
+              {version ? `Version ${version}` : "Browser preview"} · Windows desktop · MIT license
+            </p>
+            <button className="settings-self-link" onClick={() => setView("workingdir")}>
+              See what's in my working folder, and how big it is →
+            </button>
+          </div>
         </section>
 
-        <section className="setting-block">
-          <h2 className="setting-title">About the name</h2>
-          <p className="setting-help">
-            Poiesis (ποίησις) is the ancient Greek word for "making": the act of bringing
-            something into being that wasn't there before. It's the root of our word "poetry",
-            and in Plato's Symposium it is the cause that makes anything pass from non-being
-            into being. Heidegger later used it for a kind of bringing-forth that reveals
-            something, as opposed to merely producing it.
-          </p>
-          <p className="setting-help">
-            It fits this app in two ways. I'm built to make things with you (documents, code,
-            images, plans) rather than only talk about them. And I'm meant to keep making
-            myself: I remember what I learn about you, learn from my own mistakes, and repair
-            what breaks. That echoes autopoiesis, "self-making", the term biologists Maturana
-            and Varela coined for a system that keeps producing and maintaining itself.
-          </p>
+        <section className="setting-block about-split">
+          <div>
+            <h2 className="setting-title">About the name</h2>
+            <p className="setting-help">
+              <strong>Poiesis</strong> (ποίησις) is Greek for making: bringing something into
+              being that wasn't there before. It's the root of "poetry". Say it:{" "}
+              <em>poy-EE-sis</em>.
+            </p>
+            <p className="setting-help">
+              Autopoiesis, a word from the biologists Maturana and Varela, is a system that keeps
+              making the parts it's made of. I try to do both: make things with you, and keep
+              making myself.
+            </p>
+          </div>
           <figure className="about-plate">
             <img
               src="/illustrations/04-athena-olive.webp"
@@ -75,6 +92,33 @@ export default function About() {
             />
             <figcaption>Athena's olive tree: roots below, a ring of stones around it.</figcaption>
           </figure>
+        </section>
+
+        <section className="setting-block">
+          <h2 className="setting-title">The harness</h2>
+          <p className="setting-help">
+            The model only answers. The harness is everything around it: it decides what each
+            turn does, runs the tools, asks before it acts, and keeps a record. It runs in the
+            app itself, so it works the same whichever model you pick.
+          </p>
+          <div className="about-cells">
+            {HARNESS_CELLS.map((c, i) => (
+              <div key={c.title} className="about-cell">
+                <span className="about-cell-n">{String(i + 1).padStart(2, "0")}</span>
+                <h3>{c.title}</h3>
+                <p>{c.text}</p>
+              </div>
+            ))}
+          </div>
+          <ul className="about-points">
+            {HARNESS_POINTS.map((p) => (
+              <li key={p.lead}>
+                <span>
+                  <strong>{p.lead}</strong> {p.text}
+                </span>
+              </li>
+            ))}
+          </ul>
         </section>
 
         <UpdatesBlock version={version} />

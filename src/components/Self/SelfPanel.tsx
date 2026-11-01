@@ -47,28 +47,30 @@ export default function SelfPanel() {
 
   return (
     <>
-      {activeConversationId && (
-        <button
-          className="why-link self-why-link"
-          onClick={() => openContextPanel({ conversationId: activeConversationId })}
-        >
-          What I'm working from
-        </button>
-      )}
-      {/* The segmented control the rest of the app uses for view switching
-          (Models, Engine) — Self is a page like those, so it switches like them. */}
-      <div className="model-tabs" role="tablist" aria-label="What I'm made of">
-        {TABS.map((t) => (
+      <div className="self-toolbar">
+        {/* The segmented control the rest of the app uses for view switching
+            (Models, Engine) — Self is a page like those, so it switches like them. */}
+        <div className="model-tabs" role="tablist" aria-label="What I'm made of">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={tab === t.id}
+              className={`model-tab ${tab === t.id ? "on" : ""}`}
+              onClick={() => setTab(t.id)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {activeConversationId && (
           <button
-            key={t.id}
-            role="tab"
-            aria-selected={tab === t.id}
-            className={`model-tab ${tab === t.id ? "on" : ""}`}
-            onClick={() => setTab(t.id)}
+            className="why-link self-why-link"
+            onClick={() => openContextPanel({ conversationId: activeConversationId })}
           >
-            {t.label}
+            What I'm working from
           </button>
-        ))}
+        )}
       </div>
 
       <div className="self-tabpanel" role="tabpanel">
@@ -136,10 +138,13 @@ function LessonsTab() {
   if (!lessons.length && !pending.length) {
     return (
       <>
-        <p className="empty-hint">
-          I haven't learned anything yet. When a conversation goes wrong and you put me
-          right, I'll draw a lesson from it once we're done and keep it here.
-        </p>
+        <div className="memory-empty">
+          <strong>Nothing learned yet</strong>
+          <span>
+            When a conversation goes wrong and you put me right, I'll draw a lesson from it once
+            we're done and keep it here.
+          </span>
+        </div>
         <LetGo collection="lessons" version={version} onChanged={() => void refreshSelf()} />
       </>
     );
@@ -189,6 +194,7 @@ function LessonsTab() {
 
       <RecentChanges collection="lessons" version={version} />
 
+      {lessons.length > 0 && <h3 className="memory-section-title">What I've learned</h3>}
       {lessons.map((l) => (
         <div className="memory-card" key={l.name}>
           <div className="memory-card-head">
@@ -306,17 +312,31 @@ function HealthTab() {
     await refreshSelf();
   }
 
-  if (!vitality) return <p className="empty-hint">Nothing to report yet.</p>;
+  if (!vitality) {
+    return (
+      <div className="memory-empty">
+        <strong>Nothing to report yet</strong>
+        <span>Once I've been running for a while, how I'm doing shows up here.</span>
+      </div>
+    );
+  }
 
   return (
     <div className="self-list">
-      <div className="self-block">
-        <p className="self-line">
-          {vitality.engine_restarts_session > 0
-            ? `I've restarted my runtime ${vitality.engine_restarts_session}× this session.`
-            : "My runtime hasn't needed restarting this session."}
-        </p>
-        <p className="self-line">Last time I reflected: {formatDate(vitality.last_reflection)}.</p>
+      <section className="self-card">
+        <h3 className="self-card-title">How I'm running</h3>
+        <div className="self-row">
+          <span className="self-row-label">Runtime</span>
+          <span className="self-row-value">
+            {vitality.engine_restarts_session > 0
+              ? `I've restarted my runtime ${vitality.engine_restarts_session}× this session.`
+              : "My runtime hasn't needed restarting this session."}
+          </span>
+        </div>
+        <div className="self-row">
+          <span className="self-row-label">Last reflected</span>
+          <span className="self-row-value">{formatDate(vitality.last_reflection)}</span>
+        </div>
         <div className="setting-actions">
           <button className="btn-secondary" onClick={reflectNow} disabled={reflecting || !latest}>
             {reflecting ? "Reflecting…" : "Reflect now"}
@@ -331,23 +351,19 @@ function HealthTab() {
           </label>
         </div>
         {note && <p className="self-line self-note">{note}</p>}
-      </div>
+      </section>
 
-      <div className="self-block">
-        <p className="self-subhead">Whether I'm learning</p>
+      <section className="self-card">
+        <h3 className="self-card-title">Whether I'm learning</h3>
         {lines ? (
-          lines.map((l) => (
-            <p key={l} className="self-line">
-              {l}
-            </p>
-          ))
+          lines.map((l) => <LineRow key={l} line={l} />)
         ) : (
-          <p className="empty-hint">No data yet. I need about two weeks to tell.</p>
+          <p className="self-quiet">No data yet. I need about two weeks to tell.</p>
         )}
-      </div>
+      </section>
 
-      <div className="self-block">
-        <p className="self-subhead">Whether a recent change made me worse</p>
+      <section className="self-card">
+        <h3 className="self-card-title">Whether a recent change made me worse</h3>
         {goldenStatus ? (
           <>
             <p className="self-line">
@@ -365,7 +381,7 @@ function HealthTab() {
             )}
           </>
         ) : (
-          <p className="empty-hint">I haven't checked myself yet.</p>
+          <p className="self-quiet">I haven't checked myself yet.</p>
         )}
         <div className="setting-actions">
           <button className="btn-secondary" onClick={checkGoldenNow} disabled={checkingGolden}>
@@ -373,12 +389,12 @@ function HealthTab() {
           </button>
         </div>
         {goldenError && <p className="self-line self-note">{goldenError}</p>}
-      </div>
+      </section>
 
-      <div className="self-block">
-        <p className="self-subhead">How my tools have run this week</p>
+      <section className="self-card">
+        <h3 className="self-card-title">How my tools have run this week</h3>
         {vitality.tool_health.length === 0 ? (
-          <p className="empty-hint">No tool calls recorded yet.</p>
+          <p className="self-quiet">No tool calls recorded yet.</p>
         ) : (
           <ul className="self-table">
             {vitality.tool_health.map((t) => (
@@ -391,11 +407,11 @@ function HealthTab() {
             ))}
           </ul>
         )}
-      </div>
+      </section>
 
       {vitality.quarantined.length > 0 && (
-        <div className="self-block">
-          <p className="self-subhead">Files I couldn't read</p>
+        <section className="self-card">
+          <h3 className="self-card-title">Files I couldn't read</h3>
           <p className="self-line">
             I set these aside rather than delete them. Fix one in an editor and put it
             back, or discard it.
@@ -413,8 +429,20 @@ function HealthTab() {
               </li>
             ))}
           </ul>
-        </div>
+        </section>
       )}
+    </div>
+  );
+}
+
+/** One "label: value" line of the learning numbers, set like a row of details. */
+function LineRow({ line }: { line: string }) {
+  const at = line.indexOf(": ");
+  if (at < 0) return <p className="self-line">{line}</p>;
+  return (
+    <div className="self-row">
+      <span className="self-row-label">{line.slice(0, at)}</span>
+      <span className="self-row-value">{line.slice(at + 2)}</span>
     </div>
   );
 }
@@ -435,26 +463,28 @@ function AutonomyTab() {
       <p className="setting-help">
         I maintain myself. You decide how much I may change without asking.
       </p>
-      {AUTONOMY_CLASSES.map((c) => (
-        <div className="self-rung" key={c.id} id={`autonomy-${c.id}`}>
-          <div className="self-rung-text">
-            <span className="self-rung-label">{c.label}</span>
-            <span className="skill-desc">{c.blurb}</span>
+      <div className="self-card self-rungs">
+        {AUTONOMY_CLASSES.map((c) => (
+          <div className="self-rung" key={c.id} id={`autonomy-${c.id}`}>
+            <div className="self-rung-text">
+              <span className="self-rung-label">{c.label}</span>
+              <span className="skill-desc">{c.blurb}</span>
+            </div>
+            <div className="self-segmented" role="group" aria-label={c.label}>
+              {c.rungs.map((r) => (
+                <button
+                  key={r}
+                  className={`self-segment ${(autonomy[c.id] ?? c.fallback) === r ? "active" : ""}`}
+                  aria-pressed={(autonomy[c.id] ?? c.fallback) === r}
+                  onClick={() => setAutonomy(c.id, r)}
+                >
+                  {RUNG_LABELS[r]}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="self-segmented" role="group" aria-label={c.label}>
-            {c.rungs.map((r) => (
-              <button
-                key={r}
-                className={`self-segment ${(autonomy[c.id] ?? c.fallback) === r ? "active" : ""}`}
-                aria-pressed={(autonomy[c.id] ?? c.fallback) === r}
-                onClick={() => setAutonomy(c.id, r)}
-              >
-                {RUNG_LABELS[r]}
-              </button>
-            ))}
-          </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }

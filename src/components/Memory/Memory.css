@@ -7,17 +7,24 @@
   gap: 10px;
 }
 
+/* The toolbar: what I hold, then the small actions. */
 .memory-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 .memory-count {
   flex: 1;
   font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
-  font-size: var(--fs-ui);
-  color: var(--ink-muted);
+  font-size: var(--fs-ui-lg);
+  font-weight: 600;
+  color: var(--ink);
+}
+.memory-head .btn-secondary {
+  min-height: var(--control-sm);
+  padding: 0 11px;
+  font-size: var(--fs-footnote);
 }
 .memory-search {
   margin-bottom: 2px;
@@ -30,14 +37,15 @@
 
 /* ---- the untitled synthesis (PRO-UI, SMP-5) ---- */
 .memory-about-you {
-  padding: 2px 0 10px;
-  border-bottom: 1px solid var(--paper-edge-2);
+  padding: 14px 18px 8px;
+  background: var(--fill-quiet);
+  border-radius: var(--radius-lg);
 }
 .memory-about-you.busy .memory-about-you-text {
   opacity: 0.5;
 }
 .memory-about-you-text {
-  margin: 0 0 4px;
+  margin: 0 0 6px;
   font-size: var(--fs-ui);
   line-height: 1.6;
   color: var(--ink);
@@ -57,7 +65,8 @@
 
 /* ---- fact cards ---- */
 .memory-card {
-  padding: 12px 14px;
+  padding: 14px 18px;
+  background: var(--paper);
   border: 1px solid var(--paper-edge-2);
   border-radius: var(--radius-lg);
 }
@@ -70,13 +79,15 @@
   font-size: var(--fs-footnote);
 }
 .memory-name {
+  font-size: var(--fs-ui);
+  font-weight: 600;
   color: var(--ink);
 }
 .memory-kind {
-  padding: 1px 6px;
+  padding: 1px 8px;
   border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  color: var(--ink-faint);
+  border-radius: var(--radius-pill);
+  color: var(--ink-muted);
   font-size: var(--fs-caption);
 }
 .memory-created {
@@ -124,20 +135,23 @@
 
 /* ---- consolidation proposal ---- */
 .memory-proposal {
-  padding: 12px 14px;
+  padding: 14px 18px;
+  background: var(--paper);
   border: 1px solid var(--paper-edge-2);
   border-radius: var(--radius-lg);
 }
 .memory-proposal-head {
   margin: 0 0 8px;
   font-size: var(--fs-ui);
+  font-weight: 500;
+  line-height: 1.5;
   color: var(--ink);
 }
 .memory-proposal-row {
   display: flex;
   gap: 10px;
-  padding: 6px 0;
-  border-top: 1px solid var(--paper-edge-2);
+  padding: 8px 0;
+  border-top: 1px solid var(--paper-edge);
   font-size: var(--fs-footnote);
 }
 .memory-proposal-kind {
@@ -163,9 +177,9 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 12px;
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
+  padding: 10px 14px;
+  background: var(--fill-quiet);
+  border-radius: var(--radius-lg);
   font-size: var(--fs-ui);
   color: var(--ink-muted);
 }
@@ -238,31 +252,73 @@
 
 /* ---- beliefs a newer answer replaced (CUE-UI-1) ---- */
 .memory-earlier {
-  margin-top: 16px;
+  margin-top: 14px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
   font-family: var(--font-sans);
   font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
 .memory-earlier > summary {
+  padding: 12px 18px;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink);
   cursor: pointer;
+  border-radius: var(--radius-lg);
+}
+.memory-earlier > summary:hover {
+  background: var(--fill-hover);
+}
+.memory-earlier[open] > summary {
+  border-bottom: 1px solid var(--paper-edge);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.memory-earlier > :not(summary) {
+  margin-left: 18px;
+  margin-right: 18px;
+}
+.memory-earlier > :last-child {
+  margin-bottom: 14px;
 }
 .memory-earlier-note {
-  margin: 6px 0 8px;
+  margin-top: 12px;
+  margin-bottom: 8px;
   color: var(--ink-faint);
+}
+/* Inside the fold the cards lose their box and sit on hairlines. */
+.memory-earlier .memory-card {
+  padding: 12px 0;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--paper-edge);
+  border-radius: 0;
+}
+.memory-earlier > .memory-search {
+  margin-bottom: 8px;
 }
 .memory-card-earlier {
   opacity: 0.75;
 }
 
 /* ---- beliefs with evidence (BLF-UI-1) ---- */
+/* Small uppercase group titles, as on Experiments. */
 .memory-section-title {
-  margin: 14px 0 4px;
+  margin: 18px 0 2px;
   font-family: var(--font-sans);
-  font-size: var(--fs-ui);
+  font-size: var(--fs-caption);
   font-weight: 600;
-  color: var(--ink-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
 }
-.memory-recent ul,
+.memory-recent .memory-section-title,
+.memory-unsure .memory-section-title,
+.memory-todo .memory-section-title {
+  margin-bottom: 8px;
+}
 .memory-evidence {
   margin: 0;
   padding: 0;
@@ -271,8 +327,59 @@
   font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
+/* What I last did: a card of lines on hairlines, the time at the end. */
+.memory-recent ul {
+  margin: 0;
+  padding: 2px 18px;
+  list-style: none;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+}
 .memory-recent li {
-  margin: 2px 0;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 0;
+  line-height: 1.5;
+}
+.memory-recent li + li {
+  border-top: 1px solid var(--paper-edge);
+}
+.memory-recent li .memory-created {
+  flex: none;
+  margin-left: auto;
+  font-size: var(--fs-footnote);
+  white-space: nowrap;
+}
+/* "Nothing here yet" for a group that is empty on a fresh start: calm and quiet,
+   the same moment as `.empty-note` in global.css, sized to sit inside a tab. */
+.memory-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: var(--sp-6);
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.5;
+  color: var(--ink-muted);
+  background: var(--fill-quiet);
+  border-radius: var(--radius-lg);
+}
+.memory-empty strong {
+  font-weight: 600;
+  color: var(--ink);
+}
+.memory-empty code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-footnote);
+  color: var(--ink);
 }
 .memory-evidence {
   margin: 2px 0 4px;
@@ -289,7 +396,7 @@
 }
 .memory-unsure-side + .memory-unsure-side {
   padding-top: 8px;
-  border-top: 1px solid var(--paper-edge-2);
+  border-top: 1px solid var(--paper-edge);
 }
 
 /* `IMP-UI-1`: the block that says which fixes were tried. Collapsed to its first line. */

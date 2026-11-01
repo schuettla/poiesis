@@ -24,6 +24,16 @@ export function narrative(
   );
 }
 
+/** One count in the header strip: the number over its word. */
+function Stat({ n, one, many }: { n: number; one: string; many: string }) {
+  return (
+    <span className="self-stat">
+      <span className="self-stat-n">{n}</span>
+      <span className="self-stat-label">{n === 1 ? one : many}</span>
+    </span>
+  );
+}
+
 /**
  * The Self view (PRES-3): a place, not a settings tab. Everything Poiesis is
  * made of — what it remembers, what it learned, the skills it keeps, how
@@ -56,10 +66,13 @@ export default function Self() {
             <h1>Self</h1>
             <p className="lede">{narrative(days, facts, lessonCount, skillCount)}</p>
             {vitality?.portrait && <p className="self-portrait">{vitality.portrait}</p>}
-            <p className="self-strip">
-              {facts} facts · {lessonCount} lessons · {skillCount} skills · {pending} pending
-              {unsure > 0 && ` · ${unsure} I'm unsure about`}
-            </p>
+            <div className="self-strip">
+              <Stat n={facts} one="fact" many="facts" />
+              <Stat n={lessonCount} one="lesson" many="lessons" />
+              <Stat n={skillCount} one="skill" many="skills" />
+              <Stat n={pending} one="pending" many="pending" />
+              {unsure > 0 && <Stat n={unsure} one="I'm unsure about" many="I'm unsure about" />}
+            </div>
           </div>
           {born && <GrowthRings entries={entries} born={born} />}
         </header>

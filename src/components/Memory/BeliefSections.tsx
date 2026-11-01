@@ -60,7 +60,18 @@ export function RecentChanges({ collection, version }: { collection: "facts" | "
       .then((all) => setChanges(all.filter((c) => c.collection === collection).slice(0, 6)))
       .catch(() => setChanges([]));
   }, [collection, version]);
-  if (changes.length === 0) return null;
+  if (changes.length === 0) {
+    return (
+      <section className="memory-recent" aria-label="Recent changes">
+        <h3 className="memory-section-title">Recent changes</h3>
+        <div className="memory-empty">
+          <span>
+            Nothing yet. When I learn, replace or let go of something, it is listed here.
+          </span>
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="memory-recent" aria-label="Recent changes">
       <h3 className="memory-section-title">Recent changes</h3>
@@ -150,7 +161,19 @@ export function ThingsIWillDo({ version, onChanged }: { version: number; onChang
     }
   }
 
-  if (items.length === 0) return null;
+  if (items.length === 0) {
+    return (
+      <section className="memory-todo" aria-label="Things I'll do">
+        <h3 className="memory-section-title">Things I'll do</h3>
+        <div className="memory-empty">
+          <span>
+            Nothing waiting. Type <code>/remember remind me … when …</code> and I will keep it here
+            until it is time.
+          </span>
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="memory-todo" aria-label="Things I'll do">
       <h3 className="memory-section-title">Things I'll do</h3>
