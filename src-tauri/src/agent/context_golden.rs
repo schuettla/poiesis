@@ -101,6 +101,7 @@ fn assemble(f: &serde_json::Value) -> String {
         &f["current"],
         f["budget"].as_u64().unwrap_or(4096) as usize,
         f["keep_recent"].as_u64().unwrap_or(KEEP_RECENT as u64) as usize,
+        0,
     );
     render(&bt.turns)
 }
@@ -183,7 +184,7 @@ fn the_fixture_actually_exercises_the_budget() {
 fn the_spoken_sentence_matches_the_shared_golden() {
     let on = compose_system_prompt(&PromptInputs { base: "BASE".into(), spoken: true, ..Default::default() });
     let off = compose_system_prompt(&PromptInputs { base: "BASE".into(), ..Default::default() });
-    assert_eq!(off, "BASE", "a typed turn must not change");
+    assert!(!off.contains("by voice"), "a typed turn must not change");
 
     let path = fixture_dir().join("voice").join("spoken-prompt.golden.txt");
     if std::env::var("UPDATE_PROMPT_GOLDEN").is_ok() {

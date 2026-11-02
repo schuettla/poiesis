@@ -214,9 +214,10 @@ pub fn pick(units: &[Unit], verdict: &Verdict) -> Pick {
 }
 
 /// Whether a run may be narrowed at all. A delegated child, a resumed run, an
-/// unattended run and a run with no tools are never narrowed.
-pub fn may_narrow(child: bool, resumed: bool, headless: bool, tools_enabled: bool) -> bool {
-    tools_enabled && !child && !resumed && !headless
+/// unattended run and a run with no tools are never narrowed, and neither is a
+/// run below Full: its menu is already short (`TIER-5`).
+pub fn may_narrow(child: bool, resumed: bool, headless: bool, tools_enabled: bool, tier: crate::agent::tier::ModelTier) -> bool {
+    tools_enabled && !child && !resumed && !headless && tier.is_full()
 }
 
 /// The units that stay on the menu whatever a decision says, because the user's
@@ -556,11 +557,13 @@ mod tests {
     /// are never narrowed.
     #[test]
     fn only_a_users_own_fresh_turn_with_tools_is_narrowed() {
-        assert!(may_narrow(false, false, false, true));
-        assert!(!may_narrow(true, false, false, true), "a delegated child");
-        assert!(!may_narrow(false, true, false, true), "a resumed run");
-        assert!(!may_narrow(false, false, true, true), "a scheduled task");
-        assert!(!may_narrow(false, false, false, false), "no tools");
+        use crate::agent::tier::ModelTier::{Basic, Full};
+        assert!(may_narrow(false, false, false, true, Full));
+        assert!(!may_narrow(true, false, false, true, Full), "a delegated child");
+        assert!(!may_narrow(false, true, false, true, Full), "a resumed run");
+        assert!(!may_narrow(false, false, true, true, Full), "a scheduled task");
+        assert!(!may_narrow(false, false, false, false, Full), "no tools");
+        assert!(!may_narrow(false, false, false, true, Basic), "a small model");
     }
 
     #[test]

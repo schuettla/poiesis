@@ -25,8 +25,11 @@ import {
   type CatalogState,
   StarButton,
   capabilityChips,
+  hasTierControls,
+  useFocusedRow,
   useUseModel,
 } from "../components/Models/ModelRows";
+import { TierControls } from "../components/Models/TierControls";
 import {
   useImageLibrary,
   localImageAsModel,
@@ -102,7 +105,22 @@ export default function Models() {
   const openRuntime = useAppStore((s) => s.openRuntime);
   const tabRequest = useAppStore((s) => s.modelsTabRequest);
   const clearTabRequest = useAppStore((s) => s.clearModelsTabRequest);
+  const focusedModelId = useAppStore((s) => s.focusedModelId);
+  const showModel = useAppStore((s) => s.showModel);
   const imageLib = useImageLibrary();
+
+  // `TIER-UI-2`: the composer chip points at one model. Make sure nothing on
+  // this page is hiding its row; the row opens itself, and the pointer is let
+  // go a moment later so the highlight fades.
+  useEffect(() => {
+    if (!focusedModelId) return;
+    setPane("models");
+    setTab("chat");
+    setFilter("all");
+    setSource(null);
+    const t = setTimeout(() => showModel(null), 3000);
+    return () => clearTimeout(t);
+  }, [focusedModelId, setFilter, setSource, showModel]);
 
   useEffect(() => {
     if (!inTauri()) return;
@@ -452,11 +470,12 @@ function LocalRow({
   const makeDefault = useAppStore((s) => s.setDefaultModelPref);
   const use = useUseModel();
   const [open, setOpen] = useState(false);
+  const { focused, ref } = useFocusedRow(model, setOpen);
   const isDefault = defaultFor(prefs, favoriteTabOf(model)) === model.id;
   const active = model.id === selectedModelId;
 
   return (
-    <div className={`model-row-wrap ${highlight ? "just-added" : ""}`}>
+    <div className={`model-row-wrap ${highlight || focused ? "just-added" : ""}`} ref={ref}>
       <div className={`model-row ${active ? "in-use" : ""}`}>
         <span className="provenance-dot local" aria-hidden="true" />
         <span className="model-row-name" title={model.name}>
@@ -499,6 +518,7 @@ function LocalRow({
       </div>
       {open && (
         <div className="model-row-details">
+          {hasTierControls(model) && <TierControls model={model} />}
           <span>{details}</span>
           <span className="model-row-path">{path}</span>
           <button className="btn-text danger" onClick={onDelete}>
@@ -678,13 +698,19 @@ function CloudGroup({ label, models, expandAll }: { label: string; models: Model
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   const favs = useAppStore((s) => s.modelPrefs.favorites);
+  const focusedModelId = useAppStore((s) => s.focusedModelId);
   // Starred models float to the top of their group.
   const sorted = [...models].sort(
     (a, b) =>
       Number(favs[favoriteTabOf(b)].includes(b.id)) - Number(favs[favoriteTabOf(a)].includes(a.id))
   );
   const found = sorted.filter((m) => matches(m, q));
-  const visible = all || expandAll || q ? found : found.slice(0, GROUP_PREVIEW);
+  const focusedHere = !!focusedModelId && found.some((m) => m.id === focusedModelId);
+  // The pointer is let go after a moment; the group stays open once it was needed.
+  useEffect(() => {
+    if (focusedHere) setAll(true);
+  }, [focusedHere]);
+  const visible = all || expandAll || q || focusedHere ? found : found.slice(0, GROUP_PREVIEW);
   return (
     <section className="model-section">
       <div className="section-head">

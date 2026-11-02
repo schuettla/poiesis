@@ -252,6 +252,8 @@ async fn run_one(spawn: Spawn) {
         plan: None,
         options: Default::default(),
         read_only: spawn.read_only,
+        // Only a Full run can hand work out (`TIER-5`), so what it hands out is Full.
+        tier: crate::agent::tier::ModelTier::Full,
     };
 
     let outcome = if let Some(e) = &spawn.engine {

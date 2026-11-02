@@ -328,6 +328,13 @@ impl DecideManager {
         self.started.lock().ok()?.as_ref().map(|s| s.gpu)
     }
 
+    /// The model file the engine holds in memory right now, and whether it sits
+    /// in video memory. Never blocks: a start in flight is not counted.
+    pub fn running_model(&self) -> Option<(PathBuf, bool)> {
+        let path = self.engine.try_lock().ok()?.as_ref().map(|e| e.model_path.clone())?;
+        Some((path, self.running_gpu().unwrap_or(false)))
+    }
+
     pub fn record_ms(&self, ms: u32) {
         if let Ok(mut s) = self.samples.lock() {
             if s.len() == SAMPLES {

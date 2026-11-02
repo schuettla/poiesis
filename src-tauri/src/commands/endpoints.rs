@@ -7,6 +7,7 @@
 use futures_util::future::join_all;
 use tauri::State;
 
+use crate::agent::tier::{self, ModelTier};
 use crate::cloud::endpoints::{self, EndpointInfo, EndpointModel, EndpointProbe};
 use crate::db::Db;
 use crate::runtime::RuntimeManager;
@@ -147,6 +148,18 @@ pub async fn test_endpoint_cmd(
     Ok(endpoints::probe(&mgr.client, &base_url, key.as_deref()).await)
 }
 
+/// A model on a connected server with the tier a turn on it runs at (`TIER-3`).
+/// The window is the one the user gave the server when they added it.
+#[derive(serde::Serialize)]
+pub struct EndpointModelListing {
+    #[serde(flatten)]
+    model: EndpointModel,
+    window: Option<u32>,
+    tier: ModelTier,
+    auto_tier: ModelTier,
+    tier_set: Option<ModelTier>,
+}
+
 /// Discover models across every enabled endpoint. Best-effort, like
 /// `list_cloud_models_cmd`: an endpoint that's unreachable right now is
 /// skipped, not fatal — a sleeping Ollama box shouldn't block the picker.
@@ -156,7 +169,7 @@ pub async fn test_endpoint_cmd(
 pub async fn list_endpoint_models_cmd(
     mgr: State<'_, RuntimeManager>,
     db: State<'_, Db>,
-) -> Cmd<Vec<EndpointModel>> {
+) -> Cmd<Vec<EndpointModelListing>> {
     let rows = db.list_local_endpoints().map_err(|e| PoiesisError::Message(e.to_string()))?;
     let client = &mgr.client;
     let results = join_all(
@@ -165,5 +178,21 @@ pub async fn list_endpoint_models_cmd(
             .map(|ep| async move { endpoints::discover(client, &ep).await }),
     )
     .await;
-    Ok(results.into_iter().filter_map(Result::ok).flatten().collect())
+    Ok(results
+        .into_iter()
+        .filter_map(Result::ok)
+        .flatten()
+        .map(|model| {
+            let window = u32::try_from(model.ctx_size).ok().filter(|n| *n > 0);
+            let id = tier::endpoint_model_id(&model.endpoint_id, &model.model);
+            let tier_set = tier::tier_override(&db, &id);
+            EndpointModelListing {
+                tier: tier::tier_for(model.tools, window.map(|w| w as usize), tier_set),
+                auto_tier: tier::tier_for(model.tools, window.map(|w| w as usize), None),
+                tier_set,
+                window,
+                model,
+            }
+        })
+        .collect())
 }

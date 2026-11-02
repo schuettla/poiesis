@@ -241,6 +241,13 @@ pub fn detect_hardware() -> HardwareProfile {
     HardwareProfile { cpu, ram_mb, gpus }
 }
 
+/// The survey, taken once per run of the app. The machine does not change under
+/// us, and the model listing asks on every refresh.
+pub fn detect_hardware_cached() -> HardwareProfile {
+    static PROFILE: std::sync::OnceLock<HardwareProfile> = std::sync::OnceLock::new();
+    PROFILE.get_or_init(detect_hardware).clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

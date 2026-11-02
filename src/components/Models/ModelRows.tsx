@@ -1,7 +1,26 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../lib/store";
 import type { Model } from "../../lib/types";
 import { defaultFor, favoriteTabOf, type FavoriteTab } from "../../lib/modelPrefs";
+import { tierTag } from "../../lib/tier";
+import { TierControls } from "./TierControls";
+
+/** `TIER-UI-2`: the Models page brings a model into view and opens its details,
+ * when the composer chip pointed here. */
+export function useFocusedRow(model: Model, open: (v: boolean) => void) {
+  const focused = useAppStore((s) => s.focusedModelId === model.id);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!focused) return;
+    open(true);
+    ref.current?.scrollIntoView?.({ block: "center" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focused]);
+  return { focused, ref };
+}
+
+/** A chat model is the only kind with features and a window to choose. */
+export const hasTierControls = (m: Model) => !m.modality || m.modality === "chat";
 
 const PROVIDER_NAMES: Record<string, string> = {
   openai: "OpenAI",
@@ -39,12 +58,8 @@ export function capabilityChips(m: Model): { label: string; title?: string }[] {
   if (m.modality === "image") chips.push({ label: "Image" });
   if (m.modality === "video") chips.push({ label: "Video" });
   if (m.vision) chips.push({ label: "Sees images" });
-  if (m.tools === false) {
-    chips.push({
-      label: "Chat only",
-      title: "This model can't use tools — it can chat, but it can't search, read files, or run skills.",
-    });
-  }
+  const tag = tierTag(m);
+  if (tag) chips.push({ label: tag.chip, title: tag.title });
   return chips.slice(0, 2);
 }
 
@@ -107,53 +122,73 @@ export function ModelRow({ model }: { model: Model }) {
   const makeDefault = useAppStore((s) => s.setDefaultModelPref);
   const use = useUseModel();
   const [copied, setCopied] = useState(false);
+  const [open, setOpen] = useState(false);
+  const { focused, ref } = useFocusedRow(model, setOpen);
   const tab = favoriteTabOf(model);
   const isDefault = defaultFor(prefs, tab) === model.id;
   const cost = costLabel(model);
+  const controls = hasTierControls(model);
 
   return (
-    <div className={`model-row ${model.id === selectedModelId ? "in-use" : ""}`}>
-      <span className={`provenance-dot ${model.provenance}`} aria-hidden="true" />
-      <span className="model-row-name" title={model.name}>
-        {model.name}
-      </span>
-      <span className="model-row-chips">
-        {capabilityChips(model).map((c) => (
-          <span key={c.label} className="cap-chip" title={c.title}>
-            {c.label}
-          </span>
-        ))}
-      </span>
-      {cost && <span className="model-row-cost">{cost}</span>}
-      <span className="model-row-actions">
-        {isDefault ? (
-          <span className="default-tag">Default</span>
-        ) : (
-          model.modality !== "video" && (
-            <button className="btn-text" onClick={() => makeDefault(model.id, model)}>
-              Make default
-            </button>
-          )
-        )}
-        <button className="btn-use" onClick={() => use(model.id)}>
-          {model.id === selectedModelId ? "In use" : "Use"}
-        </button>
-        <StarButton model={model} />
-        {model.cloudModel && (
-          <button
-            className="btn-text"
-            title="Copy model id"
-            aria-label={`Copy the model id of ${model.name}`}
-            onClick={() => {
-              navigator.clipboard?.writeText(model.cloudModel ?? model.id).catch(() => {});
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1400);
-            }}
-          >
-            {copied ? "Copied" : "⧉"}
+    <div className={`model-row-wrap ${focused ? "just-added" : ""}`} ref={ref}>
+      <div className={`model-row ${model.id === selectedModelId ? "in-use" : ""}`}>
+        <span className={`provenance-dot ${model.provenance}`} aria-hidden="true" />
+        <span className="model-row-name" title={model.name}>
+          {model.name}
+        </span>
+        <span className="model-row-chips">
+          {capabilityChips(model).map((c) => (
+            <span key={c.label} className="cap-chip" title={c.title}>
+              {c.label}
+            </span>
+          ))}
+        </span>
+        {cost && <span className="model-row-cost">{cost}</span>}
+        <span className="model-row-actions">
+          {isDefault ? (
+            <span className="default-tag">Default</span>
+          ) : (
+            model.modality !== "video" && (
+              <button className="btn-text" onClick={() => makeDefault(model.id, model)}>
+                Make default
+              </button>
+            )
+          )}
+          <button className="btn-use" onClick={() => use(model.id)}>
+            {model.id === selectedModelId ? "In use" : "Use"}
           </button>
-        )}
-      </span>
+          <StarButton model={model} />
+          {model.cloudModel && (
+            <button
+              className="btn-text"
+              title="Copy model id"
+              aria-label={`Copy the model id of ${model.name}`}
+              onClick={() => {
+                navigator.clipboard?.writeText(model.cloudModel ?? model.id).catch(() => {});
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1400);
+              }}
+            >
+              {copied ? "Copied" : "⧉"}
+            </button>
+          )}
+          {controls && (
+            <button
+              className="btn-text"
+              aria-expanded={open}
+              aria-label={`Details for ${model.name}`}
+              onClick={() => setOpen((o) => !o)}
+            >
+              Details {open ? "▴" : "▾"}
+            </button>
+          )}
+        </span>
+      </div>
+      {open && controls && (
+        <div className="model-row-details">
+          <TierControls model={model} />
+        </div>
+      )}
     </div>
   );
 }

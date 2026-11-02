@@ -10,11 +10,12 @@ use crate::db::Db;
 use crate::runtime::download::{
     download_with_resume, find_server_binary, resolve_asset, unpack_zip, DownloadProgress,
 };
-use crate::runtime::hardware::{detect_hardware, HardwareProfile};
+use crate::runtime::hardware::{detect_hardware, detect_hardware_cached, HardwareProfile};
 use crate::runtime::manifest::{select_runtime, Backend, RuntimeSelection, PINNED_BUILD_TAG};
 use crate::runtime::process::{EngineConfig, EngineStatus};
 use crate::runtime::proxy::{stream_completion, StreamEvent};
-use crate::runtime::RuntimeManager;
+use crate::runtime::window::load_shrinking;
+use crate::runtime::{DecideManager, EmbedManager, RerankManager, RuntimeManager};
 use crate::PoiesisError;
 
 type Cmd<T> = Result<T, PoiesisError>;
@@ -159,30 +160,82 @@ pub async fn ensure_runtime_cmd(
     Ok(bin.to_string_lossy().to_string())
 }
 
+/// Load `model_path` with the window it should have (`TIER-2`) and keep it alive.
+///
+/// An explicit `asked` window wins, as it always did. Otherwise the window is the
+/// user's own choice for this model if they made one, else what the model was
+/// trained for as far as this PC's memory allows. Unless the user chose it, a
+/// start that dies is tried again with half the window before the error is shown;
+/// the window that loaded is the one the manager remembers, so a watchdog restart
+/// does not repeat the failure.
+#[allow(clippy::too_many_arguments)]
+async fn load_with_window(
+    app: tauri::AppHandle,
+    mgr: &RuntimeManager,
+    db: &Db,
+    others: &(&EmbedManager, &RerankManager, &DecideManager),
+    server_binary: PathBuf,
+    model_path: PathBuf,
+    asked: Option<u32>,
+    n_gpu_layers: u32,
+) -> Cmd<EngineStatus> {
+    let hw = tauri::async_runtime::spawn_blocking(detect_hardware_cached).await.map_err(err)?;
+    let entry = db.find_model_by_path(&model_path.to_string_lossy()).map_err(err)?;
+    let (window, shrink) = match (asked, entry) {
+        (Some(n), _) => (n, false),
+        (None, Some(entry)) => {
+            let resident = super::models::residents(others.0, others.1, others.2);
+            let w = super::models::local_window(db, &hw, &entry, &resident);
+            (w.window, w.set.is_none())
+        }
+        // Not in the library (loaded by path): nothing to read it against.
+        (None, None) => (crate::runtime::window::DEFAULT_WINDOW, false),
+    };
+    let (status, _) = load_shrinking(window, shrink, |ctx_size| {
+        let config = EngineConfig {
+            server_binary: server_binary.clone(),
+            model_path: model_path.clone(),
+            ctx_size,
+            n_gpu_layers,
+            extra_args: Vec::new(),
+        };
+        async move { mgr.load_model(config).await }
+    })
+    .await
+    .map_err(err)?;
+    // From here the engine keeps itself alive (HEAL-1).
+    crate::runtime::watchdog::spawn(app, mgr.generation());
+    Ok(status)
+}
+
 /// Load a model into the engine and block until ready (§7.4). Spawns the engine
 /// (provisioning the runtime first if necessary).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn load_model_cmd(
     app: tauri::AppHandle,
     mgr: State<'_, RuntimeManager>,
     db: State<'_, Db>,
+    embed: State<'_, EmbedManager>,
+    rerank: State<'_, RerankManager>,
+    decide: State<'_, DecideManager>,
     model_path: String,
     ctx_size: Option<u32>,
     n_gpu_layers: Option<u32>,
     on_progress: Channel<DownloadProgress>,
 ) -> Cmd<EngineStatus> {
     let server_binary = provision_active(&mgr, &db, &on_progress).await?;
-    let config = EngineConfig {
+    load_with_window(
+        app,
+        &mgr,
+        &db,
+        &(&*embed, &*rerank, &*decide),
         server_binary,
-        model_path: PathBuf::from(model_path),
-        ctx_size: ctx_size.unwrap_or(4096),
-        n_gpu_layers: n_gpu_layers.unwrap_or(999), // offload all by default; engine clamps
-        extra_args: Vec::new(),
-    };
-    let status = mgr.load_model(config).await.map_err(err)?;
-    // From here the engine keeps itself alive (HEAL-1).
-    crate::runtime::watchdog::spawn(app, mgr.generation());
-    Ok(status)
+        PathBuf::from(model_path),
+        ctx_size,
+        n_gpu_layers.unwrap_or(999), // offload all by default; engine clamps
+    )
+    .await
 }
 
 /// One selectable backend in the engine view, with its install + recommend state.
@@ -274,6 +327,9 @@ pub async fn start_engine_cmd(
     app: tauri::AppHandle,
     mgr: State<'_, RuntimeManager>,
     db: State<'_, Db>,
+    embed: State<'_, EmbedManager>,
+    rerank: State<'_, RerankManager>,
+    decide: State<'_, DecideManager>,
     on_progress: Channel<DownloadProgress>,
 ) -> Cmd<EngineStatus> {
     let model = db
@@ -284,16 +340,17 @@ pub async fn start_engine_cmd(
             PoiesisError::Message("No model in your library yet. Download one from Models first.".into())
         })?;
     let server_binary = provision_active(&mgr, &db, &on_progress).await?;
-    let config = EngineConfig {
+    load_with_window(
+        app,
+        &mgr,
+        &db,
+        &(&*embed, &*rerank, &*decide),
         server_binary,
-        model_path: PathBuf::from(model.path),
-        ctx_size: 4096,
-        n_gpu_layers: 999,
-        extra_args: Vec::new(),
-    };
-    let status = mgr.load_model(config).await.map_err(err)?;
-    crate::runtime::watchdog::spawn(app, mgr.generation());
-    Ok(status)
+        PathBuf::from(model.path),
+        None,
+        999,
+    )
+    .await
 }
 
 /// Information about an available upstream engine update (§7.3, D-4: pinned

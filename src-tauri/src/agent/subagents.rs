@@ -1056,6 +1056,8 @@ async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
             options: Default::default(),
             // `PLF-2`: below a plan-first run, nothing changes either.
             read_only: del.read_only,
+            // Only a Full run can hand work out (`TIER-5`), so a child is Full.
+            tier: crate::agent::tier::ModelTier::Full,
         };
         // Boxed because this is `run_agent` calling itself through a tool call:
         // without it the future's size is defined in terms of itself.

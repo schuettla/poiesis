@@ -701,6 +701,10 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
         let _ = db.set_conversation_folder(&conversation_id, Some(scope));
     }
 
+    // `TIER-4`: a scheduled run is on the local engine, so it is on that model's tier.
+    let tier = crate::commands::agent::tier_of(&mgr, &db, &crate::commands::agent::ChatTarget::default()).await;
+    let tools_enabled = crate::agent::tier::tools_on(true, tier);
+
     // No live webview is listening — the run's answer comes back as the
     // return value, not a stream, so an empty handler is enough.
     let sink = AgentEventSink::new(tauri::ipc::Channel::new(|_| Ok(())));
@@ -718,7 +722,8 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
         &embed_mgr,
         crate::agent::context::GatherOpts {
             conversation_id: &conversation_id,
-            tools_enabled: true,
+            tools_enabled,
+            tier,
             model_name: &model_name,
             query: &job.prompt,
             // A scheduled run: nobody reads it as it happens.
@@ -731,7 +736,7 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
         serde_json::json!({ "role": "system", "content": system }),
         serde_json::json!({ "role": "user", "content": &job.prompt }),
     ];
-    crate::agent::context::insert_briefs(&db, &conversation_id, true, true, &mut messages);
+    crate::agent::context::insert_briefs(&db, &conversation_id, tools_enabled, true, &mut messages);
     let images_dir = mgr.generated_media_dir();
     let answer_id = open_run_turn(&db, &conversation_id, &job.prompt, &model_name);
 
@@ -751,7 +756,8 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
         Some(&fleet),
         "local",
         mgr.engine_ctx_size().await.map(|n| n as usize),
-    );
+    )
+    .with_tier(tier);
 
     let outcome = run_agent(
         &mgr.client,
@@ -772,7 +778,7 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
         &model_name,
         messages,
         0.4,
-        true,
+        tools_enabled,
         true,
         &rc,
         &sink,

@@ -201,6 +201,12 @@ impl RerankManager {
         }
     }
 
+    /// The model file the engine holds in memory right now. Never blocks: a
+    /// start in flight is not counted.
+    pub fn running_model(&self) -> Option<PathBuf> {
+        self.engine.try_lock().ok()?.as_ref().map(|e| e.model_path.clone())
+    }
+
     /// Start the engine if it isn't already running against this exact model.
     /// Any failure here means "reranking unavailable" to the caller (`RRK-5`)
     /// — never a hard error surfaced to a search.

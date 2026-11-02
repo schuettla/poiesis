@@ -8,6 +8,7 @@
 pub mod decideserver;
 pub mod download;
 pub mod embedserver;
+pub mod gguf;
 pub mod hardware;
 pub mod imageengine;
 pub mod jobobject;
@@ -27,6 +28,7 @@ pub mod voice_session;
 #[cfg(feature = "voice")]
 pub mod voice_speech;
 pub mod watchdog;
+pub mod window;
 
 pub use manager::RuntimeManager;
 pub use decideserver::DecideManager;

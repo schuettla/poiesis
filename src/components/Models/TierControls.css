@@ -1,0 +1,26 @@
+/* The two per-model choices, in the strip under a row. The row above keeps its
+   height; this is the Details strip that already opens beneath it. */
+.tier-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  flex: 1 1 100%;
+}
+.tier-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.tier-control-label {
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.tier-control-note {
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+  white-space: nowrap;
+}

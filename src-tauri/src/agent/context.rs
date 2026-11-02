@@ -258,7 +258,10 @@ pub fn compose_system_prompt(inputs: &PromptInputs) -> String {
             push(surface_context(inputs.surface.as_ref()));
         }
     }
-    push(session_state_block(inputs.session_state_json.as_deref()));
+    push(session_state_block(inputs.session_state_json.as_deref(), inputs.tools_enabled));
+    if !inputs.tools_enabled {
+        push(NO_TOOLS_GUIDANCE.to_string());
+    }
     if inputs.tools_enabled {
         push(tool_guidance_block(inputs.plan_mode, inputs.workspace));
         // `MEM-COLD`: last of the guidance, and sent even at zero facts — that
@@ -278,6 +281,10 @@ pub fn compose_system_prompt(inputs: &PromptInputs) -> String {
 /// `VTN-2`: what a spoken reply is. `fixtures/voice/spoken-prompt.golden.txt`
 /// holds it still.
 pub const SPOKEN_GUIDANCE: &str = "The user is talking to you by voice and will hear your reply spoken aloud. Answer in short spoken sentences. Do not use markdown, lists, tables or code in the reply; if something needs to be on screen, put it in an artifact and say so in one short sentence.";
+
+/// `TIER-4`: a model with no tools is told so. Without it a small model acts out
+/// a search and invents the result, or writes a call out as text (TIER-9, Gemma 3).
+pub const NO_TOOLS_GUIDANCE: &str = "## No tools in this chat\nYou cannot search the web, open files or save notes here, and you have no live data. Never write out a tool call or say you are looking something up. If the user asks for something current, like the weather, news or prices, say you cannot check it in this chat, and give only what you know, saying it may be out of date.";
 
 /// `PRO-6`/`PRO-7`: unlike SOUL.md this is a background inference, not something
 /// the user just decided, so a persona always wins.
@@ -327,28 +334,29 @@ fn has_hedge_marker(index: &str) -> bool {
     index.contains(" [unsure, noted ") || index.contains(" [contested, noted ")
 }
 
-/// The durable memory index, with a caveat when tools (and so `memory` reads)
-/// are off.
+/// The durable memory index. With tools off it names no call: a model shown
+/// `memory(op:…)` that it cannot make copies the shape as text.
 fn memory_index_block(index: Option<&str>, tools_enabled: bool) -> String {
     let i = index.unwrap_or_default().trim();
     if i.is_empty() {
         return String::new();
     }
-    let detail = if tools_enabled {
-        ""
+    let read = if tools_enabled {
+        "Read a note's full text with memory(op:\"read\", name:…) before relying on its details."
     } else {
-        " Tools are off — treat descriptions as the only available detail."
+        "Only these descriptions are available in this chat, not the full notes."
     };
     let hedge = if has_hedge_marker(i) { HEDGE_NOTE } else { "" };
-    format!("## Your notes about the user (durable facts)\n{i}\n(Read a note's full text with memory(op:\"read\", name:…) before relying on its details.{detail}{hedge})")
+    format!("## Your notes about the user (durable facts)\n{i}\n({read}{hedge})")
 }
 
 /// A compact rendering of durable session state, passed through as stored.
-fn session_state_block(state_json: Option<&str>) -> String {
+fn session_state_block(state_json: Option<&str>, tools_enabled: bool) -> String {
     let Some(text) = non_empty_object(state_json) else {
         return String::new();
     };
-    format!("## Session state (durable; update with the remember tool)\n{text}")
+    let how = if tools_enabled { "; update with the remember tool" } else { "" };
+    format!("## Session state (durable{how})\n{text}")
 }
 
 /// The standing guidance only sent when the model can actually call tools.
@@ -519,6 +527,9 @@ pub struct GatherOpts<'a> {
     pub conversation_id: &'a str,
     /// Can the model call tools on this turn.
     pub tools_enabled: bool,
+    /// `TIER-5`: what the model can carry. Below Full the skills block and the
+    /// planning guidance are left out, because the tools they describe are.
+    pub tier: super::tier::ModelTier,
     /// Which model's reliability record the cautions are drawn from.
     pub model_name: &'a str,
     /// This turn's user message, used to scope memory recall to what is
@@ -594,7 +605,7 @@ pub async fn gather(
     // A persona may narrow the advertised skills, never widen them (`SKL-6`).
     // Telling the model about a skill the `skill` tool will then refuse burns a
     // turn to learn what the prompt could have said.
-    if opts.tools_enabled {
+    if opts.tools_enabled && opts.tier.is_full() {
         let conv = db.get_conversation(opts.conversation_id).ok().flatten();
         let allowed: Option<Vec<String>> = conv
             .as_ref()
@@ -681,7 +692,7 @@ fn from_db(db: &crate::db::Db, opts: &GatherOpts<'_>) -> PromptInputs {
         surface,
         session_state_json: db.get_session_state(opts.conversation_id).ok().flatten(),
         tool_health,
-        plan_mode: super::plan::PlanMode::current(db),
+        plan_mode: if opts.tier.is_full() { super::plan::PlanMode::current(db) } else { super::plan::PlanMode::Never },
         ..Default::default()
     }
 }
@@ -816,7 +827,7 @@ mod tests {
         let unsure = memory_index_block(Some("- [a] (fact) Likes tea [unsure, noted 2026-10-27]"), true);
         assert!(unsure.contains(HEDGE_NOTE.trim_start()), "{unsure}");
         let contested = memory_index_block(Some("- [a] (fact) Tea? [contested, noted 2026-10-27]"), false);
-        assert!(contested.contains("Tools are off") && contested.contains("may be wrong"));
+        assert!(contested.contains("Only these descriptions") && contested.contains("may be wrong"));
         // A description that merely mentions the word does not trigger it.
         assert!(!memory_index_block(Some("- [a] (fact) Says he is unsure"), true).contains("may be wrong"));
     }
@@ -832,15 +843,16 @@ mod tests {
     #[test]
     fn the_project_block_is_absent_unless_there_is_something_to_say() {
         let mut inputs = base();
-        assert_eq!(compose_system_prompt(&inputs), "You are Poiesis Agent.");
+        let bare = compose_system_prompt(&inputs);
+        assert!(!bare.contains("## Project"));
 
         // A name alone has nothing to attribute; instructions alone have
         // nothing to attribute them to.
         inputs.project_name = Some("Kitchen rebuild".into());
-        assert_eq!(compose_system_prompt(&inputs), "You are Poiesis Agent.");
+        assert_eq!(compose_system_prompt(&inputs), bare);
         inputs.project_name = None;
         inputs.project_instructions = Some("Quotes are in EUR.".into());
-        assert_eq!(compose_system_prompt(&inputs), "You are Poiesis Agent.");
+        assert_eq!(compose_system_prompt(&inputs), bare);
 
         inputs.project_name = Some("Kitchen rebuild".into());
         let out = compose_system_prompt(&inputs);
@@ -849,7 +861,7 @@ mod tests {
 
         // Whitespace is not something to say.
         inputs.project_instructions = Some("   \n  ".into());
-        assert_eq!(compose_system_prompt(&inputs), "You are Poiesis Agent.");
+        assert_eq!(compose_system_prompt(&inputs), bare);
     }
 
     /// It sits after the standing instructions, which apply everywhere, and
@@ -882,8 +894,10 @@ mod tests {
             Some(SurfaceView { data_json: r#"{"type":"stack"}"#.into(), state_json: None });
         inputs.memory_enabled = true;
 
+        // Only the one block that says there are no tools, so the model does not
+        // act out a search either.
         let out = compose_system_prompt(&inputs);
-        assert_eq!(out, "You are Poiesis Agent.");
+        assert_eq!(out, format!("You are Poiesis Agent.\n\n{NO_TOOLS_GUIDANCE}"));
 
         inputs.tools_enabled = true;
         let on = compose_system_prompt(&inputs);
@@ -1009,12 +1023,17 @@ mod tests {
     }
 
     #[test]
-    fn the_index_says_tools_are_off_only_when_they_are() {
+    fn the_index_names_the_memory_call_only_when_tools_are_on() {
         let mut inputs = base();
         inputs.memory_index = Some("- likes tea".to_string());
-        assert!(compose_system_prompt(&inputs).contains("Tools are off"));
+        let off = compose_system_prompt(&inputs);
+        assert!(off.contains("Only these descriptions are available"), "{off}");
+        assert!(!off.contains("memory(op:"), "a call it cannot make is copied as text: {off}");
+        assert!(!off.contains("remember tool"));
         inputs.tools_enabled = true;
-        assert!(!compose_system_prompt(&inputs).contains("Tools are off"));
+        let on = compose_system_prompt(&inputs);
+        assert!(on.contains("memory(op:\"read\""));
+        assert!(!on.contains("Only these descriptions") && !on.contains("## No tools"));
     }
 
     /// Only the two worst, and only ones with enough calls to mean anything —
@@ -1108,7 +1127,14 @@ mod tests {
     }
 
     fn opts<'a>(conversation_id: &'a str, tools_enabled: bool) -> GatherOpts<'a> {
-        GatherOpts { conversation_id, tools_enabled, model_name: "local", query: "do the thing", attended: true }
+        GatherOpts {
+            conversation_id,
+            tools_enabled,
+            tier: super::super::tier::ModelTier::Full,
+            model_name: "local",
+            query: "do the thing",
+            attended: true,
+        }
     }
 
     /// A conversation with no persona falls back to the user's own prompt, and a
@@ -1136,6 +1162,20 @@ mod tests {
             .unwrap();
         db.set_conversation_persona(&conv, Some(&persona.id), None).unwrap();
         assert_eq!(from_db(&db, &opts(&conv, true)).base, "You are a ruthless editor.");
+    }
+
+    /// `TIER-T-4`: below Full the planning setting is not asked, so no planning
+    /// guidance reaches a small model; at Full it is as it always was.
+    #[test]
+    fn planning_guidance_is_left_out_below_full() {
+        let (db, conv) = seeded();
+        let full = from_db(&db, &opts(&conv, true));
+        let mut o = opts(&conv, true);
+        o.tier = super::super::tier::ModelTier::Basic;
+        let basic = from_db(&db, &o);
+        assert_eq!(full.plan_mode, super::super::plan::PlanMode::current(&db));
+        assert_eq!(basic.plan_mode, super::super::plan::PlanMode::Never);
+        assert!(basic.plan_mode.guidance().is_empty());
     }
 
     /// The surface rides on the blocks table next to the blocks other tools

@@ -3,6 +3,7 @@ import { useAppStore, useSelectedModel } from "../../lib/store";
 import type { Model } from "../../lib/types";
 import { availableFavorites, isMediaModel } from "../../lib/modelPrefs";
 import { StarButton } from "../Models/ModelRows";
+import { tierTag } from "../../lib/tier";
 import { ChevronIcon } from "../Icons/Icons";
 import "./ModelPicker.css";
 
@@ -267,14 +268,16 @@ function ModelRow({
       <Dot provenance={model.provenance} />
       <span className="name">{model.name}</span>
       {model.meta && <span className="meta">{model.meta}</span>}
-      {model.tools === false && (
-        <span
-          className="meta no-tools"
-          title="This model can't use tools — it can chat, but it can't search, read files, or run skills."
-        >
-          chat only
-        </span>
-      )}
+      {(() => {
+        const tag = tierTag(model);
+        return (
+          tag && (
+            <span className="meta no-tools" title={tag.title}>
+              {tag.label}
+            </span>
+          )
+        );
+      })()}
       {model.priceLabel && <span className="price">{model.priceLabel}</span>}
       {model.modality && model.modality !== "chat" && !model.priceLabel && (
         <span className="price">free</span>

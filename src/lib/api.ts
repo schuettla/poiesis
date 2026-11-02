@@ -5,7 +5,7 @@
 import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
-import type { AgentStep, Provenance } from "./types";
+import type { AgentStep, ModelTier, Provenance } from "./types";
 import { trackDownload, type AppUpdateInfo, type DownloadEvent } from "./updates";
 
 export function inTauri(): boolean {
@@ -361,6 +361,17 @@ export interface ModelEntry {
   role: string;
   is_default: boolean;
   added_at: number;
+  /** `TIER-2b`/`TIER-3`: worked out in Rust on the way out of the listing.
+   * Absent on an entry that did not come from it (a fresh download). */
+  trained_ctx?: number | null;
+  /** `TIER-3`: false when the model's chat template has no place for tools. */
+  tools?: boolean;
+  window?: number;
+  auto_window?: number;
+  window_set?: number | null;
+  tier?: ModelTier;
+  auto_tier?: ModelTier;
+  tier_set?: ModelTier | null;
 }
 
 export const recommendedCatalog = () => invoke<CatalogEntry[]>("recommended_catalog_cmd");
@@ -493,7 +504,14 @@ export type AgentEvent =
    * the message — it exists so a reasoning model's long silence reads as work
    * rather than as a hang. */
   | { type: "thinking"; run_id: string; text: string }
-  | { type: "run_started"; run_id: string; max_steps: number; context_window: number | null }
+  | {
+      type: "run_started";
+      run_id: string;
+      max_steps: number;
+      context_window: number | null;
+      /** `TIER-4`: what the turn really ran at. */
+      tier?: ModelTier;
+    }
   | {
       type: "run_progress";
       run_id: string;
@@ -2729,6 +2747,11 @@ export interface CloudModel {
   /** USD per million tokens, when known (`MOD-5`). Null is unknown, not free. */
   prompt_per_mtok: number | null;
   output_per_mtok: number | null;
+  /** `TIER-3`: tokens the model can hold, when known, and its tier. */
+  window?: number | null;
+  tier?: ModelTier;
+  auto_tier?: ModelTier;
+  tier_set?: ModelTier | null;
 }
 
 export const listProviders = () => invoke<ProviderInfo[]>("list_providers_cmd");
@@ -2761,6 +2784,11 @@ export interface EndpointModel {
   vision: boolean;
   tools: boolean;
   ctx_size: number;
+  /** `TIER-3` */
+  window?: number | null;
+  tier?: ModelTier;
+  auto_tier?: ModelTier;
+  tier_set?: ModelTier | null;
 }
 export interface EndpointProbe {
   ok: boolean;

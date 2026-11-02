@@ -22,6 +22,7 @@ use crate::agent::context::{self, GatherOpts, KEEP_RECENT, KEEP_RECENT_WORKSPACE
 use crate::agent::fleet::StopReason;
 use crate::agent::plan::Plan;
 use crate::agent::run::{AgentEventSink, RunOptions};
+use crate::agent::tier;
 use crate::agent::timeline::{self, Timeline};
 use crate::agent::AgentEvent;
 use crate::commands::agent::{execute_turn, resolve_turn, ChatTarget, TurnEnv};
@@ -383,6 +384,10 @@ fn history(
 /// Fit the summary, the earlier turns and the new message into `budget`. The one
 /// place a turn's transcript is cut: `run_turn` sends what it returns, and the
 /// CTX-4 gate (`context_golden`) renders the same call.
+///
+/// `TIER-6`: the tool specs go to the model beside the transcript, so their
+/// tokens come off the budget first. Without that, history plus specs overflows a
+/// small window. `0` for a turn with no tools.
 pub fn fit(
     system: &str,
     summary: &str,
@@ -390,8 +395,15 @@ pub fn fit(
     current: &serde_json::Value,
     budget: usize,
     keep: usize,
+    spec_tokens: usize,
 ) -> context::Budgeted {
-    context::budget_turns(&context::with_summary(system, summary), prior, current, budget, keep)
+    context::budget_turns(
+        &context::with_summary(system, summary),
+        prior,
+        current,
+        budget.saturating_sub(spec_tokens),
+        keep,
+    )
 }
 
 /// The turns to send: the system prompt, as much history as the window holds,
@@ -406,6 +418,8 @@ async fn budgeted_turns(
     current: serde_json::Value,
     current_id: &str,
     sink: &AgentEventSink,
+    // `TIER-6`: what this turn's tool specs will cost, and so what history gets.
+    spec_tokens: usize,
 ) -> Vec<serde_json::Value> {
     let db = env.db;
     let conversation_id = input.conversation_id.as_str();
@@ -419,7 +433,7 @@ async fn budgeted_turns(
     let turns_of = |prior: &[(String, serde_json::Value)]| -> Vec<serde_json::Value> {
         prior.iter().map(|(_, t)| t.clone()).collect()
     };
-    let mut bt = fit(system, &summary, &turns_of(&prior), &current, budget, keep);
+    let mut bt = fit(system, &summary, &turns_of(&prior), &current, budget, keep, spec_tokens);
 
     let auto = db.get_setting(AUTOCOMPACT_KEY).ok().flatten().as_deref() != Some("false");
     if bt.needs_compaction && auto {
@@ -443,7 +457,7 @@ async fn budgeted_turns(
                 });
                 summary = made;
                 prior = history(db, conversation_id, current_id, Some(&upto));
-                bt = fit(system, &summary, &turns_of(&prior), &current, budget, keep);
+                bt = fit(system, &summary, &turns_of(&prior), &current, budget, keep, spec_tokens);
             }
         }
     }
@@ -589,6 +603,11 @@ pub async fn run_turn(env: &TurnEnv<'_>, input: TurnInput, on_event: Channel<Age
         }
     };
 
+    // `TIER-4`: the one place a Chat-tier model loses its tools. Everything below
+    // that depends on tools follows this value: no toolsets, no loop tools, no
+    // skills block, no tool or memory guidance, no narrowing, no wrap-up.
+    let tools_enabled = tier::tools_on(input.tools_enabled, setup.tier);
+
     // `DEC-4`/`CTL-2`: the decision engine warm by the first decision, and the
     // turn's decision budget started with it.
     crate::agent::decide::prewarm();
@@ -607,7 +626,8 @@ pub async fn run_turn(env: &TurnEnv<'_>, input: TurnInput, on_event: Channel<Age
         env.embed_mgr,
         GatherOpts {
             conversation_id,
-            tools_enabled: input.tools_enabled,
+            tools_enabled,
+            tier: setup.tier,
             model_name: &setup.model_name,
             query,
             attended: true,
@@ -624,8 +644,13 @@ pub async fn run_turn(env: &TurnEnv<'_>, input: TurnInput, on_event: Channel<Age
     }
 
     let current = serde_json::json!({ "role": "user", "content": content });
-    let mut msgs = budgeted_turns(env, &input, &system, current, &user_id, &sink).await;
-    context::insert_briefs(db, conversation_id, input.tools_enabled, false, &mut msgs);
+    let spec_tokens = if tools_enabled {
+        crate::agent::run::tool_spec_tokens(db, env.mgr, conversation_id, setup.tier)
+    } else {
+        0
+    };
+    let mut msgs = budgeted_turns(env, &input, &system, current, &user_id, &sink, spec_tokens).await;
+    context::insert_briefs(db, conversation_id, tools_enabled, false, &mut msgs);
 
     // 6. The run.
     let temperature = temperature_for(db, conversation_id);
@@ -637,7 +662,7 @@ pub async fn run_turn(env: &TurnEnv<'_>, input: TurnInput, on_event: Channel<Age
         Some(&assistant_id),
         msgs,
         temperature,
-        input.tools_enabled,
+        tools_enabled,
         None,
         input.options.clone(),
         &sink,
@@ -726,6 +751,8 @@ pub async fn resume_turn(
             return false;
         }
     };
+    // `TIER-4`: same rule as a typed turn.
+    let tools_enabled = tier::tools_on(tools_enabled, setup.tier);
     // `CRD-1`: the resumed answer was prepared from the interrupted run's log, so
     // it carries that answer's record of what reached it.
     let _ = db.carry_context_to(conversation_id, &row.id);
@@ -1137,6 +1164,57 @@ mod tests {
         assert_eq!((last["role"].as_str(), last["content"].as_str()), (Some("user"), Some("Say hi")));
     }
 
+    /// `TIER-T-4`: the whole turn, on servers whose windows put them on each tier.
+    /// A Chat turn sends no tools, a Basic turn only the short list, and each run
+    /// tells the window the tier it ran at.
+    #[tokio::test]
+    async fn each_tier_sends_what_it_can_carry() {
+        use crate::agent::toolsets::Toolset;
+        async fn sent_on(window: i64) -> (Option<Vec<String>>, serde_json::Value) {
+            let rig = Rig::new();
+            for t in [Toolset::FileSystem, Toolset::WebSearch, Toolset::CodeExec] {
+                t.set_enabled(&rig.db, true);
+            }
+            let (url, bodies) = fake_model("ok").await;
+            let conv = rig.db.create_conversation("A chat", None, false).unwrap().id;
+            let ep = rig.db.insert_local_endpoint("fake", &url, window).unwrap();
+            let target = ChatTarget {
+                provenance: Some("endpoint".into()),
+                provider: Some(ep.id),
+                model: Some("fake-model".into()),
+            };
+            let (channel, events) = recording_channel();
+            let mut turn = typed(&conv, target, "Look something up");
+            turn.tools_enabled = true;
+            run_turn(&rig.env(), turn, channel).await;
+
+            let all = bodies.lock().unwrap();
+            let body = all.iter().find(|b| b["messages"].is_array()).expect("a chat request");
+            let tools = body["tools"].as_array().map(|ts| {
+                ts.iter().filter_map(|t| t["function"]["name"].as_str().map(String::from)).collect()
+            });
+            let started = events.lock().unwrap().iter().find(|e| e["type"] == "run_started").cloned().unwrap();
+            (tools, started)
+        }
+
+        let (chat, started) = sent_on(4096).await;
+        assert!(chat.as_ref().is_none_or(|t| t.is_empty()), "a Chat turn sends no tools: {chat:?}");
+        assert_eq!(started["tier"], "chat");
+
+        let (basic, started) = sent_on(16384).await;
+        let basic = basic.expect("a Basic turn has tools");
+        assert!(basic.iter().any(|n| n == "web_search"), "{basic:?}");
+        for left_out in ["run_code", "delegate", "skill", "plan"] {
+            assert!(!basic.iter().any(|n| n == left_out), "{left_out} in {basic:?}");
+        }
+        assert_eq!(started["tier"], "basic");
+
+        let (full, started) = sent_on(65536).await;
+        let full = full.expect("a Full turn has tools");
+        assert!(full.len() > basic.len(), "{full:?}");
+        assert_eq!(started["tier"], "full");
+    }
+
     /// The window saved the rows before it started the engine (`save_turn_cmd`):
     /// the turn runs on them and adds none of its own.
     #[tokio::test]
@@ -1484,6 +1562,22 @@ mod tests {
             .collect()
     }
 
+    /// `TIER-T-5`: the tool specs share the window with the history, so a small
+    /// window with specs counted keeps less of it than the same window without.
+    #[test]
+    fn the_tool_specs_come_off_the_budget_before_the_history_is_fitted() {
+        let turn = |n: usize| serde_json::json!({ "role": "user", "content": "w".repeat(n) });
+        let prior: Vec<serde_json::Value> = (0..12).map(|_| turn(1000)).collect();
+        let current = turn(100);
+        let without = fit("sys", "", &prior, &current, 4096, 2, 0);
+        let with = fit("sys", "", &prior, &current, 4096, 2, 1500);
+        assert!(with.turns.len() < without.turns.len(), "{} vs {}", with.turns.len(), without.turns.len());
+        assert!(with.overflow > without.overflow);
+        // Specs bigger than the window leave only what must be kept.
+        let swamped = fit("sys", "", &prior, &current, 1000, 2, 5000);
+        assert_eq!(swamped.turns.len(), 1 + 2 + 1, "system, the two kept turns, the new message");
+    }
+
     fn model_with(provenance: &str, ctx_size: Option<i64>) -> TurnModel {
         TurnModel { name: "m".into(), provenance: provenance.into(), vision: false, ctx_size }
     }
@@ -1668,7 +1762,7 @@ mod tests {
         let sent = last_chat(&bodies);
         let system = sent[0]["content"].as_str().unwrap();
         assert!(system.contains("Your notes about the user"), "{system}");
-        assert!(system.contains("Tools are off"), "{system}");
+        assert!(system.contains("Only these descriptions are available"), "{system}");
         assert!(system.contains("tea"));
     }
 }

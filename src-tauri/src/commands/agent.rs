@@ -6,6 +6,7 @@ use tauri::State;
 use crate::agent::artifacts::ConsoleEntry;
 use crate::agent::browser::BrowserPool;
 use crate::agent::fleet::{Fleet, RunLimits, RunOutcome, Steer};
+use crate::agent::tier::{self, ModelTier};
 use crate::commands::files::DialogGrants;
 use crate::agent::run::{run_agent, AgentEventSink, RunContext, RunOptions};
 use crate::agent::toolsets::{self, Toolset, ToolsetInfo};
@@ -34,6 +35,9 @@ pub(crate) struct TurnSetup {
     local_endpoint: Option<ChatEndpoint>,
     pub(crate) model_name: String,
     pub(crate) context_window: Option<usize>,
+    /// `TIER-3`: what this model can carry. Decided once here, so a typed turn, a
+    /// resume and a scheduled run cannot disagree about it.
+    pub(crate) tier: ModelTier,
 }
 
 /// The long-lived handles a turn runs with, borrowed once. `execute_turn` and
@@ -109,7 +113,44 @@ pub(crate) async fn resolve_turn(
         mgr.engine_ctx_size().await.map(|n| n as usize)
     };
 
-    Ok(TurnSetup { endpoint, local_endpoint, model_name, context_window })
+    let tier = tier_of(mgr, db, target).await;
+    Ok(TurnSetup { endpoint, local_endpoint, model_name, context_window, tier })
+}
+
+/// `TIER-3`: the tier a turn on this target runs at, from the facts of its
+/// provenance. The user's own choice for the model beats the rule.
+///
+/// - local: tools if the model's chat template has a place for them, and the
+///   window is the one the running engine was started with;
+/// - cloud: what the provider's catalog said when the picker last read it, else
+///   the price table's window, else unknown;
+/// - endpoint: the window the user gave the server when they added it.
+pub(crate) async fn tier_of(mgr: &RuntimeManager, db: &Db, target: &ChatTarget) -> ModelTier {
+    let provider = target.provider.as_deref().unwrap_or_default();
+    let model = target.model.as_deref().unwrap_or_default();
+    let (id, tools, window) = match target.provenance.as_deref() {
+        Some("cloud") => {
+            let facts = cloud::tier_facts(provider, model);
+            (tier::cloud_model_id(provider, model), facts.is_none_or(|f| f.tools), facts.and_then(|f| f.window))
+        }
+        Some("endpoint") => {
+            let window = db
+                .get_local_endpoint(provider)
+                .ok()
+                .flatten()
+                .and_then(|ep| usize::try_from(ep.ctx_size).ok())
+                .filter(|n| *n > 0);
+            (tier::endpoint_model_id(provider, model), true, window)
+        }
+        _ => {
+            let window = mgr.engine_ctx_size().await.map(|n| n as usize);
+            let path = mgr.engine_model_path().await;
+            let id = path.as_ref().and_then(|p| db.find_model_by_path(&p.to_string_lossy()).ok().flatten()).map(|e| e.id);
+            let tools = crate::runtime::gguf::takes_tools(path.and_then(|p| crate::runtime::gguf::read_header(&p)).as_ref());
+            (id.unwrap_or_default(), tools, window)
+        }
+    };
+    tier::tier_for(tools, window, tier::tier_override(db, &id))
 }
 
 /// Start a run and see it through: register it with the fleet so Stop and
@@ -145,7 +186,8 @@ pub(crate) async fn execute_turn(
     let provenance = target.provenance.as_deref().unwrap_or("local");
     let rc = RunContext::top(&run, &limits, Some(env.fleet), provenance, setup.context_window)
         .resuming(plan)
-        .with_options(options);
+        .with_options(options)
+        .with_tier(setup.tier);
     let images_dir = env.mgr.generated_media_dir();
     let outcome = run_agent(
         &env.mgr.client,
@@ -366,6 +408,7 @@ pub async fn side_question_cmd(
             crate::agent::context::GatherOpts {
                 conversation_id: &conversation_id,
                 tools_enabled: false,
+                tier: setup.tier,
                 model_name: &setup.model_name,
                 query: &question,
                 attended: true,

@@ -208,6 +208,12 @@ impl EmbedManager {
         }
     }
 
+    /// The model file the engine holds in memory right now. Never blocks: a
+    /// start in flight is not counted.
+    pub fn running_model(&self) -> Option<PathBuf> {
+        self.engine.try_lock().ok()?.as_ref().map(|e| e.model_path.clone())
+    }
+
     /// Start the engine if it isn't already running against this exact
     /// model, and return its connection details. Any failure here means
     /// "recall engine unavailable" to the caller (EMB-5) — never a hard

@@ -17,6 +17,7 @@ use crate::secrets::{self, SERVICE_MCP};
 use super::connector_gate::{self, Admit, CallKind};
 use super::decide::toolgate;
 use super::fleet::{Fleet, RunHandle, RunLimits, RunOutcome, StopReason};
+use super::tier::{ModelTier, BASIC_TOOLSETS};
 use super::toolsets::{self, Toolset, ToolContext};
 use crate::memory::MemoryStore;
 use super::AgentEvent;
@@ -150,6 +151,8 @@ impl ToolRegistry {
         // `PLF-2`: drop every tool that changes something. Only the loop's own
         // `plan` and the reads are left.
         read_only: bool,
+        // `TIER-5`: below Full, only the short list a small model can carry.
+        tier: ModelTier,
     ) -> Self {
         #[derive(serde::Deserialize, Default)]
         struct CachedConfig {
@@ -183,6 +186,9 @@ impl ToolRegistry {
         }
         if !may_delegate {
             enabled.retain(|s| *s != Toolset::Subagents);
+        }
+        if tier == ModelTier::Basic {
+            enabled.retain(|s| BASIC_TOOLSETS.contains(s));
         }
         // `LRN-5`: a tool that needs a mail account or an image model is not
         // offered while there is none.
@@ -251,7 +257,9 @@ impl ToolRegistry {
         // `MCG-3`: with sending turned off, a tool that sends is not on the menu.
         let sending_off = crate::autonomy::autonomy_gate(db, "app_send") == crate::autonomy::Rung::Off;
 
-        if let Ok(connectors) = db.list_connectors() {
+        // `TIER-5`: connected apps and MCP servers are not for a small model.
+        let connectors = if tier.is_full() { db.list_connectors() } else { Ok(Vec::new()) };
+        if let Ok(connectors) = connectors {
             for c in connectors.into_iter().filter(|c| c.enabled) {
                 // `CAP-4`: Composio has no stored address. Its four meta-tools are
                 // offered from the cached list, narrowed to this persona, and only
@@ -649,11 +657,12 @@ impl AgentEventSink {
         self.send(AgentEvent::StateUpdate { state: state.clone() });
     }
     /// `HRN-1`: hand the UI this run's id, so it has something to steer and stop.
-    fn run_started(&self, run_id: &str, max_steps: usize, context_window: Option<usize>) {
+    fn run_started(&self, run_id: &str, max_steps: usize, context_window: Option<usize>, tier: ModelTier) {
         self.send(AgentEvent::RunStarted {
             run_id: run_id.to_string(),
             max_steps,
             context_window,
+            tier,
         });
     }
     fn run_progress(
@@ -957,6 +966,31 @@ fn reasoning_effort(db: &Db) -> Effort {
         .unwrap_or_default()
 }
 
+/// The effort a run asks for. `TIER-5`: below Full it is off, because a small
+/// reasoning model can otherwise use the whole window thinking.
+fn run_effort(tier: ModelTier, options: &RunOptions, db: &Db) -> Effort {
+    if tier.is_full() {
+        options.effort_or(db)
+    } else {
+        Effort::Off
+    }
+}
+
+/// When a run is offered the `plan` tool.
+///
+/// `PLF-2`: the plan is what a plan-first run exists to write, so the tool is
+/// offered even where the setting says never. `TIER-5`: below Full the setting is
+/// not asked, so a small model never plans on its own; planning first, which the
+/// user chose for this one message, still works.
+fn plan_mode_for(tier: ModelTier, plan_first: bool, db: &Db) -> super::plan::PlanMode {
+    use super::plan::PlanMode;
+    let setting = if tier.is_full() { PlanMode::current(db) } else { PlanMode::Never };
+    match setting {
+        PlanMode::Never if plan_first => PlanMode::Auto,
+        mode => mode,
+    }
+}
+
 /// [`drive_turn`], plus a one-shot adaptation for engines whose chat template
 /// refuses the loop's own message shapes (see [`flatten_to_alternating`]).
 ///
@@ -1230,6 +1264,15 @@ async fn prematch_turn(
     super::subagents::act_on_prematch(&cx, &offered, &verdict).await
 }
 
+/// `TIER-6`: what the tool specs a top-level run would offer cost in the window,
+/// so the history can be cut to leave room for them. Built the way the run builds
+/// its table, so it counts the same specs. The loop's own tools (`plan`,
+/// `harness`, `ask_user`) are not in it: they are small and always there.
+pub fn tool_spec_tokens(db: &Db, mgr: &RuntimeManager, conversation_id: &str, tier: ModelTier) -> usize {
+    let registry = ToolRegistry::build(db, mgr, conversation_id, None, true, false, tier);
+    super::decide::thought::spec_tokens(&registry.specs, &registry.tool_names()) as usize
+}
+
 /// `AGC-1`/`AGC-3`: which of the loop's own tools this run is offered.
 ///
 /// A child never speaks to the user: it keeps only `compact`, which touches
@@ -1482,6 +1525,9 @@ pub struct RunContext<'a> {
     /// `PLF-2`: the ceiling a plan-first run puts on every agent below it. A
     /// delegated child is handed the parent's value and can never lift it.
     pub read_only: bool,
+    /// `TIER-3`: what the model this run talks to can carry. A child runs on its
+    /// lead's model, and only a Full run can hand work out, so a child is Full.
+    pub tier: ModelTier,
 }
 
 impl<'a> RunContext<'a> {
@@ -1503,7 +1549,14 @@ impl<'a> RunContext<'a> {
             plan: None,
             options: RunOptions::default(),
             read_only: false,
+            tier: ModelTier::Full,
         }
+    }
+
+    /// The same turn, on a model that can carry only what `tier` allows (`TIER-3`).
+    pub fn with_tier(mut self, tier: ModelTier) -> Self {
+        self.tier = tier;
+        self
     }
 
     /// Whether this run may change nothing: it was asked to plan first, or it is
@@ -2088,7 +2141,7 @@ async fn run_agent_inner(
     sink: &AgentEventSink,
 ) -> RunOutcome {
     let (run, limits) = (rc.run, rc.limits);
-    sink.run_started(&run.id, limits.max_iterations, rc.context_window);
+    sink.run_started(&run.id, limits.max_iterations, rc.context_window, rc.tier);
 
     // `PLF`: planning first. One system message on the run's own transcript, not
     // on the assembled system prompt, so the golden gate does not move.
@@ -2109,6 +2162,7 @@ async fn run_agent_inner(
         // `SUB-5`: no room left below this run means no `delegate` tool at all.
         rc.fleet.is_some() && limits.max_depth > 0,
         read_only,
+        rc.tier,
     );
     // `RTE-4`: the lead is told which agent apps it may hand a task to, and the
     // user's own rules for each. A run with none keeps the plain `delegate`.
@@ -2132,7 +2186,7 @@ async fn run_agent_inner(
     // `USE-13` then `USE-4`: match the message against the user's handover rules
     // first, so a handover the user just agreed to is never taken off the menu.
     // Never for a child, a resume, an unattended run or a run with no tools.
-    if super::decide::tools::may_narrow(run.parent.is_some(), rc.plan.is_some(), headless, tools_enabled) {
+    if super::decide::tools::may_narrow(run.parent.is_some(), rc.plan.is_some(), headless, tools_enabled, rc.tier) {
         let early = prematch_turn(db, perms, client, local_endpoint, conversation_id, rc, &registry, headless, &messages, sink).await;
         for note in &early.notes {
             messages.push(serde_json::json!({ "role": "system", "content": note }));
@@ -2148,12 +2202,7 @@ async fn run_agent_inner(
         tool_names.push(name.to_string());
         invocable.push(name.to_string());
     }
-    // `PLF-2`: the plan is what a plan-first run exists to write, so the tool is
-    // offered even where the setting says never.
-    let plan_mode = match super::plan::PlanMode::current(db) {
-        super::plan::PlanMode::Never if plan_first => super::plan::PlanMode::Auto,
-        mode => mode,
-    };
+    let plan_mode = plan_mode_for(rc.tier, plan_first, db);
     if plan_mode.offers_tool() {
         tool_names.push("plan".to_string());
         invocable.push("plan".to_string());
@@ -2188,7 +2237,7 @@ async fn run_agent_inner(
         data_dir,
         model_name,
         temperature,
-        effort: rc.options.effort_or(db),
+        effort: run_effort(rc.tier, &rc.options, db),
         tools_enabled,
         headless,
         cancel: run.cancel.clone(),
@@ -4195,7 +4244,7 @@ mod tests {
         may_delegate: bool,
     ) -> ToolRegistry {
         let mgr = RuntimeManager::new(std::env::temp_dir().join("poiesis-test"));
-        ToolRegistry::build(db, &mgr, conversation_id, ceiling, may_delegate, false)
+        ToolRegistry::build(db, &mgr, conversation_id, ceiling, may_delegate, false, ModelTier::Full)
     }
 
     fn call(id: &str, name: &str) -> ToolCallReq {
@@ -4387,7 +4436,7 @@ mod tests {
         assert!(normal.tool_names().iter().any(|n| n == "write_file"), "the setup offers writes");
 
         let mgr = RuntimeManager::new(std::env::temp_dir().join("poiesis-test"));
-        let reading = ToolRegistry::build(&db, &mgr, &conv, None, true, true);
+        let reading = ToolRegistry::build(&db, &mgr, &conv, None, true, true, ModelTier::Full);
         let names = reading.tool_names();
         assert!(names.iter().any(|n| n == "read_file"), "reads stay: {names:?}");
         for write in ["write_file", "edit_file", "delete_file", "move_file", "create_dir"] {
@@ -4682,15 +4731,62 @@ mod tests {
     fn the_registry_holds_each_connector_tool_to_its_kind() {
         let (db, conv) = db_with_notes_connector();
         let mgr = RuntimeManager::new(std::env::temp_dir().join("poiesis-test"));
-        let registry = ToolRegistry::build(&db, &mgr, &conv, None, false, false);
+        let registry = ToolRegistry::build(&db, &mgr, &conv, None, false, false, ModelTier::Full);
         assert_eq!(registry.mcp["list_notes"].kind, CallKind::Read);
         assert_eq!(registry.mcp["update_note"].kind, CallKind::Change);
         assert_eq!(registry.mcp["post_message"].kind, CallKind::Send);
 
         // Planning first offers only the read.
-        let planning = ToolRegistry::build(&db, &mgr, &conv, None, false, true);
+        let planning = ToolRegistry::build(&db, &mgr, &conv, None, false, true, ModelTier::Full);
         assert!(planning.mcp.contains_key("list_notes"));
         assert!(!planning.mcp.contains_key("update_note") && !planning.mcp.contains_key("post_message"));
+    }
+
+    /// `TIER-T-4`: a Basic run is offered the short list and nothing from
+    /// connected apps or MCP servers; a Full run is offered what it always was.
+    #[test]
+    fn a_basic_registry_holds_only_the_short_list() {
+        let (db, conv) = db_with_notes_connector();
+        for t in [Toolset::FileSystem, Toolset::WebSearch, Toolset::Memory, Toolset::Recall, Toolset::CodeExec] {
+            t.set_enabled(&db, true);
+        }
+        let mgr = RuntimeManager::new(std::env::temp_dir().join("poiesis-test"));
+
+        let full = ToolRegistry::build(&db, &mgr, &conv, None, true, false, ModelTier::Full);
+        assert!(full.toolsets.contains(&Toolset::CodeExec));
+        assert!(full.mcp.contains_key("list_notes"));
+
+        let basic = ToolRegistry::build(&db, &mgr, &conv, None, true, false, ModelTier::Basic);
+        assert!(!basic.toolsets.is_empty());
+        assert!(basic.toolsets.iter().all(|t| BASIC_TOOLSETS.contains(t)), "{:?}", basic.toolsets);
+        assert!(!basic.toolsets.contains(&Toolset::CodeExec));
+        assert!(!basic.toolsets.contains(&Toolset::Subagents), "no delegation");
+        assert!(basic.mcp.is_empty(), "no connected apps");
+        assert!(!basic.tool_names().iter().any(|n| n == "list_notes" || n == "delegate" || n == "skill"));
+        assert!(basic.tool_names().iter().any(|n| n == "web_search"));
+    }
+
+    /// `TIER-T-4`: below Full a run never plans on its own, but planning first,
+    /// asked for one message, still gets the tool.
+    #[test]
+    fn below_full_only_plan_first_plans() {
+        use super::super::plan::PlanMode;
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(plan_mode_for(ModelTier::Full, false, &db), PlanMode::current(&db));
+        assert_eq!(plan_mode_for(ModelTier::Basic, false, &db), PlanMode::Never);
+        assert_eq!(plan_mode_for(ModelTier::Basic, true, &db), PlanMode::Auto);
+    }
+
+    /// `TIER-T-4`: thinking is off below Full, and the user's chip counts only at Full.
+    #[test]
+    fn effort_is_off_below_full() {
+        let db = Db::open_in_memory().unwrap();
+        db.set_setting("models.reasoning_effort", "high").unwrap();
+        let chip = RunOptions { effort: Some("medium".into()), ..Default::default() };
+        assert_eq!(run_effort(ModelTier::Full, &RunOptions::default(), &db), Effort::High);
+        assert_eq!(run_effort(ModelTier::Full, &chip, &db), Effort::Medium);
+        assert_eq!(run_effort(ModelTier::Basic, &chip, &db), Effort::Off);
+        assert_eq!(run_effort(ModelTier::Chat, &RunOptions::default(), &db), Effort::Off);
     }
 
     #[test]
@@ -4698,7 +4794,7 @@ mod tests {
         let (db, conv) = db_with_notes_connector();
         db.set_setting(&crate::autonomy::setting_key("app_send"), "off").unwrap();
         let mgr = RuntimeManager::new(std::env::temp_dir().join("poiesis-test"));
-        let registry = ToolRegistry::build(&db, &mgr, &conv, None, false, false);
+        let registry = ToolRegistry::build(&db, &mgr, &conv, None, false, false, ModelTier::Full);
         assert!(!registry.mcp.contains_key("post_message"));
         assert!(registry.mcp.contains_key("update_note"), "a change is not a send");
         assert!(!registry.tool_names().iter().any(|n| n == "post_message"));
@@ -4712,7 +4808,7 @@ mod tests {
         policy.tool_overrides = Some(r#"{"update_note":"send"}"#.into());
         db.save_connector_policy(&policy).unwrap();
         let mgr = RuntimeManager::new(std::env::temp_dir().join("poiesis-test"));
-        let registry = ToolRegistry::build(&db, &mgr, &conv, None, false, false);
+        let registry = ToolRegistry::build(&db, &mgr, &conv, None, false, false, ModelTier::Full);
         assert_eq!(registry.mcp["update_note"].kind, CallKind::Send);
     }
 
@@ -4740,11 +4836,11 @@ mod tests {
         let mgr = RuntimeManager::new(std::env::temp_dir().join("poiesis-test"));
 
         tests_pretend::key(false);
-        let without = ToolRegistry::build(&db, &mgr, &conv, None, false, false);
+        let without = ToolRegistry::build(&db, &mgr, &conv, None, false, false, ModelTier::Full);
         assert!(without.mcp.is_empty(), "no key, no Composio tools");
 
         tests_pretend::key(true);
-        let registry = ToolRegistry::build(&db, &mgr, &conv, None, false, false);
+        let registry = ToolRegistry::build(&db, &mgr, &conv, None, false, false, ModelTier::Full);
         let mut got: Vec<&str> = registry.mcp.keys().map(String::as_str).collect();
         got.sort();
         let mut want = composio::OFFERED.to_vec();
@@ -4763,7 +4859,7 @@ mod tests {
 
         // Planning first can look. The batch runner stays on the menu too, and is
         // judged by what is inside it when it is called (`CAP-C-F9`).
-        let planning = ToolRegistry::build(&db, &mgr, &conv, None, false, true);
+        let planning = ToolRegistry::build(&db, &mgr, &conv, None, false, true, ModelTier::Full);
         assert!(planning.mcp.contains_key(composio::SEARCH_TOOLS));
         assert!(planning.mcp.contains_key(composio::MULTI_EXECUTE));
         assert!(!refuses_in_plan_first(&planning, composio::MULTI_EXECUTE), "its contents decide, at the call");

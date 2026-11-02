@@ -158,7 +158,7 @@ pub async fn run_external(req: Request<'_>) -> RunOutcome {
         };
     };
     let _ = req.db.set_subagent_status(&req.run.id, "running");
-    req.sink.emit(AgentEvent::RunStarted { run_id: req.run.id.clone(), max_steps: 0, context_window: None });
+    req.sink.emit(AgentEvent::RunStarted { run_id: req.run.id.clone(), max_steps: 0, context_window: None, tier: crate::agent::tier::ModelTier::Full });
     let started = std::time::Instant::now();
 
     let trust = effective_trust(req.folder_trust, &req.offered.row.trust_ceiling);

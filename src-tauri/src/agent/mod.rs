@@ -54,6 +54,7 @@ pub mod screen;
 pub mod skillpack;
 pub mod subagents;
 pub mod symbols;
+pub mod tier;
 pub mod timeline;
 pub mod toolsets;
 pub mod toolrpc;
@@ -332,6 +333,9 @@ pub enum AgentEvent {
         /// not say, in which case the meter shows no percentage rather than a
         /// made-up one.
         context_window: Option<usize>,
+        /// `TIER-4`: what the turn really ran at. Can be lower than the listing
+        /// said if the engine was restarted with less memory.
+        tier: tier::ModelTier,
     },
     /// One iteration of the loop began (`HRN-UI-3`'s meter). `step` is
     /// 1-based; `ms` is elapsed wall clock for the whole run so far.

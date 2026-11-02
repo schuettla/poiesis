@@ -169,19 +169,61 @@ pub struct CloudModel {
     /// says; elsewhere it's [`pricing`]'s table. `None` is unknown, never free.
     pub prompt_per_mtok: Option<f64>,
     pub output_per_mtok: Option<f64>,
+    /// How many tokens the model can hold, when known (`TIER-3`): OpenRouter's
+    /// `context_length`, else the price table's. `None` is unknown, never small.
+    pub window: Option<u32>,
 }
 
 impl CloudModel {
-    /// Fill in list prices from the table where the catalog gave none.
+    /// Fill in list prices and the window from the table where the catalog gave
+    /// none.
     fn priced(mut self) -> Self {
-        if self.prompt_per_mtok.is_none() {
-            if let Some(f) = pricing::facts_for(&self.model) {
+        if let Some(f) = pricing::facts_for(&self.model) {
+            if self.prompt_per_mtok.is_none() {
                 self.prompt_per_mtok = Some(f.prompt_per_mtok);
                 self.output_per_mtok = Some(f.output_per_mtok);
+            }
+            if self.window.is_none() {
+                self.window = u32::try_from(f.context_window).ok();
             }
         }
         self
     }
+}
+
+/// What a turn needs to know about a cloud model to place it on a tier.
+#[derive(Debug, Clone, Copy)]
+pub struct TierFacts {
+    pub tools: bool,
+    pub window: Option<usize>,
+}
+
+fn tier_facts_table() -> &'static std::sync::Mutex<std::collections::HashMap<String, TierFacts>> {
+    static FACTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, TierFacts>>> =
+        std::sync::OnceLock::new();
+    FACTS.get_or_init(Default::default)
+}
+
+/// Keep what the catalog said about these models, so a turn can place one on a
+/// tier without asking the provider again.
+pub fn remember_tier_facts(models: &[CloudModel]) {
+    if let Ok(mut table) = tier_facts_table().lock() {
+        for m in models {
+            table.insert(
+                format!("{}:{}", m.provider, m.model),
+                TierFacts { tools: m.tools, window: m.window.map(|w| w as usize) },
+            );
+        }
+    }
+}
+
+/// What the catalog said about a model, or the price table's window when the
+/// catalog has not been read this run. `None` means nothing is known.
+pub fn tier_facts(provider: &str, model: &str) -> Option<TierFacts> {
+    let seen = tier_facts_table().lock().ok().and_then(|t| t.get(&format!("{provider}:{model}")).copied());
+    seen.or_else(|| {
+        pricing::facts_for(model).map(|f| TierFacts { tools: true, window: Some(f.context_window) })
+    })
 }
 
 // ---- key management (keyring-backed) ----
@@ -328,6 +370,7 @@ fn anthropic_models(list: AnthropicModelList) -> Vec<CloudModel> {
             tools: true,
             prompt_per_mtok: None,
             output_per_mtok: None,
+            window: None,
         }
         .priced())
         .collect()
@@ -376,6 +419,7 @@ async fn discover_openai(
                 tools: true,
                 prompt_per_mtok: None,
                 output_per_mtok: None,
+                window: None,
             }
             .priced()
         })
@@ -403,6 +447,9 @@ struct OrModel {
     /// USD per token, as decimal strings.
     #[serde(default)]
     pricing: Option<OrPricing>,
+    /// Tokens the model can hold, as OpenRouter reports it (`TIER-3`).
+    #[serde(default)]
+    context_length: Option<u64>,
 }
 #[derive(Deserialize)]
 struct OrPricing {
@@ -459,6 +506,11 @@ async fn discover_openrouter(client: &reqwest::Client) -> Result<Vec<CloudModel>
                 Some(p) => (per_mtok(p.prompt.as_ref()), per_mtok(p.completion.as_ref())),
                 None => (None, None),
             };
+            let window = m
+                .context_length
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|n| *n > 0)
+                .or_else(|| pricing::facts_for(&m.id).and_then(|f| u32::try_from(f.context_window).ok()));
             CloudModel {
                 name: m.name.unwrap_or_else(|| m.id.clone()),
                 id: format!("openrouter:{}", m.id),
@@ -468,6 +520,7 @@ async fn discover_openrouter(client: &reqwest::Client) -> Result<Vec<CloudModel>
                 tools,
                 prompt_per_mtok,
                 output_per_mtok,
+                window,
             }
         })
         .collect();
@@ -494,6 +547,7 @@ fn curated_anthropic() -> Vec<CloudModel> {
             tools: true,
             prompt_per_mtok: None,
             output_per_mtok: None,
+            window: None,
         }
         .priced())
         .collect()

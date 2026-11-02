@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { getSetting, setSetting } from "../../lib/api";
 import { EFFORTS, type Effort } from "../../lib/effort";
+import { useAppStore, useSelectedModel } from "../../lib/store";
+import { tierOf } from "../../lib/tier";
 import { ChevronIcon } from "../Icons/Icons";
 import "./EffortPicker.css";
 
@@ -27,6 +29,11 @@ export type { Effort };
 
 const DEFAULT = EFFORTS[1];
 
+/** `TIER-UI-4`: what the picker shows below Full. The run does not think at all,
+ * so this is Off drawn as an outline: a fact about the model, not a level. */
+export const LIMITED_HINT = "Thinking is off for small models. Set Features to Full to change this.";
+const LIMITED: Effort = { ...EFFORTS[0], bars: -1, hint: LIMITED_HINT };
+
 /** Three rising bars, filled to the level. `-1` is "not our choice" and shows
  * as an outline throughout, so it never reads as a quantity on the scale. */
 export function Meter({ bars }: { bars: number }) {
@@ -43,6 +50,10 @@ export function Meter({ bars }: { bars: number }) {
  * shared by this picker and the composer's combined model control. */
 export function useEffort(chip?: string, onPick?: () => void) {
   const [value, setValue] = useState<string>(DEFAULT.value);
+  const selected = useSelectedModel();
+  const setTier = useAppStore((s) => s.setModelTier);
+  // `TIER-5`: below Full the run asks for no thinking, whatever is set here.
+  const limited = tierOf(selected) !== "full";
 
   useEffect(() => {
     getSetting(EFFORT_KEY)
@@ -61,16 +72,19 @@ export function useEffort(chip?: string, onPick?: () => void) {
   }, []);
 
   const standing: Effort = EFFORTS.find((e) => e.value === value) ?? DEFAULT;
-  const chipped = chip ? EFFORTS.find((e) => e.value === chip) : undefined;
-  const current: Effort = chipped ?? standing;
+  const chipped = !limited && chip ? EFFORTS.find((e) => e.value === chip) : undefined;
+  const current: Effort = limited ? LIMITED : (chipped ?? standing);
 
   function choose(e: Effort) {
     setValue(e.value);
     setSetting(EFFORT_KEY, e.value).catch(() => {});
+    // The one action that makes the pick take effect: picking a level here
+    // means the user wants this model to think.
+    if (limited) void setTier(selected, "full");
     onPick?.();
   }
 
-  return { standing, chipped, current, choose };
+  return { standing, chipped, current, choose, limited };
 }
 
 export default function EffortPicker({
@@ -123,7 +137,9 @@ export default function EffortPicker({
         title={
           chipped
             ? `Just this message. My default is ${standing.label.toLowerCase()}.`
-            : `${current.hint} Only models that can think are affected; the rest ignore it.`
+            : effort.limited
+              ? LIMITED_HINT
+              : `${current.hint} Only models that can think are affected; the rest ignore it.`
         }
         onClick={() => setOpen((o) => !o)}
       >

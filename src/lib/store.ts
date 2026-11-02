@@ -15,6 +15,7 @@ import type {
   Project,
   RuntimeTab,
   Provenance,
+  ModelTier,
   SubRun,
   View,
   WorkbenchSelection,
@@ -262,6 +263,10 @@ export interface AppState {
   engineReady: boolean;
   /** Which library model the running engine currently holds (null = none). */
   loadedModelId: string | null;
+  /** `TIER-UI-3`: the window the loaded model was meant to start with, so its
+   * row can tell a change still waiting for a reload from a start that had to
+   * use less memory. */
+  loadedWindow: number | null;
   loadingModel: { id: string; label: string } | null;
   selectModel: (id: string) => void;
   setModelFilter: (f: ModelFilter) => void;
@@ -269,6 +274,15 @@ export interface AppState {
   refreshCloud: () => Promise<void>;
   refreshMediaModels: () => Promise<void>;
   refreshEndpoints: () => Promise<void>;
+  /** `TIER-UI-3`: the user's own Features choice for one model (`null` is Auto).
+   * Stored as `models.tier.<id>`; Rust reads it when it places a turn. */
+  setModelTier: (model: Model, tier: ModelTier | null) => Promise<void>;
+  /** `TIER-UI-3`: the user's own memory window for one local model, in tokens
+   * (`null` is Auto). Used the next time the model loads. */
+  setModelWindow: (model: Model, tokens: number | null) => Promise<void>;
+  /** `TIER-UI-2`: the model the Models page should bring into view. */
+  focusedModelId: string | null;
+  showModel: (id: string | null) => void;
   loadModelById: (id: string) => Promise<void>;
   stopEngine: () => Promise<void>;
 
@@ -370,6 +384,8 @@ export interface AppState {
      * and the meter then shows no percentage rather than a made-up one. */
     contextTokens: number;
     contextWindow: number | null;
+    /** `TIER-4`: the tier this run really ran at. */
+    tier?: ModelTier;
     /** What the model has been thinking since the last thing it said out loud.
      * Cleared when prose starts arriving, so the indicator describes now and
      * not the whole run. Shown as thinking, never as the answer. */
@@ -1167,6 +1183,14 @@ function localToModels(lib: api.ModelEntry[]): Model[] {
     meta: e.quant ?? undefined,
     vision: e.vision,
     available: true,
+    tier: e.tier,
+    autoTier: e.auto_tier,
+    tierSet: e.tier_set ?? null,
+    window: e.window,
+    autoWindow: e.auto_window,
+    windowSet: e.window_set ?? null,
+    trainedCtx: e.trained_ctx ?? undefined,
+    tools: e.tools,
   }));
 }
 
@@ -1183,6 +1207,10 @@ function cloudToModels(cm: api.CloudModel[]): Model[] {
     cloudModel: m.model,
     promptPerMtok: m.prompt_per_mtok ?? undefined,
     outputPerMtok: m.output_per_mtok ?? undefined,
+    tier: m.tier,
+    autoTier: m.auto_tier,
+    tierSet: m.tier_set ?? null,
+    window: m.window ?? undefined,
   }));
 }
 
@@ -1203,6 +1231,10 @@ function endpointToModels(ems: api.EndpointModel[]): Model[] {
     endpointId: m.endpoint_id,
     endpointLabel: m.endpoint_label,
     cloudModel: m.model,
+    tier: m.tier,
+    autoTier: m.auto_tier,
+    tierSet: m.tier_set ?? null,
+    window: m.window ?? undefined,
   }));
 }
 
@@ -1561,6 +1593,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   modelFilter: "all",
   engineReady: false,
   loadedModelId: null,
+  loadedWindow: null,
   loadingModel: null,
   setModelFilter: (modelFilter) => set({ modelFilter }),
 
@@ -1684,6 +1717,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
+  setModelTier: async (model, tier) => {
+    const value = tier ?? "";
+    if (api.inTauri()) await api.setSetting(`models.tier.${model.id}`, value);
+    if (model.provenance === "local") {
+      await get().refreshLibrary();
+      return;
+    }
+    // A hosted model or a connected server: the listing is a network call, and
+    // Rust already said what Auto gives, so the choice is applied in place.
+    set((s) => {
+      const cloudModels = s.cloudModels.map((m) =>
+        `cloud:${m.id}` === model.id ? { ...m, tier_set: tier, tier: tier ?? m.auto_tier } : m
+      );
+      const endpointModels = s.endpointModels.map((m) =>
+        m.id === model.id ? { ...m, tier_set: tier, tier: tier ?? m.auto_tier } : m
+      );
+      const models = composeModels(s.libraryModels, cloudModels, s.mediaModels, endpointModels);
+      return { cloudModels, endpointModels, models };
+    });
+  },
+  setModelWindow: async (model, tokens) => {
+    if (api.inTauri()) await api.setSetting(`models.ctx.${model.id}`, tokens === null ? "" : String(tokens));
+    // The window moves the tier with it, and only Rust knows the rule.
+    await get().refreshLibrary();
+  },
+  focusedModelId: null,
+  showModel: (id) => set(id ? { focusedModelId: id, view: "models" } : { focusedModelId: null }),
+
   // Load cloud providers + their models for the unified picker (CLD-3, CLD-4).
   refreshCloud: async () => {
     if (!api.inTauri()) return;
@@ -1715,9 +1776,17 @@ export const useAppStore = create<AppState>((set, get) => ({
           const pct = p.total ? ` ${Math.round((p.received / p.total) * 100)}%` : "";
           set({ loadingModel: { id, label: `${p.label}${pct}` } });
         });
-        set({ engineReady: true, selectedModelId: id, loadedModelId: id, loadingModel: null });
+        set({
+          engineReady: true,
+          selectedModelId: id,
+          loadedModelId: id,
+          loadedWindow: entry.window ?? null,
+          loadingModel: null,
+        });
+        // The loaded model's tier follows the window it really started with.
+        get().refreshLibrary().catch(() => {});
       } catch (e) {
-        set({ loadingModel: null, engineReady: false, loadedModelId: null });
+        set({ loadingModel: null, engineReady: false, loadedModelId: null, loadedWindow: null });
         throw e;
       } finally {
         inflightLoad = null;
@@ -1729,7 +1798,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   stopEngine: async () => {
     if (api.inTauri()) await api.stopEngine().catch(() => {});
-    set({ engineReady: false, loadedModelId: null, loadingModel: null });
+    set({ engineReady: false, loadedModelId: null, loadedWindow: null, loadingModel: null });
+    get().refreshLibrary().catch(() => {});
   },
 
   modelPrefs: EMPTY_PREFS,
@@ -6188,6 +6258,7 @@ async function streamAssistantTurn(
                 startedAt: Date.now(),
                 contextTokens: 0,
                 contextWindow: e.context_window,
+                tier: e.tier,
                 thinking: "",
                 // A resume announces the plan it is continuing right after
                 // this, so the card is never blank while the run is live.

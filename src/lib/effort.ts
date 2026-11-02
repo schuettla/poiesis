@@ -15,4 +15,9 @@ export const EFFORTS = [
   { value: "provider", label: "Default", bars: -1, hint: "Send nothing and take the provider's own setting." },
 ] as const;
 
-export type Effort = (typeof EFFORTS)[number];
+export type Effort = {
+  readonly value: (typeof EFFORTS)[number]["value"];
+  readonly label: string;
+  readonly bars: number;
+  readonly hint: string;
+};

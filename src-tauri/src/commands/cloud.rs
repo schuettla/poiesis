@@ -5,7 +5,9 @@
 
 use tauri::State;
 
+use crate::agent::tier::{self, ModelTier};
 use crate::cloud::{self, CloudModel, Provider, ProviderInfo};
+use crate::db::Db;
 use crate::media::{self, Registry};
 use crate::runtime::RuntimeManager;
 use crate::PoiesisError;
@@ -85,10 +87,24 @@ pub fn clear_provider_key_cmd(provider: String) -> Cmd<()> {
     out.map_err(|e| PoiesisError::Message(e.to_string()))
 }
 
+/// A cloud model with the tier a turn on it runs at (`TIER-3`).
+#[derive(serde::Serialize)]
+pub struct CloudModelListing {
+    #[serde(flatten)]
+    model: CloudModel,
+    tier: ModelTier,
+    /// What the rule says with no choice from the user, and the choice itself.
+    auto_tier: ModelTier,
+    tier_set: Option<ModelTier>,
+}
+
 /// Discover models across every provider that has a key (CLD-3, CLD-4).
 /// Best-effort: a provider that fails discovery is skipped, not fatal.
 #[tauri::command]
-pub async fn list_cloud_models_cmd(mgr: State<'_, RuntimeManager>) -> Cmd<Vec<CloudModel>> {
+pub async fn list_cloud_models_cmd(
+    mgr: State<'_, RuntimeManager>,
+    db: State<'_, Db>,
+) -> Cmd<Vec<CloudModelListing>> {
     let mut out = Vec::new();
     for provider in Provider::ALL {
         if !cloud::has_key(provider) {
@@ -98,5 +114,19 @@ pub async fn list_cloud_models_cmd(mgr: State<'_, RuntimeManager>) -> Cmd<Vec<Cl
             out.extend(models);
         }
     }
-    Ok(out)
+    cloud::remember_tier_facts(&out);
+    Ok(out
+        .into_iter()
+        .map(|model| {
+            let id = tier::cloud_model_id(&model.provider, &model.model);
+            let window = model.window.map(|w| w as usize);
+            let tier_set = tier::tier_override(&db, &id);
+            CloudModelListing {
+                tier: tier::tier_for(model.tools, window, tier_set),
+                auto_tier: tier::tier_for(model.tools, window, None),
+                tier_set,
+                model,
+            }
+        })
+        .collect())
 }

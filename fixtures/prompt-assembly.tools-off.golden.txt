@@ -14,10 +14,13 @@ Quotes are in EUR and include VAT. The flat is a 1930s build, so assume no strai
 ## Your notes about the user (durable facts)
 - [Coffee](coffee.md) â€” takes it black
 - [Editor](editor.md) â€” uses Neovim [unsure, noted 2026-10-27]
-(Read a note's full text with memory(op:"read", name:…) before relying on its details. Tools are off — treat descriptions as the only available detail. A note marked [unsure] or [contested] may be wrong: say so, and give its date, when you rely on it.)
+(Only these descriptions are available in this chat, not the full notes. A note marked [unsure] or [contested] may be wrong: say so, and give its date, when you rely on it.)
 
-## Session state (durable; update with the remember tool)
+## Session state (durable)
 {"decisions":{"Which laptop":"b"},"constraints":{"budget":2000}}
+
+## No tools in this chat
+You cannot search the web, open files or save notes here, and you have no live data. Never write out a tool call or say you are looking something up. If the user asks for something current, like the weather, news or prices, say you cannot check it in this chat, and give only what you know, saying it may be out of date.
 
 ## Conversation so far (older turns were summarized)
 The user asked about laptops and picked option b.

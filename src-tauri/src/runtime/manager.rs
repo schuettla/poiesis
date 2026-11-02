@@ -237,6 +237,11 @@ impl RuntimeManager {
         self.engine.lock().await.as_ref().map(|e| e.ctx_size)
     }
 
+    /// Where the running local model's file is, if one is loaded.
+    pub async fn engine_model_path(&self) -> Option<PathBuf> {
+        self.engine.lock().await.as_ref().map(|e| e.model_path.clone())
+    }
+
     /// A short label for the running local model — its file stem (GRM-4), used
     /// to key per-model tool reliability stats.
     pub async fn engine_model_name(&self) -> Option<String> {
@@ -271,5 +276,33 @@ pub fn existing_server_binary(runtimes_dir: &Path, build_tag: &str) -> Option<Pa
         super::download::find_server_binary(&dir)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(binary: &Path, ctx_size: u32) -> EngineConfig {
+        EngineConfig {
+            server_binary: binary.to_path_buf(),
+            model_path: PathBuf::from("m.gguf"),
+            ctx_size,
+            n_gpu_layers: 0,
+            extra_args: Vec::new(),
+        }
+    }
+
+    /// `TIER-T-2`: a load that fails leaves the remembered launch alone, so after
+    /// a retry with a smaller window the watchdog restarts the one that loaded.
+    #[tokio::test]
+    async fn a_failed_load_keeps_the_launch_that_worked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = RuntimeManager::new(tmp.path().to_path_buf());
+        *mgr.last_config.lock().unwrap() = Some(config(Path::new("server"), 8192));
+
+        let missing = tmp.path().join("no-such-server.exe");
+        assert!(mgr.load_model(config(&missing, 16384)).await.is_err());
+        assert_eq!(mgr.last_config.lock().unwrap().as_ref().map(|c| c.ctx_size), Some(8192));
     }
 }

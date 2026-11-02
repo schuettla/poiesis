@@ -1,4 +1,5 @@
-import { useAppStore } from "../../lib/store";
+import { useAppStore, useSelectedModel } from "../../lib/store";
+import { tierOf, tierTag } from "../../lib/tier";
 import { usePersonaAppsLine } from "../Apps/personaAppsLine";
 import "./ModeChips.css";
 
@@ -32,6 +33,10 @@ export default function ModeChips() {
       s.engines.some((e) => e.enabled && e.delegate_ready)
   );
   const setEnginesOff = useAppStore((s) => s.setEnginesOff);
+  const showModel = useAppStore((s) => s.showModel);
+  const setModelTier = useAppStore((s) => s.setModelTier);
+  const model = useSelectedModel();
+  const runTier = useAppStore((s) => (s.activeRun?.convId === s.activeConversationId ? s.activeRun?.tier : undefined));
   const persona = useAppStore((s) => {
     const id = s.conversations.find((c) => c.id === s.activeConversationId)?.personaId;
     return id ? (s.personas.find((p) => p.id === id) ?? null) : null;
@@ -70,6 +75,31 @@ export default function ModeChips() {
       command: "/tools ",
       off: () => setToolsEnabled(true),
       offLabel: "Let me use my tools again",
+    });
+  }
+  // `TIER-UI-2`: only when the model's tier takes away something the user has on.
+  // If they already turned tools off, "Tools off" above says it. While a run is
+  // live it says the tier that run really has. The x and the chip that follows
+  // it undo each other, so the choice can always be taken back where it was made.
+  const shown = runTier ? { ...model, tier: runTier } : model;
+  const tag = tierTag(shown);
+  if (toolsEnabled && tag) {
+    chips.push({
+      key: "tier",
+      label: tag.chip,
+      command: "",
+      off: () => void setModelTier(model, "full"),
+      offLabel: "Use all features with this model",
+      open: { run: () => showModel(model.id), title: `${tag.title} · Change this` },
+    });
+  } else if (toolsEnabled && tierOf(shown) === "full" && model.tierSet === "full" && model.autoTier !== "full") {
+    chips.push({
+      key: "tier",
+      label: "All features",
+      command: "",
+      off: () => void setModelTier(model, null),
+      offLabel: "Go back to fewer features for this small model",
+      open: { run: () => showModel(model.id), title: "You gave this small model every feature. · Change this" },
     });
   }
   if (enginesOff && convId) {

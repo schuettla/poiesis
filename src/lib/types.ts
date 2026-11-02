@@ -3,6 +3,10 @@
 
 export type Provenance = "local" | "cloud" | "endpoint";
 
+/** What a model can carry (`TIER-3`). Decided in Rust from the model's facts;
+ * the window only shows it. */
+export type ModelTier = "full" | "basic" | "chat";
+
 export interface Model {
   id: string;
   name: string;
@@ -44,6 +48,19 @@ export interface Model {
   /** Cloud chat only: USD per million tokens in / out, when known. */
   promptPerMtok?: number;
   outputPerMtok?: number;
+  /** `TIER-3`: the tier a turn on this model runs at. Absent means Full. */
+  tier?: ModelTier;
+  /** What the rule gives with no choice from the user, and the user's choice
+   * (`null` is Auto). Both come from Rust. */
+  autoTier?: ModelTier;
+  tierSet?: ModelTier | null;
+  /** Tokens the model can hold, when known. For a local model, what it loads
+   * with next time; `autoWindow` is what it would load with on Auto and
+   * `windowSet` the user's choice. `trainedCtx` is what it was trained for. */
+  window?: number;
+  autoWindow?: number;
+  windowSet?: number | null;
+  trainedCtx?: number;
 }
 
 export type Role = "user" | "assistant";
