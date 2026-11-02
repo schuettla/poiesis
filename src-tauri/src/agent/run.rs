@@ -505,11 +505,21 @@ pub struct AgentEventSink {
     /// leaves wrapped in `AgentEvent::Sub` — one place, rather than a tag
     /// parameter on all twenty helpers below.
     sub: Option<String>,
+    /// `HRW-5`: something that reads the lead's own events as they pass, so a
+    /// turn run in Rust can save what the window would have saved. A child's
+    /// events leave wrapped in `Sub` and are never shown to it.
+    tap: Option<std::sync::Arc<dyn Fn(&AgentEvent) + Send + Sync>>,
 }
 
 impl AgentEventSink {
     pub fn new(channel: Channel<AgentEvent>) -> Self {
-        Self { channel, sub: None }
+        Self { channel, sub: None, tap: None }
+    }
+
+    /// The same sink, with `tap` shown every event the lead run sends.
+    pub fn with_tap(mut self, tap: impl Fn(&AgentEvent) + Send + Sync + 'static) -> Self {
+        self.tap = Some(std::sync::Arc::new(tap));
+        self
     }
 
     /// A sink for a delegated child. Everything it sends arrives attributed to
@@ -518,12 +528,16 @@ impl AgentEventSink {
         AgentEventSink {
             channel: self.channel.clone(),
             sub: Some(run_id.to_string()),
+            tap: None,
         }
     }
 
     /// The single exit. Every helper goes through here so tagging is not
     /// something a new helper can forget to do.
     fn send(&self, event: AgentEvent) {
+        if let (None, Some(tap)) = (&self.sub, &self.tap) {
+            tap(&event);
+        }
         let _ = match &self.sub {
             Some(run_id) => self.channel.send(AgentEvent::Sub {
                 run_id: run_id.clone(),
@@ -1361,7 +1375,7 @@ fn made_room_note(cleared: &Cleared) -> String {
 }
 
 /// `REG-5`: what the user decided about *this* turn only. Built from the
-/// composer's modifier chips, passed through `agent_chat_cmd` and `resume_run_cmd`,
+/// composer's modifier chips, passed through `run_turn_cmd` and `resume_run_cmd`,
 /// and dropped when the turn ends. A delegated child gets `RunOptions::default()`,
 /// so a modifier never leaks into the agents a run starts.
 #[derive(Debug, Clone, Default, serde::Deserialize)]

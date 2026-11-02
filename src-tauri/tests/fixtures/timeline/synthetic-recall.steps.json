@@ -1,0 +1,41 @@
+[
+  {
+    "id": "recall-1730000000000",
+    "verb": "remembered",
+    "target": "2 things",
+    "status": "done",
+    "matches": [
+      {
+        "source": "memory",
+        "title": "tea",
+        "created_at": 1,
+        "snippet": "Likes green tea",
+        "kind": "fact",
+        "why": "you asked about drinks"
+      },
+      {
+        "source": "memory",
+        "title": "coffee",
+        "created_at": 2,
+        "snippet": "Dislikes coffee",
+        "kind": "fact"
+      }
+    ]
+  },
+  {
+    "id": "s1",
+    "verb": "searched",
+    "target": "drinks",
+    "status": "done",
+    "result": "— 1 match",
+    "matches": [
+      {
+        "source": "chat",
+        "conversation_id": "c9",
+        "title": "Earlier chat",
+        "created_at": 3,
+        "snippet": "we talked about tea"
+      }
+    ]
+  }
+]

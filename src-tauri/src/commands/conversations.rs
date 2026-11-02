@@ -142,6 +142,15 @@ pub fn finalize_message_cmd(
     .map_err(err)
 }
 
+/// `VTN-6`: the user cut a spoken reply off. What is kept is what they heard;
+/// the whole reply moves beside the timeline and the row says it was interrupted.
+/// Rust finishes a turn before the audio does, so the window calls this after.
+/// Returns whether a message was updated.
+#[tauri::command]
+pub fn set_heard_cmd(db: State<'_, Db>, message_id: String, heard: String) -> Cmd<bool> {
+    db.set_message_heard(&message_id, &heard).map_err(err)
+}
+
 /// Each word becomes a quoted prefix term, so punctuation the user types
 /// (`-`, `:`, `(`) is searched for rather than parsed as FTS5 syntax — which
 /// used to fail the whole query and read as "no results".
@@ -257,8 +266,21 @@ pub async fn compact_conversation_cmd(
     // `UCM-3`: what `/compact <focus>` asked to be kept in particular.
     focus: Option<String>,
 ) -> Cmd<String> {
-    let target = target.unwrap_or_default();
-    let endpoint = match build_remote_endpoint(&db, &target).map_err(PoiesisError::Message)? {
+    compact_conversation(&mgr, &db, &conversation_id, &upto_message_id, target.unwrap_or_default(), focus.as_deref())
+        .await
+}
+
+/// The body of `compact_conversation_cmd`, shared with the turn that compacts
+/// on its own when history overflows (`HRW-2`).
+pub(crate) async fn compact_conversation(
+    mgr: &RuntimeManager,
+    db: &Db,
+    conversation_id: &str,
+    upto_message_id: &str,
+    target: ChatTarget,
+    focus: Option<&str>,
+) -> Cmd<String> {
+    let endpoint = match build_remote_endpoint(db, &target).map_err(PoiesisError::Message)? {
         Some(ep) => ep,
         None => {
             let Some((base_url, token)) = mgr.engine_endpoint().await else {
@@ -281,7 +303,7 @@ pub async fn compact_conversation_cmd(
         .find(|c| c.id == conversation_id)
         .ok_or_else(|| PoiesisError::Message("That conversation no longer exists.".into()))?;
 
-    let messages = db.list_messages_until(&conversation_id, &upto_message_id).map_err(err)?;
+    let messages = db.list_messages_until(conversation_id, upto_message_id).map_err(err)?;
     if messages.is_empty() {
         return Err(PoiesisError::Message("Nothing to summarize yet.".into()));
     }
@@ -302,7 +324,6 @@ pub async fn compact_conversation_cmd(
     };
 
     let focus_rule = focus
-        .as_deref()
         .map(str::trim)
         .filter(|f| !f.is_empty())
         .map(|f| format!("\nKeep in particular everything about: {f}."))
@@ -341,7 +362,7 @@ pub async fn compact_conversation_cmd(
         return Err(PoiesisError::Message("The model returned an empty summary.".into()));
     }
 
-    db.set_conversation_summary(&conversation_id, &summary, &upto_message_id)
+    db.set_conversation_summary(conversation_id, &summary, upto_message_id)
         .map_err(err)?;
 
     // `CTX-5`: the column above holds only the newest summary, so a second
@@ -359,12 +380,12 @@ pub async fn compact_conversation_cmd(
         None => messages.iter().collect(),
     };
     crate::agent::log::record_compaction(
-        &db,
-        &conversation_id,
+        db,
+        conversation_id,
         &crate::agent::log::Compaction {
             text: summary.clone(),
             from_message_id: covered.first().map(|m| m.id.clone()),
-            upto_message_id: upto_message_id.clone(),
+            upto_message_id: upto_message_id.to_string(),
             replaced: covered.len(),
             merged_earlier: conv.summary.is_some(),
         },

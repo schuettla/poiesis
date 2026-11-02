@@ -1,0 +1,11 @@
+{"type":"run_started","run_id":"r1","max_steps":25,"context_window":32000}
+{"type":"steps_parallel","ids":["p1","p2","p3"]}
+{"type":"step_start","id":"p1","verb":"read","target":"a.rs"}
+{"type":"step_start","id":"p2","verb":"read","target":"b.rs"}
+{"type":"step_start","id":"p3","verb":"read","target":"c.rs"}
+{"type":"step_done","id":"p2","result":"— 2 lines"}
+{"type":"step_done","id":"p1","result":"— 9 lines"}
+{"type":"step_done","id":"p3","result":"— 1 line"}
+{"type":"step_start","id":"later","verb":"edited","target":"a.rs"}
+{"type":"step_done","id":"later","result":null}
+{"type":"done"}

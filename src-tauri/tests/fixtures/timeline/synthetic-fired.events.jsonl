@@ -1,0 +1,9 @@
+{"type":"run_started","run_id":"r1","max_steps":25,"context_window":32000}
+{"type":"step_start","id":"f1","verb":"edited","target":"main.rs"}
+{"type":"fired","id":"f1","lesson":"Run the tests","line":"I ran the tests because you asked me to last time"}
+{"type":"fired","id":"f1","lesson":"Small steps","line":"I kept the change small"}
+{"type":"step_done","id":"f1","result":"— 1 change"}
+{"type":"step_start","id":"f2","verb":"ran","target":"cargo test"}
+{"type":"fired","id":"f2","lesson":"Run the tests","line":"again"}
+{"type":"step_done","id":"f2","result":null}
+{"type":"done"}

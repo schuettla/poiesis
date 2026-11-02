@@ -1,0 +1,2 @@
+# The prompt gate compares bytes, so a checkout must not turn these into CRLF.
+fixtures/**/*.golden.txt text eol=lf

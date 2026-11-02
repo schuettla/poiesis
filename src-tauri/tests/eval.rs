@@ -3,16 +3,15 @@
 
 use std::path::PathBuf;
 
+use poiesis_lib::agent::browser::BrowserPool;
+use poiesis_lib::agent::fleet::Fleet;
 use poiesis_lib::agent::golden::{describe_failures, parse_cases, GoldenCase};
-use poiesis_lib::agent::fleet::{Fleet, RunLimits};
-use poiesis_lib::agent::run::run_agent;
-use poiesis_lib::agent::run::{AgentEventSink, RunContext};
-use poiesis_lib::cloud::ChatEndpoint;
+use poiesis_lib::agent::turn::{run_turn, TurnInput};
 use poiesis_lib::db::Db;
 use poiesis_lib::memory::MemoryStore;
 use poiesis_lib::permissions::{Mode, PermissionManager};
-use poiesis_lib::runtime::proxy::CancelFlag;
 use poiesis_lib::runtime::{EmbedManager, RerankManager, RuntimeManager};
+use poiesis_lib::{DialogGrants, TurnEnv};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/eval/fixtures")
@@ -28,8 +27,9 @@ fn golden_cases() -> Vec<GoldenCase> {
     parse_cases(&raw).unwrap_or_else(|e| panic!("{} is not valid: {e}", path.display()))
 }
 
-/// Run one question through a real agent turn, tools enabled, grounded in the
-/// fixtures folder. Returns the final assistant prose.
+/// Run one question through the turn a user's message takes (`run_turn`), tools
+/// enabled, grounded in the fixtures folder. Returns the final assistant prose, as
+/// the answer's row holds it.
 async fn run_case(
     db: &Db,
     perms: &PermissionManager,
@@ -40,60 +40,64 @@ async fn run_case(
     let base_url = std::env::var("EVAL_ENGINE_URL").expect(
         "set EVAL_ENGINE_URL to a running OpenAI-compatible endpoint, e.g. http://127.0.0.1:8080",
     );
-    let api_key = std::env::var("EVAL_ENGINE_TOKEN").ok();
-    let endpoint = ChatEndpoint::OpenAi { base_url, api_key, model: None };
+    // The eval endpoint is a connected server, which is how the turn finds it. Its
+    // key, when it has one, goes in the credential store for the length of the case.
+    let endpoint = db
+        .insert_local_endpoint("eval", &base_url, 8192)
+        .expect("register the eval endpoint");
+    let key = std::env::var("EVAL_ENGINE_TOKEN").ok().filter(|k| !k.is_empty());
+    if let Some(key) = &key {
+        poiesis_lib::cloud::endpoints::set_key(&endpoint.id, key).expect("store the eval endpoint's key");
+    }
 
     perms.add_chat_grant(conversation_id, fixtures_dir(), Mode::Read);
 
-    // No live webview on the other end — an empty handler is fine since
-    // assertions only need `run_agent`'s return value, not the event stream.
+    // No live webview on the other end: an empty handler is fine, since the
+    // assertions read the saved answer, not the event stream.
     let channel = tauri::ipc::Channel::new(|_| Ok(()));
-    let sink = AgentEventSink::new(channel);
-    let client = reqwest::Client::new();
-    let messages = vec![serde_json::json!({ "role": "user", "content": question })];
-    // Eval cases don't exercise RET, so these never actually spin up an
-    // engine — they only need to exist for `run_agent`'s signature.
+    // Eval cases don't exercise RET, so these never actually spin up an engine.
+    // `EVL` dispatches real tool calls but never a real browser session, and never
+    // delegates.
     let mgr = RuntimeManager::new(fixtures_dir());
     let embed_mgr = EmbedManager::new();
     let rerank_mgr = RerankManager::new();
-
-    // `HRN-1`: a run is addressable now, so even this harness opens one. No
-    // fleet is registered with it — `EVL` never delegates, and a `None` fleet
-    // makes `delegate` report itself unavailable rather than panicking.
+    let browser_pool = BrowserPool::new();
     let fleet = Fleet::new();
-    let run = fleet.open(conversation_id, CancelFlag::new(), None, 0);
-    let limits = RunLimits::default();
-    let rc = RunContext::top(&run, &limits, None, "local", None);
-
-    run_agent(
-        &client,
-        &endpoint,
-        // The eval endpoint *is* the local engine, so a skill's side call
-        // (SCP-1) can use it too.
-        Some(&endpoint),
+    let grants = DialogGrants::new();
+    let env = TurnEnv {
+        mgr: &mgr,
+        embed_mgr: &embed_mgr,
+        rerank_mgr: &rerank_mgr,
         db,
-        &mgr,
-        &embed_mgr,
-        &rerank_mgr,
         perms,
         memory,
-        // `EVL` dispatches real tool calls but never a real browser session.
-        None,
-        conversation_id,
-        None,
-        &fixtures_dir(),
-        "eval-model",
-        messages,
-        0.2,
-        true,
-        false,
-        &rc,
-        &sink,
-    )
-    .await
+        browser_pool: &browser_pool,
+        fleet: &fleet,
+        grants: &grants,
+    };
+    let input: TurnInput = serde_json::from_value(serde_json::json!({
+        "conversationId": conversation_id,
+        "text": question,
+        "model": { "name": "eval-model", "provenance": "endpoint", "ctxSize": 8192 },
+        "target": { "provenance": "endpoint", "provider": endpoint.id, "model": "eval-model" },
+        "toolsEnabled": true,
+    }))
+    .expect("a turn input");
+
+    run_turn(&env, input, channel).await;
+
+    if key.is_some() {
+        let _ = poiesis_lib::cloud::endpoints::clear_key(&endpoint.id);
+    }
     // `HRN-3`: a run reports how it ended as well as what it said. The cases
     // here assert on the prose, and a run that stopped early still has some.
-    .text
+    db.list_messages(conversation_id)
+        .expect("read the saved turn")
+        .into_iter()
+        .rev()
+        .find(|m| m.role == "assistant")
+        .map(|m| m.content)
+        .unwrap_or_default()
 }
 
 /// EVL-2/EVL-3: run every case in `golden.json` (or just `EVAL_FILTER`),
@@ -119,7 +123,10 @@ async fn eval() {
 
     let mut failures = Vec::new();
     for case in &cases {
-        let conversation_id = format!("eval-{}", case.id);
+        let conversation_id = db
+            .create_conversation(&format!("eval {}", case.id), None, false)
+            .expect("create the eval conversation")
+            .id;
         let answer = run_case(&db, &perms, &memory, &conversation_id, &case.question).await;
         // EVL's real-dispatch mode: `tool_stats` records every call the
         // agent actually made (GLD's mode instead parses a call it never

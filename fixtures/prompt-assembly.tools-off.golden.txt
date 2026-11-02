@@ -1,0 +1,41 @@
+
+<<<turn role=system>>>
+You are Poiesis Agent, a local-first assistant. Be concise and clear.
+
+## About you, as I understand it (apply it; don't mention it unless asked; the persona/system prompt above always wins if they conflict)
+Prefers short answers and plain English. Works on Windows.
+
+## Standing instructions (SOUL.md — the user approved these; they take precedence over the persona/system prompt above when the two conflict)
+Never write to disk without asking.
+
+## Project: Kitchen rebuild (instructions for this project; the persona/system prompt above still governs voice, format and depth)
+Quotes are in EUR and include VAT. The flat is a 1930s build, so assume no straight walls and check every measurement twice.
+
+## Your notes about the user (durable facts)
+- [Coffee](coffee.md) â€” takes it black
+- [Editor](editor.md) â€” uses Neovim [unsure, noted 2026-10-27]
+(Read a note's full text with memory(op:"read", name:…) before relying on its details. Tools are off — treat descriptions as the only available detail. A note marked [unsure] or [contested] may be wrong: say so, and give its date, when you rely on it.)
+
+## Session state (durable; update with the remember tool)
+{"decisions":{"Which laptop":"b"},"constraints":{"budget":2000}}
+
+## Conversation so far (older turns were summarized)
+The user asked about laptops and picked option b.
+
+<<<turn role=user>>>
+This is the oldest turn and it should not survive the budget. It is padded out so it costs real tokens rather than a rounding error, which is what makes the drop deliberate instead of accidental.
+
+<<<turn role=assistant>>>
+An older answer, also padded so that the budget has something to actually push out of the window when it runs the numbers on this fixture.
+
+<<<turn role=user>>>
+Which laptop should I get?
+
+<<<turn role=assistant>>>
+Option b.
+
+<<<turn role=user>>>
+Why?
+
+<<<turn role=user>>>
+Order it.

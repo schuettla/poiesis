@@ -10,9 +10,9 @@
 //!
 //! The plan's kind list has no `prompt`, because it assumes `CTX-3` has already
 //! moved prompt assembly into Rust, at which point the opening system and user
-//! turns are rows this loop writes itself. Assembly still lives in `store.ts`
-//! today, so the loop is handed an array it did not build and cannot take
-//! apart without guessing. It therefore stores that array whole, in one row,
+//! turns are rows this loop writes itself. Assembly used to live in `store.ts`
+//! (it is `agent::turn` now), so the loop is handed an array it did not build
+//! and cannot take apart without guessing. It therefore stores that array whole, in one row,
 //! and every message the run appends after it as its own row. Replay is the
 //! same either way, and when `CTX-3` lands this row splits into the per-kind
 //! rows the plan describes without changing a single reader.

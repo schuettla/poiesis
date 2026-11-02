@@ -1,0 +1,50 @@
+[
+  {
+    "id": "t1",
+    "verb": "ran",
+    "target": "cargo test",
+    "status": "done",
+    "result": "— failed",
+    "task": {
+      "name": "cargo test",
+      "argv": [
+        "cargo",
+        "test"
+      ],
+      "cwd": "C:/p",
+      "kind": "test",
+      "lastLine": "test result: FAILED",
+      "outcome": "failed",
+      "exitCode": 101,
+      "durationMs": 8200,
+      "diagnostics": [
+        {
+          "file": "src/lib.rs",
+          "line": 12,
+          "col": 5,
+          "severity": "error",
+          "message": "mismatched types",
+          "code": "E0308"
+        }
+      ],
+      "tail": "error[E0308]"
+    }
+  },
+  {
+    "id": "t2",
+    "verb": "ran",
+    "target": "make",
+    "status": "done",
+    "task": {
+      "name": "make",
+      "argv": [],
+      "cwd": "",
+      "kind": "other",
+      "outcome": "cancelled",
+      "exitCode": null,
+      "durationMs": 40,
+      "diagnostics": [],
+      "tail": ""
+    }
+  }
+]

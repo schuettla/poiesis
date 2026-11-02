@@ -12,8 +12,6 @@ let script: Script = () => {};
 vi.mock("./api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api")>()),
   inTauri: () => true,
-  appendMessage: () => Promise.resolve({ id: "persisted-1" }),
-  finalizeMessage: () => Promise.resolve(),
   recordCommandTrace: () => Promise.resolve(),
   setConversationWorkspace: () => Promise.resolve(),
   resumeRun: async (_conv: string, onEvent: (e: AgentEvent) => void) => {
@@ -22,7 +20,7 @@ vi.mock("./api", async (importOriginal) => ({
   },
 }));
 
-import { useAppStore } from "./store";
+import { applyAutoCheck, useAppStore } from "./store";
 
 const snapshots: { notes: string[]; presence: string; question: boolean; proposals: number; suggestion: string | null }[] =
   [];
@@ -49,6 +47,7 @@ beforeEach(() => {
     loadedModelId: model.id,
     commandNotes: {},
     harnessProposals: [],
+    verifications: {},
     activeSuggestion: null,
     pendingQuestion: null,
     workspaceMode: false,
@@ -102,8 +101,9 @@ describe("a proposal (AGC-4)", () => {
     expect(useAppStore.getState().workspaceMode, "nothing changes until you say so").toBe(false);
   });
 
-  it("follows its turn to the turn's real id once the turn is saved", async () => {
+  it("belongs to the turn's real id from the moment the turn is saved (HRW-T-7)", async () => {
     script = (emit) => {
+      emit({ type: "turn_saved", user_message_id: null, assistant_message_id: "persisted-1" });
       emit(started);
       emit({
         type: "harness_proposal",
@@ -117,7 +117,27 @@ describe("a proposal (AGC-4)", () => {
     await useAppStore.getState().resumeLastRun();
     const kept = useAppStore.getState().harnessProposals;
     expect(kept).toHaveLength(1);
-    expect(kept[0].messageId, "the optimistic id is gone after finalize").toBe("persisted-1");
+    expect(kept[0].messageId, "no swap after the turn: it was never anything else").toBe("persisted-1");
+    const ids = useAppStore.getState().conversations[0].messages.map((m) => m.id);
+    expect(ids).toEqual(["persisted-1"]);
+  });
+
+  it("the check of its sentences lands under the real id too (HRW-T-7)", async () => {
+    script = (emit) => {
+      emit({ type: "turn_saved", user_message_id: null, assistant_message_id: "persisted-1" });
+      emit(started);
+      applyAutoCheck((fn) => useAppStore.setState(fn), useAppStore.getState, {
+        type: "progress",
+        conversation_id: "c1",
+        message_id: "persisted-1",
+        run_id: "r1",
+        done: 1,
+        total: 2,
+      });
+    };
+    await useAppStore.getState().resumeLastRun();
+    const held = useAppStore.getState().verifications;
+    expect(Object.keys(held)).toEqual(["persisted-1"]);
   });
 
   it("at the auto rung is carried out for the next message, and says so", async () => {

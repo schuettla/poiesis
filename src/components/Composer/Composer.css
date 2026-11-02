@@ -21,22 +21,30 @@
      if the last turn ends flush; bottom stays tight to keep the box low. */
   padding: 10px 24px 14px;
 }
+/* A file is over the window: the box itself becomes the place to let go — same
+   shape and surface as the composer, lit with the focus ring's indigo. */
+.composer {
+  position: relative;
+}
 .composer-wrap.drag-over .composer {
   border-color: var(--local);
+  box-shadow: var(--ring), var(--shadow-float);
 }
-.composer-wrap.drag-over::after {
-  content: "Drop image to attach";
+.composer-wrap.drag-over .composer::after {
+  content: "Drop to attach  ·  pictures and PDFs";
   position: absolute;
-  inset: 8px 24px;
+  inset: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
   font-family: var(--font-sans);
-  font-size: var(--fs-ui);
-  color: var(--local);
-  background: color-mix(in srgb, var(--paper) 88%, var(--local));
-  border: 1.5px dashed color-mix(in srgb, var(--local) 60%, transparent);
-  border-radius: var(--radius-xl);
+  font-size: var(--fs-callout);
+  font-weight: 500;
+  letter-spacing: var(--tracking-tight);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--paper) 90%, var(--local));
+  border-radius: inherit;
   pointer-events: none;
   animation: fade-in var(--dur-fast) var(--ease-out);
 }

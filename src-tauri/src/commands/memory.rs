@@ -115,33 +115,10 @@ fn wholesale(db: &Db, mem: &MemoryStore, project: Option<&str>) -> RecallResult 
 /// current recall model in the same round trip (SEM-1/SEM-2), then retrieve.
 /// Degrades to `index_markdown` unchanged whenever an embedder isn't ready —
 /// no model, no engine, or a failed request (EMB-5, SEM-4).
-#[tauri::command]
-pub async fn recall_for_cmd(
-    mgr: State<'_, RuntimeManager>,
-    embed_mgr: State<'_, EmbedManager>,
-    db: State<'_, Db>,
-    mem: State<'_, MemoryStore>,
-    query: String,
-    conversation_id: Option<String>,
-) -> Cmd<RecallResult> {
-    // `PRJ-8`: scoped to the conversation's project when one is named. The
-    // caller may legitimately have none — a manual search of memory is not
-    // happening anywhere in particular.
-    let project = conversation_id
-        .as_deref()
-        .and_then(|id| db.conversation_project(id).ok().flatten())
-        .map(|p| p.id);
-    // The chat window: the person typed this message.
-    Ok(recall_for(&mgr, &embed_mgr, &db, &mem, &query, project.as_deref(), conversation_id.as_deref(), true).await)
-}
-
-/// The body of `recall_for_cmd`, callable without a Tauri `State`.
 ///
-/// `CTX-3` needs the same scoped recall the chat window gets, from inside the
-/// backend's own prompt assembly. Two copies of this would mean a scheduled job
-/// recalling different memories than a typed message, which is exactly the drift
-/// that track exists to end. Anything that fails here degrades to the whole
-/// index rather than to no memory at all.
+/// `CTX-3`: every run recalls from inside the backend's own prompt assembly, so a
+/// scheduled job and a typed message recall the same memories. Anything that
+/// fails here degrades to the whole index rather than to no memory at all.
 #[allow(clippy::too_many_arguments)]
 pub async fn recall_for(
     mgr: &RuntimeManager,
@@ -345,9 +322,8 @@ pub struct ContextRefs {
 }
 
 impl ContextRefs {
-    /// What one turn used: the same record the chat window builds for its own
-    /// turns (`buildContextRefs` in `store.ts`), for the runs the backend
-    /// assembles itself. Two builders, one shape.
+    /// What one turn used: the record the "What I'm working from" panel reads,
+    /// built for every turn the backend assembles (`run_turn` and scheduled runs).
     pub fn for_turn(
         persona_id: Option<String>,
         soul_present: bool,

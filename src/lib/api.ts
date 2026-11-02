@@ -583,6 +583,13 @@ export type AgentEvent =
       steps: number;
       ms: number;
     }
+  /** `HRW-1`: the rows a turn saved. First event of a turn. `user_message_id` is
+   * null for a resume, which has no user row. */
+  | { type: "turn_saved"; user_message_id: string | null; assistant_message_id: string }
+  /** `HRW-5`: the turn's timeline as the row holds it. Last event of a turn. */
+  | { type: "turn_finalized"; message_id: string; steps_json: string | null }
+  /** `HRW-2`: older turns were summarized so this one fits. */
+  | { type: "compacted"; conversation_id: string; summary: string; summary_upto_message_id: string }
   | { type: "done" }
   | { type: "cancelled" }
   | { type: "error"; message: string };
@@ -758,15 +765,50 @@ export interface ChatTarget {
   model?: string;
 }
 
-/** What a run needs beyond its messages. Shared by `agentChat` and `resumeRun`
- * so the two cannot drift into running the same conversation differently. */
+/** The model the window picked, as far as a turn needs to know it. */
+export interface TurnModel {
+  name: string;
+  provenance: Provenance;
+  vision: boolean;
+  /** A connected server's own window, which `/v1/models` does not report. */
+  ctxSize?: number;
+}
+
+/** What a resumed run needs beyond its conversation. A typed turn carries the
+ * same things inside `TurnInput`. */
 export interface RunOptions {
-  temperature?: number;
   toolsEnabled?: boolean;
   target?: ChatTarget;
-  assistantMessageId?: string;
+  model: TurnModel;
   /** `REG-5`: what the user decided about this turn only. */
   turn?: TurnRunOptions;
+}
+
+/** `HRW-1`: what the user typed and chose for one turn. The rows, the model's
+ * copy of the message, the prompt and the history are made in Rust. */
+export interface TurnInput {
+  conversationId: string;
+  text: string;
+  /** A block or surface action: the recall query in place of `text`. */
+  action?: string;
+  attachments: { kind: string; name: string; path: string; dataUri?: string }[];
+  refs: { kind: "conversation" | "artifact"; id: string; label: string }[];
+  /** `W2`: workspace interactions since the last reply, already worded. */
+  pendingActions: string[];
+  lastTime?: { at: number; conversationId: string; digest: string; skill: string | null };
+  spoken: boolean;
+  model: TurnModel;
+  target: ChatTarget;
+  options?: TurnRunOptions;
+  toolsEnabled: boolean;
+  /** The rows `saveTurn` already wrote for this turn. */
+  saved?: SavedTurn;
+}
+
+/** A turn's two rows, once saved. */
+export interface SavedTurn {
+  userMessageId: string;
+  assistantMessageId: string;
 }
 
 /** `REG-5`: the composer's modifier chips, as the backend's `RunOptions`. */
@@ -830,24 +872,20 @@ export function composerHintLabel(decisionId: string, kind: ComposerHint["kind"]
   return invoke<void>("composer_hint_label_cmd", { decisionId, kind, taken });
 }
 
-export function agentChat(
-  conversationId: string,
-  messages: ChatTurnMessage[],
-  onEvent: (e: AgentEvent) => void,
-  opts?: RunOptions
-): Promise<void> {
+/**
+ * `HRW-1`: run one user turn, streaming step + token events to `onEvent`. The
+ * first event, `turn_saved`, carries the real ids of the rows Rust saved; the
+ * last, `turn_finalized`, carries the timeline as the row holds it.
+ */
+/** Save a turn's two rows before the engine starts, so the message outlives a
+ * failed or abandoned start. `runTurn` then gets the ids in `input.saved`. */
+export const saveTurn = (input: TurnInput) =>
+  invoke<SavedTurn>("save_turn_cmd", { input: { ...input, options: input.options ?? {} } });
+
+export function runTurn(input: TurnInput, onEvent: (e: AgentEvent) => void): Promise<void> {
   const ch = new Channel<AgentEvent>();
   ch.onmessage = onEvent;
-  return invoke<void>("agent_chat_cmd", {
-    conversationId,
-    assistantMessageId: opts?.assistantMessageId,
-    messages,
-    temperature: opts?.temperature,
-    toolsEnabled: opts?.toolsEnabled ?? false,
-    target: opts?.target,
-    runOptions: opts?.turn,
-    onEvent: ch,
-  });
+  return invoke<void>("run_turn_cmd", { input: { ...input, options: input.options ?? {} }, onEvent: ch });
 }
 
 /**
@@ -856,25 +894,29 @@ export function agentChat(
  * The transcript is rebuilt in Rust from the session log (`CTX-2`), not from
  * what is on screen — the screen has the prose, the log has the work. Resolves
  * `false` when there is nothing to resume, which is a fact about the run and
- * not a failure.
+ * not a failure: the answer row says so itself.
  */
 export function resumeRun(
   conversationId: string,
   onEvent: (e: AgentEvent) => void,
-  opts?: RunOptions
+  opts: RunOptions
 ): Promise<boolean> {
   const ch = new Channel<AgentEvent>();
   ch.onmessage = onEvent;
   return invoke<boolean>("resume_run_cmd", {
     conversationId,
-    assistantMessageId: opts?.assistantMessageId,
-    temperature: opts?.temperature,
-    toolsEnabled: opts?.toolsEnabled ?? false,
-    target: opts?.target,
-    runOptions: opts?.turn,
+    model: opts.model,
+    toolsEnabled: opts.toolsEnabled ?? false,
+    target: opts.target,
+    runOptions: opts.turn,
     onEvent: ch,
   });
 }
+
+/** `VTN-6`: the user cut a spoken reply off. The row keeps what they heard, and the
+ * whole of it beside the timeline. */
+export const setHeard = (messageId: string, heard: string) =>
+  invoke<boolean>("set_heard_cmd", { messageId, heard });
 
 /** `REG-4`: one command that left a trace, as the log keeps it. */
 export interface CommandTrace {
@@ -1409,10 +1451,6 @@ export interface RecallResult {
    * what the character cap kept, not everything that was considered. */
   injected_facts: string[];
 }
-
-/** `conversationId` scopes recall to the chat's project and lets a reminder fire (`INT-2`). */
-export const recallFor = (query: string, conversationId?: string) =>
-  invoke<RecallResult>("recall_for_cmd", { query, conversationId });
 
 // ---- context manifest (WHY): what shaped one answer ----
 
@@ -3212,6 +3250,12 @@ export interface TrashEntry {
 export const pickFolder = () => invoke<string | null>("pick_folder_cmd");
 /** Pick attachment files. Routed through Rust so the choice counts as consent. */
 export const pickFiles = () => invoke<string[]>("pick_files_cmd");
+/** Keep a file dropped on the composer and get back a path the backend will read.
+ * Sent as a raw body so the file is not turned into a JSON array. */
+export async function stashDroppedFile(bytes: Uint8Array, ext: string): Promise<string> {
+  if (!inTauri()) throw new Error(`Tauri command "stash_dropped_file_cmd" called outside the desktop app`);
+  return tauriInvoke<string>("stash_dropped_file_cmd", bytes, { headers: { "x-file-ext": ext } });
+}
 /** Pick a single `.zip` archive (`Add from zip…`, `SKL-4`). */
 export const pickZipFile = () => invoke<string | null>("pick_zip_file_cmd");
 
@@ -3441,8 +3485,6 @@ export const undoFileOp = (id: string) => invoke<void>("undo_file_op_cmd", { id 
 
 export const readImageDataUri = (path: string, conversationId?: string) =>
   invoke<string>("read_image_data_uri_cmd", { path, conversationId });
-export const extractPdfText = (path: string, conversationId?: string) =>
-  invoke<string>("extract_pdf_text_cmd", { path, conversationId });
 
 /** Save a Canvas artifact to disk (CHT-6 download). `content` is the artifact's
  * source path for the `image` kind, its raw text otherwise. */
@@ -3955,13 +3997,6 @@ export function parseUnspoken(stepsJson: string | null): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-/** The `steps_json` of a turn: the timeline, plus the full reply when the user
- * cut a spoken one off (`VTN-6`). */
-export function stepsJsonFor(steps: AgentStep[], unspoken?: string): string | undefined {
-  if (unspoken) return JSON.stringify({ steps, unspoken });
-  return steps.length ? JSON.stringify(steps) : undefined;
 }
 
 // ---- voice (VOC): everything runs on this machine ----

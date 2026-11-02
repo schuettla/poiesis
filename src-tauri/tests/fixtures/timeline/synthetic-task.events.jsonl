@@ -1,0 +1,11 @@
+{"type":"run_started","run_id":"r1","max_steps":25,"context_window":32000}
+{"type":"step_start","id":"t1","verb":"ran","target":"cargo test"}
+{"type":"task_started","id":"t1","task":"cargo test","argv":["cargo","test"],"cwd":"C:/p","kind":"test","timeout_secs":600}
+{"type":"task_output","id":"t1","line":"running 4 tests"}
+{"type":"task_output","id":"t1","line":"test result: FAILED"}
+{"type":"task_ended","id":"t1","outcome":"failed","exit_code":101,"timed_out":false,"cancelled":false,"duration_ms":8200,"diagnostics":[{"file":"src/lib.rs","line":12,"col":5,"severity":"error","message":"mismatched types","code":"E0308"}],"tail":"error[E0308]"}
+{"type":"step_done","id":"t1","result":"— failed"}
+{"type":"step_start","id":"t2","verb":"ran","target":"make"}
+{"type":"task_ended","id":"t2","outcome":"cancelled","exit_code":null,"timed_out":false,"cancelled":true,"duration_ms":40,"diagnostics":[],"tail":""}
+{"type":"step_done","id":"t2","result":null}
+{"type":"done"}

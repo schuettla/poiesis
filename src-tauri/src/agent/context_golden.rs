@@ -1,20 +1,19 @@
-//! `CTX-4`: the equivalence gate.
+//! `CTX-4`: the prompt snapshot.
 //!
-//! Prompt assembly exists twice right now — once in `agent/context.rs` and once
-//! in `store.ts` — and the switchover is only safe if the two produce the same
-//! bytes. This module renders the shared fixture through the Rust side and
-//! compares it to `fixtures/prompt-assembly.golden.txt`. A vitest of the same
-//! name renders it through the TypeScript side and compares it to the same file.
-//! Both matching one file is the same claim as the two matching each other, and
-//! it needs no running app, no dev-only command and no IPC.
+//! This module renders the shared fixture through `agent/context.rs` and the
+//! history cut `run_turn` makes (`turn::fit`), and compares it to
+//! `fixtures/prompt-assembly.golden.txt`. It began as the gate that held the Rust
+//! and TypeScript prompt assemblies to the same bytes; the TypeScript copy went
+//! with `HRW-6`, and what is left is a snapshot of what the model is sent. It
+//! needs no running app, no dev-only command and no IPC.
 //!
 //! The rendering is deliberately dumb: plain concatenation with a marker line
 //! between turns, no JSON serializer anywhere. Comparing serialized arrays would
 //! have tested `serde_json` against `JSON.stringify` — two things that are
 //! allowed to differ — instead of testing the two assemblies.
 //!
-//! **When this fails, one of the two implementations changed.** Fix the one that
-//! was not meant to, or update the golden and both sides together in one commit.
+//! **When this fails, the prompt changed.** If it was meant to, update the golden
+//! in the same commit, so the change to what the model reads shows in review.
 
 #![cfg(test)]
 
@@ -85,17 +84,19 @@ fn build(f: &serde_json::Value) -> PromptInputs {
             .collect(),
         spoken: false,
         context_refs: Default::default(),
+        recalled_matches: Vec::new(),
     }
 }
 
 /// Assemble the fixture exactly as a real turn would: compose the system prompt,
-/// fold in the conversation summary, then budget the history around it.
+/// then `run_turn`'s own fit (`HRW-T-4`) folds in the conversation summary and
+/// budgets the history around it.
 fn assemble(f: &serde_json::Value) -> String {
     let system = compose_system_prompt(&build(f));
-    let system = with_summary(&system, f["summary"].as_str().unwrap_or_default());
     let prior: Vec<serde_json::Value> = f["prior"].as_array().cloned().unwrap_or_default();
-    let bt = budget_turns(
+    let bt = super::turn::fit(
         &system,
+        f["summary"].as_str().unwrap_or_default(),
         &prior,
         &f["current"],
         f["budget"].as_u64().unwrap_or(4096) as usize,
@@ -104,9 +105,8 @@ fn assemble(f: &serde_json::Value) -> String {
     render(&bt.turns)
 }
 
-/// The gate itself. Set `UPDATE_PROMPT_GOLDEN=1` to rewrite the golden after a
-/// deliberate change — then run the vitest of the same name, which must agree
-/// with the new file without being told anything.
+/// The snapshot itself. Set `UPDATE_PROMPT_GOLDEN=1` to rewrite the golden after
+/// a deliberate change.
 #[test]
 fn the_rust_assembly_matches_the_shared_golden() {
     let fixture: serde_json::Value = serde_json::from_str(
@@ -126,11 +126,31 @@ fn the_rust_assembly_matches_the_shared_golden() {
     let want = std::fs::read_to_string(&path).unwrap_or_default();
     assert_eq!(
         got, want,
-        "Rust prompt assembly no longer matches fixtures/prompt-assembly.golden.txt.\n\
+        "Prompt assembly no longer matches fixtures/prompt-assembly.golden.txt.\n\
          Either a change landed in agent/context.rs that was not meant to, or the\n\
-         golden needs updating: run with UPDATE_PROMPT_GOLDEN=1, then run the\n\
-         vitest `prompt-assembly` to confirm the frontend still agrees."
+         golden needs updating: run with UPDATE_PROMPT_GOLDEN=1."
     );
+}
+
+/// `HRW-T-4`: the same fixture with the composer's tools switch off. The index
+/// stays, marked as the only detail there is; skills, the surface and the
+/// guidance go. Its own golden, so the main one does not have to move.
+#[test]
+fn the_rust_assembly_with_tools_off_matches_its_golden() {
+    let mut fixture: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture_dir().join("prompt-assembly.json")).unwrap(),
+    )
+    .unwrap();
+    fixture["tools_enabled"] = serde_json::Value::Bool(false);
+
+    let got = assemble(&fixture);
+    let path = fixture_dir().join("prompt-assembly.tools-off.golden.txt");
+    if std::env::var("UPDATE_PROMPT_GOLDEN").is_ok() {
+        std::fs::write(&path, &got).expect("write the golden");
+        return;
+    }
+    let want = std::fs::read_to_string(&path).unwrap_or_default();
+    assert_eq!(got, want, "tools-off prompt assembly changed: update the golden");
 }
 
 /// The budget must actually bite on this fixture. A golden recorded from a
@@ -156,9 +176,9 @@ fn the_fixture_actually_exercises_the_budget() {
     assert!(bt.overflow > 0 && bt.overflow < prior.len(), "some turns drop, not all");
 }
 
-/// `VTN-2`: the spoken-reply sentence, held in step with `store.ts` by one
-/// shared file, same idea as the gate above but small. The main fixture is not
-/// touched, so this gate can move on its own.
+/// `VTN-2`: the spoken-reply sentence, held by a file of its own, same idea as
+/// the snapshot above but small. The main fixture is not touched, so this one can
+/// move on its own.
 #[test]
 fn the_spoken_sentence_matches_the_shared_golden() {
     let on = compose_system_prompt(&PromptInputs { base: "BASE".into(), spoken: true, ..Default::default() });
@@ -171,7 +191,7 @@ fn the_spoken_sentence_matches_the_shared_golden() {
         return;
     }
     let want = std::fs::read_to_string(&path).unwrap_or_default();
-    assert_eq!(on, want, "SPOKEN_GUIDANCE changed: update the golden and `store.ts` together");
+    assert_eq!(on, want, "SPOKEN_GUIDANCE changed: update the golden");
 }
 
 /// It goes last, after the tool guidance, so nothing above can undo it.

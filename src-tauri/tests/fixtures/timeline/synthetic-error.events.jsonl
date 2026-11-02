@@ -1,0 +1,7 @@
+{"type":"run_started","run_id":"r1","max_steps":25,"context_window":32000}
+{"type":"step_start","id":"e1","verb":"read","target":"secret.txt"}
+{"type":"step_error","id":"e1","error":"permission denied"}
+{"type":"step_start","id":"e2","verb":"searched","target":"x"}
+{"type":"step_error","id":"missing","error":"no such step, so nothing changes"}
+{"type":"run_ended","run_id":"r1","stop_reason":"error","steps":2,"ms":1200,"usage":null,"cost_usd":null,"plan":null}
+{"type":"error","message":"The connection dropped"}

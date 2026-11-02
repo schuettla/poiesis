@@ -180,11 +180,11 @@ pub struct GoldenResult {
     pub total: usize,
 }
 
-/// The base prompt, mirroring `DEFAULT_SYSTEM_PROMPT` in `src/lib/store.ts`.
+/// The base prompt, mirroring `DEFAULT_SYSTEM_PROMPT` in `agent/context.rs`.
 ///
 /// The duplication is deliberate and load-bearing. A real turn's system prompt
-/// is assembled in the **frontend** (`composeSystemPrompt`) and arrives here
-/// already inside `messages`; this guard has no turn to borrow one from. If it
+/// is assembled per turn (`agent::turn::run_turn`) and never reaches this
+/// guard; it has no turn to borrow one from. If it
 /// asked the model a bare question instead, then a soul edit, a consolidation
 /// and a newly enabled skill would all be invisible to it — it would be
 /// checking a prompt none of those three self-changes touch, and could never
@@ -197,8 +197,8 @@ const GOLDEN_BASE_PROMPT: &str =
 /// Reassemble the self-changing parts of a real turn's system prompt: standing
 /// instructions, the durable memory index, and the stage-1 skills list. These
 /// are exactly the three things `GLD-2` guards a change to, so these are
-/// exactly the three that have to be here. Mirrors `soulBlock`,
-/// `memoryIndexBlock` and `skillsBlock` in `src/lib/store.ts`.
+/// exactly the three that have to be here. Mirrors `soul_block`,
+/// `memory_index_block` and `skills_block` in `agent/context.rs`.
 fn golden_system_prompt(db: &Db, mem: &MemoryStore, app_data: &Path) -> String {
     let mut out = String::from(GOLDEN_BASE_PROMPT);
 

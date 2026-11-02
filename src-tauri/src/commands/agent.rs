@@ -5,7 +5,8 @@ use tauri::State;
 
 use crate::agent::artifacts::ConsoleEntry;
 use crate::agent::browser::BrowserPool;
-use crate::agent::fleet::{Fleet, RunLimits, Steer};
+use crate::agent::fleet::{Fleet, RunLimits, RunOutcome, Steer};
+use crate::commands::files::DialogGrants;
 use crate::agent::run::{run_agent, AgentEventSink, RunContext, RunOptions};
 use crate::agent::toolsets::{self, Toolset, ToolsetInfo};
 use crate::agent::AgentEvent;
@@ -16,17 +17,9 @@ use crate::permissions::{Decision, PermissionManager};
 use crate::runtime::{EmbedManager, RerankManager, RuntimeManager};
 use crate::PoiesisError;
 
-/// A turn message whose `content` is either a plain string or an OpenAI-style
-/// content-part array (text + image_url) for multimodal/vision input (CHT-5).
-#[derive(serde::Deserialize)]
-pub struct TurnMessage {
-    pub role: String,
-    pub content: serde_json::Value,
-}
-
 /// Which model a turn should run against (CLD-3 routing). Defaults to the local
 /// engine when absent.
-#[derive(serde::Deserialize, Default, Clone)]
+#[derive(serde::Deserialize, Default, Clone, Debug)]
 pub struct ChatTarget {
     pub provenance: Option<String>,
     pub provider: Option<String>,
@@ -39,8 +32,23 @@ pub struct ChatTarget {
 pub(crate) struct TurnSetup {
     pub(crate) endpoint: ChatEndpoint,
     local_endpoint: Option<ChatEndpoint>,
-    model_name: String,
-    context_window: Option<usize>,
+    pub(crate) model_name: String,
+    pub(crate) context_window: Option<usize>,
+}
+
+/// The long-lived handles a turn runs with, borrowed once. `execute_turn` and
+/// the Rust turn entry points (`agent::turn`) take this instead of nine
+/// separate parameters each.
+pub struct TurnEnv<'a> {
+    pub mgr: &'a RuntimeManager,
+    pub embed_mgr: &'a EmbedManager,
+    pub rerank_mgr: &'a RerankManager,
+    pub db: &'a Db,
+    pub perms: &'a PermissionManager,
+    pub memory: &'a MemoryStore,
+    pub browser_pool: &'a BrowserPool,
+    pub fleet: &'a Fleet,
+    pub grants: &'a DialogGrants,
 }
 
 /// Resolve where this turn runs: the local engine, a cloud provider (CLD-3), or
@@ -104,68 +112,6 @@ pub(crate) async fn resolve_turn(
     Ok(TurnSetup { endpoint, local_endpoint, model_name, context_window })
 }
 
-/// Run an agentic turn against the loaded local engine, streaming a visible step
-/// timeline + prose to `on_event` (CHT-9). Tools may pause for consent (§5.4.4).
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn agent_chat_cmd(
-    mgr: State<'_, RuntimeManager>,
-    embed_mgr: State<'_, EmbedManager>,
-    rerank_mgr: State<'_, RerankManager>,
-    db: State<'_, Db>,
-    perms: State<'_, PermissionManager>,
-    memory: State<'_, MemoryStore>,
-    browser_pool: State<'_, BrowserPool>,
-    fleet: State<'_, Fleet>,
-    conversation_id: String,
-    assistant_message_id: Option<String>,
-    messages: Vec<TurnMessage>,
-    temperature: Option<f32>,
-    tools_enabled: Option<bool>,
-    target: Option<ChatTarget>,
-    run_options: Option<RunOptions>,
-    on_event: Channel<AgentEvent>,
-) -> Result<(), PoiesisError> {
-    let target = target.unwrap_or_default();
-    let setup = match resolve_turn(&mgr, &db, &target).await {
-        Ok(setup) => setup,
-        Err(message) => {
-            let _ = on_event.send(AgentEvent::Error { message });
-            return Ok(());
-        }
-    };
-
-    // `DEC-4`: have the decision engine warm by the time this turn's first
-    // decision is asked. The first turn after a cold start goes without.
-    crate::agent::decide::prewarm();
-    // `CTL-2`: a user turn starts; its decision budget starts with it.
-    crate::agent::decide::begin_turn(&conversation_id);
-
-    let mut msgs: Vec<serde_json::Value> = messages
-        .into_iter()
-        .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
-        .collect();
-
-    // `CTX-3`: the folder and Canvas briefs live in `agent::context` now, so
-    // every way a run can start gets them, not just this one.
-    crate::agent::context::insert_briefs(
-        &db,
-        &conversation_id,
-        tools_enabled.unwrap_or(false),
-        false,
-        &mut msgs,
-    );
-
-    execute_turn(
-        &mgr, &embed_mgr, &rerank_mgr, &db, &perms, &memory, &browser_pool, &fleet, &setup,
-        &target, &conversation_id, assistant_message_id.as_deref(), msgs,
-        temperature.unwrap_or(0.7), tools_enabled.unwrap_or(false), None,
-        run_options.unwrap_or_default(), on_event,
-    )
-    .await;
-    Ok(())
-}
-
 /// Start a run and see it through: register it with the fleet so Stop and
 /// steering can address it by id, run the loop, then close it.
 ///
@@ -174,15 +120,8 @@ pub async fn agent_chat_cmd(
 /// permission prompts and the usage ledger can see. The only difference between
 /// them is the message array, and that difference is settled before this call.
 #[allow(clippy::too_many_arguments)]
-async fn execute_turn(
-    mgr: &RuntimeManager,
-    embed_mgr: &EmbedManager,
-    rerank_mgr: &RerankManager,
-    db: &Db,
-    perms: &PermissionManager,
-    memory: &MemoryStore,
-    browser_pool: &BrowserPool,
-    fleet: &Fleet,
+pub(crate) async fn execute_turn(
+    env: &TurnEnv<'_>,
     setup: &TurnSetup,
     target: &ChatTarget,
     conversation_id: &str,
@@ -195,31 +134,30 @@ async fn execute_turn(
     plan: Option<crate::agent::plan::Plan>,
     // `REG-5`: what the user decided about this turn only.
     options: RunOptions,
-    on_event: Channel<AgentEvent>,
-) {
+    sink: &AgentEventSink,
+) -> RunOutcome {
     // `PLF-4`: a Go ahead starts from the plan the user approved, with nothing
     // restricted. Settled here, once, so a stray chip can never loop approval.
     let (plan, options) = options.settle_approval(plan);
-    let cancel = mgr.new_cancel();
-    let run = fleet.open(conversation_id, cancel, None, 0);
-    let limits = RunLimits::top(db).with_max_steps(options.max_steps);
+    let cancel = env.mgr.new_cancel();
+    let run = env.fleet.open(conversation_id, cancel, None, 0);
+    let limits = RunLimits::top(env.db).with_max_steps(options.max_steps);
     let provenance = target.provenance.as_deref().unwrap_or("local");
-    let rc = RunContext::top(&run, &limits, Some(fleet), provenance, setup.context_window)
+    let rc = RunContext::top(&run, &limits, Some(env.fleet), provenance, setup.context_window)
         .resuming(plan)
         .with_options(options);
-    let sink = AgentEventSink::new(on_event);
-    let images_dir = mgr.generated_media_dir();
-    run_agent(
-        &mgr.client,
+    let images_dir = env.mgr.generated_media_dir();
+    let outcome = run_agent(
+        &env.mgr.client,
         &setup.endpoint,
         setup.local_endpoint.as_ref(),
-        db,
-        mgr,
-        embed_mgr,
-        rerank_mgr,
-        perms,
-        memory,
-        Some(browser_pool),
+        env.db,
+        env.mgr,
+        env.embed_mgr,
+        env.rerank_mgr,
+        env.perms,
+        env.memory,
+        Some(env.browser_pool),
         conversation_id,
         assistant_message_id,
         &images_dir,
@@ -232,23 +170,19 @@ async fn execute_turn(
         // directly with `headless: true`.
         false,
         &rc,
-        &sink,
+        sink,
     )
     .await;
-    fleet.close(&run.id);
+    env.fleet.close(&run.id);
+    outcome
 }
 
-/// `HRN-UI-5`: pick an interrupted run back up with its work intact.
-///
-/// The transcript comes out of the session log (`CTX-2`) rather than being
-/// rebuilt from the visible messages, and that is the whole point: the visible
-/// messages have the prose, but the log has the tool results — the part that
-/// cost minutes and money and that starting over would spend again.
+/// `HRN-UI-5`: pick an interrupted run back up with its work intact. The work is
+/// `agent::turn::resume_turn`; this hands it the window's choices.
 ///
 /// `Ok(false)` means there was nothing to resume. That is not an error: a run
-/// that finished cleanly, or one from before this log existed, simply has
-/// nothing to continue, and the caller turns it into a quiet absence of the
-/// button rather than a failure.
+/// that finished cleanly, or one from before the session log existed, has nothing
+/// to continue. The answer row says so itself.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn resume_run_cmd(
@@ -260,64 +194,79 @@ pub async fn resume_run_cmd(
     memory: State<'_, MemoryStore>,
     browser_pool: State<'_, BrowserPool>,
     fleet: State<'_, Fleet>,
+    grants: State<'_, DialogGrants>,
     conversation_id: String,
-    assistant_message_id: Option<String>,
-    temperature: Option<f32>,
+    model: crate::agent::turn::TurnModel,
     tools_enabled: Option<bool>,
     target: Option<ChatTarget>,
     run_options: Option<RunOptions>,
     on_event: Channel<AgentEvent>,
 ) -> Result<bool, PoiesisError> {
-    let Some((run_id, _reason)) = db
-        .last_logged_run(&conversation_id)
-        .map_err(|e| PoiesisError::Message(e.to_string()))?
-    else {
-        return Ok(false);
+    let env = TurnEnv {
+        mgr: &mgr,
+        embed_mgr: &embed_mgr,
+        rerank_mgr: &rerank_mgr,
+        db: &db,
+        perms: &perms,
+        memory: &memory,
+        browser_pool: &browser_pool,
+        fleet: &fleet,
+        grants: &grants,
     };
-    let mut msgs = crate::agent::log::replay(&db, &run_id);
-    if msgs.is_empty() {
-        return Ok(false);
-    }
-    // `LRN-2`: never do again what has already left the machine. The model would
-    // be told not to repeat its work, but "not to" is a request; this is a refusal.
-    if let Some(what) = crate::agent::log::outward_done(&db, &run_id) {
-        // Said as the reply, not as an error: nothing failed, and the store would
-        // put "That didn't work:" in front of an `Error`.
-        let _ = on_event.send(AgentEvent::Token { text: crate::agent::log::cut_off_after(&what) });
-        return Ok(false);
-    }
-    msgs.push(serde_json::json!({
-        "role": "system",
-        "content": crate::agent::log::RESUME_PROMPT,
-    }));
-
-    let target = target.unwrap_or_default();
-    let setup = match resolve_turn(&mgr, &db, &target).await {
-        Ok(setup) => setup,
-        Err(message) => {
-            let _ = on_event.send(AgentEvent::Error { message });
-            return Ok(false);
-        }
-    };
-    // `CRD-1`: the resumed answer was prepared from the interrupted run's log, so
-    // it carries that answer's record of what reached it.
-    if let Some(id) = assistant_message_id.as_deref() {
-        let _ = db.carry_context_to(&conversation_id, id);
-    }
-    execute_turn(
-        &mgr, &embed_mgr, &rerank_mgr, &db, &perms, &memory, &browser_pool, &fleet, &setup,
-        &target, &conversation_id, assistant_message_id.as_deref(), msgs,
-        temperature.unwrap_or(0.7), tools_enabled.unwrap_or(false),
-        // `PLN-T4`: the plan is not in the replayed messages — a `plan` row is
-        // state about the run, not a turn in it — so it is handed over
-        // separately. Without this a resumed run would show its plan vanish at
-        // the moment it was picked back up, and write a second one.
-        crate::agent::log::last_plan(&db, &conversation_id),
+    Ok(crate::agent::turn::resume_turn(
+        &env,
+        &conversation_id,
+        &model,
+        target.unwrap_or_default(),
+        tools_enabled.unwrap_or(false),
         run_options.unwrap_or_default(),
         on_event,
     )
-    .await;
-    Ok(true)
+    .await)
+}
+
+/// `HRW-1`: start, run and save one user turn. The window sends what the user
+/// typed and chose; the rows, the prompt and the run are Rust's.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn run_turn_cmd(
+    mgr: State<'_, RuntimeManager>,
+    embed_mgr: State<'_, EmbedManager>,
+    rerank_mgr: State<'_, RerankManager>,
+    db: State<'_, Db>,
+    perms: State<'_, PermissionManager>,
+    memory: State<'_, MemoryStore>,
+    browser_pool: State<'_, BrowserPool>,
+    fleet: State<'_, Fleet>,
+    grants: State<'_, DialogGrants>,
+    input: crate::agent::turn::TurnInput,
+    on_event: Channel<AgentEvent>,
+) -> Result<(), PoiesisError> {
+    let env = TurnEnv {
+        mgr: &mgr,
+        embed_mgr: &embed_mgr,
+        rerank_mgr: &rerank_mgr,
+        db: &db,
+        perms: &perms,
+        memory: &memory,
+        browser_pool: &browser_pool,
+        fleet: &fleet,
+        grants: &grants,
+    };
+    crate::agent::turn::run_turn(&env, input, on_event).await;
+    Ok(())
+}
+
+/// `HRW-1`: save a turn's two rows ahead of `run_turn_cmd`. The window does this
+/// before it starts the engine, so the message is kept even when the start
+/// fails, the app is closed during it, or the run never begins; `run_turn_cmd`
+/// then gets the ids in `input.saved`.
+#[tauri::command]
+pub fn save_turn_cmd(
+    db: State<'_, Db>,
+    input: crate::agent::turn::TurnInput,
+) -> Result<crate::agent::turn::SavedTurn, PoiesisError> {
+    crate::agent::turn::save_turn(&db, &input).map_err(|e| PoiesisError::Message(e.to_string()))
 }
 
 /// `HRN-UI-5`: "Try again from here". Branches the conversation just before one

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { inTauri, pickFiles, stillWorking } from "../../lib/api";
+import { inTauri, pickFiles, stashDroppedFile, stillWorking } from "../../lib/api";
 import { useAppStore, useExpert, useSelectedModel } from "../../lib/store";
 import { detectIntent } from "../../lib/mediaIntent";
 import type { Attachment, ContextRef, Model, SendOptions } from "../../lib/types";
@@ -54,6 +54,7 @@ export default function Composer({
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [dropNotice, setDropNotice] = useState<string | null>(null);
   const modelNotice = useAppStore((s) => s.modelNotice);
   const dismissModelNotice = useAppStore((s) => s.dismissModelNotice);
   // `CMP-3`: things the `+` pointed at (an earlier chat, a library page) that
@@ -287,19 +288,33 @@ export default function Composer({
     setAttachments((list) => [...list, a]);
   }
 
-  // Pasted / dropped images carry their bytes inline (no filesystem path).
+  // Pasted / dropped images carry their bytes inline for the preview and the
+  // model, but the saved message keeps only the path: with none, the picture is
+  // gone once the chat is reopened. So the bytes are also kept under the app's
+  // data folder, as a dropped PDF is.
   function addImageFile(file: File) {
     if (!file.type.startsWith("image/")) return;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const dataUri = reader.result as string;
+      let path = "";
+      if (inTauri()) {
+        const nameExt = file.name.split(".").pop()?.toLowerCase() ?? "";
+        const mimeExt = file.type.slice("image/".length).replace("jpeg", "jpg");
+        const ext = IMAGE_EXT.includes(nameExt) ? nameExt : mimeExt;
+        try {
+          path = await stashDroppedFile(new Uint8Array(await file.arrayBuffer()), ext);
+        } catch {
+          // The picture still goes to the model this turn; only reopening loses it.
+        }
+      }
       setAttachments((a) => [
         ...a,
         {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           kind: "image",
           name: file.name || "pasted-image.png",
-          path: "",
+          path,
           dataUri,
         },
       ]);
@@ -307,11 +322,71 @@ export default function Composer({
     reader.readAsDataURL(file);
   }
 
-  function onDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setDragOver(false);
-    for (const f of Array.from(e.dataTransfer.files)) addImageFile(f);
+  // A file dragged in from Explorer. Pictures travel inline; a PDF has to be
+  // read from disk by the backend, so it is kept under the app's data folder and
+  // attached by that path.
+  async function addDroppedFile(file: File) {
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    if (file.type.startsWith("image/") || IMAGE_EXT.includes(ext)) {
+      addImageFile(file);
+      return;
+    }
+    if (ext !== "pdf" || !inTauri()) {
+      setDropNotice(`${file.name} can't be attached. Pictures and PDFs only.`);
+      return;
+    }
+    try {
+      const path = await stashDroppedFile(new Uint8Array(await file.arrayBuffer()), ext);
+      setAttachments((a) => [...a, { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, kind: "pdf", name: file.name, path }]);
+    } catch (e) {
+      setDropNotice(String(e instanceof Error ? e.message : (e as { message?: string })?.message ?? e));
+    }
   }
+
+  // The listeners below are bound once; the ref keeps them on the current render.
+  const addDroppedFileRef = useRef(addDroppedFile);
+  addDroppedFileRef.current = addDroppedFile;
+
+  // The whole window is the drop target, not just the box: a file let go over the
+  // conversation would otherwise do nothing, or be opened by the webview itself.
+  useEffect(() => {
+    const hasFiles = (e: DragEvent) => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
+    let depth = 0;
+    const enter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth++;
+      setDragOver(true);
+    };
+    const over = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    };
+    const leave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragOver(false);
+    };
+    const drop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth = 0;
+      setDragOver(false);
+      setDropNotice(null);
+      for (const f of Array.from(e.dataTransfer?.files ?? [])) void addDroppedFileRef.current(f);
+    };
+    window.addEventListener("dragenter", enter);
+    window.addEventListener("dragover", over);
+    window.addEventListener("dragleave", leave);
+    window.addEventListener("drop", drop);
+    return () => {
+      window.removeEventListener("dragenter", enter);
+      window.removeEventListener("dragover", over);
+      window.removeEventListener("dragleave", leave);
+      window.removeEventListener("drop", drop);
+    };
+  }, []);
 
   function onPaste(e: React.ClipboardEvent) {
     for (const item of Array.from(e.clipboardData.items)) {
@@ -407,17 +482,7 @@ export default function Composer({
         : "Message Poiesis Agent  ·  / for commands  ·  + to add files";
 
   return (
-    <div
-      className={`composer-wrap ${dragOver ? "drag-over" : ""}`}
-      onDragOver={(e) => {
-        e.preventDefault();
-        if (!dragOver) setDragOver(true);
-      }}
-      onDragLeave={(e) => {
-        if (e.currentTarget === e.target) setDragOver(false);
-      }}
-      onDrop={onDrop}
-    >
+    <div className={`composer-wrap ${dragOver ? "drag-over" : ""}`}>
       <div className="composer-col">
         {/* `RUN`: what the run is doing and did, above everything else here. */}
         <RunBar />
@@ -650,6 +715,14 @@ export default function Composer({
         )}
 
         {/* `MOD-3`: said once when the default model couldn't be used. */}
+        {dropNotice && (
+          <div className="composer-model-notice" role="status">
+            <span>{dropNotice}</span>
+            <button className="implicit-ref-remove" aria-label="Dismiss" onClick={() => setDropNotice(null)}>
+              ×
+            </button>
+          </div>
+        )}
         {modelNotice && (
           <div className="composer-model-notice" role="status">
             <span>{modelNotice}</span>

@@ -10,6 +10,10 @@ pub mod agent;
 pub mod autonomy;
 pub mod cloud;
 mod commands;
+// What `agent::turn::run_turn` takes, so the eval harness can start a turn the way
+// the window does.
+pub use commands::agent::TurnEnv;
+pub use commands::files::DialogGrants;
 pub mod connectors;
 #[cfg(windows)]
 mod mic_permission;
@@ -238,7 +242,6 @@ pub fn run() {
             commands::conversations::compact_conversation_cmd,
             commands::conversations::conversation_summaries_cmd,
             commands::memory::get_memory_context_cmd,
-            commands::memory::recall_for_cmd,
             commands::memory::context_manifest_cmd,
             commands::memory::list_memory_facts_cmd,
             commands::memory::update_memory_fact_cmd,
@@ -295,6 +298,7 @@ pub fn run() {
             commands::conversations::list_messages_cmd,
             commands::conversations::append_message_cmd,
             commands::conversations::finalize_message_cmd,
+            commands::conversations::set_heard_cmd,
             commands::conversations::search_messages_cmd,
             commands::conversations::list_artifacts_cmd,
             commands::conversations::list_all_artifacts_cmd,
@@ -320,7 +324,8 @@ pub fn run() {
             commands::models::list_models_cmd,
             commands::models::delete_model_cmd,
             commands::models::set_default_model_cmd,
-            commands::agent::agent_chat_cmd,
+            commands::agent::run_turn_cmd,
+            commands::agent::save_turn_cmd,
             commands::agent::steer_run_cmd,
             commands::agent::answer_question_cmd,
             commands::agent::restore_tools_cmd,
@@ -535,6 +540,7 @@ pub fn run() {
             commands::projects::run_code_artifact_cmd,
             commands::files::pick_folder_cmd,
             commands::files::pick_files_cmd,
+            commands::files::stash_dropped_file_cmd,
             commands::files::pick_zip_file_cmd,
             commands::files::set_conversation_folder_cmd,
             commands::files::set_conversation_trust_cmd,
@@ -551,7 +557,6 @@ pub fn run() {
             commands::files::find_duplicates_cmd,
             commands::files::trash_file_cmd,
             commands::attachments::read_image_data_uri_cmd,
-            commands::attachments::extract_pdf_text_cmd,
             commands::attachments::save_artifact_cmd,
             commands::scheduler::list_scheduler_jobs_cmd,
             commands::scheduler::create_scheduler_job_cmd,

@@ -54,9 +54,11 @@ pub mod screen;
 pub mod skillpack;
 pub mod subagents;
 pub mod symbols;
+pub mod timeline;
 pub mod toolsets;
 pub mod toolrpc;
 pub mod trash;
+pub mod turn;
 pub mod untrusted;
 pub mod verify;
 pub mod websearch;
@@ -99,6 +101,19 @@ pub struct EngineBadge {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
+    /// `HRW-1`: the turn's two rows are saved, before any slow step. The bubble
+    /// takes these ids at once, so every later patch and every id a block or
+    /// proposal is anchored to is the real one from the start. A resumed run has
+    /// no user row, so `user_message_id` is `None` for it.
+    TurnSaved { user_message_id: Option<String>, assistant_message_id: String },
+    /// `HRW-2`: older turns were summarized before this one ran, so the window
+    /// can update its copy of the conversation's summary.
+    Compacted { conversation_id: String, summary: String, summary_upto_message_id: String },
+    /// `HRW-5`: the assistant row is written, last of all. `steps_json` is the
+    /// timeline Rust folded and saved (null when the turn had no steps); the
+    /// window shows this in place of the one it drew while the run worked, so
+    /// what it shows is what a reload would show.
+    TurnFinalized { message_id: String, steps_json: Option<String> },
     /// A tool step began — render a running timeline row.
     StepStart {
         id: String,

@@ -1,0 +1,11 @@
+{"type":"turn_saved","user_message_id":"u1","assistant_message_id":"m1"}
+{"type":"run_started","run_id":"r1","max_steps":25,"context_window":32000}
+{"type":"step_start","id":"call_a","verb":"read","target":"notes.md"}
+{"type":"step_done","id":"call_a","result":"— 4 lines"}
+{"type":"step_start","id":"call_b","verb":"searched","target":"tea"}
+{"type":"step_done","id":"call_b","result":"— 2 matches"}
+{"type":"step_start","id":"call_c","verb":"listed","target":"src"}
+{"type":"step_done","id":"call_c","result":null}
+{"type":"token","text":"Here is what I found."}
+{"type":"run_ended","run_id":"r1","stop_reason":"completed","steps":3,"ms":1200,"usage":null,"cost_usd":null,"plan":null}
+{"type":"done"}

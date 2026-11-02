@@ -7,7 +7,7 @@
  * folder resolver, create-or-join) is tested in `db/mod.rs`, where it lives.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { composeSystemPrompt, useAppStore } from "./store";
+import { useAppStore } from "./store";
 import type { Conversation, Project } from "./types";
 
 function conv(id: string, projectId?: string): Conversation {
@@ -25,12 +25,6 @@ function project(id: string, tabsJson?: string): Project {
     updatedAt: 0,
     tabsJson: tabsJson ?? null,
   };
-}
-
-/** `PRJ-1a`: a project that is not about a directory — a book, a job, a
- * person. The kind this whole change exists for. */
-function folderless(id: string, instructions?: string): Project {
-  return { ...project(id), rootPath: null, instructions: instructions ?? null };
 }
 
 beforeEach(() => {
@@ -156,55 +150,6 @@ describe("a project does not need a folder (PRJ-1a)", () => {
     expect(useAppStore.getState().activeConversationId).toBe("p1a");
   });
 });
-
-describe("project instructions reach the prompt (PRJ-7)", () => {
-  it("injects the project's instructions for a session in it", () => {
-    useAppStore.setState((s) => ({
-      projects: [folderless("p1", "Quotes are in EUR."), ...s.projects.filter((p) => p.id !== "p1")],
-    }));
-    const out = composeSystemPrompt("BASE", {
-      conv: undefined,
-      sessionState: undefined,
-      toolsEnabled: false,
-      ...projectPromptFor("p1a"),
-    });
-    expect(out).toContain("## Project: p1");
-    expect(out).toContain("Quotes are in EUR.");
-  });
-
-  it("says nothing for a project with no instructions, so an old folder project pays no tokens", () => {
-    const out = composeSystemPrompt("BASE", {
-      conv: undefined,
-      sessionState: undefined,
-      toolsEnabled: false,
-      ...projectPromptFor("p1a"),
-    });
-    expect(out).toBe("BASE");
-  });
-
-  it("says nothing for a loose chat", () => {
-    useAppStore.setState((s) => ({
-      projects: [folderless("p1", "Quotes are in EUR."), ...s.projects.filter((p) => p.id !== "p1")],
-    }));
-    const out = composeSystemPrompt("BASE", {
-      conv: undefined,
-      sessionState: undefined,
-      toolsEnabled: false,
-      ...projectPromptFor("loose"),
-    });
-    expect(out).toBe("BASE");
-  });
-});
-
-/** The store's own `projectPrompt` is internal; this mirrors what it hands
- * `composeSystemPrompt`, which is the contract under test. */
-function projectPromptFor(convId: string) {
-  const s = useAppStore.getState();
-  const projectId = s.conversations.find((c) => c.id === convId)?.projectId;
-  const project = projectId ? s.projects.find((p) => p.id === projectId) : undefined;
-  if (!project?.instructions) return {};
-  return { projectName: project.name, projectInstructions: project.instructions };
-}
 
 describe("moving sessions between projects (PRJ-9)", () => {
   it("takes a session out without deleting it", async () => {

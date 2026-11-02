@@ -19,21 +19,23 @@ plan (`COGNITION_PLAN.md`).
 
 The harness is **backend-owned**. Rust drives the model, decides when a turn is
 a tool call, runs it, feeds the result back, and streams a typed event for
-everything it does. The frontend renders those events and, for the one
-interactive entry point, still assembles the prompt it sends (§3).
+everything it does. The frontend sends what the user typed and chose, and
+renders those events. Rows, prompt, history and the saved timeline are Rust's
+(`agent/turn.rs`).
 
 ```
 ┌─ React / TypeScript ────────────────────────────────────────────────────┐
 │  lib/store.ts                                                            │
-│    sendMessage → composeSystemPrompt · recallForPrompt · assembleTurns   │
-│               → invoke("agent_chat_cmd", { messages, target, ... })      │
+│    sendMessage → invoke("run_turn_cmd", { text, refs, model, ... })      │
 │               ◄── Channel<AgentEvent> (and the app bus for background)   │
 │  TopBar (tab strip) · Conversation (timeline, plan, fleet, prompts)      │
 │  Workbench (sidebar: Files/Artifacts/Agents/Browser/Changes, item tabs)  │
 └──────────────────────────────────────────────────────────────────────────┘
                   │
 ┌─ Rust (Tauri) ──┴────────────────────────────────────────────────────────┐
-│  commands/agent.rs      resolve endpoint, insert briefs, open a run      │
+│  agent/turn.rs          run_turn / resume_turn: rows, prompt, history,   │
+│                         the saved timeline (agent/timeline.rs)           │
+│  commands/agent.rs      resolve endpoint, open a run                     │
 │  commands/scheduler.rs  unattended runs (assembles its own prompt)       │
 │  agent/fleet.rs         run handles: id, cancel, steering inbox, usage   │
 │  agent/run.rs           THE LOOP: prepare → assemble → request →         │
@@ -68,15 +70,15 @@ opening message array and which limits apply.
 
 | Entry point | Prompt built by | Limits | Headless |
 |---|---|---|---|
-| `agent_chat_cmd` (a typed message, a block action) | frontend (`store.ts`), then Rust adds the briefs | `RunLimits::top`: `agent.max_steps` (default 12, clamped 1..50), no clock | no |
-| `resume_run_cmd` ("Continue where I stopped") | `log::replay` of the last logged run + `RESUME_PROMPT` | as above; the last plan is handed back | no |
+| `run_turn_cmd` (a typed message, a block action) | Rust: `agent::turn::run_turn` (`context::gather` + `compose_system_prompt` + history + briefs) | `RunLimits::top`: `agent.max_steps` (default 12, clamped 1..50), no clock | no |
+| `resume_run_cmd` ("Continue where I stopped") | `turn::resume_turn`: `log::replay` of the last logged run + `RESUME_PROMPT` | as above; the last plan is handed back | no |
 | `scheduler::run_job` (Tasks) | Rust: `context::gather` + `compose_system_prompt` + briefs | 12 steps, 600 s clock | yes |
 | `delegate` (foreground child) | `subagents.rs`: the task only, plus the agent type's prompt | `RunLimits::subagent`: 8 steps, 300 s, depth 0 | inherits |
 | `delegate { background: true }` | `background.rs`, same as above | same | always |
 | `delegate` to an **agent app** (Claude Code, Codex, OpenCode) | `engines::run::run_external`: the task fenced as data, the agent app's own system append | the app's timeout (`engines/run.rs::timeout`), at most `max_parallel` at once | follows the parent |
 | `/delegate [agent] <task>` | the same path, with the rules (not the guards) skipped | as above | no |
 
-`agent_chat_cmd` and `resume_run_cmd` both go through `execute_turn`, which
+`run_turn` and `resume_turn` both go through `execute_turn`, which
 opens a handle in the `Fleet`, builds a `RunContext::top`, runs the loop and
 closes the handle. A resumed run is therefore the same kind of run as a fresh
 one in every way the fleet, the permission panel and the usage ledger can see.
@@ -84,42 +86,51 @@ one in every way the fleet, the permission panel and the usage ledger can see.
 ### 2.1 One interactive turn, end to end
 
 1. **`sendMessage`** adds the user message and an empty assistant message to
-   the chat, persists both, and makes sure the engine is ready (starting
-   `llama-server` for a local model).
-2. Attachments become model content: images as `image_url` parts when the model
-   has vision, PDFs as extracted text.
-3. **`recallForPrompt`** asks the backend for memory relevant to this message
-   (§8), scoped to the chat's project.
-4. **`composeSystemPrompt`** layers the prompt (§3).
-5. **`assembleTurns`** fits system prompt, history and the new turn into the
-   model's context budget and compacts the overflow into a summary if needed.
-   The optimistic message the new turn was made from is excluded from history,
-   so the user's words are sent once.
-6. **`agent_chat_cmd`** resolves the endpoint (`resolve_turn`: local engine,
-   cloud provider with a key from the OS credential store, or a connected
-   server), the model name, the local side-call endpoint and the context
-   window, then inserts the **briefs** (§3.2).
+   the chat and saves both rows through `save_turn_cmd`, so the bubbles take
+   their real ids and the message is kept even if the engine never starts. Then
+   it makes sure the engine is ready (starting `llama-server` for a local model)
+   and calls `run_turn_cmd` with what the user typed and chose, and the ids.
+2. **`run_turn`** takes those rows (or saves them itself when called without,
+   as the eval harness does) and sends `TurnSaved` before anything slow happens.
+3. Attachments become model content: images as `image_url` parts when the model
+   has vision, PDFs as extracted text. Workspace updates, `+` references and
+   "Do it the same way" are worded into the same message.
+4. **`context::gather`** reads everything the prompt is made of, including the
+   memory relevant to this message (§8), scoped to the chat's project, and
+   **`compose_system_prompt`** layers it (§3). What recall brought in is sent as
+   a `Recall` event, which the timeline draws as the first step.
+5. **`turn::budgeted_turns`** fits system prompt, history and the new turn into
+   the model's context budget, and compacts the overflow into a summary if
+   needed (`Compacted`). The turn being sent is excluded from history, so the
+   user's words are sent once.
+6. **`resolve_turn`** resolves the endpoint (local engine, cloud provider with a
+   key from the OS credential store, or a connected server), the model name, the
+   local side-call endpoint and the context window, then the **briefs** (§3.2)
+   are inserted.
 7. **`run_agent`** runs the loop (§4), emitting `AgentEvent`s on the channel.
 8. The frontend renders steps as the timeline, prose as streaming text, the
    plan as a card, children as a Fleet card, and side effects (blocks,
    artifacts, file changes, permission prompts, memory writes) in their own
    surfaces.
-9. The assistant message is finalized in SQLite with its stop reason, steps and
-   a compact `context_refs` record (which persona, facts and lessons reached the
-   prompt, never the prompt text), which the "What I'm working from" panel reads.
+9. **`agent::timeline`** folds the events into the step timeline as they pass.
+   The assistant message is finalized in SQLite with its stop reason, steps, plan
+   and a compact `context_refs` record (which persona, facts and lessons reached
+   the prompt, never the prompt text), which the "What I'm working from" panel
+   reads. Then `TurnFinalized` carries the saved steps, and the window replaces
+   what it drew with them, so the screen shows what a reload would show. A spoken
+   reply the user cut off is rewritten by `set_heard_cmd` (§16).
 
 ---
 
 ## 3. Prompt assembly
 
-### 3.1 The system prompt, in two places behind one gate
+### 3.1 The system prompt, in one place and held by a snapshot
 
-`agent/context.rs` is a byte-for-byte port of `composeSystemPrompt` in
-`store.ts`. Both render `fixtures/prompt-assembly.json` and must equal
-`fixtures/prompt-assembly.golden.txt` (`context_golden.rs` and a vitest of the
-same name). Editing one side alone fails the build;
-`UPDATE_PROMPT_GOLDEN=1 cargo test --lib context_golden` rewrites the golden and
-the vitest must then agree.
+`agent/context.rs` builds the system prompt for every turn. It renders
+`fixtures/prompt-assembly.json` and must equal
+`fixtures/prompt-assembly.golden.txt` (`context_golden.rs`), so a changed prompt
+sentence is a changed golden in review.
+`UPDATE_PROMPT_GOLDEN=1 cargo test --lib context_golden` rewrites it.
 
 Rust uses its assembly for every run that has no frontend to ask (scheduled
 jobs; `gather` reads everything from the database and the memory store). The
@@ -166,8 +177,8 @@ needs Artifacts.
 
 ### 3.3 Context budget and compaction
 
-`assembleTurns` (and `context::budget_turns` in Rust) resolves a budget (the
-engine's real context size locally, a per-model table for cloud), keeps the most
+`turn::budgeted_turns` (with `context::budget_turns`) resolves a budget (the
+engine's real context size locally, a per-provider table for cloud), keeps the most
 recent turns verbatim, and when the rest overflows summarizes the oldest prefix
 once via `compact_conversation_cmd`. The summary rides in the system prompt;
 every compaction is kept in the session log with the stretch it stands for.
@@ -1101,9 +1112,12 @@ one in-process engine (`sherpa-onnx`) does voice-activity detection (Silero),
 recognition (Parakeet, or Moonshine on small machines) and synthesis (Kokoro,
 Piper), on the CPU, with no cloud model. A turn-taking state machine in the
 frontend decides when the user has stopped, lets them cut in, and stops playback.
-What it hears becomes an ordinary user turn through `agent_chat_cmd`, marked as
+What it hears becomes an ordinary user turn through `run_turn_cmd`, marked as
 spoken (the mark survives a fork); the reply is queued for playback as it
-streams (`playbackQueue.ts`). Models are fetched on demand from Settings → Runtime → Voice.
+streams (`playbackQueue.ts`). A reply the user cuts off is saved as what they heard:
+the turn finishes in Rust as usual, then `set_heard_cmd` sets the content to the
+heard text, keeps the whole reply as `unspoken` beside the steps, and marks the
+row `interrupted`. Models are fetched on demand from Settings → Runtime → Voice.
 
 ---
 
@@ -1115,6 +1129,7 @@ streams (`playbackQueue.ts`). Models are fetched on demand from Settings → Run
 
 | Event | Rendered as |
 |---|---|
+| `TurnSaved` / `TurnFinalized` / `Compacted` | the real ids of the saved rows (first event), the saved timeline (last event), and a new conversation summary when older turns were folded away |
 | `RunStarted` / `RunProgress` / `RunEnded` | run id for steering, the run meter (step, clock, context estimate), the stop reason |
 | `StepStart` / `StepDone` / `StepError` | the timeline (a step can be nested under a script step) |
 | `StepsParallel` | one "N things at once" band |
@@ -1211,8 +1226,8 @@ send it. If it should move the sidebar, call `setDockView` on a transition only.
 **A new self-change class:** add it to `AUTONOMY_DEFAULTS`, call
 `autonomy_gate` at the write site, and map its tool in `self_change_class`.
 
-**A change to the system prompt:** change `context.rs` and `store.ts` together
-and regenerate the golden (§3.1).
+**A change to the system prompt:** change `context.rs` and regenerate the golden
+(§3.1).
 
 **A new agent app:** an entry in `shared/engines.json`; if it speaks ACP, that is
 all the driver it needs (`acp.rs`), otherwise a driver implementing the trait in
@@ -1246,9 +1261,6 @@ recorded reply (`fixtures/composio/`).
 
 ## 20. Known limits
 
-- **The interactive prompt is still assembled on the frontend.** Rust has the
-  byte-identical port and uses it for scheduled runs; `agent_chat_cmd` has not
-  switched over yet.
 - **`run_agent` takes 20 arguments.** `TurnCtx` bundles them inside the loop,
   but the public signature has not followed.
 - **Sandboxes do not block outbound network** or confine the filesystem on

@@ -1,0 +1,31 @@
+[
+  {
+    "id": "f1",
+    "verb": "edited",
+    "target": "main.rs",
+    "status": "done",
+    "result": "— 1 change",
+    "fired": [
+      {
+        "lesson": "Run the tests",
+        "line": "I ran the tests because you asked me to last time"
+      },
+      {
+        "lesson": "Small steps",
+        "line": "I kept the change small"
+      }
+    ]
+  },
+  {
+    "id": "f2",
+    "verb": "ran",
+    "target": "cargo test",
+    "status": "done",
+    "fired": [
+      {
+        "lesson": "Run the tests",
+        "line": "again"
+      }
+    ]
+  }
+]

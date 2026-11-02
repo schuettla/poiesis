@@ -31,7 +31,6 @@ import type {
 import { NEW_PROJECT_NAME } from "./types";
 import { mockConversations, mockModels } from "./mockData";
 import * as api from "./api";
-import { lastTimeNote } from "./lastTime";
 import {
   UPDATE_AUTOCHECK_KEY,
   UPDATE_LAST_SEEN_KEY,
@@ -45,7 +44,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { proposedDraft, type TaskDraft } from "./when";
 import { afterRun as afterGoalRun, newGoal, openingTurn, type Goal, type GoalHost, type RoundEvidence } from "./goal";
 import { markReadsAsInstructions } from "./untrusted";
-import { budgetTurns, withSummary, KEEP_RECENT, KEEP_RECENT_WORKSPACE } from "./context";
+import { KEEP_RECENT, KEEP_RECENT_WORKSPACE } from "./context";
 import { workspaceAvailable } from "./experiments";
 import type { VerifyEntry } from "./verify";
 import { emptyThought, type TurnThought } from "./thought";
@@ -1124,6 +1123,24 @@ export const MESSAGE_FONTS = [
     label: "Source Serif",
     kind: "Serif",
     stack: '"Source Serif 4 Variable", Georgia, serif',
+  },
+  {
+    id: "iosevka-aile",
+    label: "Iosevka Aile",
+    kind: "Sans",
+    stack: '"Iosevka Aile", var(--font-sans)',
+  },
+  {
+    id: "iosevka-etoile",
+    label: "Iosevka Etoile",
+    kind: "Serif",
+    stack: '"Iosevka Etoile", Georgia, serif',
+  },
+  {
+    id: "iosevka",
+    label: "Iosevka",
+    kind: "Mono",
+    stack: '"Iosevka", var(--font-mono)',
   },
 ] as const;
 
@@ -3685,7 +3702,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     const convId = state.activeConversationId;
     const model = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
     if (!convId || !model || state.busy || !api.inTauri()) return;
-    const conv = state.conversations.find((c) => c.id === convId);
 
     const assistantId = `a-${Date.now()}`;
     const assistantMsg: Message = {
@@ -3707,20 +3723,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       ),
     }));
 
-    let persistedAssistantId = assistantId;
-    try {
-      const row = await api.appendMessage({
-        conversationId: convId,
-        role: "assistant",
-        content: "",
-        modelName: model.name,
-        modelProvenance: model.provenance,
-      });
-      persistedAssistantId = row.id;
-    } catch {
-      /* non-fatal */
-    }
-
     const engineError = await ensureEngineForModel(get, model);
     if (engineError) {
       patchAssistant(set, convId, assistantId, { text: engineError, streaming: false });
@@ -3728,9 +3730,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    const persona = conv?.personaId
-      ? state.personas.find((p) => p.id === conv.personaId)
-      : undefined;
     // `/continue` carries `/steps` and `/effort` like any other turn. It never
     // carries Plan first: it picks up a run that was already going, and making
     // it read-only half way would strand it.
@@ -3739,16 +3738,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     await streamAssistantTurn(set, get, {
       convId,
       assistantId,
-      persistedAssistantId,
-      turn,
-      // Deliberately empty: a resumed run's transcript is rebuilt in Rust from
-      // the session log, because that is the only place the interrupted run's
-      // tool results survive. Reassembling here would send the prose back and
-      // silently throw the work away.
-      turns: [],
       model,
-      temperature: conv?.overrides?.temperature ?? personaTemperature(persona),
-      resume: true,
+      // A resumed run's transcript is rebuilt in Rust from the session log,
+      // because that is the only place the interrupted run's tool results
+      // survive. The prose on screen would send the work away.
+      start: (onEvent) =>
+        api.resumeRun(convId, onEvent, {
+          toolsEnabled: get().toolsEnabled,
+          target: targetFor(model),
+          model: turnModelFor(model),
+          turn,
+        }),
     });
   },
 
@@ -3909,40 +3909,57 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    // Persist the user message and an empty assistant row.
-    let persistedAssistantId = assistantId;
+    // `EPI-UI-1`: "Do it the same way" adds what I recorded of that conversation, here
+    // and nowhere else; the chip is spent with this send.
+    const taken = state.turnModifiers.lastTime;
+    const input: api.TurnInput = {
+      conversationId: convId,
+      text,
+      action: sendOpts?.action,
+      attachments: attachments.map((a) => ({
+        kind: a.kind,
+        name: a.name,
+        path: a.path || "",
+        dataUri: a.dataUri,
+      })),
+      // `CMP-3`: things the user pointed at with `+`. Named in the model's copy
+      // only; it reads them with `read_conversation` / `read_artifact` itself.
+      refs: sendOpts?.refs ?? [],
+      pendingActions: [],
+      lastTime: taken
+        ? { at: taken.at, conversationId: taken.conversationId, digest: taken.digest, skill: taken.skill }
+        : undefined,
+      spoken,
+      model: turnModelFor(model),
+      target: targetFor(model),
+      options: turn,
+      toolsEnabled: get().toolsEnabled,
+    };
+
+    // The rows first, before the engine starts: a start that fails, or an app
+    // closed while it loads, still leaves the message behind.
+    let saved: api.SavedTurn;
     try {
-      const userRow = await api.appendMessage({
-        conversationId: convId,
-        role: "user",
-        content: text,
-        attachments: attachments.length
-          ? attachments.map((a) => ({ kind: a.kind, name: a.name, path: a.path || "" }))
-          : undefined,
-        spoken: spoken || undefined,
+      saved = await api.saveTurn(input);
+    } catch (e) {
+      const msg = `I couldn't save your message. ${String(e)}`;
+      if (spoken) getSpeechBridge()?.fail(msg);
+      patchAssistant(set, convId, assistantId, { text: msg, streaming: false });
+      set({ busy: false });
+      return;
+    }
+    patchAssistant(set, convId, userMsg.id, { id: saved.userMessageId });
+    patchAssistant(set, convId, assistantId, { id: saved.assistantMessageId });
+    // `SKC-2`: the trace carries the message's real id, which is how its
+    // bubble finds its `/name` chip again after a reload.
+    if (sendOpts?.skill) {
+      get().recordCommand(convId, {
+        name: sendOpts.skill,
+        args: skillWords(sendOpts),
+        by: "user",
+        outcome: "done",
+        messageId: saved.userMessageId,
       });
-      // `SKC-2`: the trace carries the message's real id, which is how its
-      // bubble finds its `/name` chip again after a reload.
-      if (sendOpts?.skill) {
-        get().recordCommand(convId, {
-          name: sendOpts.skill,
-          args: skillWords(sendOpts),
-          by: "user",
-          outcome: "done",
-          messageId: userRow.id,
-        });
-      }
-      const row = await api.appendMessage({
-        conversationId: convId,
-        role: "assistant",
-        content: "",
-        modelName: model.name,
-        modelProvenance: model.provenance,
-        spoken: spoken || undefined,
-      });
-      persistedAssistantId = row.id;
-    } catch {
-      // Non-fatal; we still stream into the optimistic message.
     }
 
     // Readiness gating (§7.4): a local turn needs llama-server actually running
@@ -3950,10 +3967,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     // rather than letting the request fail with "No model is loaded yet".
     const failTurn = async (msg: string) => {
       if (spoken) getSpeechBridge()?.fail(msg);
-      patchAssistant(set, convId, assistantId, { text: msg, streaming: false });
+      patchAssistant(set, convId, saved.assistantMessageId, { text: msg, streaming: false });
       set({ busy: false });
       try {
-        await api.finalizeMessage(persistedAssistantId, msg, undefined);
+        await api.finalizeMessage(saved.assistantMessageId, msg);
       } catch {
         /* ignore */
       }
@@ -3978,106 +3995,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
 
-    // Resolve attachments into model-ready content (CHT-5, CHT-8).
-    const images = attachments.filter((a) => a.kind === "image");
-    const pdfs = attachments.filter((a) => a.kind === "pdf");
-    let textForModel = text;
-
-    // W2: carry queued workspace interactions (checked steps, pins) as context
-    // on this message instead of having spent a model turn each.
+    // W2: queued workspace interactions ride on this message instead of having
+    // spent a model turn each. Rust words them into the model's copy.
     const pending = get().pendingActions[convId] ?? [];
-    if (pending.length) {
-      textForModel = `(Workspace updates since your last reply: ${pending.join("; ")}.)\n\n${textForModel}`;
-      set((s) => ({ pendingActions: { ...s.pendingActions, [convId]: [] } }));
-    }
-    // `CMP-3`: things the user pointed at with `+`. Named in the model's copy
-    // only; it reads them with `read_conversation` / `read_artifact` itself.
-    for (const ref of sendOpts?.refs ?? []) {
-      textForModel +=
-        ref.kind === "conversation"
-          ? `\n\n[Context: the earlier conversation "${ref.label}" (id ${ref.id}). Read it with read_conversation before answering.]`
-          : `\n\n[Context: "${ref.label}" from the library (artifact id ${ref.id}). Read it with read_artifact before answering.]`;
-    }
-    // `EPI-UI-1`: "Do it the same way" adds what I recorded of that conversation, here
-    // and nowhere else; the chip is spent with this send.
-    if (state.turnModifiers.lastTime) textForModel += lastTimeNote(state.turnModifiers.lastTime);
-    for (const pdf of pdfs) {
-      try {
-        const extracted = await api.extractPdfText(pdf.path);
-        const body = extracted.trim()
-          ? extracted.slice(0, 20000)
-          : "(No selectable text — this looks like a scanned PDF.)";
-        textForModel += `\n\n[Attached PDF: ${pdf.name}]\n${body}`;
-      } catch {
-        textForModel += `\n\n[Attached PDF: ${pdf.name} — couldn't be read]`;
-      }
-    }
-    const visionOk = !!model.vision;
-    if (images.length && !visionOk) {
-      textForModel += `\n\n(I attached ${images.length} image(s), but “${model.name}” can't see images. Pick a vision-capable model to use them.)`;
-    }
+    if (pending.length) set((s) => ({ pendingActions: { ...s.pendingActions, [convId]: [] } }));
 
-    let userContent: api.ChatTurnMessage["content"] = textForModel;
-    if (images.length && visionOk) {
-      const parts: api.ContentPart[] = [{ type: "text", text: textForModel }];
-      for (const img of images) {
-        try {
-          // Pasted / browser-dropped images carry their bytes inline; file-picker
-          // and native-drop images are read from disk by path.
-          const url = img.dataUri ?? (await api.readImageDataUri(img.path));
-          parts.push({ type: "image_url", image_url: { url } });
-        } catch {
-          /* skip unreadable image */
-        }
-      }
-      userContent = parts;
-    }
+    // The composed surface's state saves after a pause, and the prompt Rust
+    // builds reads it from the database.
+    flushAllSurfaceStates();
+    // The meter reads the engine's window as it is now, not as it was when the
+    // model was picked.
+    void resolveBudget(model).then((contextBudget) => set({ contextBudget }));
 
-    // Resolve the effective persona/overrides for this conversation
-    // (CHT-4/CHT-7): conversation override → persona → global default.
-    const persona = conv?.personaId
-      ? state.personas.find((p) => p.id === conv.personaId)
-      : undefined;
-    const baseSystemPrompt = persona?.system_prompt ?? get().systemPrompt;
-    const { memory, matches, injectedFacts } = await recallForPrompt(get, sendOpts?.action ?? text, convId);
-    const effectiveSystemPrompt = composeSystemPrompt(baseSystemPrompt, {
-      // `EXP-3`: the same cut the backend makes (`experiments::in_workspace`).
-      conv: chatForPrompt(get(), convId),
-      sessionState: get().sessionState[convId],
-      toolsEnabled: get().toolsEnabled,
-      surface: get().surfaces[convId],
-      memory,
-      memoryEnabled: get().memoryToolEnabled,
-      toolHealth: get().toolHealth,
-      skills: skillsForPersona(get().skills, persona?.skills_json),
-      planMode: get().planMode,
-      spoken,
-      ...projectPrompt(get(), convId),
-    });
-    const effectiveTemperature =
-      conv?.overrides?.temperature ?? personaTemperature(persona);
-
-    // System prompt + as much history as the context window holds + this turn.
-    const turns = await assembleTurns(set, get, {
-      convId,
-      system: effectiveSystemPrompt,
-      current: { role: "user", content: userContent },
-      currentId: userMsg.id,
-      model,
-    });
-
-    const recalled = recallStep(matches);
     await streamAssistantTurn(set, get, {
       convId,
-      assistantId,
-      persistedAssistantId,
-      turns,
+      assistantId: saved.assistantMessageId,
       model,
-      temperature: effectiveTemperature,
-      initialSteps: recalled ? [recalled] : undefined,
-      contextRefs: buildContextRefs({ personaId: persona?.id ?? null, memory, injectedFacts, matches }),
-      turn,
       spoken,
+      start: (onEvent) =>
+        api.runTurn({ ...input, pendingActions: pending, toolsEnabled: get().toolsEnabled, saved }, onEvent),
     });
   },
 
@@ -5508,7 +5444,7 @@ function patchAssistant(
  * for a run this session never saw — a stale event is not worth inventing a row
  * the user cannot open. */
 /** `SEE-1`: the automatic check of an answer tells the screen over the app event, because it
- * outlives the run's stream. The answer is found by its run: until the turn is finalized its
+ * outlives the run's stream. The answer is found by its run: until `turn_saved` its
  * id is still the optimistic one. */
 export function applyAutoCheck(set: StoreSet, get: () => AppState, e: api.AutoCheckEvent) {
   const s = get();
@@ -5841,85 +5777,27 @@ function reflectOnLeaving(get: () => AppState, nextId?: string) {
   }
 }
 
-/**
- * SEM-3: the live, per-turn replacement for the old wholesale-index inject.
- * Facts stay wholesale (`SCP` narrows that later); lessons and
- * lessons are retrieved by relevance to `query` when an embedder is ready,
- * and never shown twice — an entry that surfaces here is *removed* from
- * `index`, not merely repeated in both places.
- *
- * Same toolset-gating as `memoryForPrompt`: off ⇒ soul only, no retrieval
- * call at all. A failed `recall_for` (engine hiccup) falls back to the last
- * cached wholesale index rather than dropping memory from the turn.
- */
-async function recallForPrompt(
-  get: () => AppState,
-  query: string,
-  convId: string
-): Promise<{
-  memory: api.MemoryContext | undefined;
-  matches: api.SearchHit[];
-  /** Fact names that actually reached the prompt this turn (WHY-2) — empty
-   * whenever recall didn't run through the backend (toolset off, no Tauri, or
-   * a failed call falling back to the cached wholesale index). */
-  injectedFacts: string[];
-}> {
-  const state = get();
-  const mc = state.memoryContext;
-  if (!mc) return { memory: undefined, matches: [], injectedFacts: [] };
-  if (!state.memoryToolEnabled) {
-    return {
-      memory: mc.soul.trim() || mc.about_you.trim() ? { ...mc, index: "" } : undefined,
-      matches: [],
-      injectedFacts: [],
-    };
-  }
-  if (!api.inTauri()) return { memory: mc, matches: [], injectedFacts: [] };
-  try {
-    const { index, matches, injected_facts } = await api.recallFor(query, convId);
-    return { memory: { ...mc, index }, matches, injectedFacts: injected_facts };
-  } catch {
-    return { memory: mc, matches: [], injectedFacts: [] };
-  }
-}
+/** The id a turn's own recall step carries (`agent::timeline::RECALL_STEP_PREFIX`). */
+const RECALL_STEP_PREFIX = "recall-";
 
-/** WHY-2: the compact per-message record built from what this turn actually
- * used — persona id, soul presence, and the exact fact/lesson names
- * that reached the prompt (never the prompt text itself). */
-export function buildContextRefs(opts: {
-  personaId: string | null;
-  memory: api.MemoryContext | undefined;
-  injectedFacts: string[];
-  matches: api.SearchHit[];
-}): api.ContextRefs {
+/** `SEM-5`/`HRW-3`: memory that surfaced on its own, before the turn started,
+ * drawn as a step the timeline renders exactly like a `search_history` call.
+ * Always-injected entries (soul, facts) never announce themselves. The saved
+ * step is Rust's (`agent::timeline`); this is only what is drawn while it runs. */
+function rememberedStep(id: string, matches: api.SearchHit[]): AgentStep {
   return {
-    persona_id: opts.personaId,
-    soul_present: !!opts.memory?.soul?.trim(),
-    about_you_present: !!opts.memory?.about_you?.trim(),
-    facts: opts.injectedFacts,
-    lessons: opts.matches.filter((m) => m.kind === "lesson").map((m) => m.title),
-    files: [],
-    // `CRD-1`: the reason recall gave for each entry that came by relevance.
-    why: Object.fromEntries(
-      opts.matches.filter((m) => m.source === "memory" && m.why).map((m) => [m.title, m.why as string])
-    ),
-  };
-}
-
-/** SEM-5: reuses the `recall` event's shape — a step the timeline renders
- * exactly like a `search_history` call — for memory that surfaced on its
- * own, before the turn even started. `null` when nothing was retrieved:
- * always-injected entries (soul, facts) never announce themselves. */
-function recallStep(matches: api.SearchHit[]): AgentStep | null {
-  if (!matches.length) return null;
-  const target = matches.length === 1 ? matches[0].snippet : `${matches.length} things`;
-  return {
-    id: `recall-${Date.now()}`,
+    id,
     verb: "remembered",
-    target,
+    target: matches.length === 1 ? matches[0].snippet : `${matches.length} things`,
     status: "done",
     matches,
   };
+}
+
+/** The model as a turn needs to know it: what the budget and the model's copy of
+ * the message depend on. */
+function turnModelFor(model: Model): api.TurnModel {
+  return { name: model.name, provenance: model.provenance, vision: !!model.vision, ctxSize: model.ctxSize };
 }
 
 // ---- context homeostasis (CTX-4) ----
@@ -6200,113 +6078,40 @@ export function isPersistedId(id: string): boolean {
   return !id.startsWith("u-") && !id.startsWith("a-");
 }
 
-/**
- * Build the turns for one request: system prompt + as much history as the
- * model's context window can hold + the current turn (CTX-4).
- *
- * When history overflows, the older part is summarized into the conversation
- * (once), and the summary rides along in the system prompt. Nothing is deleted
- * or hidden — this only decides what gets *sent*. Shared by `sendMessage` and
- * `sendBlockAction` so both paths budget identically.
- */
-async function assembleTurns(
-  set: StoreSet,
-  get: () => AppState,
-  opts: {
-    convId: string;
-    system: string;
-    current: api.ChatTurnMessage;
-    /** The optimistic message `current` was made from. It is already in the
-     * transcript by now, and sending it as history too would put the user's
-     * words in front of the model twice (the loop merges the two turns). */
-    currentId: string;
-    model: Model;
-  }
-): Promise<api.ChatTurnMessage[]> {
-  const { convId, current, model } = opts;
-  const conv = get().conversations.find((c) => c.id === convId);
-  const keepRecent = conv?.workspace ? KEEP_RECENT_WORKSPACE : KEEP_RECENT;
-
-  /** History after the summary boundary — the turns still sent verbatim. */
-  const priorFrom = (boundaryId: string | null | undefined) => {
-    const all = (conv?.messages ?? []).filter((m) => m.id !== opts.currentId && m.text.trim().length > 0);
-    const cut = boundaryId ? all.findIndex((m) => m.id === boundaryId) : -1;
-    return all.slice(cut + 1).map((m) => ({
-      id: m.id,
-      turn: { role: m.role as "user" | "assistant", content: m.text },
-    }));
-  };
-
-  const budget = await resolveBudget(model);
-  set(() => ({ contextBudget: budget }));
-
-  let system = conv?.summary ? withSummary(opts.system, conv.summary) : opts.system;
-  let prior = priorFrom(conv?.summaryUptoMessageId);
-  let bt = budgetTurns(system, prior.map((p) => p.turn), current, budget, keepRecent);
-
-  if (bt.needsCompaction && api.inTauri() && get().autoCompact) {
-    // Overflow is the oldest prefix, so the boundary is its last message.
-    const boundary = prior[bt.overflow.length - 1];
-    if (boundary && isPersistedId(boundary.id)) {
-      try {
-        const summary = await api.compactConversation(convId, boundary.id, targetFor(model));
-        set((s) => ({
-          conversations: s.conversations.map((c) =>
-            c.id === convId ? { ...c, summary, summaryUptoMessageId: boundary.id } : c
-          ),
-        }));
-        system = withSummary(opts.system, summary);
-        prior = priorFrom(boundary.id);
-        bt = budgetTurns(system, prior.map((p) => p.turn), current, budget, keepRecent);
-      } catch {
-        // Summarizing failed (no engine, model error). Sending must never block:
-        // fall through and let the oldest turns simply be dropped.
-      }
-    }
-  }
-
-  return bt.turns;
-}
-
-/** Run one assistant turn: stream events into the optimistic message, then
- * finalize. Shared by `sendMessage` and `sendBlockAction`. */
+/** Run one assistant turn: stream events into the optimistic message. Rust saves
+ * the rows and finishes the answer (`run_turn`), and says so: `turn_saved` gives
+ * the bubbles their real ids, `turn_finalized` gives the saved timeline. Shared by
+ * `sendMessage`, `sendBlockAction` and `resumeLastRun`. */
 async function streamAssistantTurn(
   set: StoreSet,
   get: () => AppState,
   opts: {
     convId: string;
+    /** The saved row's id for a typed turn; an optimistic one for a resume,
+     * whose row Rust saves. */
     assistantId: string;
-    persistedAssistantId: string;
-    turns: api.ChatTurnMessage[];
     model: Model;
-    temperature?: number;
-    /** A step already resolved before the turn started (SEM-5's ambient
-     * recall) — shown immediately, not waiting for the first stream event. */
-    initialSteps?: AgentStep[];
-    /** WHY-2: what this turn's prompt was actually built from, stored on the
-     * finalized message so it can be explained later. */
-    contextRefs?: api.ContextRefs;
-    /** `HRN-UI-5`: continue the conversation's last run instead of starting a
-     * new one. `turns` is then unused — the transcript comes from the session
-     * log, which is the only place the interrupted run's tool results survive. */
-    resume?: boolean;
-    /** `REG-5`: what the user decided about this turn only. */
-    turn?: api.TurnRunOptions;
+    /** Starts the run, feeding it every event. */
+    start: (onEvent: (e: api.AgentEvent) => void) => Promise<unknown>;
     /** `VTN-3`: the reply is read out as it streams. */
     spoken?: boolean;
   }
 ): Promise<void> {
-  const { convId, assistantId, persistedAssistantId, turns, model, temperature } = opts;
+  const { convId, model } = opts;
+  /** The row's own id from `turn_saved` on (a resume's is optimistic before). */
+  let assistantId = opts.assistantId;
+  /** Rust took the turn. Until it says so, a failure is the window's to save. */
+  let begun = false;
   // `VTN-3`: while voice is on, a spoken turn's text and steps go to the voice
   // session, which owns the audio. `speakGen` says which reply they belong to.
   const speech = opts.spoken ? getSpeechBridge() : null;
   const speakGen = speech?.current() ?? 0;
   let acc = "";
-  const steps: AgentStep[] = [...(opts.initialSteps ?? [])];
-  if (steps.length) patchAssistant(set, convId, assistantId, { steps: [...steps] });
+  /** What is drawn while the run works. The saved timeline is Rust's, and
+   * replaces this when the turn is finalized. */
+  const steps: AgentStep[] = [];
   const blocks: BlockView[] = [];
   const proposalIds: string[] = [];
-  const firedNames: string[] = [];
   const artifactIds: string[] = [];
   /** Media artifacts this turn produced, rendered inline (`STR-1`). */
   const mediaAttachments: Attachment[] = [];
@@ -6328,22 +6133,33 @@ async function streamAssistantTurn(
    * as well as on the turn so it can be written to the row when the turn
    * finalizes (`PLN-UI-5`). */
   let plan: api.PlanView | undefined;
-  /** `HRN-UI-5`: the backend found no log to pick up. Not an error — the run
-   * predates the session log, or finished cleanly and has nothing left to do. */
-  let nothingToResume = false;
-  /** Where this turn's events come from. Resuming is the same stream with the
-   * same handling; the only difference is that the transcript is rebuilt in
-   * Rust from the session log instead of being assembled here. */
-  const startRun = opts.resume
-    ? async (onEvent: (e: api.AgentEvent) => void, runOpts: api.RunOptions) => {
-        nothingToResume = !(await api.resumeRun(convId, onEvent, runOpts));
-      }
-    : (onEvent: (e: api.AgentEvent) => void, runOpts: api.RunOptions) =>
-        api.agentChat(convId, turns, onEvent, runOpts);
   try {
-    await startRun(
-      (e) => {
+    await opts.start((e) => {
         switch (e.type) {
+          case "turn_saved":
+            // `HRW-1`: the row exists. A resume's bubble takes its real id, and
+            // every later patch, proposal and check goes to it.
+            begun = true;
+            patchAssistant(set, convId, assistantId, { id: e.assistant_message_id });
+            assistantId = e.assistant_message_id;
+            break;
+          case "turn_finalized":
+            // `HRW-5`: what is on screen from here is what a reload would show.
+            // The saved steps become the ones drawn, so a check that reports
+            // late (`untrusted_flag`) marks the saved timeline, as Rust does.
+            steps.splice(0, steps.length, ...(api.parseSteps(e.steps_json) ?? []));
+            patchAssistant(set, convId, assistantId, { steps: [...steps] });
+            break;
+          case "compacted":
+            // `HRW-2`: older turns were summarized so this one fits.
+            set((s) => ({
+              conversations: s.conversations.map((c) =>
+                c.id === e.conversation_id
+                  ? { ...c, summary: e.summary, summaryUptoMessageId: e.summary_upto_message_id }
+                  : c
+              ),
+            }));
+            break;
           case "token":
             acc += e.text;
             speech?.token(speakGen, e.text);
@@ -6905,6 +6721,13 @@ async function streamAssistantTurn(
             // Hang the provenance off the step the search is running under, so
             // the timeline row can expand into clickable sources (RCL-UI).
             const s = steps.find((x) => x.id === e.id);
+            if (!s && e.id.startsWith(RECALL_STEP_PREFIX)) {
+              // `HRW-3`: what surfaced on its own before the first model call is
+              // a step of its own, and goes first.
+              if (e.matches.length) steps.unshift(rememberedStep(e.id, e.matches));
+              patchAssistant(set, convId, assistantId, { steps: [...steps] });
+              break;
+            }
             if (s) s.matches = e.matches;
             patchAssistant(set, convId, assistantId, { steps: [...steps] });
             // SMP-7b: explain the ability the first time it actually surfaces
@@ -6927,10 +6750,9 @@ async function streamAssistantTurn(
           }
           case "fired": {
             // `HAB-UI-1`: a lesson spoke up at this step. The line goes in the step's
-            // detail; the name goes in the record of what reached the answer.
+            // detail.
             const s = steps.find((x) => x.id === e.id);
             if (s) s.fired = [...(s.fired ?? []), { lesson: e.lesson, line: e.line }];
-            if (!firedNames.includes(e.lesson)) firedNames.push(e.lesson);
             patchAssistant(set, convId, assistantId, { steps: [...steps] });
             break;
           }
@@ -6978,38 +6800,31 @@ async function streamAssistantTurn(
             patchAssistant(set, convId, assistantId, { text: acc, streaming: false });
             break;
         }
-      },
-      {
-        toolsEnabled: get().toolsEnabled,
-        temperature,
-        assistantMessageId: persistedAssistantId,
-        target: targetFor(model),
-        turn: opts.turn,
-      }
-    );
-    if (nothingToResume) {
-      acc =
-        acc ||
-        "I have no record of that run to pick up — it finished before I started keeping one. Ask me again and I will start it fresh.";
-      patchAssistant(set, convId, assistantId, { text: acc, streaming: false });
-    }
+    });
   } catch (err) {
     failed = true;
     speech?.fail(`That didn't work: ${String(err)}`);
     acc = acc || `That didn't work: ${String(err)}`;
     patchAssistant(set, convId, assistantId, { text: acc, streaming: false });
+    // The run never began, so nothing finished the saved row: say why on it.
+    if (!begun && isPersistedId(assistantId)) {
+      try {
+        await api.finalizeMessage(assistantId, acc);
+      } catch {
+        /* the row stays empty */
+      }
+    }
   } finally {
     // `VTN-6`: the turn is not over while Poiesis is still talking, and what is
     // saved is what the user heard. A reply they cut off keeps only the pieces
     // that finished playing; the whole of it is kept beside the timeline.
-    let unspoken: string | undefined;
+    let heard: string | undefined;
     if (speech) {
       const outcome = await speech.end(speakGen);
       if (outcome.interrupted) {
-        unspoken = acc;
-        acc = outcome.heard;
+        heard = outcome.heard;
         stopReason = "interrupted";
-        patchAssistant(set, convId, assistantId, { text: acc, unspoken, stopReason, streaming: false });
+        patchAssistant(set, convId, assistantId, { text: heard, unspoken: acc, stopReason, streaming: false });
       }
     }
     // Back to resting unless a self-process is still working (PRES-1). The run
@@ -7034,41 +6849,13 @@ async function streamAssistantTurn(
             }
       ),
     }));
-    try {
-      const stepsJson = api.stepsJsonFor(steps, unspoken);
-      const contextJson = opts.contextRefs
-        ? JSON.stringify(firedNames.length ? { ...opts.contextRefs, fired: firedNames } : opts.contextRefs)
-        : undefined;
-      const planJson = plan?.items.length ? JSON.stringify(plan) : undefined;
-      await api.finalizeMessage(
-        persistedAssistantId,
-        acc,
-        stepsJson,
-        contextJson,
-        stopReason,
-        planJson
-      );
-      // The message still carries its optimistic client id until this turn
-      // finalizes — swap in the real one so "why this answer?" (WHY-4) can
-      // address it this session, not only after the next reload.
-      if (persistedAssistantId !== assistantId) {
-        patchAssistant(set, convId, assistantId, { id: persistedAssistantId });
-        // What I asked of you in this turn follows the turn to its real id.
-        set((st) => ({
-          harnessProposals: st.harnessProposals.map((p) =>
-            p.messageId === assistantId ? { ...p, messageId: persistedAssistantId } : p
-          ),
-        }));
-        // And so does the check of its sentences, which began while it streamed (`SEE-1`).
-        set((st) => {
-          const held = st.verifications[assistantId];
-          if (!held) return {};
-          const { [assistantId]: _moved, ...rest } = st.verifications;
-          return { verifications: { [persistedAssistantId]: held, ...rest } };
-        });
+    // Rust finished the row before the audio did; this is what the user heard.
+    if (heard !== undefined && isPersistedId(assistantId)) {
+      try {
+        await api.setHeard(assistantId, heard);
+      } catch {
+        /* the row keeps the whole reply */
       }
-    } catch {
-      /* ignore */
     }
     // This turn just wrote its tool outcomes (GRM-4). Re-reading them here is
     // what lets a tool that starts failing earn its caution during the session
@@ -7081,7 +6868,7 @@ async function streamAssistantTurn(
       stopReason: stopReason ?? (failed ? "error" : undefined),
       awaitingApproval: plan?.awaiting_approval,
       // `LRN-1`: this turn's own calls, not the recall step that came with it.
-      evidence: roundEvidence(steps.slice(opts.initialSteps?.length ?? 0)),
+      evidence: roundEvidence(steps.filter((x) => !x.id.startsWith(RECALL_STEP_PREFIX))),
     });
   }
 }
@@ -7309,13 +7096,6 @@ function applyExperiments(
   });
 }
 
-/** The chat as the prompt should see it: a Workspace chat is only one while the
- * experiment is on (the backend's `experiments::in_workspace`). */
-function chatForPrompt(s: AppState, convId: string): Conversation | undefined {
-  const conv = s.conversations.find((c) => c.id === convId);
-  return conv?.workspace && !workspaceAvailable(s) ? { ...conv, workspace: false } : conv;
-}
-
 // ---- external agent apps (`CLI-2`) ----
 
 /** Store a fresh list and work out whether the hub tab should wear its dot. */
@@ -7344,323 +7124,10 @@ function listenForEngineEvents(get: () => AppState) {
 
 // ---- session state helpers (Generative UI, Phase C) ----
 
-/** PRO-6: the agent's own synthesis of how this user likes to be talked to —
- * placed first among the memory blocks since it changes slowest of all of
- * them (a rebuild is debounced and gated), which is what keeps the prefix
- * cache warm turn to turn. PRO-7: unlike SOUL.md, this is a background
- * inference, not something the user just decided — a persona always wins. */
-function aboutYouBlock(text: string | undefined): string {
-  const t = text?.trim();
-  if (!t) return "";
-  return `## About you, as I understand it (apply it; don't mention it unless asked; the persona/system prompt above always wins if they conflict)\n${t}`;
-}
-
-/** Standing instructions, framed so the model knows they outrank the persona
- * prompt above them when the two pull in different directions (SOUL constrains,
- * persona styles — persona still governs voice/format/depth). */
-function soulBlock(soul: string | undefined): string {
-  const s = soul?.trim();
-  if (!s) return "";
-  return `## Standing instructions (SOUL.md — the user approved these; they take precedence over the persona/system prompt above when the two conflict)\n${s}`;
-}
-
-/** `PRJ-7`: what this project is, carried by every session in it.
- *
- * Sits after SOUL.md because standing instructions the user approved apply
- * everywhere and this applies only here. Mirrors `project_block` in
- * `context.rs` — the two are compared byte for byte by `CTX-4`. */
-function projectBlock(name: string | undefined, instructions: string | undefined): string {
-  const n = name?.trim();
-  const t = instructions?.trim();
-  if (!n || !t) return "";
-  const text = t.length > PROJECT_INSTRUCTIONS_CAP ? `${t.slice(0, PROJECT_INSTRUCTIONS_CAP)}…` : t;
-  return `## Project: ${n} (instructions for this project; the persona/system prompt above still governs voice, format and depth)\n${text}`;
-}
-
-/** `CUE-3`: said once, and only when a line of the index carries the marker
- * (`Fact::hedge_marker` in Rust). Word for word `HEDGE_NOTE` in `agent/context.rs`. */
-const HEDGE_NOTE =
-  " A note marked [unsure] or [contested] may be wrong: say so, and give its date, when you rely on it.";
-
-/** The durable memory index, with a caveat when tools (and so `memory` reads) are off. */
-function memoryIndexBlock(index: string | undefined, toolsEnabled: boolean): string {
-  const i = index?.trim();
-  if (!i) return "";
-  const detail = toolsEnabled
-    ? ""
-    : " Tools are off — treat descriptions as the only available detail.";
-  const hedge = i.includes(" [unsure, noted ") || i.includes(" [contested, noted ") ? HEDGE_NOTE : "";
-  return `## Your notes about the user (durable facts)\n${i}\n(Read a note's full text with memory(op:"read", name:…) before relying on its details.${detail}${hedge})`;
-}
-
-/** A compact rendering of durable session state. */
-function sessionStateBlock(state: Record<string, unknown> | undefined): string {
-  if (!state || Object.keys(state).length === 0) return "";
-  return `## Session state (durable; update with the remember tool)\n${JSON.stringify(state)}`;
-}
-
-/** The standing guidance only sent when the model can actually call tools.
- *
- * `PLN-3`: the planning sentence rides on the end of the same block — it is the
- * same kind of thing (how to go about the work), and `never` must be able to
- * remove it without leaving a gap. Mirrors `tool_guidance_block` in
- * `agent/context.rs`; the golden gate (`CTX-4`) holds the two to the byte. */
-function toolGuidanceBlock(planMode: PlanMode | undefined, workspace: boolean): string {
-  const out = workspace ? `${SURFACE_GUIDANCE}\n\n${PLAN_FIRST_GUIDANCE}` : PLAN_FIRST_GUIDANCE;
-  const planning = planGuidance(planMode);
-  return planning ? `${out}\n${planning}` : out;
-}
-
 /** `PLN-3`: the user's override of the model's judgement about planning.
- * Mirrors `agent::plan::PlanMode`. */
+ * Mirrors `agent::plan::PlanMode`; the prompt sentence is Rust's. */
 export type PlanMode = "always" | "auto" | "never";
 export const PLAN_MODE_KEY = "agent.plan_mode";
-
-/** One sentence, and one sentence only. A model that writes junk plans will not
- * be argued out of it by a paragraph — `never` is the answer for that model.
- * Word for word `PlanMode::guidance` in `agent/plan.rs`. */
-export function planGuidance(mode: PlanMode | undefined): string {
-  if (mode === "never") return "";
-  if (mode === "always") {
-    return "Before your first tool call, write the plan with the `plan` tool, then keep it up to date as you work.";
-  }
-  return "When a request has several distinct parts, or will take more than a few steps, write a short plan with the `plan` tool before you start and keep it up to date as you work; otherwise just do the work.";
-}
-
-/**
- * MEM-COLD: the instruction that makes durable memory actually happen.
- *
- * Without this the only thing telling the model to save is one tool
- * description buried among forty others, and `memoryIndexBlock` goes silent at
- * zero facts — so an empty memory never mentions memory, the model never saves,
- * and it stays empty forever. This block is therefore sent whenever the Memory
- * toolset is on, *especially* when there is nothing remembered yet.
- */
-function memoryGuidanceBlock(hasFacts: boolean): string {
-  const lines = [
-    "## Remembering",
-    'You keep durable notes about the user across conversations with the `memory` tool. When the user says something that will still be true next week and would change how you answer later, call memory(op:"save") in the same turn — do not wait to be asked, and do not announce it at length; the save shows up in their timeline on its own.',
-    "Worth saving: how they want you to work (tone, length, format, language), tools/stacks/services they use, what they're building and why, stable personal or professional facts, standing decisions they've made.",
-    "Never save: task state, one-off requests, anything you inferred rather than heard, or anything they haven't actually confirmed. When in doubt, don't.",
-    "One fact per save, in their own terms, with a slug you would search for later.",
-  ];
-  if (!hasFacts) {
-    lines.push(
-      "You have not saved anything about this user yet, so the bar for the first few notes is simply: would knowing this next month make you better here? If so, save it.",
-    );
-  }
-  return lines.join("\n");
-}
-
-export interface ComposePromptOpts {
-  conv: Conversation | undefined;
-  sessionState: Record<string, unknown> | undefined;
-  toolsEnabled: boolean;
-  surface?: BlockView;
-  /** The durable self (MEM-3). Omitted when the Memory toolset is off. */
-  memory?: api.MemoryContext;
-  /** Is the Memory toolset on — i.e. can the model actually call `memory`?
-   * Distinct from `memory` being present: with the toolset off, soul and the
-   * synthesis are still injected (`recallForPrompt`), just without an index. */
-  memoryEnabled?: boolean;
-  /** 7-day tool reliability for this model (HEAL-2). */
-  toolHealth?: api.ToolHealth[];
-  /** Discovered Agent Skills (SKL-2), for the "Skills available" block. */
-  skills?: api.SkillView[];
-  /** `PLN-3`: whether this turn is told to plan first. Absent means *when it
-   * helps*, which is what an unset setting means. */
-  planMode?: PlanMode;
-  /** `PRJ-7`: the project this session is in, and what it says to do. Both or
-   * neither — a name with no instructions has nothing to inject, and
-   * instructions with no name have nothing to attribute them to. */
-  projectName?: string;
-  projectInstructions?: string;
-  /** `VTN-2`: the user is talking by voice and will hear the reply spoken. */
-  spoken?: boolean;
-}
-
-/** `PRJ-7`: the project half of a turn's standing context, read beside the
- * persona because both answer the same question — what this turn starts from.
- * Mirrors `from_db` in `context.rs`. */
-function projectPrompt(
-  state: AppState,
-  convId: string
-): { projectName?: string; projectInstructions?: string } {
-  const projectId = state.conversations.find((c) => c.id === convId)?.projectId;
-  const project = projectId ? state.projects.find((p) => p.id === projectId) : undefined;
-  if (!project?.instructions) return {};
-  return { projectName: project.name, projectInstructions: project.instructions };
-}
-
-/** `PRJ-7`: same order as the skills block, and well under any model's
- * patience. Instructions past this are clipped rather than dropped — a project
- * whose instructions vanished for being long would be worse. */
-export const PROJECT_INSTRUCTIONS_CAP = 4000;
-
-/** Assemble the full system prompt for a turn: base persona/prompt, then the
- * live workspace-block registry (W3), durable session state, and the
- * block-usage guidance (W4/W5). Kept in one place so `sendMessage` and
- * `sendBlockAction` build identical context. */
-/** Exported for `store.compose-system-prompt.test.ts` — this is otherwise an
- * internal helper used only by `sendMessage`/`sendBlockAction`. */
-export function composeSystemPrompt(base: string, opts: ComposePromptOpts): string {
-  let out = base;
-  // The durable self comes first, right after the base prompt. The synthesis
-  // leads (PRO-6) — it's the slowest-changing of these blocks — then standing
-  // instructions the user approved, then the index of what's remembered.
-  const aboutYouText = aboutYouBlock(opts.memory?.about_you);
-  if (aboutYouText) out += `\n\n${aboutYouText}`;
-  const soulText = soulBlock(opts.memory?.soul);
-  if (soulText) out += `\n\n${soulText}`;
-  // `PRJ-7`: after the standing instructions, which apply everywhere, and
-  // before the memory index, which this narrows the meaning of.
-  const projectText = projectBlock(opts.projectName, opts.projectInstructions);
-  if (projectText) out += `\n\n${projectText}`;
-  const indexText = memoryIndexBlock(opts.memory?.index, opts.toolsEnabled);
-  if (indexText) out += `\n\n${indexText}`;
-  const workspace = opts.conv?.workspace === true;
-  // Only mention the surface machinery when the model can actually call the
-  // tools — otherwise it imitates tool-call JSON as prose and it leaks raw.
-  if (opts.toolsEnabled) {
-    const skillsText = skillsBlock(opts.skills);
-    if (skillsText) out += `\n\n${skillsText}`;
-    // Only a chat in Workspace mode has `render_ui` (`ToolRegistry::build`), so
-    // only there is the interface described or shown.
-    if (workspace) {
-      const surface = surfaceContext(opts.surface);
-      if (surface) out += `\n\n${surface}`;
-    }
-  }
-  const sessionText = sessionStateBlock(opts.sessionState);
-  if (sessionText) out += `\n\n${sessionText}`;
-  if (opts.toolsEnabled) {
-    out += `\n\n${toolGuidanceBlock(opts.planMode, workspace)}`;
-    // MEM-COLD: last of the guidance, and sent even at zero facts — that is
-    // precisely the state it exists to break out of.
-    if (opts.memoryEnabled) {
-      // `fact_count`, not the index text: scoped recall (SCP) can leave the
-      // index empty on a turn where facts do exist, and that is not a cold start.
-      out += `\n\n${memoryGuidanceBlock((opts.memory?.fact_count ?? 0) > 0)}`;
-    }
-    const cautions = toolCautions(opts.toolHealth);
-    if (cautions) out += `\n\n${cautions}`;
-  }
-  // `VTN-2`: last, so nothing above can talk the model back into markdown.
-  if (opts.spoken) out += `\n\n${SPOKEN_GUIDANCE}`;
-  return out;
-}
-
-/** `VTN-2`: what a spoken reply is. Word for word `SPOKEN_GUIDANCE` in
- * `agent/context.rs`; `fixtures/voice/spoken-prompt.golden.txt` holds the two
- * together. */
-export const SPOKEN_GUIDANCE =
-  "The user is talking to you by voice and will hear your reply spoken aloud. Answer in short spoken sentences. Do not use markdown, lists, tables or code in the reply; if something needs to be on screen, put it in an artifact and say so in one short sentence.";
-
-/** Per-entry cap (description + when_to_use combined) and whole-block cap for
- * the `SKL-2` stage-1 disclosure — matches the Agent Skills standard's own
- * numbers, so a skill written for another agent isn't truncated differently
- * here than it would be there. */
-export const SKILL_ENTRY_CAP = 1536;
-export const SKILLS_BLOCK_CAP = 4000;
-
-/** SKL-2 stage 1: name + description of every *enabled* skill, so the model
- * knows what exists before spending a turn on `skill` to read one. Lowest
- * priority (last to fit) is whichever skill sorts last — a full priority
- * ranking by source isn't worth the complexity at the skill counts this is
- * ever exercised at. */
-/** `SKL-6`: narrow the advertised list to a persona's allowlist, mirroring the
- * backend's `skillpack::enabled_names_for_persona`. Without this the model is
- * told about skills the `skill` tool will then refuse — it would burn a turn
- * to learn what the prompt could have said. A persona can narrow, never widen:
- * the global `enabled` flag is still what `skillsBlock` filters on. */
-function skillsForPersona(
-  skills: api.SkillView[],
-  skillsJson: string | null | undefined
-): api.SkillView[] {
-  if (!skillsJson) return skills;
-  try {
-    const allow = JSON.parse(skillsJson) as string[];
-    if (!Array.isArray(allow)) return skills;
-    return skills.filter((s) => allow.includes(s.name));
-  } catch {
-    return skills;
-  }
-}
-
-function skillsBlock(skills: api.SkillView[] | undefined): string {
-  // `SKC-3`: a skill only the user can run (`disable-model-invocation`) is not
-  // part of the catalogue the model reads. Same rule as `skills_block` in
-  // `agent/context.rs`, and the golden gate holds the two together.
-  const enabled = (skills ?? []).filter((s) => s.enabled && s.model_invocable !== false);
-  if (!enabled.length) return "";
-  const header = "Skills available (read one with the `skill` tool before doing the work it covers):";
-  const lines: string[] = [header];
-  let used = header.length;
-  let shown = 0;
-  for (const s of enabled) {
-    const desc = [s.description, s.when_to_use].filter(Boolean).join(" — ");
-    const clipped = desc.length > SKILL_ENTRY_CAP ? `${desc.slice(0, SKILL_ENTRY_CAP)}…` : desc;
-    const line = `- ${s.name}: ${clipped}`;
-    if (used + line.length + 1 > SKILLS_BLOCK_CAP) break;
-    lines.push(line);
-    used += line.length + 1;
-    shown += 1;
-  }
-  const remaining = enabled.length - shown;
-  if (remaining > 0) lines.push(`(+${remaining} more)`);
-  return lines.join("\n");
-}
-
-/** HEAL-2: tell the agent which of its own tools have been failing lately, so
- * it can route around the damage. Informational self-repair — it changes only
- * this prompt, stores nothing, and needs no setting. Worst two tools only:
- * a wall of cautions would just teach the model to distrust every tool. */
-export function toolCautions(health: api.ToolHealth[] | undefined): string {
-  if (!health?.length) return "";
-  const failing = health
-    .filter((t) => t.total >= 8 && t.ok / t.total < 0.4)
-    .sort((a, b) => a.ok / a.total - b.ok / b.total)
-    .slice(0, 2);
-  return failing
-    .map(
-      (t) =>
-        `Note: your "${t.tool_name}" tool has failed often recently — double-check its arguments, and prefer an alternative when one exists.`
-    )
-    .join("\n");
-}
-
-/** The current composed surface, injected so the model can revise it by
- * node_id instead of re-rendering blind. Capped so a huge tree can't flood
- * the context — past the cap the model should just re-render whole regions. */
-function surfaceContext(surface: BlockView | undefined): string {
-  if (!surface) return "";
-  let tree = JSON.stringify(surface.data);
-  if (tree.length > 4000) tree = `${tree.slice(0, 4000)}…(truncated — re-render regions you need to change)`;
-  const bound =
-    surface.state && Object.keys(surface.state as Record<string, unknown>).length
-      ? `\nUser's bound state (from inputs/choices/toggles): ${JSON.stringify(surface.state)}`
-      : "";
-  return `## Workspace surface (the live interface you composed with render_ui)\nCurrent tree: ${tree}${bound}`;
-}
-
-/** Teach the model that the Workspace is a composable surface it owns. */
-const SURFACE_GUIDANCE = [
-  "## Composing the workspace",
-  "The Workspace view renders whatever interface tree you pass to `render_ui` — compose a real interface for the task (a dashboard, a board, a picker, a wizard, a tracker) instead of describing things in prose.",
-  "Keep the surface CURRENT: as the task evolves, revise it (render_ui with node_id for one region, or re-render the whole tree) rather than accumulating chat.",
-  "When a `ui_action` message arrives, it carries the user's bound state — revise the surface to reflect the interaction and reply in at most one sentence.",
-  // ORG-UI-2: the data is already in this prompt (notes, lessons)
-  // and render_ui already renders — so "show me what you've learned" becomes
-  // the organism examining itself in its own body, with no new machinery.
-  "If the user asks how you are, what you remember, or what you've learned, you may render your notes and lessons as a workspace surface.",
-].join("\n");
-
-/** LOOP-3: a multi-step run reads as deliberate rather than flailing when the
- * model says what it intends before the first tool call. One line, tools only. */
-const PLAN_FIRST_GUIDANCE = [
-  "## Working through a task",
-  "For multi-step tasks, state a one-line plan before your first tool call.",
-].join("\n");
 
 /** Apply a JSON merge patch to a conversation's session state and persist it. */
 function applySessionPatch(

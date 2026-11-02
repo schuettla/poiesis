@@ -57,8 +57,20 @@ pub async fn read_image_data_uri_cmd(
     conversation_id: Option<String>,
     path: String,
 ) -> Cmd<String> {
-    let p = crate::permissions::canonicalize_lenient(Path::new(&path));
-    assert_ui_readable_raw(&db, &grants, conversation_id.as_deref(), &p, Some(&path))?;
+    image_data_uri(&db, &grants, conversation_id.as_deref(), &path).await
+}
+
+/// The body of `read_image_data_uri_cmd`, callable without a Tauri `State`: a
+/// turn the backend starts itself (`HRW-1`) reads its attachments through the
+/// same scope check the window's own reads answer to.
+pub(crate) async fn image_data_uri(
+    db: &Db,
+    grants: &DialogGrants,
+    conversation_id: Option<&str>,
+    path: &str,
+) -> Cmd<String> {
+    let p = crate::permissions::canonicalize_lenient(Path::new(path));
+    assert_ui_readable_raw(db, grants, conversation_id, &p, Some(path))?;
     check_size(&p)?;
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -101,15 +113,14 @@ pub async fn save_artifact_cmd(
 /// little or no text — surfaced to the user as a clear note (OCR is out of v1
 /// scope). Page-image rendering for vision models is a documented follow-up
 /// (would reintroduce a binary dependency; see §7.7-style trade-off).
-#[tauri::command]
-pub async fn extract_pdf_text_cmd(
-    db: State<'_, Db>,
-    grants: State<'_, DialogGrants>,
-    conversation_id: Option<String>,
-    path: String,
+pub(crate) async fn pdf_text(
+    db: &Db,
+    grants: &DialogGrants,
+    conversation_id: Option<&str>,
+    path: &str,
 ) -> Cmd<String> {
-    let p = crate::permissions::canonicalize_lenient(Path::new(&path));
-    assert_ui_readable_raw(&db, &grants, conversation_id.as_deref(), &p, Some(&path))?;
+    let p = crate::permissions::canonicalize_lenient(Path::new(path));
+    assert_ui_readable_raw(db, grants, conversation_id, &p, Some(path))?;
     check_size(&p)?;
     let path = p.to_string_lossy().to_string();
 

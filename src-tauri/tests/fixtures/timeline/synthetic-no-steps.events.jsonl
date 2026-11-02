@@ -1,0 +1,6 @@
+{"type":"turn_saved","user_message_id":"u1","assistant_message_id":"m1"}
+{"type":"run_started","run_id":"r1","max_steps":25,"context_window":null}
+{"type":"thinking","run_id":"r1","text":"hm"}
+{"type":"token","text":"Hello"}
+{"type":"run_ended","run_id":"r1","stop_reason":"completed","steps":0,"ms":1200,"usage":null,"cost_usd":null,"plan":null}
+{"type":"done"}

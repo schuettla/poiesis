@@ -1,7 +1,6 @@
 /**
  * The Workspace's store logic: what a block or surface interaction sends and
- * remembers, how often a typed value is saved, and which chats are told about the
- * interface at all.
+ * remembers, and how often a typed value is saved.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,40 +16,13 @@ vi.mock("./api", async (importOriginal) => ({
   setSessionState: () => Promise.resolve(),
 }));
 
-import { composeSystemPrompt, useAppStore } from "./store";
+import { useAppStore } from "./store";
 import type { Conversation } from "./types";
 
 const conv = (workspace: boolean): Conversation =>
   ({ id: "c1", title: "t", updatedAt: 0, messages: [], workspace }) as never;
 
 const surface = { id: "s1", kind: "surface", title: "Workspace", data: { type: "stack" } } as never;
-
-describe("which chats are told about the interface", () => {
-  const opts = (workspace: boolean) => ({
-    conv: conv(workspace),
-    sessionState: undefined,
-    toolsEnabled: true,
-    surface,
-  });
-
-  it("a chat outside Workspace mode hears nothing about composing one", () => {
-    const out = composeSystemPrompt("Base.", opts(false));
-    expect(out).not.toContain("render_ui");
-    expect(out).not.toContain("Workspace surface");
-    expect(out).toContain("Working through a task");
-  });
-
-  it("a chat in the mode is told how, and shown the one it made", () => {
-    const out = composeSystemPrompt("Base.", opts(true));
-    expect(out).toContain("Composing the workspace");
-    expect(out).toContain("Workspace surface");
-  });
-
-  it("with tools off, neither is mentioned", () => {
-    const out = composeSystemPrompt("Base.", { ...opts(true), toolsEnabled: false });
-    expect(out).toBe("Base.");
-  });
-});
 
 describe("an interaction is an ordinary turn", () => {
   const sent: { text: string; opts: unknown }[] = [];

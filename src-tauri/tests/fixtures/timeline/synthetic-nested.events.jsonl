@@ -1,0 +1,8 @@
+{"type":"run_started","run_id":"r1","max_steps":25,"context_window":32000}
+{"type":"step_start","id":"script","verb":"ran","target":"a snippet"}
+{"type":"step_start","id":"script.1","verb":"read","target":"x.txt","parent":"script"}
+{"type":"step_done","id":"script.1","result":"— 3 lines"}
+{"type":"step_start","id":"script.2","verb":"read","target":"y.txt","parent":"script"}
+{"type":"step_error","id":"script.2","error":"not found"}
+{"type":"step_done","id":"script","result":"— finished"}
+{"type":"done"}

@@ -3,7 +3,8 @@
 `plans/PERCEPTION_PLAN.md` Part 0. Catches "the agent got worse" the way
 `cargo test` alone can't: everything in `fixtures/` is real content with a
 verifiably correct answer, listed in `golden.json`, and asserted against a
-real agent turn — not mocked.
+real agent turn — not mocked. The turn is `run_turn`, the one a typed message
+takes in the window, so a case sees the real system prompt, history and recall.
 
 ## Running it
 
@@ -52,17 +53,13 @@ don't use — a floor calibrated on paraphrases is the one that matters.
   Add real ones under `fixtures/docs/` and `fixtures/photos/`, with matching
   `golden.json` cases, when `OCR`/`VIS`/`PHS` land.
 - `SEM`'s "teach a lesson, bury it under 39 others, watch it surface
-  unprompted" exit check is **not** an EVL case, and that's deliberate rather
-  than an oversight. `run_case` (above) sends the model no system prompt at
-  all — memory injection is composed client-side (`lib/store.ts`'s
-  `composeSystemPrompt`/`recallForPrompt`), so `run_agent` never sees a lesson
-  regardless of what's in the store; this harness tests tool use, not prompt
-  assembly. The floor-gating mechanism itself — a relevant lesson clears
-  `0.58`, an unrelated one doesn't — is unit-tested directly instead, in
+  unprompted" exit check is not an EVL case yet. `run_case` (above) runs
+  against an empty memory store, so no lesson is there to surface. The
+  floor-gating mechanism itself — a relevant lesson clears `0.58`, an
+  unrelated one doesn't — is unit-tested directly, in
   `memory::tests::recall_for_gates_lessons_and_recipes_by_the_similarity_floor`.
-  A true end-to-end version belongs here once `WHY` moves prompt composition
-  server-side; bolting a second, Rust-only prompt assembler onto EVL just to
-  test SEM early would duplicate logic that's about to move.
+  Now that the case goes through `run_turn`, an end-to-end version only needs
+  a seeded store.
 
 ## Decision seed sets (`CTL-4`)
 

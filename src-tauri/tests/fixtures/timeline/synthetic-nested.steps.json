@@ -1,0 +1,25 @@
+[
+  {
+    "id": "script",
+    "verb": "ran",
+    "target": "a snippet",
+    "status": "done",
+    "result": "— finished"
+  },
+  {
+    "id": "script.1",
+    "verb": "read",
+    "target": "x.txt",
+    "status": "done",
+    "result": "— 3 lines",
+    "nestedUnder": "script"
+  },
+  {
+    "id": "script.2",
+    "verb": "read",
+    "target": "y.txt",
+    "status": "error",
+    "result": "— not found",
+    "nestedUnder": "script"
+  }
+]

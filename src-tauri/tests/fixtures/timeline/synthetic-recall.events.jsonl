@@ -1,0 +1,7 @@
+{"type":"turn_saved","user_message_id":"u1","assistant_message_id":"m1"}
+{"type":"recall","id":"recall-1730000000000","matches":[{"source":"memory","title":"tea","created_at":1,"snippet":"Likes green tea","kind":"fact","why":"you asked about drinks"},{"source":"memory","title":"coffee","created_at":2,"snippet":"Dislikes coffee","kind":"fact"}]}
+{"type":"run_started","run_id":"r1","max_steps":25,"context_window":32000}
+{"type":"step_start","id":"s1","verb":"searched","target":"drinks"}
+{"type":"recall","id":"s1","matches":[{"source":"chat","conversation_id":"c9","title":"Earlier chat","created_at":3,"snippet":"we talked about tea"}]}
+{"type":"step_done","id":"s1","result":"— 1 match"}
+{"type":"done"}

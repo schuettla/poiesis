@@ -1,0 +1,15 @@
+[
+  {
+    "id": "e1",
+    "verb": "read",
+    "target": "secret.txt",
+    "status": "error",
+    "result": "— permission denied"
+  },
+  {
+    "id": "e2",
+    "verb": "searched",
+    "target": "x",
+    "status": "running"
+  }
+]

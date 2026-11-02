@@ -1984,6 +1984,41 @@ impl Db {
         Ok(row.flatten())
     }
 
+    /// `VTN-6`: a spoken reply was cut off. The row keeps what was heard, says
+    /// so, and holds the whole reply beside its timeline. Returns whether a message was updated.
+    pub fn set_message_heard(&self, id: &str, heard: &str) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<(String, Option<String>)> = conn
+            .query_row("SELECT content, steps_json FROM messages WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .ok();
+        let Some((whole, steps_json)) = row else { return Ok(false) };
+        let steps_json = crate::agent::timeline::with_unspoken(steps_json.as_deref(), &whole);
+        conn.execute(
+            "UPDATE messages SET content = ?2, steps_json = ?3, stop_reason = 'interrupted' WHERE id = ?1",
+            params![id, heard, steps_json],
+        )?;
+        Ok(true)
+    }
+
+    /// `USE-8`: a background check reported after the turn was written. The row's
+    /// steps become `steps_json`, keeping a cut-off reply's whole text (`VTN-6`).
+    pub fn replace_message_steps(&self, id: &str, steps_json: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        let saved: Option<String> = conn
+            .query_row("SELECT steps_json FROM messages WHERE id = ?1", [id], |r| r.get(0))
+            .ok()
+            .flatten();
+        let unspoken = saved
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("unspoken").and_then(|u| u.as_str()).map(str::to_string));
+        let steps_json = match unspoken {
+            Some(whole) => crate::agent::timeline::with_unspoken(Some(steps_json), &whole),
+            None => steps_json.to_string(),
+        };
+        conn.execute("UPDATE messages SET steps_json = ?2 WHERE id = ?1", params![id, steps_json])?;
+        Ok(())
+    }
+
     /// The plan a message was finalised with (`PLN-UI-5`), as stored. `None` for
     /// no such message and for one that had no plan.
     pub fn message_plan_json(&self, id: &str) -> Result<Option<String>, DbError> {

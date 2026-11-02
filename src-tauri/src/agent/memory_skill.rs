@@ -167,7 +167,7 @@ pub async fn scope_for(
 /// a cloud provider even when the turn that triggered it did. `None` on any
 /// failure (bad response, network hiccup) — the fact is simply left
 /// unclassified, which `recall_for` already treats as global (`SCP-2`/`SCP-3`),
-/// and the backfill in `recall_for_cmd` gets another try at it later.
+/// and the backfill in `recall_for` gets another try at it later.
 pub async fn classify_scope(
     client: &reqwest::Client,
     endpoint: &crate::cloud::ChatEndpoint,

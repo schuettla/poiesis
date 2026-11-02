@@ -1,20 +1,19 @@
 //! `CTX-3`: prompt assembly, moved off the frontend.
 //!
-//! Until this module existed, the system prompt was built in `store.ts` and
-//! handed to the backend already finished. That worked for exactly one caller —
-//! a person typing in the chat window. Every other way a run can start (a
-//! scheduled job, a resumed run, a background subagent) had no frontend to ask,
-//! so `scheduler::run_custom_job` sent one bare user message with no persona, no
-//! standing instructions, no memory index, no skills list and no tool guidance.
-//! That is `CTX-1`'s drift, and it is what this module exists to end.
+//! The system prompt used to be built in `store.ts` and handed to the backend
+//! already finished. That worked for exactly one caller: a person typing in the
+//! chat window. Every other way a run can start (a scheduled job, a resumed run,
+//! a background subagent) had no frontend to ask, so `scheduler::run_custom_job`
+//! sent one bare user message with no persona, no standing instructions, no
+//! memory index, no skills list and no tool guidance. That is `CTX-1`'s drift,
+//! and it is what this module ended. Since `HRW-6` every turn is assembled here,
+//! and the TypeScript copy is gone.
 //!
 //! Two rules shape the code below.
 //!
-//! **Same text, byte for byte.** This is a port, not a rewrite. Every block here
-//! reproduces its TypeScript original exactly, wording and blank lines included,
-//! because `CTX-4` gates the switchover on the two agreeing character for
-//! character. Where a comment says "matches `store.ts`", that is a promise, not
-//! a note.
+//! **The text is held still.** The blocks were ported byte for byte, and
+//! `context_golden` keeps them so: a prompt sentence that changes is a change to
+//! a golden file, which shows in review.
 //!
 //! **JSON text passes through, it is not re-serialized.** Session state, a
 //! surface tree and a block's payload are all stored as JSON *text*. JavaScript
@@ -43,6 +42,10 @@ const RESPONSE_RESERVE: f64 = 0.25;
 
 /// Recent turns that are never dropped: the thread of the live exchange.
 pub const KEEP_RECENT: usize = 6;
+
+/// In Workspace mode the live surface carries the task state, so fewer turns
+/// need to ride along verbatim.
+pub const KEEP_RECENT_WORKSPACE: usize = 3;
 
 /// Estimated tokens for one turn. Text is charged by length; an image is charged
 /// a flat `IMAGE_TOKEN_COST` rather than the meaningless character count of its
@@ -157,8 +160,8 @@ pub struct HealthEntry {
 }
 
 /// Everything the system prompt is built from. Deliberately plain data with no
-/// database in sight: that is what lets `CTX-4` compare this assembly against
-/// the frontend's from a fixture, with no app running.
+/// database in sight: that is what lets `context_golden` render this assembly
+/// from a fixture, with no app running.
 #[derive(Default)]
 pub struct PromptInputs {
     /// The persona's system prompt, or the global default.
@@ -202,6 +205,9 @@ pub struct PromptInputs {
     /// `CRD-1`: what reached this turn, as the record stored beside the answer.
     /// Not part of the prompt: a caller that keeps the answer keeps this with it.
     pub context_refs: crate::commands::memory::ContextRefs,
+    /// `HRW-3`: what recall brought in by relevance this turn, for the step that
+    /// says so. Not part of the prompt.
+    pub recalled_matches: Vec<crate::db::SearchHit>,
 }
 
 /// Per-entry cap (description plus when-to-use) and whole-block cap for the
@@ -269,8 +275,8 @@ pub fn compose_system_prompt(inputs: &PromptInputs) -> String {
     out
 }
 
-/// `VTN-2`: what a spoken reply is. Must stay word for word what `store.ts`
-/// sends; `fixtures/voice/spoken-prompt.golden.txt` holds the two together.
+/// `VTN-2`: what a spoken reply is. `fixtures/voice/spoken-prompt.golden.txt`
+/// holds it still.
 pub const SPOKEN_GUIDANCE: &str = "The user is talking to you by voice and will hear your reply spoken aloud. Answer in short spoken sentences. Do not use markdown, lists, tables or code in the reply; if something needs to be on screen, put it in an artifact and say so in one short sentence.";
 
 /// `PRO-6`/`PRO-7`: unlike SOUL.md this is a background inference, not something
@@ -313,7 +319,7 @@ fn project_block(name: Option<&str>, instructions: Option<&str>) -> String {
 }
 
 /// `CUE-3`: said once, and only when a line of the index carries the marker
-/// (`Fact::hedge_marker`). Word for word `HEDGE_NOTE` in `store.ts`.
+/// (`Fact::hedge_marker`).
 const HEDGE_NOTE: &str = " A note marked [unsure] or [contested] may be wrong: say so, and give its date, when you rely on it.";
 
 /// Does any line of the index carry a hedge marker?
@@ -504,7 +510,7 @@ const SURFACE_KIND: &str = "surface";
 const SURFACE_TITLE: &str = "Workspace";
 
 /// The setting holding the user's global system prompt, and the text used when
-/// they have never changed it. Must stay word for word what `store.ts` sends.
+/// they have never changed it.
 pub const SYSTEM_PROMPT_KEY: &str = "system_prompt";
 pub const DEFAULT_SYSTEM_PROMPT: &str = "You are Poiesis Agent, a local-first assistant that maintains itself: you keep durable memory, learn lessons from your own mistakes, and propose — never impose — changes to how you work. Be concise and clear.";
 
@@ -540,11 +546,14 @@ pub async fn gather(
     // With the Memory toolset off, the standing instructions and the synthesis
     // still go in — the user approved those, and they are not something the
     // model has to call a tool to use. Only the index needs the toolset, since
-    // it is a table of contents for reads that could not happen.
+    // it is a table of contents for reads that could not happen. It does not
+    // need the composer's tools switch: with that off the index still goes in,
+    // marked as the only detail there is (`memory_index_block`), as the window
+    // always sent it.
     inputs.about_you = memory.profile().map(|p| p.body);
     inputs.soul = Some(memory.soul());
     inputs.fact_count = memory.list().len();
-    if inputs.memory_enabled && opts.tools_enabled {
+    if inputs.memory_enabled {
         let recalled =
             // `PRJ-8`: recall is scoped to the project this turn is in, so a
             // fact learned in another project is not eligible here.
@@ -571,6 +580,7 @@ pub async fn gather(
             &recalled.injected_facts,
             &recalled.matches,
         );
+        inputs.recalled_matches = recalled.matches;
     }
     // The rest of the record is known whether or not recall ran.
     inputs.context_refs.persona_id = db
@@ -751,7 +761,7 @@ fn char_len(s: &str) -> usize {
 /// The first `n` UTF-16 code units, matching `String.prototype.slice(0, n)`.
 /// Falls back to the whole string rather than splitting a surrogate pair, which
 /// would emit an unpaired half.
-fn take_chars(s: &str, n: usize) -> String {
+pub(crate) fn take_chars(s: &str, n: usize) -> String {
     if char_len(s) <= n {
         return s.to_string();
     }
@@ -899,6 +909,16 @@ mod tests {
         assert!(!warm.contains("You have not saved anything"));
     }
 
+    /// With the Memory toolset off there is no `memory` tool to call, so the
+    /// prompt must not ask for saves: tools on is not enough.
+    #[test]
+    fn nothing_about_remembering_is_said_when_the_memory_toolset_is_off() {
+        let mut inputs = base();
+        inputs.tools_enabled = true;
+        inputs.memory_enabled = false;
+        assert!(!compose_system_prompt(&inputs).contains("## Remembering"));
+    }
+
     /// Scoped recall can leave the index empty on a turn where facts do exist.
     /// Reading the cold-start state off the index rather than the count would
     /// then nag a user whose memory is full.
@@ -945,8 +965,8 @@ mod tests {
         assert!(out.contains('…'));
     }
 
-    /// A skill's two sentences are joined the way `store.ts` joins them, and an
-    /// absent second half must not leave a dangling separator.
+    /// A skill's two sentences are joined with a dash, and an absent second half
+    /// must not leave a dangling separator.
     #[test]
     fn a_skill_without_a_when_to_use_has_no_dangling_dash() {
         let mut inputs = base();
@@ -959,7 +979,7 @@ mod tests {
     }
 
     /// Key order is the whole reason these fields are strings. Re-serializing
-    /// through `serde_json` would sort them and break `CTX-4`'s byte-identity.
+    /// through `serde_json` would sort them and change the bytes the model reads.
     #[test]
     fn stored_json_reaches_the_model_with_its_key_order_intact() {
         let mut inputs = base();
@@ -1156,6 +1176,24 @@ mod tests {
         let inside = compose_system_prompt(&inputs);
         assert!(inside.contains("Composing the workspace"));
         assert!(inside.contains("Workspace surface"));
+    }
+
+    /// `PRJ-7`: a session in a project carries its instructions; a loose chat, and
+    /// a project that says nothing, carry none.
+    #[test]
+    fn a_session_in_a_project_carries_its_instructions() {
+        let (db, conv) = seeded();
+        let loose = from_db(&db, &opts(&conv, true));
+        assert!(loose.project_name.is_none() && loose.project_instructions.is_none());
+
+        let project = db.create_project("Kitchen", None).unwrap();
+        db.set_conversation_project(&conv, Some(&project.id)).unwrap();
+        assert!(from_db(&db, &opts(&conv, true)).project_instructions.is_none(), "nothing to say yet");
+
+        db.set_project_instructions(&project.id, Some("Quotes are in EUR.")).unwrap();
+        let inside = from_db(&db, &opts(&conv, true));
+        assert_eq!(inside.project_name.as_deref(), Some("Kitchen"));
+        assert_eq!(inside.project_instructions.as_deref(), Some("Quotes are in EUR."));
     }
 
     /// With tools off none of this can be acted on, so none of it is read —

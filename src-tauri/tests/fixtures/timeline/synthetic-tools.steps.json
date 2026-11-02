@@ -1,0 +1,22 @@
+[
+  {
+    "id": "call_a",
+    "verb": "read",
+    "target": "notes.md",
+    "status": "done",
+    "result": "— 4 lines"
+  },
+  {
+    "id": "call_b",
+    "verb": "searched",
+    "target": "tea",
+    "status": "done",
+    "result": "— 2 matches"
+  },
+  {
+    "id": "call_c",
+    "verb": "listed",
+    "target": "src",
+    "status": "done"
+  }
+]

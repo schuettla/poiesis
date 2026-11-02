@@ -217,6 +217,53 @@ pub async fn pick_files_cmd(
     Ok(out)
 }
 
+/// Keep a file dropped on the composer. The window runs with native drag-drop
+/// off (the model list reorders by HTML5 drag), so a dropped file arrives as
+/// bytes with no path. They are written under the app's data folder, which is
+/// where the dropped file's path then points, and that path becomes read-consent
+/// like a picked one. The body is the file; its extension comes as a header.
+#[tauri::command]
+pub async fn stash_dropped_file_cmd(
+    app: tauri::AppHandle,
+    grants: State<'_, DialogGrants>,
+    request: tauri::ipc::Request<'_>,
+) -> Cmd<String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(PoiesisError::Message("expected the file's bytes".into()));
+    };
+    if bytes.len() as u64 > 20 * 1024 * 1024 {
+        return Err(PoiesisError::Message(format!(
+            "That file is too large to attach ({} MB).",
+            bytes.len() / (1024 * 1024)
+        )));
+    }
+    let ext: String = request
+        .headers()
+        .get("x-file-ext")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(8)
+        .collect();
+    let dir = app_data_dir(&app)
+        .ok_or_else(|| PoiesisError::Message("no app data folder".into()))?
+        .join("dropped");
+    let name = format!("{}.{}", uuid::Uuid::new_v4().simple(), if ext.is_empty() { "bin" } else { &ext });
+    let path = dir.join(name);
+    let data = bytes.clone();
+    let target = path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::create_dir_all(target.parent().unwrap_or(Path::new(".")))?;
+        std::fs::write(&target, data)
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)?;
+    grants.remember(&path);
+    Ok(canonicalize_lenient(&path).to_string_lossy().to_string())
+}
+
 /// Pick a single `.zip` archive (`Add from zip…`, `SKL-4`). Same routing
 /// reasoning as `pick_files_cmd` — the picked path becomes read-consent.
 #[tauri::command]
