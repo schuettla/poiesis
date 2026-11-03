@@ -59,6 +59,9 @@ export default function UpdatesBlock({ version }: { version: string }) {
           <>
             <p className="setting-readout">{`Version ${state.info.version} is available.`}</p>
             {state.info.notes && <div className="update-notes">{state.info.notes}</div>}
+            {state.info.asksPassword && (
+              <p className="setting-readout">Your system will ask for your password to install it.</p>
+            )}
             <div className="update-actions">
               <button className="btn-primary" onClick={() => void startUpdateInstall()}>
                 Download and install

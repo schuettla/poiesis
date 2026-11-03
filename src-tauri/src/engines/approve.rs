@@ -357,6 +357,8 @@ mod tests {
         assert_eq!(kind_of("SomethingNew"), ToolKind::Other, "an unknown tool is asked about");
     }
 
+    // Windows paths: the step shows `src\a.rs`, the part under the folder.
+    #[cfg(windows)]
     #[test]
     fn steps_read_in_the_timelines_own_words() {
         let cwd = Path::new("C:\\proj");

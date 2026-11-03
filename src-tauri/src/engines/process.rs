@@ -151,6 +151,8 @@ pub fn command(program: &Path, args: &[String], env: &[(String, String)]) -> Res
         use std::os::windows::process::CommandExt;
         std_cmd.creation_flags(CREATE_NO_WINDOW);
     }
+    #[cfg(unix)]
+    crate::runtime::jobobject::bind(&mut std_cmd);
     std_cmd.env_clear();
     std_cmd.envs(env.iter().map(|(k, v)| (k, v)));
     let mut cmd = Command::from(std_cmd);
@@ -181,6 +183,11 @@ pub async fn kill_tree(child: &mut Child) {
         let mut kill = std::process::Command::new("taskkill");
         kill.args(["/T", "/F", "/PID", &pid.to_string()]).creation_flags(CREATE_NO_WINDOW);
         let _ = Command::from(kill).stdout(Stdio::null()).stderr(Stdio::null()).status().await;
+    }
+    // The child leads its own group (`jobobject::bind`), so this is `/T`.
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        crate::runtime::jobobject::kill_group(pid);
     }
     let _ = child.start_kill();
     let _ = child.wait().await;

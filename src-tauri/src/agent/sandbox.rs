@@ -57,6 +57,8 @@ pub struct Profile {
     pub timeout: Duration,
     pub extra_env: Vec<(String, String)>,
     pub mem_limit: usize,
+    // Windows only: Unix has no per-tree process limit (see `unix` below).
+    #[cfg_attr(unix, allow(dead_code))]
     pub process_limit: u32,
     pub env: EnvMode,
 }
@@ -191,7 +193,11 @@ pub async fn run(
         cmd.env("POIESIS_FOLDER", folder);
     }
 
+    #[cfg(unix)]
+    unix::confine(&mut cmd, profile);
     let child = cmd.spawn().map_err(|e| spawn_error(program, &e))?;
+    #[cfg(unix)]
+    let _group = child.id().map(crate::runtime::jobobject::Group);
 
     // Confine to a dedicated kill-on-close job with memory + process limits.
     #[cfg(windows)]
@@ -285,7 +291,11 @@ pub async fn run_streaming(
         cmd.env(key, val);
     }
 
+    #[cfg(unix)]
+    unix::confine(&mut cmd, profile);
     let mut child = cmd.spawn().map_err(|e| spawn_error(program, &e))?;
+    #[cfg(unix)]
+    let _group = child.id().map(crate::runtime::jobobject::Group);
 
     #[cfg(windows)]
     let _job = {
@@ -392,6 +402,36 @@ fn spawn_error(program: &str, e: &std::io::Error) -> String {
         hint.to_string()
     } else {
         format!("Couldn't start '{program}': {e}")
+    }
+}
+
+/// The Unix side of the sandbox's job (CROSS_PLATFORM_PLAN XP-4): its own
+/// process group, killed as a whole when the run ends, and a memory ceiling.
+///
+/// The ceiling is `RLIMIT_DATA`, not `RLIMIT_AS`: address space counts what a
+/// runtime merely reserves (V8 reserves gigabytes it never touches), so a
+/// 512 MB `RLIMIT_AS` would stop Node starting at all. `RLIMIT_DATA` counts
+/// private writable memory on Linux 4.7+, which is close to the committed
+/// memory the Windows job limits; macOS barely enforces it. There is no
+/// process limit: `RLIMIT_NPROC` counts every process the user owns, so on a
+/// desktop it would make each `fork` in the snippet fail.
+#[cfg(unix)]
+mod unix {
+    use super::Profile;
+
+    pub fn confine(cmd: &mut tokio::process::Command, profile: &Profile) {
+        let std_cmd = cmd.as_std_mut();
+        crate::runtime::jobobject::bind(std_cmd);
+        let limit = profile.mem_limit as libc::rlim_t;
+        // SAFETY: runs between fork and exec; `setrlimit` is async-signal-safe
+        // and nothing here allocates. A refused limit is not fatal.
+        unsafe {
+            std::os::unix::process::CommandExt::pre_exec(std_cmd, move || {
+                let lim = libc::rlimit { rlim_cur: limit, rlim_max: limit };
+                libc::setrlimit(libc::RLIMIT_DATA, &lim);
+                Ok(())
+            });
+        }
     }
 }
 

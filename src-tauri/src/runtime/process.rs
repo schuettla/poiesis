@@ -225,6 +225,9 @@ pub fn spawn_engine(config: &EngineConfig) -> Result<RunningEngine, EngineError>
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
+    #[cfg(unix)]
+    super::jobobject::bind(&mut cmd);
+
     // Capture both streams: llama-server reports load failures on stderr, and
     // an inherited stderr in a windowless build goes nowhere. Both pipes are
     // drained below — an undrained pipe would wedge the child once it fills.

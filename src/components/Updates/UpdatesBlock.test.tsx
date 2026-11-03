@@ -93,6 +93,13 @@ describe("the Updates block", () => {
     expect(startUpdateInstall).toHaveBeenCalled();
   });
 
+  it("available: a deb or rpm install says the system will ask for the password", async () => {
+    await show({ phase: "available", info });
+    expect(text()).not.toContain("password");
+    await show({ phase: "available", info: { ...info, asksPassword: true } });
+    expect(text()).toContain("Your system will ask for your password to install it.");
+  });
+
   it("available: Not now goes back to idle", async () => {
     await show({ phase: "available", info });
     await act(async () => button("Not now").click());

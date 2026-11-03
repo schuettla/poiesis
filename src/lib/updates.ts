@@ -3,7 +3,8 @@
 // API wrapper so each can be tested without either.
 
 /** What the UI knows about a found update. The live handle stays in Rust. */
-export type AppUpdateInfo = { version: string; notes: string };
+/** `asksPassword`: a Linux deb/rpm install, where the system asks for the password. */
+export type AppUpdateInfo = { version: string; notes: string; asksPassword?: boolean };
 
 export type UpdateState =
   | { phase: "idle" }

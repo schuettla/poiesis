@@ -796,8 +796,13 @@ mod tests {
             "subfolders must be readable"
         );
         assert!(
-            assert_ui_readable(&db, &grants, Some(&c.id), Path::new(r"C:\Windows\notepad.exe"))
-                .is_err(),
+            assert_ui_readable(
+                &db,
+                &grants,
+                Some(&c.id),
+                Path::new(if cfg!(windows) { r"C:\Windows\notepad.exe" } else { "/etc/hostname" })
+            )
+            .is_err(),
             "…and nothing outside it"
         );
 

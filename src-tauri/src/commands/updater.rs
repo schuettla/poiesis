@@ -25,6 +25,10 @@ pub struct UpdateMeta {
     pub version: String,
     /// The release notes, exactly as written on the GitHub release.
     pub notes: String,
+    /// A deb or rpm install: the updater runs `dpkg`/`rpm` through `pkexec`,
+    /// so the system asks for the user's password (CROSS_PLATFORM_PLAN XP-6).
+    #[serde(rename = "asksPassword")]
+    pub asks_password: bool,
 }
 
 /// Download progress. `contentLength` is `None` when the server doesn't say.
@@ -84,6 +88,10 @@ pub async fn update_check_cmd(
     let meta = found.as_ref().map(|u| UpdateMeta {
         version: u.version.clone(),
         notes: u.body.clone().unwrap_or_default(),
+        asks_password: matches!(
+            tauri::utils::platform::bundle_type(),
+            Some(tauri::utils::config::BundleType::Deb | tauri::utils::config::BundleType::Rpm)
+        ),
     });
     *pending.0.lock().unwrap() = found;
     Ok(meta)
