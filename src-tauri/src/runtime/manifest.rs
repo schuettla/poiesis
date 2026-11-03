@@ -1,7 +1,8 @@
 //! Runtime manifest (PRD §7.3.1–7.3.2): maps a [`HardwareProfile`] to the correct
 //! prebuilt `llama-server` asset from upstream `ggml-org/llama.cpp` releases.
 //!
-//! Poiesis does not build llama.cpp; it consumes upstream's Windows binaries. This
+//! Poiesis does not build llama.cpp; it consumes upstream's prebuilt binaries
+//! (Windows, Linux x64, Apple Silicon macOS). This
 //! module encodes only *which* asset to pick. Resolving the concrete download URL
 //! (querying the GitHub release for a matching asset name) lives in `download`.
 
@@ -31,17 +32,20 @@ pub enum Backend {
     Vulkan,
     Hip,
     Sycl,
+    /// Apple Silicon: the one macOS build, which runs on the GPU through Metal.
+    Metal,
     Cpu,
 }
 
 impl Backend {
     /// Every backend, in display order (for the engine view's picker).
-    pub const ALL: [Backend; 6] = [
+    pub const ALL: [Backend; 7] = [
         Backend::Cuda12,
         Backend::Cuda13,
         Backend::Vulkan,
         Backend::Hip,
         Backend::Sycl,
+        Backend::Metal,
         Backend::Cpu,
     ];
 
@@ -54,6 +58,7 @@ impl Backend {
             Backend::Vulkan => "vulkan",
             Backend::Hip => "hip",
             Backend::Sycl => "sycl",
+            Backend::Metal => "metal",
             Backend::Cpu => "cpu",
         }
     }
@@ -71,6 +76,7 @@ impl Backend {
             Backend::Vulkan => "Vulkan (cross-vendor GPU)",
             Backend::Hip => "AMD HIP/ROCm",
             Backend::Sycl => "Intel SYCL",
+            Backend::Metal => "Apple GPU (Metal)",
             Backend::Cpu => "CPU",
         }
     }
@@ -95,40 +101,76 @@ impl Backend {
     pub const CUDART_PREFIX: &'static str = "cudart-";
 
     /// Lowercase substrings that must all appear in an upstream asset's file
-    /// name for it to match this backend (Windows x64 only in v1). Applied on
-    /// top of [`Backend::ENGINE_PREFIX`].
+    /// name for it to match this backend on the OS this binary was built for.
+    /// Applied on top of [`Backend::ENGINE_PREFIX`].
+    pub fn asset_keywords(&self) -> Vec<&'static str> {
+        self.asset_keywords_for(std::env::consts::OS)
+    }
+
+    /// [`Backend::asset_keywords`] for a given `std::env::consts::OS`, so the
+    /// tests can check every OS's keywords against the full asset list.
     ///
     /// Matched against the real upstream naming, e.g.
     /// `llama-b11418-bin-win-cuda-12.4-x64.zip`,
-    /// `llama-b11418-bin-win-cpu-x64.zip`. The `x64` term also excludes the
+    /// `llama-b11418-bin-ubuntu-vulkan-x64.tar.gz`,
+    /// `llama-b11418-bin-macos-arm64.tar.gz`. The `x64` term also excludes the
     /// arm64 builds published under otherwise identical names.
-    pub fn asset_keywords(&self) -> Vec<&'static str> {
-        match self {
-            // Minor version deliberately unpinned: upstream moves the CUDA
-            // toolkit point release (12.4 → 12.x) without warning, and any
-            // 12.x engine runs against the 12.x DLL package we fetch beside it.
-            Backend::Cuda12 => vec!["win", "cuda-12", "x64"],
-            Backend::Cuda13 => vec!["win", "cuda-13", "x64"],
-            Backend::Vulkan => vec!["win", "vulkan", "x64"],
-            // Upstream renamed `win-hip-radeon-x64` to `win-rocm-10.0-x64`
-            // between b10333 and b11418; the ROCm version is left unpinned.
-            Backend::Hip => vec!["win", "rocm", "x64"],
-            Backend::Sycl => vec!["win", "sycl", "x64"],
-            // Upstream no longer ships per-ISA CPU builds. The single CPU zip
-            // carries a `ggml-cpu-<microarch>.dll` per ISA (sandybridge …
-            // zen4, sapphirerapids) and picks one at runtime, which is both
-            // better than our detection and one less thing to get wrong.
-            Backend::Cpu => vec!["win", "cpu", "x64"],
+    pub fn asset_keywords_for(&self, os: &str) -> Vec<&'static str> {
+        match os {
+            "linux" => match self {
+                Backend::Cuda12 => vec!["ubuntu", "cuda-12", "x64"],
+                Backend::Cuda13 => vec!["ubuntu", "cuda-13", "x64"],
+                Backend::Vulkan => vec!["ubuntu", "vulkan", "x64"],
+                Backend::Hip => vec!["ubuntu", "rocm", "x64"],
+                Backend::Sycl => vec!["ubuntu", "sycl-fp16", "x64"],
+                // The CPU build is the one with no backend word in its name
+                // (`llama-b11418-bin-ubuntu-x64.tar.gz`); "ubuntu" + "x64"
+                // alone would match every GPU build too.
+                Backend::Cpu | Backend::Metal => vec!["bin-ubuntu-x64"],
+            },
+            // One Apple Silicon build (CROSS_PLATFORM_PLAN D-2); Metal is
+            // compiled in, so every backend maps to it.
+            "macos" => vec!["bin-macos-arm64"],
+            _ => match self {
+                // Minor version deliberately unpinned: upstream moves the CUDA
+                // toolkit point release (12.4 → 12.x) without warning, and any
+                // 12.x engine runs against the 12.x DLL package we fetch beside it.
+                Backend::Cuda12 => vec!["win", "cuda-12", "x64"],
+                Backend::Cuda13 => vec!["win", "cuda-13", "x64"],
+                Backend::Vulkan => vec!["win", "vulkan", "x64"],
+                // Upstream renamed `win-hip-radeon-x64` to `win-rocm-10.0-x64`
+                // between b10333 and b11418; the ROCm version is left unpinned.
+                Backend::Hip => vec!["win", "rocm", "x64"],
+                Backend::Sycl => vec!["win", "sycl", "x64"],
+                // Upstream no longer ships per-ISA CPU builds. The single CPU zip
+                // carries a `ggml-cpu-<microarch>.dll` per ISA (sandybridge …
+                // zen4, sapphirerapids) and picks one at runtime, which is both
+                // better than our detection and one less thing to get wrong.
+                Backend::Cpu | Backend::Metal => vec!["win", "cpu", "x64"],
+            },
         }
     }
 
-    /// Keywords identifying the matching CUDA runtime DLL package, if any.
+    /// Keywords identifying the matching CUDA runtime package, if any.
     /// Applied on top of [`Backend::CUDART_PREFIX`]; real package names look
-    /// like `cudart-llama-bin-win-cuda-12.4-x64.zip`.
+    /// like `cudart-llama-bin-win-cuda-12.4-x64.zip` and
+    /// `cudart-llama-b11418-bin-ubuntu-cuda-12.8-x64.tar.gz`.
     pub fn cudart_keywords(&self) -> Option<Vec<&'static str>> {
+        self.cudart_keywords_for(std::env::consts::OS)
+    }
+
+    /// [`Backend::cudart_keywords`] for a given `std::env::consts::OS`. The OS
+    /// word is load-bearing: without it the Windows CUDA 12 keywords match the
+    /// Ubuntu package, which sorts first in the release.
+    pub fn cudart_keywords_for(&self, os: &str) -> Option<Vec<&'static str>> {
+        let os_word = match os {
+            "linux" => "ubuntu",
+            "macos" => return None,
+            _ => "win",
+        };
         match self {
-            Backend::Cuda12 => Some(vec!["cuda-12", "x64"]),
-            Backend::Cuda13 => Some(vec!["cuda-13", "x64"]),
+            Backend::Cuda12 => Some(vec![os_word, "cuda-12", "x64"]),
+            Backend::Cuda13 => Some(vec![os_word, "cuda-13", "x64"]),
             _ => None,
         }
     }
@@ -155,6 +197,17 @@ fn is_blackwell(name: &str) -> bool {
 /// Select the backend for this machine per the v1 Windows matrix (§7.3.2).
 pub fn select_runtime(profile: &HardwareProfile) -> RuntimeSelection {
     let build_tag = PINNED_BUILD_TAG.to_string();
+
+    // macOS: there is one build and it already runs on the GPU, so there is
+    // nothing to detect or choose (CROSS_PLATFORM_PLAN D-2).
+    if cfg!(target_os = "macos") {
+        return RuntimeSelection {
+            backend: Backend::Metal,
+            alternates: vec![],
+            rationale: "Using Metal acceleration on your Apple GPU.".to_string(),
+            build_tag,
+        };
+    }
 
     if let Some(gpu) = profile.primary_gpu() {
         match gpu.vendor {

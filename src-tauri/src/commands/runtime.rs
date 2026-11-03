@@ -8,7 +8,7 @@ use tauri::State;
 
 use crate::db::Db;
 use crate::runtime::download::{
-    download_with_resume, find_server_binary, resolve_asset, unpack_zip, DownloadProgress,
+    download_with_resume, find_server_binary, resolve_asset, unpack_archive, DownloadProgress,
 };
 use crate::runtime::hardware::{detect_hardware, detect_hardware_cached, HardwareProfile};
 use crate::runtime::manifest::{select_runtime, Backend, RuntimeSelection, PINNED_BUILD_TAG};
@@ -79,7 +79,7 @@ async fn provision_backend(
     )
     .await
     .map_err(err)?;
-    unpack_zip(&archive_path, &target_dir).map_err(err)?;
+    unpack_archive(&archive_path, &target_dir).map_err(err)?;
     // The zip is dead weight once unpacked — a few hundred MB per backend, and
     // resuming a download that already finished is not a thing we need.
     let _ = std::fs::remove_file(&archive_path);
@@ -101,7 +101,7 @@ async fn provision_backend(
             )
             .await
             .map_err(err)?;
-            unpack_zip(&cudart_archive, &target_dir).map_err(err)?;
+            unpack_archive(&cudart_archive, &target_dir).map_err(err)?;
             let _ = std::fs::remove_file(&cudart_archive);
         }
     }

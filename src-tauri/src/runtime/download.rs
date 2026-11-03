@@ -22,7 +22,7 @@ pub enum DownloadError {
     Http(#[from] reqwest::Error),
     #[error("filesystem error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("no asset in release {tag} matched '{prefix}…{keywords}…zip'")]
+    #[error("no asset in release {tag} matched '{prefix}…{keywords}…'")]
     NoAsset {
         tag: String,
         prefix: String,
@@ -65,7 +65,8 @@ pub struct ResolvedAsset {
     pub size: u64,
 }
 
-/// Does `name` start with `prefix` and contain every keyword?
+/// Does `name` start with `prefix`, end in an archive we can unpack, and
+/// contain every keyword?
 ///
 /// The prefix is what separates an engine zip from the CUDA DLL package that
 /// sits beside it in the same release: since upstream dropped the `cu`
@@ -74,7 +75,7 @@ pub struct ResolvedAsset {
 fn name_matches(name: &str, prefix: &str, keywords: &[&str]) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.starts_with(prefix)
-        && lower.ends_with(".zip")
+        && (lower.ends_with(".zip") || lower.ends_with(".tar.gz"))
         && keywords.iter().all(|k| lower.contains(k))
 }
 
@@ -235,6 +236,21 @@ pub fn verify_sha256(path: &Path, expected: Option<&str>) -> Result<(), Download
     }
 }
 
+/// Extract a downloaded `.zip` or `.tar.gz` (picked by extension) into
+/// `dest_dir`. Upstream ships Windows engines as zips and Linux/macOS llama.cpp
+/// engines as tarballs; sd.cpp ships zips everywhere.
+pub fn unpack_archive(archive: &Path, dest_dir: &Path) -> Result<Vec<PathBuf>, DownloadError> {
+    let name = archive
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if name.ends_with(".tar.gz") {
+        unpack_tar_gz(archive, dest_dir)
+    } else {
+        unpack_zip(archive, dest_dir)
+    }
+}
+
 /// Extract a downloaded `.zip` into `dest_dir`, flattening nothing. Returns the
 /// list of extracted file paths.
 pub fn unpack_zip(archive: &Path, dest_dir: &Path) -> Result<Vec<PathBuf>, DownloadError> {
@@ -258,9 +274,47 @@ pub fn unpack_zip(archive: &Path, dest_dir: &Path) -> Result<Vec<PathBuf>, Downl
         if let Some(parent) = out_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        // A symlink entry's content is its target (the `.so`/`.dylib` version
+        // links). Written as a plain file it would be a few bytes of text
+        // where the loader expects a library.
+        #[cfg(unix)]
+        if entry.is_symlink() {
+            let mut target = String::new();
+            entry.read_to_string(&mut target)?;
+            let _ = fs::remove_file(&out_path);
+            std::os::unix::fs::symlink(target, &out_path)?;
+            written.push(out_path);
+            continue;
+        }
         let mut out = File::create(&out_path)?;
         std::io::copy(&mut entry, &mut out)?;
+        // File::create drops the zip's exec bit; without it the engine binary
+        // can't be started off Windows.
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&out_path, fs::Permissions::from_mode(mode & 0o777))?;
+        }
         written.push(out_path);
+    }
+    Ok(written)
+}
+
+/// Extract a downloaded `.tar.gz` into `dest_dir`. Returns the list of
+/// extracted file paths.
+pub fn unpack_tar_gz(archive: &Path, dest_dir: &Path) -> Result<Vec<PathBuf>, DownloadError> {
+    let file = File::open(archive)?;
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    fs::create_dir_all(dest_dir)?;
+    let mut written = Vec::new();
+    for entry in tar.entries()? {
+        let mut entry = entry?;
+        let rel = entry.path()?.into_owned();
+        // `unpack_in` skips entries that would land outside `dest_dir`, and
+        // keeps the header's mode and symlinks, so the binary stays executable.
+        if entry.unpack_in(dest_dir)? && !entry.header().entry_type().is_dir() {
+            written.push(dest_dir.join(rel));
+        }
     }
     Ok(written)
 }
@@ -275,9 +329,9 @@ fn select_asset_name<'a>(names: &[&'a str], prefix: &str, keywords: &[&str]) -> 
         .find(|n| name_matches(n, prefix, keywords))
 }
 
-/// Locate `llama-server.exe` within an extracted runtime directory.
+/// Locate `llama-server` (`.exe` on Windows) within an extracted runtime directory.
 pub fn find_server_binary(dir: &Path) -> Option<PathBuf> {
-    find_binary(dir, &["llama-server.exe"])
+    find_binary(dir, &[&format!("llama-server{}", std::env::consts::EXE_SUFFIX)])
 }
 
 /// Recursively find the first file matching any of `names` (case-insensitive).
@@ -306,15 +360,37 @@ mod tests {
     use super::*;
     use crate::runtime::manifest::Backend;
 
-    /// The real Windows `.zip` assets published on the pinned release
-    /// (`ggml-org/llama.cpp`). Our matcher must resolve each backend to exactly
-    /// the right one of these — this guards against the asset-naming drift that
-    /// broke the CUDA and CPU paths once already. Keep this list in sync with
-    /// `PINNED_BUILD_TAG` whenever the pin moves.
-    const PINNED_WIN_ASSETS: &[&str] = &[
+    /// The real assets published on the pinned release (`ggml-org/llama.cpp`
+    /// `b11418`), all platforms, in the API's (alphabetical) order. The release
+    /// endpoint returns every one of them on every OS, so each OS's keywords
+    /// are checked against the whole list — this guards against the
+    /// asset-naming drift that broke the CUDA and CPU paths once already, and
+    /// against one OS's keywords matching another OS's archive. Keep this list
+    /// in sync with `PINNED_BUILD_TAG` whenever the pin moves.
+    const PINNED_ASSETS: &[&str] = &[
+        "cudart-llama-b11418-bin-ubuntu-cuda-12.8-x64.tar.gz",
+        "cudart-llama-b11418-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+        "cudart-llama-b11418-bin-ubuntu-cuda-13.4-x64.tar.gz",
         "cudart-llama-bin-win-cuda-12.4-x64.zip",
         "cudart-llama-bin-win-cuda-13.4-arm64.zip",
         "cudart-llama-bin-win-cuda-13.4-x64.zip",
+        "llama-b11418-bin-android-arm64-snapdragon.tar.gz",
+        "llama-b11418-bin-android-arm64.tar.gz",
+        "llama-b11418-bin-linux-arm64-snapdragon.tar.gz",
+        "llama-b11418-bin-macos-arm64.tar.gz",
+        "llama-b11418-bin-macos-x64.tar.gz",
+        "llama-b11418-bin-ubuntu-arm64.tar.gz",
+        "llama-b11418-bin-ubuntu-cuda-12.8-x64.tar.gz",
+        "llama-b11418-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+        "llama-b11418-bin-ubuntu-cuda-13.4-x64.tar.gz",
+        "llama-b11418-bin-ubuntu-openvino-2026.4.1-x64.tar.gz",
+        "llama-b11418-bin-ubuntu-rocm-10.0-x64.tar.gz",
+        "llama-b11418-bin-ubuntu-s390x.tar.gz",
+        "llama-b11418-bin-ubuntu-sycl-fp16-x64.tar.gz",
+        "llama-b11418-bin-ubuntu-sycl-fp32-x64.tar.gz",
+        "llama-b11418-bin-ubuntu-vulkan-arm64.tar.gz",
+        "llama-b11418-bin-ubuntu-vulkan-x64.tar.gz",
+        "llama-b11418-bin-ubuntu-x64.tar.gz",
         "llama-b11418-bin-win-cpu-arm64.zip",
         "llama-b11418-bin-win-cpu-x64.zip",
         "llama-b11418-bin-win-cuda-12.4-x64.zip",
@@ -326,13 +402,15 @@ mod tests {
         "llama-b11418-bin-win-sycl-x64.zip",
         "llama-b11418-bin-win-vulkan-arm64.zip",
         "llama-b11418-bin-win-vulkan-x64.zip",
+        "llama-b11418-ui.tar.gz",
+        "llama-b11418-xcframework.zip",
     ];
 
-    fn engine_asset(backend: Backend) -> Option<&'static str> {
+    fn engine_asset(backend: Backend, os: &str) -> Option<&'static str> {
         select_asset_name(
-            PINNED_WIN_ASSETS,
+            PINNED_ASSETS,
             Backend::ENGINE_PREFIX,
-            &backend.asset_keywords(),
+            &backend.asset_keywords_for(os),
         )
     }
 
@@ -348,11 +426,39 @@ mod tests {
         ];
         for (backend, expected) in cases {
             assert_eq!(
-                engine_asset(backend),
+                engine_asset(backend, "windows"),
                 Some(expected),
                 "wrong engine asset for {backend:?}"
             );
         }
+    }
+
+    #[test]
+    fn linux_engine_keywords_resolve_real_pinned_assets() {
+        let cases = [
+            (Backend::Cuda12, "llama-b11418-bin-ubuntu-cuda-12.8-x64.tar.gz"),
+            (Backend::Cuda13, "llama-b11418-bin-ubuntu-cuda-13.4-x64.tar.gz"),
+            (Backend::Vulkan, "llama-b11418-bin-ubuntu-vulkan-x64.tar.gz"),
+            (Backend::Sycl, "llama-b11418-bin-ubuntu-sycl-fp16-x64.tar.gz"),
+            (Backend::Hip, "llama-b11418-bin-ubuntu-rocm-10.0-x64.tar.gz"),
+            (Backend::Cpu, "llama-b11418-bin-ubuntu-x64.tar.gz"),
+        ];
+        for (backend, expected) in cases {
+            assert_eq!(
+                engine_asset(backend, "linux"),
+                Some(expected),
+                "wrong Linux engine asset for {backend:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn macos_resolves_the_one_apple_silicon_build() {
+        assert_eq!(
+            engine_asset(Backend::Metal, "macos"),
+            Some("llama-b11418-bin-macos-arm64.tar.gz")
+        );
+        assert_eq!(Backend::Metal.cudart_keywords_for("macos"), None);
     }
 
     /// The regression that motivated the prefix: upstream renamed the CUDA
@@ -360,35 +466,43 @@ mod tests {
     /// and the CUDA DLL package became substring-identical.
     #[test]
     fn cuda_engine_does_not_match_the_cudart_package() {
-        for backend in [Backend::Cuda12, Backend::Cuda13] {
-            let got = engine_asset(backend).unwrap();
-            assert!(
-                !got.starts_with("cudart"),
-                "matched the cudart package for {backend:?}: {got}"
-            );
+        for os in ["windows", "linux"] {
+            for backend in [Backend::Cuda12, Backend::Cuda13] {
+                let got = engine_asset(backend, os).unwrap();
+                assert!(
+                    !got.starts_with("cudart"),
+                    "matched the cudart package for {backend:?} on {os}: {got}"
+                );
+            }
         }
     }
 
+    /// The Ubuntu CUDA 12 package sorts first and shares every word but the
+    /// OS with the Windows one, so the OS word must be part of the keywords.
     #[test]
-    fn cudart_keywords_resolve_the_matching_dll_package() {
+    fn cudart_keywords_resolve_the_matching_package_per_os() {
         let cases = [
-            (Backend::Cuda12, "cudart-llama-bin-win-cuda-12.4-x64.zip"),
-            (Backend::Cuda13, "cudart-llama-bin-win-cuda-13.4-x64.zip"),
+            ("windows", Backend::Cuda12, "cudart-llama-bin-win-cuda-12.4-x64.zip"),
+            ("windows", Backend::Cuda13, "cudart-llama-bin-win-cuda-13.4-x64.zip"),
+            ("linux", Backend::Cuda12, "cudart-llama-b11418-bin-ubuntu-cuda-12.8-x64.tar.gz"),
+            ("linux", Backend::Cuda13, "cudart-llama-b11418-bin-ubuntu-cuda-13.4-x64.tar.gz"),
         ];
-        for (backend, expected) in cases {
-            let kw = backend.cudart_keywords().unwrap();
-            let got = select_asset_name(PINNED_WIN_ASSETS, Backend::CUDART_PREFIX, &kw);
-            assert_eq!(got, Some(expected), "wrong cudart package for {backend:?}");
+        for (os, backend, expected) in cases {
+            let kw = backend.cudart_keywords_for(os).unwrap();
+            let got = select_asset_name(PINNED_ASSETS, Backend::CUDART_PREFIX, &kw);
+            assert_eq!(got, Some(expected), "wrong cudart package for {backend:?} on {os}");
         }
     }
 
     /// Every backend ships an arm64 sibling under a near-identical name; `x64`
     /// is the only thing keeping us off a binary that cannot run here.
     #[test]
-    fn never_resolves_an_arm64_asset() {
-        for backend in Backend::ALL {
-            if let Some(got) = engine_asset(backend) {
-                assert!(!got.contains("arm64"), "picked an arm64 build: {got}");
+    fn never_resolves_an_arm64_asset_off_macos() {
+        for os in ["windows", "linux"] {
+            for backend in Backend::ALL {
+                if let Some(got) = engine_asset(backend, os) {
+                    assert!(!got.contains("arm64"), "picked an arm64 build on {os}: {got}");
+                }
             }
         }
     }
@@ -396,13 +510,45 @@ mod tests {
     /// Non-CUDA backends must not drag in a CUDA DLL download.
     #[test]
     fn only_cuda_backends_want_the_cudart_package() {
-        for backend in Backend::ALL {
-            let wants = backend.cudart_keywords().is_some();
-            assert_eq!(
-                wants,
-                matches!(backend, Backend::Cuda12 | Backend::Cuda13),
-                "unexpected cudart requirement for {backend:?}"
+        for os in ["windows", "linux"] {
+            for backend in Backend::ALL {
+                let wants = backend.cudart_keywords_for(os).is_some();
+                assert_eq!(
+                    wants,
+                    matches!(backend, Backend::Cuda12 | Backend::Cuda13),
+                    "unexpected cudart requirement for {backend:?} on {os}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unpack_archive_handles_tar_gz() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("llama-test-bin-ubuntu-x64.tar.gz");
+        {
+            let gz = flate2::write::GzEncoder::new(
+                File::create(&archive).unwrap(),
+                flate2::Compression::fast(),
             );
+            let mut tar = tar::Builder::new(gz);
+            let body = b"#!/bin/sh\n";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            tar.append_data(&mut header, "build/bin/llama-server", &body[..])
+                .unwrap();
+            tar.into_inner().unwrap().finish().unwrap();
+        }
+        let out = dir.path().join("out");
+        let written = unpack_archive(&archive, &out).unwrap();
+        assert_eq!(written, vec![out.join("build/bin/llama-server")]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&written[0]).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0o111, "exec bit lost: {mode:o}");
         }
     }
 }

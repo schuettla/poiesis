@@ -14,7 +14,7 @@ use crate::db::Db;
 use crate::media;
 use crate::media::imagecatalog::{self, image_catalog, BundleManifest, ImageCatalogEntry};
 use crate::runtime::download::{
-    download_with_resume, resolve_asset_from, unpack_zip, DownloadProgress,
+    download_with_resume, resolve_asset_from, unpack_archive, DownloadProgress,
 };
 use crate::runtime::hardware::{classify_fit, detect_hardware, Fit};
 use crate::runtime::imageengine::{
@@ -95,7 +95,7 @@ pub async fn setup_image_generation_cmd(
             })
             .await
             .map_err(err)?;
-            unpack_zip(&archive, &sd_dir).map_err(err)?;
+            unpack_archive(&archive, &sd_dir).map_err(err)?;
 
             // NVIDIA also needs the CUDA runtime DLL package.
             if let Some(cudart_kw) = sd_cudart_keywords(backend) {
@@ -106,7 +106,7 @@ pub async fn setup_image_generation_cmd(
                     })
                     .await
                     .map_err(err)?;
-                    unpack_zip(&cudart_archive, &sd_dir).map_err(err)?;
+                    unpack_archive(&cudart_archive, &sd_dir).map_err(err)?;
                 }
             }
 
@@ -169,7 +169,7 @@ pub async fn install_image_engine_cmd(
             })
             .await
             .map_err(err)?;
-            unpack_zip(&archive, &sd_dir).map_err(err)?;
+            unpack_archive(&archive, &sd_dir).map_err(err)?;
             if let Some(cudart_kw) = sd_cudart_keywords(backend) {
                 if let Ok(cudart) = resolve_asset_from(&mgr.client, SD_REPO, SD_PINNED_TAG, SD_CUDART_PREFIX, &cudart_kw).await {
                     let cudart_archive = sd_dir.join(&cudart.name);
@@ -178,7 +178,7 @@ pub async fn install_image_engine_cmd(
                     })
                     .await
                     .map_err(err)?;
-                    unpack_zip(&cudart_archive, &sd_dir).map_err(err)?;
+                    unpack_archive(&cudart_archive, &sd_dir).map_err(err)?;
                 }
             }
             find_sd_binary(&sd_dir)

@@ -4151,6 +4151,7 @@ dependencies = [
  "bzip2 0.5.2",
  "chromiumoxide",
  "chrono",
+ "flate2",
  "futures-util",
  "image",
  "imap",
