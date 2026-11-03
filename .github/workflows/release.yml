@@ -19,8 +19,9 @@ jobs:
           # Apple Silicon only, and Linux as AppImage + deb: plans/CROSS_PLATFORM_PLAN.md D-2, D-3.
           - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
-          # ubuntu-22.04, not 24.04: the AppImage's glibc floor is the build host's.
-          - platform: 'ubuntu-22.04'
+          # ubuntu-24.04: xcap's pipewire 0.10 bindings don't compile against 22.04's
+          # PipeWire 0.3.48. The AppImage's glibc floor is the build host's (2.39).
+          - platform: 'ubuntu-24.04'
             args: '--bundles appimage,deb'
 
     runs-on: ${{ matrix.platform }}
@@ -40,10 +41,10 @@ jobs:
         shell: bash
 
       - name: install Linux build dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-24.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev \
             libssl-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev \
             libegl-dev libgbm-dev
 
