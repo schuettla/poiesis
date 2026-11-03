@@ -454,13 +454,7 @@ export default function AgentRun({ message, last = false }: { message: Message; 
       )}
       {/* `PLN-UI-1`: above the timeline, because the plan is what the steps
           below it are for. */}
-      {message.plan && (
-        <PlanCard
-          plan={message.plan}
-          actionable={last && !message.streaming && !busyNow}
-          messageId={message.streaming ? undefined : message.id}
-        />
-      )}
+      {message.plan && <PlanCard plan={message.plan} actionable={last && !message.streaming && !busyNow} />}
       {/* `SEE-2`: what the quick decisions understood, before the first word. */}
       <ThoughtStrip message={message} />
       {message.steps && <Timeline steps={message.steps} live={!!message.streaming} />}
