@@ -271,7 +271,8 @@ mod tests {
     /// words and not a colour.
     #[test]
     fn the_engine_line_says_what_is_running_or_that_it_is_not_needed() {
-        let on = engine_line(&status(true, Some("C:\\models\\gemma-3-4b.gguf")), false);
+        let model = if cfg!(windows) { "C:\\models\\gemma-3-4b.gguf" } else { "/models/gemma-3-4b.gguf" };
+        let on = engine_line(&status(true, Some(model)), false);
         assert_eq!((on.state.as_str(), on.text.as_str()), ("fine", "My engine is running gemma-3-4b."));
         let off = engine_line(&status(false, None), false);
         assert_eq!(off.state, "needs_you");

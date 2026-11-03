@@ -984,6 +984,8 @@ mod tests {
 
     /// `CLI-T-1`: the screen events of the recording, in order. A step is
     /// labelled from the first update that has its input, and ends once.
+    // Recorded on Windows: the paths are `C:\proj\…` (CROSS_PLATFORM_PLAN XP-5).
+    #[cfg(windows)]
     #[test]
     fn the_recording_plays_as_steps_with_the_timelines_words() {
         let (_, events) = replay(include_str!("../../../fixtures/engines/opencode-2.1.0.jsonl"));
@@ -1049,6 +1051,8 @@ mod tests {
         assert_eq!(refuse(json!(1), &p).result["outcome"]["outcome"], "cancelled");
     }
 
+    // Windows paths: a relative path is joined with `\` (CROSS_PLATFORM_PLAN XP-5).
+    #[cfg(windows)]
     #[test]
     fn what_the_agent_asks_to_do_is_described_in_the_panels_words() {
         let cwd = Path::new("C:\\proj");

@@ -1104,6 +1104,8 @@ mod tests {
             .collect()
     }
 
+    // Recorded on Windows: the paths are `C:\proj\…` (CROSS_PLATFORM_PLAN XP-5).
+    #[cfg(windows)]
     #[test]
     fn the_recorded_session_ends_with_a_final_report_usage_and_three_questions() {
         let (run, events, answers, done) = replay(include_str!("../../../fixtures/engines/codex-0.163.0.jsonl"), false);
@@ -1132,6 +1134,8 @@ mod tests {
     /// The panel is shown the real thing, not the wrapper around it: the command as
     /// typed, and the new file with its words (the approval itself carries neither
     /// path nor diff).
+    // Recorded on Windows: the paths are `C:\proj\…` (CROSS_PLATFORM_PLAN XP-5).
+    #[cfg(windows)]
     #[test]
     fn the_questions_name_the_command_and_the_file() {
         let (_, _, answers, _) = replay(include_str!("../../../fixtures/engines/codex-0.163.0.jsonl"), true);
@@ -1146,6 +1150,8 @@ mod tests {
 
     /// `on-request` in a writable sandbox asked for nothing; every step is counted
     /// as one its own settings allowed (`CLI-6`'s footer).
+    // Recorded on Windows: the paths are `C:\proj\…` (CROSS_PLATFORM_PLAN XP-5).
+    #[cfg(windows)]
     #[test]
     fn on_request_in_a_writable_sandbox_asks_nothing_and_the_steps_are_counted() {
         let (run, events, answers, done) = replay(include_str!("../../../fixtures/engines/codex-0.163.0-on-request.jsonl"), true);
