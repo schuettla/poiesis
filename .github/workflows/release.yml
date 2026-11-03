@@ -69,7 +69,13 @@ jobs:
           MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
         run: |
           KC="$RUNNER_TEMP/signing.keychain-db"; KCPW="$(uuidgen)"
-          echo "$MAC_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          # Pasted from a Windows text file, a secret can end in \r or \n.
+          MAC_CERT_PASSWORD="$(printf '%s' "$MAC_CERT_PASSWORD" | tr -d '\r\n')"
+          printf '%s' "$MAC_CERT_P12" | tr -d ' \r\n' | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          # Lengths and the file's hash only, to tell an old or mangled secret
+          # from a wrong one. Expected: 3356, 30, sha256 49f407a0…acf60.
+          echo "MAC_CERT_P12: ${#MAC_CERT_P12} chars, MAC_CERT_PASSWORD: ${#MAC_CERT_PASSWORD} chars"
+          echo "cert.p12 sha256: $(shasum -a 256 "$RUNNER_TEMP/cert.p12" | cut -c1-64)"
           security create-keychain -p "$KCPW" "$KC"
           security set-keychain-settings -t 3600 -u "$KC"
           security unlock-keychain -p "$KCPW" "$KC"
@@ -78,11 +84,24 @@ jobs:
           security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
           rm "$RUNNER_TEMP/cert.p12"
 
+      # The updater key and its password, with any pasted line ending removed
+      # (a trailing \r or \n turns the right password into "Wrong password for
+      # that key"). Only lengths are printed.
+      - name: clean updater signing secrets
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          KEY_PW: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          key="$(printf '%s' "$KEY" | tr -d ' \r\n')"
+          pw="$(printf '%s' "$KEY_PW" | tr -d '\r\n')"
+          echo "updater key: ${#KEY} chars as stored, ${#key} cleaned; password: ${#KEY_PW} as stored, ${#pw} cleaned"
+          echo "TAURI_SIGNING_PRIVATE_KEY=$key" >> "$GITHUB_ENV"
+          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$pw" >> "$GITHUB_ENV"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Empty on Windows/Linux, where it is ignored. No APPLE_ID / notarisation (D-1).
           APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-latest' && 'Poiesis Self-Signed' || '' }}
         with:
