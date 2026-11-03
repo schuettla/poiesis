@@ -16,11 +16,12 @@ jobs:
         include:
           - platform: 'windows-latest'
             args: ''
-          # macOS / Linux: see plans/AUTOUPDATE_PLAN.md §7 before enabling.
-          # - platform: 'macos-latest'
-          #   args: '--target aarch64-apple-darwin'
-          # - platform: 'ubuntu-22.04'
-          #   args: ''
+          # Apple Silicon only, and Linux as AppImage + deb: plans/CROSS_PLATFORM_PLAN.md D-2, D-3.
+          - platform: 'macos-latest'
+            args: '--target aarch64-apple-darwin'
+          # ubuntu-22.04, not 24.04: the AppImage's glibc floor is the build host's.
+          - platform: 'ubuntu-22.04'
+            args: '--bundles appimage,deb'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -38,7 +39,17 @@ jobs:
         run: node scripts/check-version.mjs "${{ github.ref_name }}"
         shell: bash
 
+      - name: install Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libssl-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev \
+            libegl-dev libgbm-dev
+
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -47,11 +58,32 @@ jobs:
       - name: install frontend dependencies
         run: npm ci
 
+      # Self-signed code-signing certificate (CROSS_PLATFORM_PLAN D-1). It goes in
+      # through our own keychain, not APPLE_CERTIFICATE: the bundler only accepts
+      # Apple-issued certificate names there.
+      - name: import self-signed signing certificate
+        if: matrix.platform == 'macos-latest'
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"; KCPW="$(uuidgen)"
+          echo "$MAC_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -t 3600 -u "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC"
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Empty on Windows/Linux, where it is ignored. No APPLE_ID / notarisation (D-1).
+          APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-latest' && 'Poiesis Self-Signed' || '' }}
         with:
           tagName: v__VERSION__
           releaseName: 'Poiesis Agent v__VERSION__'
