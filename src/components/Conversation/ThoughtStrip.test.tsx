@@ -121,9 +121,9 @@ describe("the strip (SEE-T-5)", () => {
     expect(q(".thought-strip")).toBeNull();
   });
 
-  it("says the decision model is off, with Start while a model is installed, and says when it is on", async () => {
+  it("says the decision model is starting, with Start while a model is installed, and says when it is on", async () => {
     render(<ThoughtStrip message={message(turn({ engine: "cold" }))} />);
-    expect(q(".thought-strip")!.textContent).toContain("Quick thinking is off: the decision model isn't running");
+    expect(q(".thought-strip")!.textContent).toContain("Quick thinking is starting: the decision model isn't running yet");
     await act(async () => click(button("Start")));
     expect(decideStart).toHaveBeenCalledTimes(1);
     expect(q(".thought-strip")!.textContent).toContain("Quick thinking is on");
