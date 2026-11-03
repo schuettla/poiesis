@@ -12,6 +12,8 @@ pub enum GpuVendor {
     Nvidia,
     Amd,
     Intel,
+    /// Apple Silicon's built-in GPU, which shares system memory (macOS only).
+    Apple,
     Unknown,
 }
 
@@ -110,9 +112,25 @@ fn detect_cpu(sys: &System) -> CpuInfo {
         brand,
         physical_cores: sys.physical_core_count().unwrap_or(0),
         // Runtime ISA detection — picks the right CPU build variant (§7.3.2).
-        avx2: std::arch::is_x86_feature_detected!("avx2"),
-        avx512: std::arch::is_x86_feature_detected!("avx512f"),
+        avx2: x86_feature("avx2"),
+        avx512: x86_feature("avx512f"),
     }
+}
+
+/// `is_x86_feature_detected!` only exists on x86 targets; Apple Silicon has
+/// neither feature.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn x86_feature(name: &str) -> bool {
+    match name {
+        "avx2" => std::arch::is_x86_feature_detected!("avx2"),
+        "avx512f" => std::arch::is_x86_feature_detected!("avx512f"),
+        _ => false,
+    }
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn x86_feature(_name: &str) -> bool {
+    false
 }
 
 fn vendor_from_name(name: &str) -> GpuVendor {
@@ -164,7 +182,7 @@ fn detect_nvidia() -> Vec<GpuInfo> {
 /// saturates at ~4 GB, so VRAM here is a lower bound for large cards — accurate
 /// VRAM for NVIDIA comes from `detect_nvidia`.
 #[cfg(target_os = "windows")]
-fn detect_gpus_wmi() -> Vec<GpuInfo> {
+fn detect_gpus_system(_ram_mb: u64) -> Vec<GpuInfo> {
     let script = "Get-CimInstance Win32_VideoController | \
         Select-Object Name, AdapterRAM, DriverVersion | ConvertTo-Json -Compress";
     let out = Command::new("powershell")
@@ -204,16 +222,78 @@ fn detect_gpus_wmi() -> Vec<GpuInfo> {
         .collect()
 }
 
-#[cfg(not(target_os = "windows"))]
-fn detect_gpus_wmi() -> Vec<GpuInfo> {
+/// Linux fallback probe: the kernel's DRM devices. Enough for the selector to
+/// pick Vulkan on AMD and Intel; NVIDIA names and VRAM come from `detect_nvidia`.
+#[cfg(target_os = "linux")]
+fn detect_gpus_system(_ram_mb: u64) -> Vec<GpuInfo> {
+    drm_gpus(std::path::Path::new("/sys/class/drm"))
+}
+
+/// macOS: there is no probe to run. Apple Silicon always has a GPU, and it
+/// shares system memory; macOS lets Metal use about two thirds of it, which is
+/// what the fit classifier should compare against.
+#[cfg(target_os = "macos")]
+fn detect_gpus_system(ram_mb: u64) -> Vec<GpuInfo> {
+    vec![GpuInfo {
+        vendor: GpuVendor::Apple,
+        name: "Apple GPU".to_string(),
+        vram_mb: Some(ram_mb * 2 / 3),
+        driver_version: None,
+    }]
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+fn detect_gpus_system(_ram_mb: u64) -> Vec<GpuInfo> {
     Vec::new()
 }
 
-/// Merge the accurate NVIDIA probe with the WMI list, preferring NVIDIA-SMI data
-/// and de-duplicating by name.
-fn merge_gpus(nvidia: Vec<GpuInfo>, wmi: Vec<GpuInfo>) -> Vec<GpuInfo> {
+/// Read GPUs from a `/sys/class/drm`-shaped directory: each `cardN/device`
+/// holds the PCI `vendor` id, and amdgpu also reports `mem_info_vram_total`
+/// in bytes. The `cardN-<connector>` entries beside them are outputs, not GPUs.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn drm_gpus(root: &std::path::Path) -> Vec<GpuInfo> {
+    let Ok(entries) = std::fs::read_dir(root) else { return Vec::new() };
+    let mut cards: Vec<_> = entries
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.strip_prefix("card")
+                .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        })
+        .map(|e| e.path().join("device"))
+        .collect();
+    cards.sort();
+    cards
+        .into_iter()
+        .filter_map(|dev| {
+            let vendor = std::fs::read_to_string(dev.join("vendor")).ok()?;
+            let (vendor, name) = match vendor.trim().to_ascii_lowercase().as_str() {
+                "0x10de" => (GpuVendor::Nvidia, "NVIDIA GPU"),
+                "0x1002" => (GpuVendor::Amd, "AMD GPU"),
+                "0x8086" => (GpuVendor::Intel, "Intel GPU"),
+                _ => return None,
+            };
+            let vram_mb = std::fs::read_to_string(dev.join("mem_info_vram_total"))
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .map(|b| b / (1024 * 1024))
+                .filter(|&mb| mb > 0);
+            Some(GpuInfo {
+                vendor,
+                name: name.to_string(),
+                vram_mb,
+                driver_version: None,
+            })
+        })
+        .collect()
+}
+
+/// Merge the accurate NVIDIA probe with the OS's own GPU list, preferring
+/// NVIDIA-SMI data and de-duplicating by name.
+fn merge_gpus(nvidia: Vec<GpuInfo>, system: Vec<GpuInfo>) -> Vec<GpuInfo> {
     let mut result = nvidia;
-    for g in wmi {
+    for g in system {
         let dup = result.iter().any(|r| {
             r.name.eq_ignore_ascii_case(&g.name)
                 || (r.vendor == GpuVendor::Nvidia && g.vendor == GpuVendor::Nvidia)
@@ -236,7 +316,7 @@ pub fn detect_hardware() -> HardwareProfile {
 
     let cpu = detect_cpu(&sys);
     let ram_mb = sys.total_memory() / (1024 * 1024);
-    let gpus = merge_gpus(detect_nvidia(), detect_gpus_wmi());
+    let gpus = merge_gpus(detect_nvidia(), detect_gpus_system(ram_mb));
 
     HardwareProfile { cpu, ram_mb, gpus }
 }
@@ -260,5 +340,43 @@ mod tests {
         let selection = select_runtime(&profile);
         println!("\n--- runtime selection ---\n{selection:#?}\n");
         assert!(profile.ram_mb > 0, "should detect some RAM");
+    }
+
+    #[test]
+    fn reads_gpus_from_a_drm_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let card = |name: &str, vendor: &str, vram: Option<&str>| {
+            let dev = root.path().join(name).join("device");
+            std::fs::create_dir_all(&dev).unwrap();
+            std::fs::write(dev.join("vendor"), format!("{vendor}\n")).unwrap();
+            if let Some(v) = vram {
+                std::fs::write(dev.join("mem_info_vram_total"), v).unwrap();
+            }
+        };
+        card("card0", "0x8086", None);
+        card("card1", "0x1002", Some("17163091968\n"));
+        // A connector, not a GPU: must be skipped even though it looks like one.
+        card("card1-DP-1", "0x1002", None);
+        card("card2", "0x1af4", None); // virtio: not a vendor we drive
+
+        let gpus = drm_gpus(root.path());
+        assert_eq!(gpus.len(), 2, "{gpus:#?}");
+        assert_eq!(gpus[0].vendor, GpuVendor::Intel);
+        assert_eq!(gpus[1].vendor, GpuVendor::Amd);
+        assert_eq!(gpus[1].vram_mb, Some(16368));
+
+        // Discrete AMD ahead of the integrated Intel, so Vulkan targets it.
+        let merged = merge_gpus(Vec::new(), gpus);
+        assert_eq!(merged[0].vendor, GpuVendor::Amd);
+        assert_eq!(select_runtime(&HardwareProfile {
+            cpu: CpuInfo { brand: String::new(), physical_cores: 8, avx2: true, avx512: false },
+            ram_mb: 32768,
+            gpus: merged,
+        }).backend, crate::runtime::manifest::Backend::Vulkan);
+    }
+
+    #[test]
+    fn missing_drm_dir_means_no_gpus() {
+        assert!(drm_gpus(std::path::Path::new("/definitely/not/here")).is_empty());
     }
 }

@@ -241,7 +241,8 @@ pub fn select_runtime(profile: &HardwareProfile) -> RuntimeSelection {
                     build_tag,
                 };
             }
-            GpuVendor::Unknown => {}
+            // Apple is only reported on macOS, which returned above.
+            GpuVendor::Apple | GpuVendor::Unknown => {}
         }
     }
 
