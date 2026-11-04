@@ -14,7 +14,7 @@
        Rail, Chat, Composer and Workbench render. Styled by the app's own CSS. -->
   <div id="root">
     <div class="app" style="--dock-w: 340px">
-      <!-- ============ top bar (the title bar on Windows) ============ -->
+      <!-- ============ top bar (no window buttons: the site shows no one system) ============ -->
       <div class="topbar is-titlebar">
         <div class="topbar-left">
           <div class="brand">
@@ -33,11 +33,6 @@
         <div class="topbar-where is-chat"><span class="topbar-where-label" id="topLabel">New chat</span></div>
         <div class="topbar-right">
           <button class="sidebar-toggle workbench-toggle on" aria-pressed="true" aria-label="Hide files and canvas" title="Hide files and canvas (Ctrl+\)"><i data-ic="sidebarR" data-size="17"></i></button>
-        </div>
-        <div class="window-controls">
-          <button class="wc-btn" aria-label="Minimize"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5.5h10" stroke="currentColor" stroke-width="1" /></svg></button>
-          <button class="wc-btn" aria-label="Maximize"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="0.5" y="0.5" width="9" height="9" rx="1" stroke="currentColor" /></svg></button>
-          <button class="wc-btn wc-close" aria-label="Close"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5l9 9M9.5 0.5l-9 9" stroke="currentColor" stroke-width="1" /></svg></button>
         </div>
       </div>
 
@@ -58,7 +53,7 @@
             <p class="rail-label">Projects</p>
             <ul class="chat-list project-list">
               <li class="project-row-wrap expanded">
-                <div class="project-row contains-active" title="C:\Users\you\Documents">
+                <div class="project-row contains-active" title="~/Documents">
                   <button class="project-twisty" aria-label="Collapse Paperwork" aria-expanded="true"><i data-ic="chevR" data-size="12" data-sw="1.6"></i></button>
                   <span class="project-dot has-folder"></span>
                   <span class="chat-title">Paperwork</span>
@@ -208,7 +203,7 @@
       <aside class="workbench" aria-label="Workbench">
         <div class="wb-head">
           <div class="wb-context">
-            <button class="wb-context-btn" title="C:\Users\you\Documents">
+            <button class="wb-context-btn" title="~/Documents">
               <span class="wb-folder-icon" aria-hidden="true"><i data-ic="folder" data-size="14"></i></span>
               <span class="wb-crumbs">
                 <span class="wb-crumb-project">Paperwork</span>

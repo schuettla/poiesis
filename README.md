@@ -1,6 +1,7 @@
 # Poiesis Agent
 
-A **local-first, agentic desktop LLM application** for Windows. Chat with local
+A **local-first, agentic desktop LLM application** for Windows, macOS (Apple
+Silicon) and Linux. Chat with local
 models that run entirely on your machine, give the assistant real capabilities
 (files, folder reading, web search, code execution, image generation, your
 connected apps, the coding agents you already have installed), talk to it out
@@ -70,7 +71,7 @@ looking for. What it may change without asking is set per class in
 - **Agent apps:** Claude Code, Codex and OpenCode, driven headless over their own stdio protocols (stream-JSON, `app-server`, ACP)
 - **Connected apps:** Composio Connect (one hosted MCP endpoint, your own `ck_` key) beside any MCP server you add yourself
 - **Storage:** embedded SQLite (FTS5 full-text search + a vector store), plus markdown for the agent's memory
-- **Secrets:** OS credential store (Windows Credential Manager) — never in files or the database
+- **Secrets:** OS credential store (Windows Credential Manager, macOS Keychain, Linux Secret Service) — never in files or the database
 
 **How the agent actually works** — the loop, the toolsets, prompt assembly,
 consent, agent apps, connected apps, the decision engine and the event
@@ -93,7 +94,9 @@ maintenance loop), `PERCEPTION_PLAN.md` (recall, retrieval, tasks),
 self-checking harness), `MULTIMODAL_PLAN.md` (media backends and in-stream
 creation), `HARNESS_PLAN.md` and `SUBAGENTS_PLAN.md` (one six-phase
 programme), `SHELL_PLAN.md` (one tab strip, a sidebar that navigates itself),
-`PROJECTS_PLAN.md` (projects as groups of sessions), `PLANNING_PLAN.md` (a
+`PROJECTS_PLAN.md` (projects as groups of sessions), `CROSS_PLATFORM_PLAN.md`
+(macOS and Linux builds with the same self-update; built except the manual
+update test on real machines), `PLANNING_PLAN.md` (a
 visible plan a run works through), `CODING_PLAN.md` (running project tasks,
 reviewing the agent's patch, code navigation), `MODELS_PLAN.md` (Models,
 Providers, Runtime), `COMMANDS_PLAN.md` (the `/` menu), `VOICE_PLAN.md`,
@@ -104,12 +107,19 @@ Providers, Runtime), `COMMANDS_PLAN.md` (the `/` menu), `VOICE_PLAN.md`,
 
 ## Download
 
-**[Download the latest Windows installer](https://github.com/schuettla/poiesis/releases/latest)**
-from the Releases page (the `-setup.exe` file). Installed copies check for
-newer releases themselves and always ask before installing one.
+**[Download the latest release](https://github.com/schuettla/poiesis/releases/latest)**
+and pick the file for your system:
 
-The installer isn't code-signed yet, so Windows may show "Windows protected
-your PC". Choose **More info → Run anyway**.
+| System | File | Notes |
+|---|---|---|
+| **Windows** 10 or 11, 64-bit | `…_x64-setup.exe` (or `…_x64_en-US.msi`) | The installer isn't code-signed yet, so Windows may show "Windows protected your PC". Choose **More info → Run anyway**. |
+| **macOS** on Apple Silicon (M1 or newer) | `…_aarch64.dmg` | Not notarised by Apple. The first time, open it from **System Settings → Privacy & Security → Open Anyway** (or `xattr -dr com.apple.quarantine "/Applications/Poiesis Agent.app"`). Intel Macs aren't supported. |
+| **Linux**, 64-bit, glibc 2.39 or newer (Ubuntu 24.04 or newer) | `…_amd64.AppImage` or `…_amd64.deb` | Make the AppImage executable (`chmod +x`) first. Saving keys needs a Secret Service (GNOME Keyring or KWallet). |
+
+Installed copies check for newer releases themselves and always ask before
+installing one. The AppImage replaces itself without a password; the `.deb`
+installs through `pkexec`, so Linux asks for your password on each update. The
+macOS and Linux builds are new and have had less testing than Windows.
 
 To build it yourself instead, see Quick start below.
 
@@ -151,13 +161,15 @@ controls, per-tool toggles and other expert surfaces.
 | Requirement | Notes |
 |---|---|
 | **Rust** (via [rustup](https://rustup.rs)) | Backend language |
-| **MSVC C++ Build Tools** | The Rust linker on Windows (Visual Studio Build Tools → "Desktop development with C++") |
 | **Node.js 18+** and npm | Frontend toolchain |
-| **WebView2 runtime** | Ships with Windows 11; the installer bootstraps it on Windows 10 |
+| **Windows:** MSVC C++ Build Tools | The Rust linker (Visual Studio Build Tools → "Desktop development with C++") |
+| **Windows:** WebView2 runtime | Ships with Windows 11; the installer bootstraps it on Windows 10 |
+| **macOS:** Xcode Command Line Tools | `xcode-select --install` |
+| **Linux:** system libraries | On Ubuntu 24.04: `sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev libssl-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev` (the same list the release workflow installs) |
 
 **No CUDA toolkit needed** — Poiesis downloads prebuilt engine binaries rather than
-compiling anything. GPU acceleration (CUDA / Vulkan / ROCm) is auto-selected from
-your hardware.
+compiling anything. GPU acceleration (CUDA / Vulkan / ROCm, Metal on a Mac) is
+auto-selected from your hardware.
 
 ---
 
@@ -167,7 +179,7 @@ your hardware.
 |---|---|
 | `npm run tauri dev` | Full app in dev mode (Rust + frontend, hot-reload UI) |
 | `npm run dev` | **Frontend-only** preview in a browser at `http://localhost:1420` (mock data, no backend) — fast UI iteration |
-| `npm run tauri build` | Production build + Windows installer (`.msi` / `.exe`) |
+| `npm run tauri build` | Production build + installers for the system you build on |
 | `npm run build` | Type-check + build the frontend bundle only |
 | `npx tsc --noEmit` | Type-check the frontend without emitting |
 | `npm test` | Frontend unit tests (vitest) |
@@ -180,8 +192,17 @@ your hardware.
 npm run tauri build
 ```
 
-Output lands in `src-tauri/target/release/bundle/` (the `.msi` and/or NSIS `.exe`
-installer, with the WebView2 bootstrapper embedded).
+Output lands in `src-tauri/target/release/bundle/`: the `.msi` and NSIS `.exe`
+on Windows (with the WebView2 bootstrapper embedded), the `.app` and `.dmg` on
+macOS, the AppImage, `.deb` and `.rpm` on Linux.
+
+Official releases come from the `release` GitHub workflow, which builds all
+three systems into one draft release with a signed `latest.json` for the
+updater. It needs four secrets: `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (the updater key, not its public key) and
+`MAC_CERT_P12` and `MAC_CERT_PASSWORD` (a self-signed code-signing certificate,
+see `plans/CROSS_PLATFORM_PLAN.md` D-1). Line endings pasted into a secret are
+stripped by the workflow.
 
 ---
 
@@ -189,12 +210,15 @@ installer, with the WebView2 bootstrapper embedded).
 
 ### Local models & runtime
 - Hardware survey (GPU / VRAM / RAM / CPU ISA) → automatic llama.cpp **backend
-  selection** (CUDA 12/13, Vulkan, HIP/ROCm, SYCL, CPU AVX-512/AVX2/baseline).
+  selection** (CUDA 12/13, Vulkan, HIP/ROCm, SYCL, CPU AVX-512/AVX2/baseline;
+  Metal on Apple Silicon).
 - Runtime provisioning: streamed, resumable **download** of the matching prebuilt
   `llama-server`, unpack, and a manual **backend override** in the Engine view.
 - Engine lifecycle: dynamic loopback port, **per-session random auth token**,
   health-gated readiness, and kill-on-exit — including a Win32 **Job Object** so an
-  ungraceful crash can't orphan the engine and leak VRAM.
+  ungraceful crash can't orphan the engine and leak VRAM. On Linux the kernel
+  kills the engine if the app dies (`PR_SET_PDEATHSIG`); on macOS a normal quit
+  or update still stops it, but a crash can leave it running.
 - A **watchdog** restarts a crashed engine with backoff, capped per rolling hour
   so it can't loop forever, and says so in **Self → Health**.
 - **Marketplace:** curated recommendations + Hugging Face / GitHub discovery,
@@ -658,7 +682,8 @@ Three sections answer three questions:
   engines' models.
 - **Providers** — *where does it come from?* Add an **OpenAI**, **OpenRouter**
   or **Anthropic** key (verified before it says "saved"), or your own model
-  servers. Keys live in Windows Credential Manager, never in a file or your
+  servers. Keys live in your system's credential store (Windows Credential
+  Manager, macOS Keychain, Linux Secret Service), never in a file or your
   chats. A **Local-only** filter hides cloud models entirely.
 - **Runtime** — *what runs on this PC?* The llama.cpp engine and its backend,
   the image, voice, recall and decision engines, and where each runs.
@@ -709,7 +734,8 @@ Three sections answer three questions:
 - **Project tasks run your project's own commands** and are off by default.
   They are confined by a Windows Job Object (time limit, memory and process
   caps, the whole process tree ends on Stop) with secret-looking environment
-  variables removed. That is not network or filesystem isolation, and the
+  variables removed. On macOS and Linux they run in their own process group
+  (the whole tree ends on Stop) with a memory cap but no process cap. That is not network or filesystem isolation, and the
   settings say so. The agent never commits, pushes or installs globally on its
   own, and free-form commands never run through a shell.
 - **Scheduled tasks are read-only** and never prompt — see Tasks, above.
@@ -790,8 +816,10 @@ poiesis/
 └── plans/                    # plans, specs, task checklist, PRD
 ```
 
-Where local state lives at runtime (under the app-data directory,
-`%APPDATA%\com.projectpoiesis.app`): `poiesis.db` (SQLite), `memory/` (the agent's
+Where local state lives at runtime (under the app-data directory:
+`%APPDATA%\com.projectpoiesis.app` on Windows,
+`~/Library/Application Support/com.projectpoiesis.app` on macOS,
+`~/.local/share/com.projectpoiesis.app` on Linux): `poiesis.db` (SQLite), `memory/` (the agent's
 durable self, as markdown), `skills/` (Agent Skills), `runtimes/` (engines),
 `models/` (weights), `generated-images/` (image and video outputs).
 
@@ -805,10 +833,15 @@ npm test                            # 1,363 frontend tests (vitest)
 npx tsc --noEmit                    # frontend type safety
 ```
 
-(Counted 2026-10-27 on the working tree after `6b1e851`: `cargo test --lib` 1,586
-passed; vitest 1,362 of 1,363, the one failure being a stale expectation in
-`ThoughtStrip.test.tsx`; `tsc` reports one error in `AgentRun.tsx`, an extra
-`messageId` prop on the plan card. Both are in uncommitted work.)
+(Counted 2026-10-27 on the working tree after `6b1e851`. The stale
+`ThoughtStrip.test.tsx` expectation and the `tsc` error in `AgentRun.tsx`
+noted then were both fixed on 2026-11-03.)
+
+A manual `test` GitHub workflow runs `cargo test --lib` on Ubuntu. On
+2026-11-03 everything passed there except the three `db` fork tests, which cut
+a conversation by millisecond timestamps and fail when a fast machine writes
+the test's messages within one millisecond. Tests recorded against Windows
+paths (`C:\proj`) run on Windows only.
 
 Covers hardware/runtime selection against **real** llama.cpp and
 stable-diffusion.cpp release asset names, SQLite + FTS5 + vector search,
@@ -885,8 +918,17 @@ Some behaviour can only be checked by hand against real models — see **Status*
 
 - **"No model is loaded yet."** Download/select a local model in **Models**, or
   pick a cloud model (with a key set). The engine starts on demand.
-- **Backend won't compile / linker error.** Install the MSVC C++ Build Tools
-  ("Desktop development with C++") so Rust has a linker.
+- **Backend won't compile / linker error.** On Windows, install the MSVC C++
+  Build Tools ("Desktop development with C++") so Rust has a linker. On Linux,
+  install the system libraries listed under Prerequisites.
+- **macOS says the app "can't be opened" or is damaged.** It isn't notarised.
+  Open **System Settings → Privacy & Security** and press **Open Anyway**, or
+  run `xattr -dr com.apple.quarantine "/Applications/Poiesis Agent.app"`. Only
+  the first install needs this.
+- **The Linux AppImage doesn't start.** Make it executable (`chmod +x`). On a
+  distribution older than glibc 2.39 (Ubuntu 22.04, Debian 12) it can't run at
+  all. If saving a key fails, the desktop has no Secret Service: install GNOME
+  Keyring or KWallet.
 - **Tools do nothing in chat.** Turn on the **⚒** toggle in the composer, and enable
   the specific group in **Settings → Tools** (web search, code execution, mail,
   browser, screen and image generation all default to off).
@@ -999,6 +1041,13 @@ Codex and OpenCode as delegation targets, with a visible rule set for when work
 is handed over), **connected apps** (a gate on every MCP connector, then
 Composio Connect) and the **dual-process work** (a decision engine, Experiments,
 and steps 1–19 of the plan). The database schema is at v42.
+
+**macOS and Linux** (2026-11-03): the release workflow builds Windows, macOS on
+Apple Silicon and Linux (AppImage, `.deb`) into one release with one signed
+update manifest. The engine downloads, GPU detection and process cleanup were
+extended for both. All three builds come out of CI, but neither the macOS nor
+the Linux app has been run on a real machine yet, and the update path from one
+version to the next is untested there.
 
 **Verified live:** local chat and local image generation (CUDA on a GTX 1060
 6 GB — Stable Diffusion 1.5 at 512×512), cloud chat via OpenRouter, and the

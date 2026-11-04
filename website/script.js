@@ -321,4 +321,47 @@
       }
     });
   }
+
+  /* ---------- downloads ----------
+     The file names carry the version, so the buttons are filled from the
+     latest published release. Until one is published (or if GitHub doesn't
+     answer) every button stays on the releases page. The visitor's own
+     system only gets a quieter border; every Download button leads to all three. */
+  var dl = $(".dl");
+  if (dl) {
+    var MATCH = {
+      exe: /-setup\.exe$/i,
+      msi: /\.msi$/i,
+      dmg: /\.dmg$/i,
+      appimage: /\.appimage$/i,
+      deb: /\.deb$/i,
+    };
+    var ua = navigator.userAgent || "";
+    var os = /Android|iPhone|iPad/.test(ua) ? null
+      : /Mac/.test(ua) ? "macos"
+      : /Win/.test(ua) ? "windows"
+      : /Linux|X11/.test(ua) ? "linux"
+      : null;
+
+    var card = os && $('[data-os="' + os + '"]', dl);
+    if (card) card.classList.add("here");
+
+    fetch("https://api.github.com/repos/schuettla/poiesis/releases/latest", {
+      headers: { Accept: "application/vnd.github+json" },
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (release) {
+        if (!release || !release.assets) return;
+        var url = {};
+        release.assets.forEach(function (asset) {
+          Object.keys(MATCH).forEach(function (kind) {
+            if (!url[kind] && MATCH[kind].test(asset.name)) url[kind] = asset.browser_download_url;
+          });
+        });
+        $$("[data-asset]", dl).forEach(function (a) {
+          if (url[a.dataset.asset]) a.href = url[a.dataset.asset];
+        });
+      })
+      .catch(function () {});
+  }
 })();

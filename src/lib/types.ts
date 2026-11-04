@@ -428,6 +428,8 @@ export type DockView = "files" | "artifacts" | "agents" | "browser" | "changes";
  * that enumerates routes — from drifting away from the routes that exist. */
 export const ALL_VIEWS = [
   "chat",
+  // The first-steps screen: what is needed to chat, and one button that does it.
+  "firststeps",
   "models",
   "providers",
   "engines",
@@ -465,6 +467,7 @@ export type View = (typeof ALL_VIEWS)[number];
  * importing a route module from the store would drag every settings panel into
  * its module graph. `SettingsHub` re-exports this as `HUB_TABS`. */
 export const HUB_SECTIONS: { view: View; label: string; icon: string }[] = [
+  { view: "firststeps", label: "First steps", icon: "⚑" },
   { view: "settings", label: "General", icon: "⚙" },
   { view: "models", label: "Models", icon: "▤" },
   { view: "providers", label: "Providers", icon: "⌁" },

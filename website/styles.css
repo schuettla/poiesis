@@ -1720,6 +1720,39 @@ kbd {
   font-weight: 500;
 }
 
+/* ---------- download: one card per system ---------- */
+.trio.dl {
+  margin-top: 32px;
+}
+.dl .txt {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+}
+.dl h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 0;
+}
+.dl .cta {
+  margin-top: 0;
+}
+.dl .fine {
+  margin-top: auto;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+/* The visitor's own system, once script.js has guessed it. */
+.dl .tile.here {
+  border-color: var(--ink-faint);
+}
+.dl-all {
+  margin-top: 20px;
+  font-size: var(--fs-footnote);
+}
+
 /* ---------- faq ---------- */
 .faq {
   margin-top: 40px;

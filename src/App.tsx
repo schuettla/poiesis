@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useAppStore, useLiveItems } from "./lib/store";
 import { inTauri, voiceSettings } from "./lib/api";
 import { useReportUse } from "./lib/useReportUse";
+import { useFirstSteps } from "./lib/useFirstSteps";
 import { hideVoiceSurface, openVoice } from "./lib/voice/controller";
 import { getVoiceHotkey, matchesHotkey, setVoiceHotkey } from "./lib/voice/hotkey";
 import { useVoiceStore } from "./lib/voice/voiceStore";
@@ -18,7 +19,6 @@ import PermissionPanel from "./components/SidePanel/PermissionPanel";
 import ContextPanel from "./components/Context/ContextPanel";
 import MediaConsentDialog from "./components/Confirm/MediaConsentDialog";
 import ImageLightbox from "./components/Conversation/ImageLightbox";
-import OnboardingGuide from "./components/Onboarding/OnboardingGuide";
 import CommandPalette from "./components/CommandPalette/CommandPalette";
 import "./App.css";
 
@@ -39,6 +39,9 @@ export default function App() {
 
   // `SLP-1`: the daily tidy-up starts when the app has been quiet, and stops on a key.
   useReportUse();
+
+  // Nothing to chat with yet: open the first-steps screen, once per launch.
+  useFirstSteps();
 
   // `UPD-6`: the arrival receipt and the startup update check. Waits for
   // bootstrap, and the check itself waits a few seconds more, so neither
@@ -167,7 +170,6 @@ export default function App() {
       <ContextPanel />
       <MediaConsentDialog />
       <ImageLightbox />
-      <OnboardingGuide />
       <CommandPalette />
     </div>
   );

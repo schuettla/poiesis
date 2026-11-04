@@ -64,6 +64,7 @@ describe("the settings hub", () => {
     // exists that it does not claim, choosing that tab blanks the window.
     renderAt("settings");
     const byLabel: Record<string, View> = {
+      "First steps": "firststeps",
       General: "settings",
       Models: "models",
       Providers: "providers",

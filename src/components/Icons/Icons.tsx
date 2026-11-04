@@ -309,6 +309,13 @@ export function SectionIcon({ view, ...props }: IconProps & { view: string }) {
   switch (view) {
     case "settings":
       return <SettingsIcon {...props} />;
+    case "firststeps":
+      // A flag on a pole: the place to start.
+      return (
+        <Glyph {...props}>
+          <path d="M5 17V3.5M5 4.5h9.5l-2 3 2 3H5" strokeLinecap="round" strokeLinejoin="round" />
+        </Glyph>
+      );
     case "models":
       return (
         <Glyph {...props}>

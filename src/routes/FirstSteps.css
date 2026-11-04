@@ -1,0 +1,148 @@
+/* The first-steps screen. Cards and buttons come from Models.css (.btn-primary
+   .big, .dl-progress) and global.css; this file only lays out the page. */
+.first-steps .fs-lede {
+  font-family: var(--font-sans);
+  font-size: var(--fs-callout);
+  line-height: 1.55;
+  color: var(--ink-muted);
+  max-width: var(--measure);
+  margin: 0 0 24px;
+}
+
+.fs-card {
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  padding: 22px 24px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.fs-main,
+.fs-ready {
+  border-color: var(--ink-faint);
+}
+.fs-card-title {
+  font-family: var(--font-serif);
+  font-size: var(--fs-title);
+  font-weight: 500;
+  color: var(--ink);
+  margin: 0 0 8px;
+}
+.fs-card-body {
+  font-family: var(--font-sans);
+  font-size: var(--fs-callout);
+  line-height: 1.55;
+  color: var(--ink-muted);
+  margin: 0 0 16px;
+  max-width: var(--measure);
+}
+.fs-sub {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink);
+  margin: 4px 0 8px;
+}
+
+.fs-needs {
+  margin: 0 0 16px;
+  padding-left: 18px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.6;
+  color: var(--ink-muted);
+}
+
+.fs-steps {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+.fs-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.fs-mark {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--paper-edge-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+  margin-top: 1px;
+}
+.fs-steps li.done .fs-mark {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.fs-steps li.active .fs-mark {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+.fs-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+.fs-body strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.fs-body .dl-progress {
+  margin-top: 6px;
+}
+
+.fs-link {
+  align-self: flex-start;
+  margin-top: 2px;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.fs-link:hover:not(:disabled) {
+  color: var(--ink-muted);
+}
+.fs-link:disabled {
+  color: var(--ink-faint);
+  cursor: default;
+}
+
+.fs-error {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  background: var(--fill-hover);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin: 0 0 14px;
+}
+
+.fs-skip {
+  margin: 4px 0 28px;
+}
+.fs-later {
+  margin-top: 8px;
+}

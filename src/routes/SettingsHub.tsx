@@ -3,6 +3,7 @@ import { HUB_SECTIONS } from "../lib/types";
 import type { View } from "../lib/types";
 import PoiesisMark from "../components/Mark/PoiesisMark";
 import { SectionIcon } from "../components/Icons/Icons";
+import FirstSteps from "./FirstSteps";
 import Models from "./Models";
 import Providers from "./Providers";
 import Engines from "./Engines";
@@ -112,6 +113,7 @@ export default function SettingsHub() {
         ))}
       </nav>
       <div className="settings-hub-content">
+        {view === "firststeps" && <FirstSteps />}
         {view === "settings" && <Settings />}
         {view === "workingdir" && <WorkingDir />}
         {view === "mail" && <Mail />}

@@ -6,7 +6,7 @@
   <title>Poiesis: the agent that tends to itself</title>
   <meta
     name="description"
-    content="Poiesis is a local-first desktop agent for Windows. It remembers what it learns, repairs what breaks, and shows you every change it makes to itself. You decide what it may change."
+    content="Poiesis is a local-first desktop agent for Windows, macOS and Linux. It remembers what it learns, repairs what breaks, and shows you every change it makes to itself. You decide what it may change."
   />
   <meta name="theme-color" content="#f3f5f3" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#0d100e" media="(prefers-color-scheme: dark)" />
@@ -39,7 +39,7 @@
       "@type": "SoftwareApplication",
       "name": "Poiesis Agent",
       "applicationCategory": "UtilitiesApplication",
-      "operatingSystem": "Windows 10, Windows 11",
+      "operatingSystem": "Windows 10, Windows 11, macOS (Apple Silicon), Linux",
       "license": "https://opensource.org/licenses/MIT",
       "description": "A local-first, agentic desktop LLM application that keeps plain-text memory and maintains itself under your control."
     }
@@ -86,7 +86,7 @@
         <a class="btn btn-secondary btn-sm btn-icon" href="https://github.com/schuettla/poiesis" aria-label="GitHub" title="GitHub">
           <svg aria-hidden="true"><use href="#i-github" /></svg>
         </a>
-        <a class="btn btn-primary btn-sm" href="https://github.com/schuettla/poiesis/releases/latest">
+        <a class="btn btn-primary btn-sm" href="#download">
           <svg><use href="#i-download" /></svg>
           Download
         </a>
@@ -100,16 +100,16 @@
       <section class="band hero" aria-labelledby="hero-h">
         <div class="wrap">
           <div class="hero-top">
-            <span class="eyebrow" style="margin: 0">Local-first agent for Windows</span>
+            <span class="eyebrow" style="margin: 0">Local-first agent for Windows, macOS and Linux</span>
             <h1 id="hero-h">The agent that <em>tends to itself.</em></h1>
             <p class="lede">
               Poiesis runs on your computer. It remembers what it learns about you, repairs what
               breaks, and shows you every change it makes to itself. You decide what it may change.
             </p>
             <div class="cta">
-              <a class="btn btn-primary" href="https://github.com/schuettla/poiesis/releases/latest">
+              <a class="btn btn-primary" href="#download">
                 <svg><use href="#i-download" /></svg>
-                Download for Windows
+                <span>Download</span>
               </a>
               <a class="btn btn-secondary btn-icon" href="https://github.com/schuettla/poiesis" aria-label="GitHub" title="GitHub">
                 <svg aria-hidden="true"><use href="#i-github" /></svg>
@@ -117,7 +117,7 @@
               <a class="btn btn-secondary" href="#idea">See how it works</a>
             </div>
             <div class="hero-facts">
-              <span>Windows 10 and 11</span>
+              <span>Windows, macOS and Linux</span>
               <span>Runs local models</span>
               <span>Talks and listens on your machine</span>
               <span>Works with Claude Code and Codex</span>
@@ -612,8 +612,8 @@
 
           <div class="promises" data-reveal>
             <div class="promise">
-              <h4>Keys stay in Windows.</h4>
-              <p>Your cloud keys live in the Windows Credential Manager. They are never in a file or in your chats.</p>
+              <h4>Keys stay in your system's keychain.</h4>
+              <p>Your cloud keys live in Windows Credential Manager, the macOS Keychain or the Linux Secret Service. They are never in a file or in your chats.</p>
             </div>
             <div class="promise">
               <h4>Words from outside are data.</h4>
@@ -676,14 +676,14 @@ description: Build the weekly report
               <div class="art">
 <pre class="codebox"><span class="k">command</span>
 npx -y @modelcontextprotocol/
-  server-filesystem C:/path
+  server-filesystem ~/notes
 
 <span class="k">or paste a link</span>
 https://example.com/mcp</pre>
               </div>
               <div class="txt">
                 <h3>Your own MCP servers.</h3>
-                <p>Connect any Model Context Protocol server, remote or local, and its tools join the toolbox behind the same read, change and send checks. Tokens are kept in the Windows credential store.</p>
+                <p>Connect any Model Context Protocol server, remote or local, and its tools join the toolbox behind the same read, change and send checks. Tokens are kept in your system's credential store.</p>
               </div>
             </article>
           </div>
@@ -765,22 +765,67 @@ until you say so.</pre>
       </section>
 
       <!-- ================= START ================= -->
-      <section class="band canvas" id="start" aria-labelledby="start-h">
+      <section class="band canvas" id="start" aria-labelledby="download-h">
         <div class="wrap">
-          <div class="start">
-            <div data-reveal>
-              <span class="eyebrow">Get started</span>
-              <h2 class="h2" id="start-h">Download it, or run it from source.</h2>
-              <p class="prose">Get the Windows installer from the latest release, or build it yourself with a few commands.</p>
-              <div class="cta" style="margin-bottom: 20px">
-                <a class="btn btn-primary" href="https://github.com/schuettla/poiesis/releases/latest">
-                  <svg><use href="#i-download" /></svg>
-                  Download the latest release
-                </a>
+          <!-- Each button points at the releases page until script.js finds the
+               file in the latest published release. -->
+          <div id="download" data-reveal>
+            <span class="eyebrow">Download</span>
+            <h2 class="h2" id="download-h">For Windows, macOS and Linux.</h2>
+            <p class="prose">Every build comes from the same release. Installed copies check for new versions themselves and always ask before installing one.</p>
+          </div>
+          <div class="trio dl" data-reveal>
+            <article class="tile" data-os="windows">
+              <div class="txt">
+                <h3>Windows</h3>
+                <p>Windows 10 or 11, 64-bit.</p>
+                <div class="cta">
+                  <a class="btn btn-primary btn-sm" data-asset="exe" href="https://github.com/schuettla/poiesis/releases/latest">
+                    <svg><use href="#i-download" /></svg>
+                    Installer (.exe)
+                  </a>
+                  <a class="btn btn-secondary btn-sm" data-asset="msi" href="https://github.com/schuettla/poiesis/releases/latest">.msi</a>
+                </div>
+                <p class="fine">The installer isn't code-signed yet, so Windows may say "Windows protected your PC". Choose More info, then Run anyway.</p>
               </div>
-              <p class="prose">The installer isn't code-signed yet, so Windows may show "Windows protected your PC". Choose More info, then Run anyway.</p>
+            </article>
+            <article class="tile" data-os="macos">
+              <div class="txt">
+                <h3>macOS <span class="badge">New</span></h3>
+                <p>Apple Silicon (M1 or newer). Intel Macs aren't supported.</p>
+                <div class="cta">
+                  <a class="btn btn-primary btn-sm" data-asset="dmg" href="https://github.com/schuettla/poiesis/releases/latest">
+                    <svg><use href="#i-download" /></svg>
+                    Disk image (.dmg)
+                  </a>
+                </div>
+                <p class="fine">It isn't notarised by Apple. The first time, open it from System Settings, Privacy &amp; Security, Open Anyway. Updates after that need nothing extra.</p>
+              </div>
+            </article>
+            <article class="tile" data-os="linux">
+              <div class="txt">
+                <h3>Linux <span class="badge">New</span></h3>
+                <p>64-bit, glibc 2.39 or newer, such as Ubuntu 24.04.</p>
+                <div class="cta">
+                  <a class="btn btn-primary btn-sm" data-asset="appimage" href="https://github.com/schuettla/poiesis/releases/latest">
+                    <svg><use href="#i-download" /></svg>
+                    AppImage
+                  </a>
+                  <a class="btn btn-secondary btn-sm" data-asset="deb" href="https://github.com/schuettla/poiesis/releases/latest">.deb</a>
+                </div>
+                <p class="fine">Make the AppImage executable before starting it. It updates itself without a password; the .deb asks for yours on each update.</p>
+              </div>
+            </article>
+          </div>
+          <p class="prose dl-all" data-reveal>Older versions and every file are on the <a href="https://github.com/schuettla/poiesis/releases">releases page</a>.</p>
+
+          <div class="start" style="margin-top: 72px">
+            <div data-reveal>
+              <span class="eyebrow">From source</span>
+              <h2 class="h2" id="start-h">Or build it yourself.</h2>
+              <p class="prose">A few commands, on any of the three.</p>
               <ol class="steps">
-                <li><span><b>Install the tools.</b> Rust, the MSVC C++ build tools, and Node.js 18 or newer. Windows 11 already has WebView2.</span></li>
+                <li><span><b>Install the tools.</b> Rust, Node.js 18 or newer, and your system's build tools: the MSVC C++ build tools on Windows, Xcode's command line tools on a Mac, WebKitGTK and its friends on Linux (the README lists them).</span></li>
                 <li><span><b>Run it.</b> The first start builds the Rust backend, which takes a few minutes.</span></li>
                 <li><span><b>Pick a model.</b> In Models, download one. The app shows which ones run great on your graphics card.</span></li>
                 <li><span><b>Say hello.</b> Attach a folder to give it something to read.</span></li>
@@ -788,7 +833,7 @@ until you say so.</pre>
             </div>
             <div data-reveal>
               <div class="panel term">
-                <div class="path">PowerShell</div>
+                <div class="path">Terminal</div>
 <pre><span class="k">$</span> git clone https://github.com/schuettla/poiesis.git
 <span class="k">$</span> cd poiesis
 <span class="k">$</span> npm install
@@ -796,8 +841,8 @@ until you say so.</pre>
               </div>
               <table class="req">
                 <tbody>
-                  <tr><td>System</td><td>Windows 10 or 11.</td></tr>
-                  <tr><td>Graphics card</td><td>Optional. It picks CUDA, Vulkan, ROCm, SYCL or CPU for you.</td></tr>
+                  <tr><td>System</td><td>Windows 10 or 11, macOS on Apple Silicon, or Linux with glibc 2.39 or newer.</td></tr>
+                  <tr><td>Graphics card</td><td>Optional. It picks CUDA, Vulkan, ROCm, SYCL, Metal or CPU for you.</td></tr>
                   <tr><td>No CUDA toolkit</td><td>Engines are downloaded prebuilt. Nothing is compiled on your side.</td></tr>
                   <tr><td>Make an installer</td><td><code>npm run tauri build</code></td></tr>
                 </tbody>
@@ -821,7 +866,7 @@ until you say so.</pre>
             </details>
             <details>
               <summary>What leaves my computer?</summary>
-              <div class="ans">Nothing, unless you use something that needs the network: web search, the browser, mail, a connected app, an agent app, a cloud model, cloud quick decisions, or a download of an engine or model. Those are labelled, and the tools start off. Telemetry is off by default, contains no content, and stays on your PC.</div>
+              <div class="ans">Nothing, unless you use something that needs the network: web search, the browser, mail, a connected app, an agent app, a cloud model, cloud quick decisions, or a download of an engine or model. Those are labelled, and the tools start off. Telemetry is off by default, contains no content, and stays on your computer.</div>
             </details>
             <details>
               <summary>Can it change or delete my files?</summary>
@@ -857,7 +902,7 @@ until you say so.</pre>
             </details>
             <details>
               <summary>Is there a Mac or Linux version?</summary>
-              <div class="ans">Not yet. Poiesis is built for Windows first.</div>
+              <div class="ans">Yes. There is a build for Macs with Apple Silicon (M1 or newer) and one for 64-bit Linux, as an AppImage or a .deb, for systems with glibc 2.39 or newer such as Ubuntu 24.04. Both are new and have had less testing than Windows. Intel Macs aren't supported.</div>
             </details>
           </div>
         </div>
@@ -869,14 +914,14 @@ until you say so.</pre>
           <div data-reveal>
             <h2 id="close-h">Meet an agent that keeps its own house.</h2>
             <div class="cta" style="margin-top: 28px">
-              <a class="btn btn-primary" href="https://github.com/schuettla/poiesis/releases/latest">
+              <a class="btn btn-primary" href="#download">
                 <svg><use href="#i-download" /></svg>
-                Download for Windows
+                <span>Download</span>
               </a>
               <a class="btn btn-secondary btn-icon" href="https://github.com/schuettla/poiesis" aria-label="GitHub" title="GitHub">
                 <svg aria-hidden="true"><use href="#i-github" /></svg>
               </a>
-              <a class="btn btn-secondary" href="#start">How to run it</a>
+              <a class="btn btn-secondary" href="#start-h">Build it yourself</a>
             </div>
           </div>
         </div>
@@ -892,7 +937,7 @@ until you say so.</pre>
       </a>
       <span>Copyright 2026 Erich Holzbauer. MIT license.</span>
       <nav aria-label="Footer">
-        <a href="https://github.com/schuettla/poiesis/releases/latest">Download</a>
+        <a href="#download">Download</a>
         <a href="https://github.com/schuettla/poiesis" aria-label="GitHub" title="GitHub">
           <svg aria-hidden="true"><use href="#i-github" /></svg>
         </a>
