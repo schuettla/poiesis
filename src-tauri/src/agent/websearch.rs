@@ -221,7 +221,7 @@ fn interpret(status: reqwest::StatusCode, body: &str) -> Result<Vec<SearchHit>, 
     }
     if !body.contains(RESULT_MARKER) {
         return Err(
-            "the search endpoint returned a page with no result list — most likely a rate-limit or \
+            "the search endpoint returned a page with no result list, most likely a rate-limit or \
              challenge page rather than an empty result set. Say the search didn't go through \
              rather than treating it as \"nothing found\"."
                 .to_string(),

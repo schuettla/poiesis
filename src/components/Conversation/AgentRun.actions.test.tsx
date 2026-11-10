@@ -49,6 +49,8 @@ function render(m: Message, last = true) {
 
 const labels = () =>
   Array.from(container.querySelectorAll(".turn-actions button")).map((b) => b.textContent);
+/** `Continue` sits on the line that says why the run stopped. */
+const continues = () => !!container.querySelector(".run-stopped .run-continue");
 
 describe("AgentRun — what you can do with a finished turn", () => {
   it("offers a rerun on any finished answer", () => {
@@ -58,15 +60,16 @@ describe("AgentRun — what you can do with a finished turn", () => {
 
   it("offers to continue only a run that did not finish", () => {
     render(message({ streaming: false, stopReason: "max_steps" }));
-    expect(labels()).toContain("Continue where I stopped");
+    expect(continues()).toBe(true);
+    expect(labels(), "said once, on the stopped line").not.toContain("Continue where I stopped");
 
     render(message({ streaming: false, stopReason: "completed" }));
-    expect(labels()).not.toContain("Continue where I stopped");
+    expect(continues()).toBe(false);
   });
 
   it("offers to continue only the last turn", () => {
     render(message({ streaming: false, stopReason: "aborted" }), false);
-    expect(labels()).not.toContain("Continue where I stopped");
+    expect(continues()).toBe(false);
   });
 
   it("keeps out of the way while anything is running", () => {
@@ -78,6 +81,7 @@ describe("AgentRun — what you can do with a finished turn", () => {
     });
     render(message({ streaming: false, stopReason: "aborted" }));
     expect(labels()).toEqual([]);
+    expect(continues()).toBe(false);
   });
 
   it("stays away from a turn that was never written down", () => {

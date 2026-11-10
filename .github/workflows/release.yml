@@ -10,6 +10,8 @@ jobs:
   build:
     permissions:
       contents: write     # required: the job creates a Release
+    outputs:
+      release_id: ${{ steps.tauri.outputs.releaseId }}
     strategy:
       fail-fast: false
       matrix:
@@ -99,7 +101,24 @@ jobs:
           echo "TAURI_SIGNING_PRIVATE_KEY=$key" >> "$GITHUB_ENV"
           echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$pw" >> "$GITHUB_ENV"
 
+      # The portable Windows exe: built and copied before tauri-action bundles,
+      # so it carries no installer mark and updates itself by swapping its file
+      # (commands/updater.rs). Signed with the same key as the installers.
+      - name: build and sign the portable exe
+        id: portable
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          npx tauri build --no-bundle
+          ver="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          name="Poiesis-Agent_${ver}_x64_portable.exe"
+          mkdir -p "$RUNNER_TEMP/portable"
+          cp src-tauri/target/release/poiesis.exe "$RUNNER_TEMP/portable/$name"
+          npx tauri signer sign "$RUNNER_TEMP/portable/$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
       - uses: tauri-apps/tauri-action@v0
+        id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Empty on Windows/Linux, where it is ignored. No APPLE_ID / notarisation (D-1).
@@ -107,9 +126,54 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: 'Poiesis Agent v__VERSION__'
-          releaseBody: 'See the assets below to download and install this version.'
+          releaseBody: 'See the assets below to download and install this version. Windows without installing: download the _portable.exe file and run it.'
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
+
+      - name: upload the portable exe
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          name="${{ steps.portable.outputs.name }}"
+          curl -fsS -X POST -H "Authorization: Bearer $GITHUB_TOKEN"             -H "Content-Type: application/octet-stream"             --data-binary @"$RUNNER_TEMP/portable/$name"             "https://uploads.github.com/repos/${{ github.repository }}/releases/${{ steps.tauri.outputs.releaseId }}/assets?name=$name" > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.platform == 'windows-latest'
+        with:
+          name: portable-sig
+          path: ${{ runner.temp }}/portable/*.sig
+
+  # Adds the portable exe to the update list (latest.json), after every
+  # platform's tauri-action has written its part of it.
+  portable-update-entry:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: portable-sig
+          path: sig
+
+      - name: add the portable exe to latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ID: ${{ needs.build.outputs.release_id }}
+        run: |
+          api() { curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "$@"; }
+          sigfile="$(ls sig/*.sig)"
+          name="$(basename "$sigfile" .sig)"
+          tag="$(api "https://api.github.com/repos/$REPO/releases/$ID" | jq -r .tag_name)"
+          asset="$(api "https://api.github.com/repos/$REPO/releases/$ID/assets" | jq -r '.[] | select(.name=="latest.json") | .id')"
+          api -H "Accept: application/octet-stream" "https://api.github.com/repos/$REPO/releases/assets/$asset" > latest.json
+          jq --arg sig "$(cat "$sigfile")"              --arg url "https://github.com/$REPO/releases/download/$tag/$name"              '.platforms["windows-x86_64-portable"] = {signature: $sig, url: $url}' latest.json > new.json
+          api -X DELETE "https://api.github.com/repos/$REPO/releases/assets/$asset"
+          api -X POST -H "Content-Type: application/json" --data-binary @new.json             "https://uploads.github.com/repos/$REPO/releases/$ID/assets?name=latest.json" > /dev/null
+          jq '.platforms | keys' new.json

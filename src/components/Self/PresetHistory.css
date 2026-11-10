@@ -1,0 +1,66 @@
+/* A preset's history. The card is the shared confirm shell; the list has a fixed height
+   and scrolls inside it, so the dialog never changes size when the history grows. */
+.preset-history {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.preset-history-list {
+  height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+.preset-history-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--hairline);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  cursor: pointer;
+}
+.preset-history-row:last-child {
+  border-bottom: none;
+}
+.preset-history-row.event {
+  cursor: default;
+  color: var(--ink-muted);
+}
+.preset-history-row.picked {
+  background: var(--fill-hover);
+}
+.preset-history-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.preset-history-date,
+.preset-history-by,
+.preset-history-why {
+  font-size: var(--fs-ui-sm, 12px);
+  color: var(--ink-muted);
+}
+.preset-history-by {
+  margin-left: auto;
+}
+.preset-history-line {
+  padding-left: 21px;
+  color: var(--ink-muted);
+}
+.preset-history-why {
+  padding-left: 21px;
+}
+.preset-history-compare {
+  min-height: 3.4em;
+}
+.preset-history-diff {
+  margin: 4px 0 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.4;
+  color: var(--ink-muted);
+}

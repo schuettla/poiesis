@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PendingQuestion } from "../../lib/types";
 import { useAppStore } from "../../lib/store";
+import RunText from "./RunText";
 import "./QuestionCard.css";
 
 /**
@@ -67,7 +68,9 @@ export default function QuestionCard({ q }: { q: PendingQuestion }) {
       aria-label={q.agent ? `${q.agent} asks you` : "I need you to decide"}
     >
       <p className="question-card-head">{q.agent ? `${q.agent} asks you` : "I need you to decide"}</p>
-      <p className="question-card-text">{q.question}</p>
+      <div className="question-card-text">
+        <RunText text={q.question} />
+      </div>
       <div className="question-card-options">
         {q.options.map((o, i) => {
           const on = picked.includes(o.label);

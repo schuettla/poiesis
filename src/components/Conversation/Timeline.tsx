@@ -192,7 +192,7 @@ function KeptDisclosure({ kept }: { kept: NonNullable<AgentStep["kept"]> }) {
     <div className="kept-disclosure">
       <div className="kept-head">
         <span className="kept-ref">{kept.reference}</span>
-        <span className="kept-size">{bytes(kept.bytes)} — I kept the full result</span>
+        <span className="kept-size">{bytes(kept.bytes)}, I kept the full result</span>
         {folder && !saved && (
           <button className="kept-save" onClick={save}>
             Save to the working folder
@@ -393,16 +393,41 @@ const LIVE_TAIL = 6;
  * and the steps are how it was got. Your own choice wins either way: open a
  * finished run and it stays open, fold a live one and it stays folded.
  */
+/** `WRK-2`/`WRK-5`: a line where an item ended or the run started fresh. The
+ * fresh start carries the note it wrote itself, which a click opens. */
+function Divider({ step }: { step: AgentStep }) {
+  const [open, setOpen] = useState(false);
+  if (!step.note) {
+    return (
+      <div className="item-divider" role="listitem">
+        {step.divider}
+      </div>
+    );
+  }
+  return (
+    <div className="item-divider has-note" role="listitem">
+      <button className="item-divider-btn" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {step.divider}
+      </button>
+      {open && <pre className="item-divider-note">{step.note}</pre>}
+    </div>
+  );
+}
+
 export default function Timeline({ steps, live = false }: { steps: AgentStep[]; live?: boolean }) {
   const [chosen, setChosen] = useState<boolean | null>(null);
   const [showAll, setShowAll] = useState(false);
-  const visible = steps.filter((s) => !isPlanNote(s));
+  // `WRK-2`: a divider is where an item ended, not a step. It is drawn between
+  // the steps and never counted among them.
+  const noted = steps.filter((s) => !isPlanNote(s));
+  const visible = noted.filter((s) => !s.divider);
   if (!visible.length) return null;
 
   const open = chosen ?? live;
   const failed = visible.filter((s) => s.status === "error").length;
   const hidden = live && !showAll ? Math.max(0, visible.length - LIVE_TAIL) : 0;
-  const rows = hidden ? visible.slice(hidden) : visible;
+  const first = hidden ? noted.findIndex((s) => s.id === visible[hidden].id) : 0;
+  const rows = noted.slice(Math.max(0, first));
   const count = `${visible.length} ${visible.length === 1 ? "step" : "steps"}`;
 
   return (
@@ -430,7 +455,13 @@ export default function Timeline({ steps, live = false }: { steps: AgentStep[]; 
             band.group && band.steps.length > 1 ? (
               <ParallelBand key={band.group + i} steps={band.steps} />
             ) : (
-              band.steps.map((step) => <Step key={step.id} step={step} />)
+              band.steps.map((step) =>
+                step.divider ? (
+                  <Divider key={step.id} step={step} />
+                ) : (
+                  <Step key={step.id} step={step} />
+                )
+              )
             )
           )}
         </div>

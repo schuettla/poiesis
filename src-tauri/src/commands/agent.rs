@@ -109,12 +109,31 @@ pub(crate) async fn resolve_turn(
             .as_deref()
             .and_then(crate::cloud::pricing::facts_for)
             .map(|f| f.context_window)
+            // Not in the price table: what the provider's catalog said, or what the
+            // person told us when they added their own server. The meter and a
+            // fresh start (`WRK-5`) both need to know how much a head holds.
+            .or_else(|| declared_window(db, target))
     } else {
         mgr.engine_ctx_size().await.map(|n| n as usize)
     };
 
     let tier = tier_of(mgr, db, target).await;
     Ok(TurnSetup { endpoint, local_endpoint, model_name, context_window, tier })
+}
+
+/// The window a cloud model's catalog entry or the person's own server declares.
+fn declared_window(db: &Db, target: &ChatTarget) -> Option<usize> {
+    let provider = target.provider.as_deref().unwrap_or_default();
+    match target.provenance.as_deref() {
+        Some("cloud") => cloud::tier_facts(provider, target.model.as_deref().unwrap_or_default()).and_then(|f| f.window),
+        Some("endpoint") => db
+            .get_local_endpoint(provider)
+            .ok()
+            .flatten()
+            .and_then(|ep| usize::try_from(ep.ctx_size).ok())
+            .filter(|n| *n > 0),
+        _ => None,
+    }
 }
 
 /// `TIER-3`: the tier a turn on this target runs at, from the facts of its
@@ -459,67 +478,6 @@ pub fn cancel_side_question_cmd(side: State<'_, SideQuestion>) {
             cancel.cancel();
         }
     }
-}
-
-/// `GOL-2`: has the goal been reached? One tool-free completion over the goal,
-/// my last answer and what I changed. It judges and nothing else: it does not
-/// start a turn, and the answer is only ever a hint to the loop in the store.
-#[tauri::command]
-pub async fn goal_check_cmd(
-    mgr: State<'_, RuntimeManager>,
-    db: State<'_, Db>,
-    conversation_id: String,
-    objective: String,
-    until: String,
-    target: Option<ChatTarget>,
-) -> Result<crate::agent::goal::GoalCheck, PoiesisError> {
-    use crate::agent::goal;
-    let target = target.unwrap_or_default();
-    let setup = resolve_turn(&mgr, &db, &target).await.map_err(PoiesisError::Message)?;
-    let last_answer = db
-        .list_messages_window(&conversation_id, 8)
-        .unwrap_or_default()
-        .into_iter()
-        .rev()
-        .find(|m| m.role == "assistant" && !m.content.trim().is_empty())
-        .map(|m| m.content)
-        .unwrap_or_default();
-    let since = crate::agent::changes::view_since(&db, &conversation_id);
-    let changes = goal::changes_line(&crate::agent::changes::change_set(&db, &conversation_id, since));
-    let messages = goal::check_messages(&objective, &until, &last_answer, &changes);
-
-    // `DEC-6`: the quick decision runs beside the prose check, which still runs
-    // for its one line of evidence or next step. Until the decision is
-    // calibrated it can only make the check stricter (`goal::combine`).
-    let decide_goal = async {
-        use crate::agent::decide::{ask, sites, Opts, Purpose};
-        let site = sites::goal(goal::decision_state(&objective, &until, &last_answer, &changes));
-        let opts = Opts { conversation_id: Some(&conversation_id), run_id: None };
-        let verdict = ask(&site.as_ask(), Purpose::GoalMet, opts).await.ok()?;
-        let got = sites::goal_from(&verdict);
-        // Below 0.8 is "not yet", which is an answer: the decision was acted on.
-        crate::agent::decide::settle(&verdict, Purpose::GoalMet, crate::agent::decide::control::Act::Go, opts);
-        got
-    };
-    let cancel = crate::runtime::proxy::CancelFlag::new();
-    let prose = cloud::drive_turn(
-        &mgr.client,
-        &setup.endpoint,
-        &messages,
-        &[],
-        0.0,
-        cloud::Effort::Off,
-        &cancel,
-        |_| {},
-    );
-    let (decision, outcome) = tokio::join!(decide_goal, prose);
-    let outcome = outcome.map_err(|e| PoiesisError::Message(e.provider_message().to_string()))?;
-    let prose = match outcome {
-        crate::runtime::proxy::TurnOutcome::Final { content, .. } => goal::parse_check(&content),
-        // A judge that asked for a tool instead of answering has not answered.
-        _ => goal::parse_check(""),
-    };
-    Ok(goal::combine(decision, prose))
 }
 
 /// `RWD-1`: go back to before one of the user's turns. A branch plus, when

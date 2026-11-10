@@ -1,0 +1,395 @@
+/* Self → How I work. One idea per block: what a style and a rule are, what waits for
+   you, the styles as cards, the picked one in detail, the rules in every style, and the
+   rest folded away. Rows are separated by hairlines like the other Self tabs; switches
+   and the ⋯ sit at the right edge so the sentences line up on the left. */
+.ways {
+  gap: 22px;
+}
+.ways-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ways-lede {
+  margin: 0;
+  max-width: 62ch;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  line-height: 1.55;
+  color: var(--ink);
+}
+.ways-lede strong {
+  font-weight: 600;
+}
+.ways-story {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+
+/* Sections */
+.ways-section {
+  display: flex;
+  flex-direction: column;
+}
+.ways-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+.ways-heading h3 {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.ways-hint {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+
+/* The styles, as cards */
+.ways-styles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+.ways-style {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 104px;
+  padding: 10px 12px;
+  text-align: left;
+  font: inherit;
+  font-family: var(--font-sans);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+.ways-style:hover {
+  border-color: var(--ink-faint);
+}
+.ways-style:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.ways-style.on {
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+.ways-style.new {
+  justify-content: center;
+  background: none;
+  border-style: dashed;
+  color: var(--ink-muted);
+}
+.ways-style.new:hover {
+  color: var(--ink);
+}
+.ways-style-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-bottom: 2px;
+}
+.ways-style-plus {
+  font-size: var(--fs-title);
+  line-height: 1;
+}
+.ways-style-name {
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
+.ways-style-line {
+  font-size: var(--fs-footnote);
+  line-height: 1.4;
+  color: var(--ink-muted);
+}
+.ways-badge {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 1px 7px;
+  color: var(--paper);
+  background: var(--ink);
+  border-radius: var(--radius-pill);
+}
+.ways-badge.quiet {
+  color: var(--ink-muted);
+  background: none;
+  border: 1px solid var(--hairline);
+}
+
+/* The picked style */
+.ways-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ways-detail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.ways-detail-title {
+  flex: 1;
+  min-width: 0;
+}
+.ways-detail-title h3 {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--ink);
+}
+.ways-detail-title p {
+  margin: 2px 0 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+.ways-detail-switches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 28px;
+}
+.ways-switch {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  cursor: pointer;
+}
+.ways-switch-help {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.ways-version {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.ways-rules {
+  display: flex;
+  flex-direction: column;
+}
+.ways-subhead {
+  margin: 0 0 2px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* Rows */
+.ways-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.ways-row:last-of-type {
+  border-bottom: none;
+}
+.ways-row .toggle {
+  margin-top: 2px;
+}
+.ways-row.editing {
+  display: block;
+}
+.ways-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.5;
+  color: var(--ink);
+}
+.ways-row.off .ways-text {
+  color: var(--ink-muted);
+}
+.ways-struck {
+  text-decoration: line-through;
+}
+.ways-tag {
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  padding: 0 7px;
+}
+.ways-note {
+  flex-basis: 100%;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.ways-quiet {
+  margin: 4px 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+.ways-problem {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--danger);
+}
+.ways-add-btn {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 5px 10px;
+  font: inherit;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  background: none;
+  border: 1px dashed var(--ink-faint);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.ways-add-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink-muted);
+}
+
+/* The sentence builder: a word, then its list, one pair per line. */
+.ways-addrow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 10px;
+  margin-top: 6px;
+  padding: 12px;
+  background: var(--fill-quiet);
+  border: 1px solid var(--paper-edge);
+  border-radius: var(--radius-lg);
+}
+.ways-addrow .select {
+  width: 100%;
+}
+.ways-word {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+.ways-readback {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-style: italic;
+  color: var(--ink);
+}
+.ways-addrow-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Folded parts */
+.ways-fold {
+  margin-top: 8px;
+}
+.ways-fold > summary {
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  padding: 4px 0;
+}
+.ways-fold > summary:hover {
+  color: var(--ink);
+}
+.ways-advanced {
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+.ways-advanced[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* Menus */
+.ways-menu {
+  position: relative;
+  display: inline-flex;
+}
+.ways-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.ways-more:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+/* Waiting for you */
+.ways-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.ways-proposal:last-child {
+  border-bottom: none;
+}
+.ways-proposal-lead,
+.ways-proposal-quote {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.5;
+  color: var(--ink);
+}
+.ways-proposal-lead {
+  color: var(--ink-muted);
+}
+.ways-proposal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.ways-offer {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}

@@ -62,6 +62,8 @@ function endedLine(run: SubRun): string {
       return `ran out of time, this is what it had${stepPart}${took}`;
     case "max_steps":
       return `hit its step limit, this is what it had${stepPart}${took}`;
+    case "stuck":
+      return `was not getting anywhere, this is what it had${stepPart}${took}`;
     case "error":
       return `it failed${stepPart}${took}`;
     default:

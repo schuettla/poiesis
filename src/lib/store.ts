@@ -43,7 +43,6 @@ import {
 } from "./updates";
 import { save } from "@tauri-apps/plugin-dialog";
 import { proposedDraft, type TaskDraft } from "./when";
-import { afterRun as afterGoalRun, newGoal, openingTurn, type Goal, type GoalHost, type RoundEvidence } from "./goal";
 import { markReadsAsInstructions } from "./untrusted";
 import { KEEP_RECENT, KEEP_RECENT_WORKSPACE } from "./context";
 import { workspaceAvailable } from "./experiments";
@@ -70,6 +69,7 @@ import {
 const SYSTEM_PROMPT_KEY = "system_prompt";
 const READING_SCALE_KEY = "reading_scale";
 const MESSAGE_FONT_KEY = "message_font";
+const CHAT_WIDTH_KEY = "chat_width";
 const TELEMETRY_KEY = "telemetry_enabled";
 const AUTOCOMPACT_KEY = "context.autocompact";
 const MEMORY_ONBOARDED_KEY = "memory.onboarded";
@@ -210,12 +210,37 @@ export const AUTONOMY_CLASSES: {
     fallback: "ask",
     rungs: ["ask", "off"],
   },
+  // `WRK-19`: how I work. Ask: every change is a card in Self, How I work. Auto: I change it
+  // and tell you there, with Undo. Off: I keep to what I have and learn nothing new about it.
+  {
+    id: "ways",
+    label: "How I work",
+    blurb:
+      "My styles and their rules changing from what I see happen. Ask first: each change is a card in How I work. Auto: I change it and tell you, with Undo. Off: I keep to what I have.",
+    fallback: "ask",
+    rungs: ["auto", "ask", "off"],
+  },
 ];
 /** What the living mark is doing (`PRES-1`). `tending` is me working on myself
  * for a moment (making room, tidying, a checkup); `listening` is a run waiting
  * for your answer (`CPX-2`). Both sit under `active` rather than over it: one
  * motion at a time. */
 export type Presence = "idle" | "active" | "reflecting" | "healing" | "tending" | "listening";
+
+/** `WRK-17`: what the preset dialog is asked to do. */
+export interface PresetDialogRequest {
+  /** `new` makes a preset of your own; `rename` changes the name and line of one. */
+  mode: "new" | "rename";
+  /** The preset it starts from (a slug), or `null`/absent for nothing. */
+  from?: string | null;
+  /** The preset being renamed. */
+  slug?: string;
+  name?: string;
+  line?: string;
+  /** Moves that fired in a run, kept on top of `from` ("Keep this way of working"). */
+  add?: api.RuleRef[];
+  onDone?: (slug: string) => void;
+}
 const DEFAULT_SYSTEM_PROMPT =
   "You are Poiesis Agent, a local-first assistant that maintains itself: you keep durable memory, learn lessons from your own mistakes, and propose — never impose — changes to how you work. Be concise and clear.";
 
@@ -503,13 +528,6 @@ export interface AppState {
   /** `CHK-UI-2`: I am looking at myself. */
   checkupRunning: boolean;
   runCheckup: () => Promise<void>;
-  /** `GOL-1`: the goal each conversation is working toward, if any. The user's
-   * alone: only `startGoal` makes one, and nothing the agent does can. */
-  goals: Record<string, Goal>;
-  /** Make the goal and send its first turn. */
-  startGoal: (conversationId: string, text: string, until: string) => Promise<void>;
-  /** End the goal, and the turn that is running toward it. */
-  stopGoal: (conversationId: string) => void;
   /** `USE-UI-1`, `SEE-2`: put the tool groups a quick decision held back on this
    * run's menu again, all of them or only `units`. Only while the run is going. */
   restoreHeldTools: (conversationId: string, units?: string[]) => void;
@@ -538,12 +556,12 @@ export interface AppState {
   dismissRunSummary: (conversationId: string) => void;
   /** `/autonomy` and `/self` land on a tab of the Self panel. */
   selfTabRequest: {
-    tab: "memory" | "lessons" | "health" | "autonomy";
+    tab: "memory" | "lessons" | "health" | "autonomy" | "ways";
     nonce: number;
     /** `CPX-6`: an autonomy class to scroll to, from a `◆` in the menu. */
     focus?: string;
   } | null;
-  openSelf: (tab?: "memory" | "lessons" | "health" | "autonomy", focus?: string) => void;
+  openSelf: (tab?: "memory" | "lessons" | "health" | "autonomy" | "ways", focus?: string) => void;
   /** `UCM-10`: the chat the Usage view should scroll to and highlight. */
   usageFocus: string | null;
   openUsage: (conversationId: string | null) => void;
@@ -639,6 +657,8 @@ export interface AppState {
   setReadingScale: (scale: number) => Promise<void>;
   messageFont: string;
   setMessageFont: (id: string) => Promise<void>;
+  chatWidth: string;
+  setChatWidth: (id: string) => Promise<void>;
   telemetryEnabled: boolean;
   setTelemetryEnabled: (on: boolean) => Promise<void>;
   /** "Show me everything" (SMP-1a) — reveals engine internals, per-note and
@@ -733,6 +753,9 @@ export interface AppState {
   ) => Promise<{ learned: number; proposed: number }>;
   /** Counts + health for the Self view (ORG-1). */
   vitality: api.Vitality | null;
+  /** `WRK-21`: how the organization has grown: a point per change (the rings in Self), and
+   * the changes I made on my own (the mark's fine layers). */
+  orgGrowth: { moments: api.WayMoment[]; layers: number };
   lessons: api.Fact[];
   /** Active facts, for the new-chat line (`G11`): what was learned or corrected lately. */
   facts: api.Fact[];
@@ -950,6 +973,8 @@ export interface AppState {
   dockOpen: boolean;
   toggleDock: () => void;
   setDockOpen: (open: boolean) => void;
+  /** `WRK-15`: show how I am organised: the Workbench's Coordination view, open. */
+  openOrganization: () => void;
   /** What the viewer is showing, file or artifact. Mirrors whichever entry in
    * `itemTabs` is active (`SHL-10`/`SHL-22`) — every existing reader of
    * `selected` (`Viewer`, `Tree`, `Artifacts`) keeps working unchanged. */
@@ -1078,6 +1103,15 @@ export interface AppState {
   setFolderTrust: (trust: FolderTrust) => Promise<void>;
   /** `RTE-5`: keep external agent apps out of (or let them back into) one chat. */
   setEnginesOff: (conversationId: string, off: boolean) => Promise<void>;
+  /** `WRK-3`: the presets the `/style` menu and the chip draw. */
+  presets: api.PresetView[];
+  loadPresets: () => Promise<void>;
+  /** `WRK-17`: the dialog that makes a preset of your own, or renames one. */
+  presetDialog: PresetDialogRequest | null;
+  openPresetDialog: (req: PresetDialogRequest) => void;
+  closePresetDialog: () => void;
+  /** How one chat works from its next message on. `null` is Ad hoc. */
+  setConversationStyle: (conversationId: string, preset: string | null) => Promise<void>;
   /** Reload one directory's children, or the whole tree when omitted. */
   refreshTree: (path?: string) => Promise<void>;
   refreshTrash: () => Promise<void>;
@@ -1163,6 +1197,23 @@ export const MESSAGE_FONTS = [
 function applyMessageFont(id: string) {
   const font = MESSAGE_FONTS.find((f) => f.id === id) ?? MESSAGE_FONTS[0];
   document.documentElement.style.setProperty("--font-message", font.stack);
+}
+
+/** How wide the message column and the composer under it are. Narrow is the
+ * original width. `px` is what CSS reads as `--chat-width`. */
+export const CHAT_WIDTHS = [
+  { id: "narrow", label: "Narrow", px: 700 },
+  { id: "medium", label: "Medium", px: 860 },
+  { id: "wide", label: "Wide", px: 1040 },
+] as const;
+
+function applyChatWidth(id: string) {
+  const w = CHAT_WIDTHS.find((c) => c.id === id) ?? CHAT_WIDTHS[0];
+  const root = document.documentElement;
+  root.style.setProperty("--chat-width", `${w.px}px`);
+  // The container-query rules that make room for the session menu cannot read
+  // a variable, so they key off this attribute instead.
+  root.setAttribute("data-chat-width", w.id);
 }
 
 function applyReadingScale(scale: number) {
@@ -1426,6 +1477,7 @@ function toConversation(c: api.DbConversation): Conversation {
     parentConversationId: c.parent_conversation_id,
     projectId: c.project_id ?? null,
     enginesOff: c.engines_off ?? false,
+    style: c.style ?? null,
   };
 }
 
@@ -1904,6 +1956,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   providerFocus: null,
   openProviders: (id) => set({ providerFocus: id ?? null, view: "providers" }),
   engines: [],
+  presets: [],
+  presetDialog: null,
+  openPresetDialog: (req) => set({ presetDialog: req }),
+  closePresetDialog: () => set({ presetDialog: null }),
   enginesNewlyFound: false,
   engineFocus: null,
   openEngines: (id) => set({ engineFocus: id ?? null, view: "engines" }),
@@ -2202,24 +2258,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       ? ` I couldn't put back ${out.files_failed.join(", ")}.`
       : "";
     set({ rewindToast: `◆ I went back to before “${shown}”. The original is still in your list.${files}${failed}` });
-  },
-  goals: {},
-  startGoal: async (conversationId, text, until) => {
-    // `CTL-3`: a new goal right after one judged met says the check was too
-    // quick. The backend decides whether that is what happened.
-    if (api.inTauri()) void api.recordGoalOutcome(conversationId, "new-goal").catch(() => {});
-    const goal = newGoal(text, until);
-    putGoal(set, conversationId, goal);
-    // An ordinary turn, so everything an ordinary turn does is done for it.
-    await get().sendMessage(openingTurn(goal));
-  },
-  stopGoal: (conversationId) => {
-    const goal = get().goals[conversationId];
-    if (!goal || goal.status !== "active") return;
-    putGoal(set, conversationId, { ...goal, status: "stopped", checking: false });
-    // Stopping the goal means stopping the work toward it, not letting a turn
-    // run on that nobody wants.
-    if (get().activeRun?.convId === conversationId) get().stopGenerating();
   },
   restoreHeldTools: (conversationId, units) => {
     const summary = get().runSummaries[conversationId];
@@ -2672,6 +2710,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ messageFont: id });
     if (api.inTauri()) await api.setSetting(MESSAGE_FONT_KEY, id);
   },
+  chatWidth: "narrow",
+  setChatWidth: async (id) => {
+    applyChatWidth(id);
+    set({ chatWidth: id });
+    if (api.inTauri()) await api.setSetting(CHAT_WIDTH_KEY, id);
+  },
   telemetryEnabled: false,
   setTelemetryEnabled: async (telemetryEnabled) => {
     set({ telemetryEnabled });
@@ -2929,18 +2973,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   vitality: null,
+  orgGrowth: { moments: [], layers: 0 },
   lessons: [],
   facts: [],
   refreshSelf: async () => {
     if (!api.inTauri()) return;
     const model = get().models.find((m) => m.id === get().selectedModelId);
-    const [vitality, lessons, facts, goldenStatus] = await Promise.all([
+    const [vitality, lessons, facts, goldenStatus, orgGrowth] = await Promise.all([
       api.getVitality(isRemoteModel(model) ? model.cloudModel : undefined).catch(() => null),
       api.listLessons().catch(() => [] as api.Fact[]),
       api.listMemoryFacts().catch(() => [] as api.Fact[]),
       api.getGoldenStatus().catch(() => null),
+      Promise.resolve()
+        .then(() => api.waysGrowth())
+        .catch(() => ({ moments: [] as api.WayMoment[], layers: 0 })),
     ]);
-    set({ vitality, lessons, facts, goldenStatus });
+    set({ vitality, lessons, facts, goldenStatus, orgGrowth });
     await get().refreshSkills();
   },
   forgetLesson: async (name) => {
@@ -3361,6 +3409,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       prompt,
       readingScaleRaw,
       messageFontRaw,
+      chatWidthRaw,
       telemetryRaw,
       autoCompactRaw,
       expertRaw,
@@ -3381,6 +3430,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       api.getSetting(SYSTEM_PROMPT_KEY),
       api.getSetting(READING_SCALE_KEY),
       api.getSetting(MESSAGE_FONT_KEY),
+      api.getSetting(CHAT_WIDTH_KEY),
       api.getSetting(TELEMETRY_KEY),
       api.getSetting(AUTOCOMPACT_KEY),
       api.getSetting(EXPERT_KEY),
@@ -3416,6 +3466,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       ? (messageFontRaw as string)
       : "inter";
     applyMessageFont(messageFont);
+    const chatWidth = CHAT_WIDTHS.some((c) => c.id === chatWidthRaw) ? (chatWidthRaw as string) : "narrow";
+    applyChatWidth(chatWidth);
     // Poiesis's birthday is set once, the first time it runs after this ships —
     // the growth narrative counts from there, not from an install timestamp we
     // never recorded.
@@ -3456,6 +3508,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       systemPrompt: prompt ?? DEFAULT_SYSTEM_PROMPT,
       readingScale,
       messageFont,
+      chatWidth,
       telemetryEnabled: telemetryRaw === "true",
       // Homeostasis is on unless the user turned it off.
       autoCompact: autoCompactRaw !== "false",
@@ -3506,6 +3559,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().refreshApps();
     void refreshAppsFromComposio(get);
     get().loadEngines();
+    get().loadPresets();
     listenForEngineEvents(get);
     listenForSelfEvents(set, get);
     maybeDailyProfileTick(get);
@@ -3884,6 +3938,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = get();
     const convId = state.activeConversationId;
     if (!convId || state.busy) return;
+    // `PLF-4`: a plain yes typed under a plan that waits for one is the Go ahead.
+    // Without this "go on" planned the whole task again from the start.
+    if (!sendOpts?.approvedPlan && !state.planRevising && !attachments.length && isPlainYes(text)) {
+      const msgs = state.conversations.find((c) => c.id === convId)?.messages ?? [];
+      const lastMsg = msgs[msgs.length - 1];
+      if (lastMsg?.role === "assistant" && lastMsg.plan?.awaiting_approval) {
+        sendOpts = { ...sendOpts, approvedPlan: lastMsg.plan };
+      } else if (
+        lastMsg?.role === "assistant" &&
+        isPersistedId(lastMsg.id) &&
+        (["max_steps", "stuck", "aborted", "timeout"] as (string | undefined)[]).includes(lastMsg.stopReason)
+      ) {
+        // After a run that stopped at its limit, "go on" is Continue where I
+        // stopped: the same plan, its results kept, nothing planned again.
+        return get().resumeLastRun();
+      }
+    }
     const selected = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
     // A click in the interface needs an answer, not a picture: with an image or
     // video model picked, the last chat model takes the action turn.
@@ -3896,10 +3967,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       getSpeechBridge()?.fail("There is no model to answer with yet. Open Models and choose one.");
       return;
     }
-
-    // `GOL-UI-1`: what a goal ended with stays on the bar until the next send.
-    const ended = state.goals[convId];
-    if (ended && ended.status !== "active") putGoal(set, convId, null);
 
     // Belt and braces (`PIK-2`): `run_agent` must never be handed an image or
     // video model. The composer already routes these to `createMedia`, but a
@@ -4212,11 +4279,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   stopGenerating: () => {
-    // Stop always stops the goal too (`GOL-3`): going on after being told to
-    // stop is the one thing it must never do.
-    const convId = get().activeConversationId;
-    const goal = convId ? get().goals[convId] : undefined;
-    if (convId && goal?.status === "active") putGoal(set, convId, { ...goal, status: "stopped", checking: false });
     // `VXP-2`: stop also silences a spoken reply, whether or not a run is still going.
     getSpeechBridge()?.stopSpeaking();
     if (api.inTauri()) api.stopChat().catch(() => {});
@@ -4449,6 +4511,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (get().dockOpen === dockOpen) return;
     set({ dockOpen });
     if (api.inTauri()) api.setSetting(DOCK_OPEN_KEY, dockOpen ? "1" : "0").catch(() => {});
+  },
+  // The Organization view is the Agents sub-view grown into its organization, so it
+  // keeps the `agents` id: nothing that points at that view changes.
+  openOrganization: () => {
+    get().setDockView("agents");
+    get().setDockOpen(true);
   },
   selected: null,
   selectNode: (selection) => {
@@ -4844,6 +4912,26 @@ export const useAppStore = create<AppState>((set, get) => ({
       conversations: s.conversations.map((c) => (c.id === conversationId ? { ...c, enginesOff: off } : c)),
     }));
     if (api.inTauri()) await api.setConversationEnginesOff(conversationId, off);
+  },
+
+  loadPresets: async () => {
+    if (!api.inTauri()) return;
+    try {
+      set({ presets: await api.presetsList() });
+    } catch {
+      // The chip and the menu read as Ad hoc until the list arrives.
+    }
+  },
+
+  setConversationStyle: async (conversationId, preset) => {
+    // The backend decides what was kept (a name that is no preset is refused, and
+    // nothing means "start where chats like this start"), so the window shows what it says.
+    const kept = api.inTauri() ? await api.setConversationStyle(conversationId, preset) : preset;
+    set((s) => ({
+      conversations: s.conversations.map((c) => (c.id === conversationId ? { ...c, style: kept } : c)),
+    }));
+    // `WRK-13`: a run that is going works the new way from the end of the item in hand.
+    await switchLiveRun(set, get, conversationId, kept ?? "ad-hoc");
   },
 
   refreshIndexStatus: async () => {
@@ -5951,49 +6039,6 @@ function pushAgentNote(set: StoreSet, convId: string, note: Omit<CommandNoteView
   }));
 }
 
-/** `GOL-1`: set a conversation's goal, or clear it. */
-function putGoal(set: StoreSet, convId: string, goal: Goal | null) {
-  set((s) => {
-    const goals = { ...s.goals };
-    if (goal) goals[convId] = goal;
-    else delete goals[convId];
-    return { goals };
-  });
-}
-
-/** `LRN-1`: what a turn's tool steps came to. A step still running when the turn
- * ended did not work, and is not counted either way. */
-function roundEvidence(steps: AgentStep[]): RoundEvidence {
-  return {
-    ok: steps.filter((s) => s.status === "done").length,
-    errors: steps.filter((s) => s.status === "error").map((s) => s.result ?? ""),
-  };
-}
-
-/** `GOL-3`: what the goal loop needs from this store. */
-function goalHost(set: StoreSet, get: () => AppState): GoalHost {
-  return {
-    get: (id) => get().goals[id],
-    isOpen: (id) => get().activeConversationId === id,
-    patch: (id, patch) => {
-      const cur = get().goals[id];
-      if (cur) putGoal(set, id, { ...cur, ...patch });
-    },
-    check: async (id, goal) => {
-      const s = get();
-      const model = s.models.find((m) => m.id === s.selectedModelId) ?? s.models[0];
-      if (!api.inTauri() || !model) throw new Error("no model to check with");
-      return api.goalCheck(id, goal.text, goal.until, targetFor(model));
-    },
-    note: (id, text) =>
-      get().recordCommand(id, { name: "goal", args: "", by: "agent", outcome: "done", note: text }),
-    send: (_id, text) => get().sendMessage(text),
-    outcome: (id, event) => {
-      if (api.inTauri()) void api.recordGoalOutcome(id, event).catch(() => {});
-    },
-  };
-}
-
 /** `DEF-4`: where Plan first by default is kept. */
 export const PLAN_FIRST_DEFAULT_KEY = "agent.plan_first_default";
 
@@ -6073,10 +6118,23 @@ function tendBriefly(set: StoreSet) {
 /** The words for a proposal in a note, in the first person's counterpart. */
 function proposalWhat(p: HarnessProposalView): string {
   if (p.name === "switch_mode") {
+    if (p.payload.style) return `switching to ${styleLabel(String(p.payload.mode))}`;
     return p.payload.mode === "plan_first" ? "switching to Plan first" : "switching to Workspace";
   }
   if (p.name === "schedule") return `running “${p.payload.task ?? "this"}” ${p.payload.when ?? "later"}`;
   return "making room";
+}
+
+/** `WRK-13`: a built-in way of working by its slug, as the backend names it in the note it
+ * writes. Kept in step with `STYLE_MODES` in `agent/commands.rs`. */
+function styleLabel(slug: string): string {
+  const names: Record<string, string> = {
+    lean: "Lean",
+    "command-and-control": "Command & Control",
+    "mission-command": "Mission Command",
+    swarm: "Swarm",
+  };
+  return names[slug] ?? slug;
 }
 
 /** `AGC-4`: the first-person note for what I asked, as the backend wrote it into
@@ -6084,17 +6142,40 @@ function proposalWhat(p: HarnessProposalView): string {
  * shows after a reload read the same. */
 function proposalNote(p: Pick<HarnessProposalView, "name" | "reason" | "payload">): string {
   if (p.name === "switch_mode") {
-    const label = p.payload.mode === "plan_first" ? "Plan first" : "Workspace";
+    const label = p.payload.style
+      ? styleLabel(String(p.payload.mode))
+      : p.payload.mode === "plan_first"
+        ? "Plan first"
+        : "Workspace";
     return `I asked to switch to ${label}: ${p.reason}`;
   }
   if (p.name === "schedule") return `I asked to run this ${p.payload.when ?? "later"}: ${p.payload.task ?? ""}`;
   return `I asked to make room: ${p.reason}`;
 }
 
+/** `WRK-13`: ask the run that is going in this chat to work another way from the end of its
+ * item. The chip says so (`A → B`) until the run does. Nothing to do when no run is going,
+ * or when it already works that way. */
+async function switchLiveRun(set: StoreSet, get: () => AppState, convId: string, slug: string): Promise<void> {
+  const run = get().activeRun;
+  if (!run || run.convId !== convId || !api.inTauri()) return;
+  const summary = get().runSummaries[convId];
+  if (!summary?.live || summary.style?.preset === slug) return;
+  const name = get().presets.find((p) => p.slug === slug)?.name ?? slug;
+  try {
+    if (await api.switchRunStyle(run.runId, slug)) patchRunSummary(set, convId, () => ({ switching: { to: slug, name } }));
+  } catch {
+    // The run ended while the menu was open; the chat's own setting is already kept.
+  }
+}
+
 /** Carry out a proposal you said yes to. */
 async function applyHarnessProposal(get: () => AppState, p: HarnessProposalView): Promise<void> {
   const s = get();
-  if (p.name === "switch_mode") {
+  if (p.name === "switch_mode" && p.payload.style) {
+    // `WRK-13`: a way of working. The chat is set to it, and the run that offered it follows.
+    await s.setConversationStyle(p.convId, String(p.payload.mode));
+  } else if (p.name === "switch_mode") {
     if (p.payload.mode === "plan_first") {
       // The next turn only. It never re-scopes a run that is already going (`PLF-6`).
       s.setTurnModifier({ planFirst: true });
@@ -6135,6 +6216,10 @@ export function turnRunOptions(
   // `SEE-3`: what the composer's hint was taken up on, for this message alone.
   if (mods.web) turn.web = true;
   if (mods.noHandover) turn.noHandover = true;
+  // `WRK-3`: `/style lean <message>`: this message only.
+  if (mods.style) turn.style = mods.style;
+  // `WRK-12`: what done means, said up front.
+  if (mods.criteria?.length) turn.criteria = mods.criteria;
   return Object.keys(turn).length ? turn : undefined;
 }
 
@@ -6196,9 +6281,6 @@ async function streamAssistantTurn(
   const parallelOf: Record<string, string> = {};
   /** `HRN-3`: set by `run_ended`, written to the row when the turn finalizes. */
   let stopReason: api.StopReason | undefined;
-  /** The run failed before it could say how it ended (no model, a dropped
-   * stream). The goal loop must not read that as finished work (`GOL-3`). */
-  let failed = false;
   /** `PLN-UI-1`: the plan this run is working to, as it last told us. Held here
    * as well as on the turn so it can be written to the row when the turn
    * finalizes (`PLN-UI-5`). */
@@ -6331,6 +6413,11 @@ async function streamAssistantTurn(
               costUsd: e.cost_usd ?? cur.costUsd,
               stopReason: e.stop_reason,
               plan: e.plan ?? cur.plan,
+              // A stopped line is a live state: a run that is over has none.
+              stopped: undefined,
+              looking: undefined,
+              branching: undefined,
+              endedAt: Date.now(),
             }));
             get().refreshChanges(convId).catch(() => {});
             // `SEE-2`: the strip becomes the receipt. What the quick decisions did
@@ -6401,6 +6488,59 @@ async function streamAssistantTurn(
                 ),
               };
             });
+            break;
+          case "style_set":
+            // `WRK-3`: how this run works, for the board's header.
+            // A switch in the middle of the run (`WRK-13`) arrives the same way, and settles
+            // what the chip was waiting to say.
+            patchRunSummary(set, convId, () => ({ style: { preset: e.preset, name: e.name }, switching: undefined }));
+            break;
+          case "line_stopped":
+            // `WRK-1`: a check failed. The board says so while the line is stopped,
+            // and the run bar says it too.
+            patchRunSummary(set, convId, () => ({ stopped: { check: e.check } }));
+            break;
+          case "line_cleared":
+            patchRunSummary(set, convId, () => ({ stopped: undefined }));
+            break;
+          case "item_ended":
+            // `WRK-2`: a thin line where an item ended. Rust folds the same step into
+            // the saved timeline, so a reload draws it again.
+            steps.push({
+              id: `item-${steps.filter((x) => x.divider).length}`,
+              verb: "",
+              target: "",
+              status: "done",
+              divider: `${e.outcome === "done" ? "Done" : e.outcome === "dropped" ? "Dropped" : e.outcome}: ${e.text}`,
+            });
+            patchAssistant(set, convId, assistantId, { steps: [...steps] });
+            patchRunSummary(set, convId, () => ({ pulsedAt: Date.now() }));
+            break;
+          case "review":
+            // `WRK-4`: someone who never saw the work is looking at an item. The plan
+            // event carries the verdict itself; this is for the run bar and the mark.
+            patchRunSummary(set, convId, () => ({ looking: e.state === "checking" ? { item: e.item } : undefined }));
+            break;
+          case "fresh_start":
+            // `WRK-5`: I forgot on purpose. A line where it happened, that opens the
+            // note; Rust folds the same step into the saved timeline.
+            steps.push({
+              id: `item-${steps.filter((x) => x.divider).length}`,
+              verb: "",
+              target: "",
+              status: "done",
+              divider: "Fresh start: I wrote myself a handover note",
+              note: e.note,
+            });
+            patchAssistant(set, convId, assistantId, { steps: [...steps] });
+            patchRunSummary(set, convId, () => ({ freshAt: Date.now() }));
+            break;
+          case "branched":
+            // `WRK-6`: two ways are being tried, for the board's two rows.
+            patchRunSummary(set, convId, () => ({ branching: { item: e.item, id: e.id } }));
+            break;
+          case "branch_kept":
+            patchRunSummary(set, convId, () => ({ branching: undefined }));
             break;
           case "steered":
             // The run picked up something typed at it mid-flight. Settle the
@@ -6865,7 +7005,6 @@ async function streamAssistantTurn(
             patchAssistant(set, convId, assistantId, { streaming: false });
             break;
           case "error":
-            failed = true;
             speech?.fail(`That didn't work: ${e.message}`);
             acc = acc || `That didn't work: ${e.message}`;
             patchAssistant(set, convId, assistantId, { text: acc, streaming: false });
@@ -6873,7 +7012,6 @@ async function streamAssistantTurn(
         }
     });
   } catch (err) {
-    failed = true;
     speech?.fail(`That didn't work: ${String(err)}`);
     acc = acc || `That didn't work: ${String(err)}`;
     patchAssistant(set, convId, assistantId, { text: acc, streaming: false });
@@ -6932,15 +7070,6 @@ async function streamAssistantTurn(
     // what lets a tool that starts failing earn its caution during the session
     // it is failing in, rather than after the next restart (HEAL-2).
     if (steps.length) useAppStore.getState().refreshToolHealth();
-    // `GOL-3`: the lead's own turn has ended. If the user set a goal here, this is
-    // where it decides whether to go on. Not awaited: the send that started this
-    // turn must not wait for every round of a goal.
-    void afterGoalRun(goalHost(set, get), convId, {
-      stopReason: stopReason ?? (failed ? "error" : undefined),
-      awaitingApproval: plan?.awaiting_approval,
-      // `LRN-1`: this turn's own calls, not the recall step that came with it.
-      evidence: roundEvidence(steps.filter((x) => !x.id.startsWith(RECALL_STEP_PREFIX))),
-    });
   }
 }
 
@@ -7313,6 +7442,19 @@ export function useSelectedModel(): Model {
   return useAppStore(
     (s) => s.models.find((m) => m.id === s.selectedModelId) ?? s.models[0] ?? NO_MODEL
   );
+}
+
+/** Words a short "yes, carry on" is made of, in English and German. */
+const YES_WORDS = new Set([
+  "yes", "yeah", "yep", "y", "ok", "okay", "k", "sure", "fine", "go", "on", "ahead", "do", "it", "proceed",
+  "continue", "start", "approve", "approved", "looks", "sounds", "good", "great", "please", "lgtm", "let's",
+  "lets", "ja", "jo", "los", "weiter", "mach", "mal", "gut", "passt", "okey",
+]);
+
+/** `PLF-4`: is this message nothing but a yes? Short, and every word one of a yes. */
+export function isPlainYes(text: string): boolean {
+  const words = text.toLowerCase().replace(/[.!,👍]/gu, " ").split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.length <= 6 && words.every((w) => YES_WORDS.has(w));
 }
 
 export function useActiveConversation(): Conversation | null {

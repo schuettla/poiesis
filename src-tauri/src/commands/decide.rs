@@ -354,16 +354,6 @@ pub async fn calibrate_decide_cmd(
     Ok(reports)
 }
 
-/// `CTL-3`: something happened to a goal that the decision had judged. Returns
-/// the label written, if any. The goal lives on the screen, so the screen says.
-#[tauri::command]
-pub fn record_goal_outcome_cmd(db: State<'_, Db>, conversation_id: String, event: String) -> Cmd<Option<String>> {
-    let Some(event) = outcomes::GoalEvent::parse(&event) else {
-        return Err(err("I don't know that goal event."));
-    };
-    Ok(outcomes::record_goal_event(&db, &conversation_id, event).map(|k| k.code().to_string()))
-}
-
 /// One catalog entry as the Models screen shows it.
 #[derive(serde::Serialize)]
 pub struct DecideModelRow {

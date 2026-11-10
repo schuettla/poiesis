@@ -68,7 +68,8 @@ pub struct TurnAttachment {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnRef {
-    /// `conversation` | `artifact`.
+    /// `conversation` | `artifact` | `file` (an `@` mention; `id` is its path
+    /// under the working folder).
     pub kind: String,
     pub id: String,
     pub label: String,
@@ -202,6 +203,12 @@ pub fn user_text(input: &TurnInput, pdfs: &[(String, PdfBody)]) -> String {
             out.push_str(&format!(
                 "\n\n[Context: the earlier conversation \"{}\" (id {}). Read it with read_conversation before answering.]",
                 r.label, r.id
+            ));
+        } else if r.kind == "file" {
+            // `id` is the path under the working folder, which `read_file` takes as is.
+            out.push_str(&format!(
+                "\n\n[Context: I pointed at the file \"{}\" in the working folder. Read it with read_file before answering.]",
+                r.id
             ));
         } else {
             out.push_str(&format!(
@@ -833,6 +840,17 @@ mod tests {
         assert!(out.find("Trip").unwrap() < out.find("Plan").unwrap(), "in the order given");
     }
 
+    /// An `@` mention names the file by its path and tells the model to read it.
+    #[test]
+    fn a_mentioned_file_is_named_by_path_and_read_with_read_file() {
+        let mut i = input("fix @src/lib.rs");
+        i.refs = vec![TurnRef { kind: "file".into(), id: "src/lib.rs".into(), label: "src/lib.rs".into() }];
+        assert_eq!(
+            user_text(&i, &[]),
+            "fix @src/lib.rs\n\n[Context: I pointed at the file \"src/lib.rs\" in the working folder. Read it with read_file before answering.]"
+        );
+    }
+
     /// `EPI-UI-1`: the digest is trimmed, the skill is named only when there was one.
     #[test]
     fn the_last_time_note_has_the_date_the_conversation_and_the_digest() {
@@ -985,15 +1003,57 @@ mod tests {
     /// An OpenAI-shaped server that answers every chat request with `reply` as a
     /// stream, and keeps the bodies it was sent.
     async fn fake_model(reply: &'static str) -> (String, Bodies) {
+        scripted_model(vec![serde_json::json!({ "content": reply })]).await
+    }
+
+    /// A delta that is a call to a tool.
+    fn call(name: &str, args: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "tool_calls": [{
+            "index": 0,
+            "id": format!("call_{name}"),
+            "type": "function",
+            "function": { "name": name, "arguments": args.to_string() },
+        }] })
+    }
+
+    /// `fake_model`, but the model's turns are scripted: the nth request that
+    /// offers tools (a turn of the loop) is answered with the nth delta, and the
+    /// last one repeats. Anything else is answered `ok`.
+    async fn scripted_model(deltas: Vec<serde_json::Value>) -> (String, Bodies) {
+        scripted_model_with(deltas, Vec::new()).await
+    }
+
+    /// The same, and the calls the loop makes on the side (no tools offered) are
+    /// answered by what they are: `asides` pairs a phrase in the call's first
+    /// system message with the replies it gets in turn, the last repeating.
+    async fn scripted_model_with(deltas: Vec<serde_json::Value>, asides: Vec<(&'static str, Vec<String>)>) -> (String, Bodies) {
+        scripted_model_full(deltas, asides, Vec::new()).await
+    }
+
+    /// The same, and `routes` answers the turns of other agents (helpers): a request
+    /// that offers tools and has the phrase anywhere in its messages is answered
+    /// from that route's own script instead of the lead's.
+    async fn scripted_model_full(
+        deltas: Vec<serde_json::Value>,
+        asides: Vec<(&'static str, Vec<String>)>,
+        routes: Vec<(&'static str, Vec<serde_json::Value>)>,
+    ) -> (String, Bodies) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let routes = Arc::new(routes.into_iter().map(|(k, v)| (k, v, std::sync::atomic::AtomicUsize::new(0))).collect::<Vec<_>>());
+        let asides = Arc::new(asides.into_iter().map(|(k, v)| (k, v, std::sync::atomic::AtomicUsize::new(0))).collect::<Vec<_>>());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let bodies: Bodies = Arc::default();
         let seen = bodies.clone();
+        let turns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         tokio::spawn(async move {
             loop {
                 let Ok((mut sock, _)) = listener.accept().await else { return };
                 let seen = seen.clone();
+                let turns = turns.clone();
+                let deltas = deltas.clone();
+                let asides = asides.clone();
+                let routes = routes.clone();
                 tokio::spawn(async move {
                     let mut buf = Vec::new();
                     let mut chunk = [0u8; 8192];
@@ -1020,10 +1080,28 @@ mod tests {
                         }
                         buf.extend_from_slice(&chunk[..n]);
                     }
+                    let mut delta = serde_json::json!({ "content": "ok" });
                     if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&buf[head_end..head_end + len]) {
+                        if v["tools"].as_array().is_some_and(|t| !t.is_empty()) {
+                            let all = v["messages"].to_string();
+                            if let Some((_, script, at)) = routes.iter().find(|(k, _, _)| all.contains(k)) {
+                                let n = at.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                delta = script[n.min(script.len() - 1)].clone();
+                            } else {
+                                let n = turns.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                delta = deltas[n.min(deltas.len() - 1)].clone();
+                            }
+                        } else {
+                            delta = deltas.last().cloned().unwrap_or(delta);
+                            let first = v["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                            if let Some((_, replies, at)) = asides.iter().find(|(k, _, _)| first.contains(k)) {
+                                let n = at.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                delta = serde_json::json!({ "content": replies[n.min(replies.len() - 1)] });
+                            }
+                        }
                         seen.lock().unwrap().push(v);
                     }
-                    let frame = serde_json::json!({ "choices": [{ "delta": { "content": reply } }] });
+                    let frame = serde_json::json!({ "choices": [{ "delta": delta }] });
                     let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -1083,8 +1161,17 @@ mod tests {
 
         /// A conversation, and a target pointing at the fake server.
         fn conversation_on(&self, base_url: &str) -> (String, ChatTarget) {
+            self.conversation_with_window(base_url, 8192)
+        }
+
+        /// The same, on a server whose window puts it on the Full tier.
+        fn full_conversation_on(&self, base_url: &str) -> (String, ChatTarget) {
+            self.conversation_with_window(base_url, 65536)
+        }
+
+        fn conversation_with_window(&self, base_url: &str, window: i64) -> (String, ChatTarget) {
             let conv = self.db.create_conversation("A chat", None, false).unwrap().id;
-            let ep = self.db.insert_local_endpoint("fake", base_url, 8192).unwrap();
+            let ep = self.db.insert_local_endpoint("fake", base_url, window).unwrap();
             let target = ChatTarget {
                 provenance: Some("endpoint".into()),
                 provider: Some(ep.id),
@@ -1215,8 +1302,816 @@ mod tests {
         assert_eq!(started["tier"], "full");
     }
 
+    /// The tools a request offered, by name.
+    fn tools_of(body: &serde_json::Value) -> Vec<String> {
+        body["tools"]
+            .as_array()
+            .map(|t| t.iter().filter_map(|t| t["function"]["name"].as_str().map(String::from)).collect())
+            .unwrap_or_default()
+    }
+
+    /// Every request that offered tools, in order: the turns of the loop.
+    fn loop_turns(bodies: &Bodies) -> Vec<serde_json::Value> {
+        bodies.lock().unwrap().iter().filter(|b| b["tools"].as_array().is_some_and(|t| !t.is_empty())).cloned().collect()
+    }
+
+    /// Does any message in this request say `words`?
+    fn says(body: &serde_json::Value, words: &str) -> bool {
+        body["messages"].as_array().unwrap().iter().any(|m| m["content"].as_str().is_some_and(|c| c.contains(words)))
+    }
+
+    /// `WRK-T`: a chat set to Lean works its plan one item at a time. The plan is
+    /// written with what done means for each item, the loop starts each item
+    /// itself and says where each one ended, and the board and the saved timeline
+    /// agree. Run through the whole turn, against a scripted model.
+    #[tokio::test]
+    async fn a_lean_turn_works_its_items_one_at_a_time_and_marks_where_each_ended() {
+        let rig = Rig::new();
+        let (url, bodies) = scripted_model_with(vec![
+            call(
+                "plan",
+                serde_json::json!({ "items": [
+                    { "text": "Export function", "done_when": "the function writes a file" },
+                    { "text": "Button", "done_when": "the button is there" },
+                ]}),
+            ),
+            call("plan", serde_json::json!({ "updates": [{ "index": 1, "status": "done" }] })),
+            call("plan", serde_json::json!({ "updates": [{ "index": 2, "status": "done" }] })),
+            serde_json::json!({ "content": "All done." }),
+        ],
+        vec![(LOOK, vec!["VERDICT: CHECKED\nREASON: It is there.".to_string()])])
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        rig.db.set_conversation_style(&conv, Some("lean")).unwrap();
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Add an export button");
+        turn.tools_enabled = true;
+        run_turn(&rig.env(), turn, channel).await;
+
+        let events = events.lock().unwrap();
+        let types: Vec<(&str, String)> = events
+            .iter()
+            .filter(|e| matches!(e["type"].as_str(), Some("style_set" | "item_started" | "item_ended")))
+            .map(|e| (e["type"].as_str().unwrap(), e["item"].to_string()))
+            .collect();
+        assert_eq!(
+            types,
+            vec![
+                ("style_set", "null".to_string()),
+                ("item_started", "0".to_string()),
+                ("item_ended", "0".to_string()),
+                ("item_started", "1".to_string()),
+                ("item_ended", "1".to_string()),
+            ],
+            "the loop starts each item and says where it ended: {events:?}"
+        );
+        let style = events.iter().find(|e| e["type"] == "style_set").unwrap();
+        assert_eq!((style["preset"].as_str(), style["source"].as_str()), (Some("lean"), Some("chat")));
+
+        // The saved timeline carries the dividers, so a reload draws them again.
+        let last = events.last().unwrap();
+        let steps: Vec<serde_json::Value> = serde_json::from_str(last["steps_json"].as_str().unwrap()).unwrap();
+        let dividers: Vec<&str> = steps.iter().filter_map(|s| s["divider"].as_str()).collect();
+        assert_eq!(dividers, vec!["Export function \u{b7} done", "Button \u{b7} done"]);
+
+        // The plan kept with the answer remembers what done meant and how it worked.
+        let rows = rig.db.list_messages(&conv).unwrap();
+        let plan: serde_json::Value = serde_json::from_str(&rig.db.message_plan_json(&rows[1].id).unwrap().unwrap()).unwrap();
+        assert_eq!(plan["style"], "lean");
+        assert_eq!(plan["items"][0]["done_when"], "the function writes a file");
+        assert!(plan["items"].as_array().unwrap().iter().all(|i| i["status"] == "done"));
+
+        // What the model was shown: the plan tool asks for what done means, it is
+        // told to write the plan first, and then which item is in hand.
+        let turns = loop_turns(&bodies);
+        assert_eq!(turns[0]["tools"].as_array().unwrap().iter().find(|t| t["function"]["name"] == "plan").unwrap()
+            ["function"]["parameters"]["properties"]["items"]["items"]["type"], "object");
+        assert!(says(&turns[0], "Before your first tool call, write the plan"), "{:?}", turns[0]["messages"]);
+        assert!(says(&turns[1], "The item in hand is 1: \"Export function\""));
+        assert!(says(&turns[2], "The item in hand is 2: \"Button\""), "the next item started by itself");
+        assert!(!says(&turns[3], "The item in hand"), "nothing is in hand once the plan is done");
+        // And a record of how it worked is in the log for later, not in the model's view:
+        // only the two second looks fired, and the run said it worked the Lean way.
+        let rows: Vec<String> =
+            rig.db.session_events(&conv).unwrap().into_iter().filter(|r| r.kind == "way").map(|r| r.payload_json).collect();
+        let (styles, moves): (Vec<&String>, Vec<&String>) = rows.iter().partition(|p| p.contains("\"rule\":\"style\""));
+        assert_eq!(moves.len(), 2);
+        assert_eq!(styles.len(), 1);
+        assert!(styles[0].contains("\"move\":\"lean\""), "{}", styles[0]);
+    }
+
+    /// The phrase that tells a second look from every other call on the side.
+    const LOOK: &str = "You are giving a second look";
+
+    /// `WRK-4`: an item the model calls done is looked at by someone who never saw
+    /// the work. A send-back keeps the item in hand and gives the reason to the
+    /// model; the item counts only once the look agrees.
+    #[tokio::test]
+    async fn a_second_look_sends_an_item_back_with_its_reason_and_it_only_counts_once_it_agrees() {
+        let rig = Rig::new();
+        let (url, bodies) = scripted_model_with(
+            vec![
+                call(
+                    "plan",
+                    serde_json::json!({ "items": [
+                        { "text": "Export function", "done_when": "the function writes a file" },
+                        { "text": "Button", "done_when": "the button is there" },
+                    ]}),
+                ),
+                call("plan", serde_json::json!({ "updates": [{ "index": 1, "status": "done" }] })),
+                call("plan", serde_json::json!({ "updates": [{ "index": 1, "status": "done" }] })),
+                call("plan", serde_json::json!({ "updates": [{ "index": 2, "status": "done" }] })),
+                serde_json::json!({ "content": "All done." }),
+            ],
+            vec![(
+                LOOK,
+                vec![
+                    "VERDICT: SENT BACK\nREASON: Nothing shows the function was ever run.".to_string(),
+                    "VERDICT: CHECKED\nREASON: It was run and wrote the file.".to_string(),
+                    "VERDICT: CHECKED\nREASON: The button is there.".to_string(),
+                ],
+            )],
+        )
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        rig.db.set_conversation_style(&conv, Some("lean")).unwrap();
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Add an export button");
+        turn.tools_enabled = true;
+        run_turn(&rig.env(), turn, channel).await;
+
+        let events = events.lock().unwrap();
+        let story: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e["type"].as_str()? {
+                "review" => Some(format!("review {} {}", e["item"], e["state"].as_str()?)),
+                "item_ended" => Some(format!("ended {}", e["item"])),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            story,
+            vec![
+                "review 0 checking",
+                "review 0 sent_back",
+                "review 0 checking",
+                "review 0 checked",
+                "ended 0",
+                "review 1 checking",
+                "review 1 checked",
+                "ended 1",
+            ],
+            "the first item does not end until the look agrees: {events:?}"
+        );
+        let back = events.iter().find(|e| e["type"] == "review" && e["state"] == "sent_back").unwrap();
+        assert_eq!(back["reason"], "Nothing shows the function was ever run.", "a send-back always has its reason");
+
+        // The model was told, in the result of the call it made.
+        let turns = loop_turns(&bodies);
+        assert!(says(&turns[2], "Second look on item 1: sent back. Nothing shows the function was ever run."), "{:?}", turns[2]["messages"]);
+        assert!(says(&turns[2], "still in hand"));
+
+        // The look was given the outcome and not the path: two messages, no transcript.
+        let looks: Vec<serde_json::Value> = bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|b| b["messages"][0]["content"].as_str().is_some_and(|c| c.contains(LOOK)))
+            .cloned()
+            .collect();
+        assert_eq!(looks.len(), 3);
+        assert_eq!(looks[0]["messages"].as_array().unwrap().len(), 2);
+        assert!(says(&looks[0], "the function writes a file") && says(&looks[0], "Add an export button"));
+        assert!(!says(&looks[0], "Before your first tool call"), "none of the loop's own instructions");
+
+        // Kept with the answer: the verdict and the signals.
+        let rows = rig.db.list_messages(&conv).unwrap();
+        let plan: serde_json::Value = serde_json::from_str(&rig.db.message_plan_json(&rows[1].id).unwrap().unwrap()).unwrap();
+        assert_eq!(plan["items"][0]["review"]["state"], "checked");
+        let ways: Vec<String> = rig
+            .db
+            .session_events(&conv)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.kind == "way" && !r.payload_json.contains("\"rule\":\"style\""))
+            .map(|r| r.payload_json)
+            .collect();
+        assert_eq!(ways.len(), 3);
+        assert!(ways[0].contains("sent back: Nothing shows the function was ever run."), "{}", ways[0]);
+    }
+
+    /// `WRK-5`: when the head is full, the run writes itself a note and goes on
+    /// from the note alone. The old transcript is gone from its view; the request
+    /// and the plan are not.
+    #[tokio::test]
+    async fn a_lean_run_with_a_full_head_starts_fresh_from_a_handover_note() {
+        let rig = Rig::new();
+        let long = "word ".repeat(700);
+        let (url, bodies) = scripted_model_with(
+            vec![
+                call(
+                    "plan",
+                    serde_json::json!({ "items": [
+                        { "text": format!("Export function {long}"), "done_when": "the function writes a file" },
+                        { "text": format!("Button {long}"), "done_when": "the button is there" },
+                    ]}),
+                ),
+                call("plan", serde_json::json!({ "updates": [{ "index": 1, "status": "done" }] })),
+                serde_json::json!({ "content": "Carried on." }),
+            ],
+            vec![
+                (HANDOVER, vec!["I am building the export. The function is in src/export.rs and works. The button is still to do.".to_string()]),
+                (LOOK, vec!["VERDICT: CHECKED\nREASON: Fine.".to_string()]),
+            ],
+        )
+        .await;
+        let (conv, target) = rig.conversation_with_window(&url, 4096);
+        let endpoint = target.provider.clone().unwrap();
+        rig.db
+            .set_setting(&crate::agent::tier::tier_key(&crate::agent::tier::endpoint_model_id(&endpoint, "fake-model")), "full")
+            .unwrap();
+        rig.db.set_conversation_style(&conv, Some("lean")).unwrap();
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Add an export button");
+        turn.tools_enabled = true;
+        run_turn(&rig.env(), turn, channel).await;
+
+        let events = events.lock().unwrap();
+        let fresh = events.iter().find(|e| e["type"] == "fresh_start").expect("the run started fresh");
+        assert!(fresh["note"].as_str().unwrap().contains("src/export.rs"));
+
+        // What the model was shown after: the request, the note and nothing of the path.
+        let turns = loop_turns(&bodies);
+        let after = turns.iter().find(|b| says(b, "carrying on this work after a fresh start")).expect("a request after the fresh start");
+        assert!(says(after, "Add an export button"), "the request is kept");
+        assert!(says(after, "The function is in src/export.rs"));
+        assert!(
+            !after["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool"),
+            "no result from before the fresh start: {:?}",
+            after["messages"]
+        );
+
+        // The timeline saved a divider that opens the note.
+        let last = events.last().unwrap();
+        let steps: Vec<serde_json::Value> = serde_json::from_str(last["steps_json"].as_str().unwrap()).unwrap();
+        let divider = steps.iter().find(|s| s["divider"] == "Fresh start: I wrote myself a handover note").expect("a divider");
+        assert!(divider["note"].as_str().unwrap().contains("src/export.rs"));
+        let ways: Vec<String> = rig.db.session_events(&conv).unwrap().into_iter().filter(|r| r.kind == "way").map(|r| r.payload_json).collect();
+        assert!(ways.iter().any(|w| w.contains("started fresh")), "{ways:?}");
+    }
+
+    /// `WRK-6`: an item that failed twice is tried two ways, each in its own copy of
+    /// the folder. One copy is kept: its changes land in the real folder, the other
+    /// way stays readable as a patch, and the board remembers which was kept.
+    #[tokio::test]
+    async fn an_item_that_failed_twice_is_tried_two_ways_and_one_is_kept() {
+        use crate::agent::toolsets::Toolset;
+        let rig = Rig::new();
+        Toolset::FileSystem.set_enabled(&rig.db, true);
+        // A learned way, as a person (or one day evolution) would have written it.
+        let ways = rig.tmp.path().join("memory/ways");
+        std::fs::create_dir_all(&ways).unwrap();
+        std::fs::write(
+            ways.join("two-ways-when-stuck.md"),
+            "---\nwhen: item-failed-twice\nmove: two-ways\nscope: everywhere\nstatus: learned\norigin: you\nsince: 2026-11-07\n---\n",
+        )
+        .unwrap();
+        let folder = rig.tmp.path().join("project");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("keep.txt"), "untouched\n").unwrap();
+
+        let (url, bodies) = scripted_model_full(
+            vec![
+                call("plan", serde_json::json!({ "items": [{ "text": "Fix the export", "done_when": "the export works" }] })),
+                call("plan", serde_json::json!({ "updates": [{ "index": 1, "status": "done" }] })),
+                call("plan", serde_json::json!({ "updates": [{ "index": 1, "status": "done" }] })),
+                serde_json::json!({ "content": "Carried on with the kept way." }),
+            ],
+            vec![
+                (LOOK, vec!["VERDICT: SENT BACK\nREASON: Nothing shows it runs.".to_string()]),
+                ("Two ways of doing the same item", vec!["KEEP: B\nREASON: no new dependency".to_string()]),
+            ],
+            vec![
+                (
+                    "the most direct fix",
+                    vec![
+                        call("write_file", serde_json::json!({ "path": "fix.txt", "content": "direct\n" })),
+                        serde_json::json!({ "content": "I wrote fix.txt the direct way." }),
+                    ],
+                ),
+                (
+                    "a different route",
+                    vec![
+                        call("write_file", serde_json::json!({ "path": "fix.txt", "content": "other route\n" })),
+                        serde_json::json!({ "content": "I wrote fix.txt another way, with no new dependency." }),
+                    ],
+                ),
+            ],
+        )
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        rig.db.set_conversation_style(&conv, Some("lean")).unwrap();
+        rig.db.set_conversation_folder(&conv, Some(&folder.to_string_lossy())).unwrap();
+        rig.db.set_conversation_trust(&conv, "auto").unwrap();
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Fix the export");
+        turn.tools_enabled = true;
+        run_turn(&rig.env(), turn, channel).await;
+
+        let events = events.lock().unwrap();
+        let branched = events.iter().find(|e| e["type"] == "branched").expect("two ways were tried");
+        let kept = events.iter().find(|e| e["type"] == "branch_kept").expect("one was kept");
+        assert_eq!((kept["kept"].as_str(), kept["reason"].as_str()), (Some("b"), Some("no new dependency")));
+        assert_eq!(kept["id"], branched["id"]);
+        assert_eq!(events.iter().filter(|e| e["type"] == "sub_spawned").count(), 2, "two helpers on the Fleet card");
+
+        // The kept way is in the real folder; nothing else was touched.
+        assert_eq!(std::fs::read_to_string(folder.join("fix.txt")).unwrap(), "other route\n");
+        assert_eq!(std::fs::read_to_string(folder.join("keep.txt")).unwrap(), "untouched\n");
+
+        // Both copies are gone, and the other way can still be read.
+        let id = kept["id"].as_str().unwrap();
+        let data_dir = rig.mgr.generated_media_dir();
+        let data = data_dir.as_path();
+        let record = crate::agent::branch::load(data, id).expect("a record of both ways");
+        assert_eq!(record.kept, "b");
+        assert!(record.patches[0].contains("+direct") && record.patches[1].contains("+other route"), "{:?}", record.patches);
+        assert!(!crate::agent::branch::workdir(data, id).join("a").exists());
+
+        // It is on the board for good, and the lead was told in plain words.
+        let rows = rig.db.list_messages(&conv).unwrap();
+        let plan: serde_json::Value = serde_json::from_str(&rig.db.message_plan_json(&rows[1].id).unwrap().unwrap()).unwrap();
+        assert_eq!(plan["items"][0]["branches"]["kept"], "b");
+        assert_eq!(plan["items"][0]["branches"]["reason"], "no new dependency");
+        // And so is why: the moves that were made, with the rule behind each, for the board's hover.
+        let moves = plan["moves"].as_array().expect("moves are kept with the plan");
+        assert!(moves.iter().any(|m| m["move"] == "two-ways" && m["item"] == 0 && m["from"] == "learned" && m["text"] == "When an item has failed twice, I try two ways and keep the better one."), "{moves:?}");
+        assert!(moves.iter().any(|m| m["move"] == "second-look" && m["from"] == "preset" && m["state"] == "fired"));
+        let turns = loop_turns(&bodies);
+        assert!(turns.iter().any(|t| says(t, "failed twice, so I had two helpers try it")));
+        let ways: Vec<String> = rig.db.session_events(&conv).unwrap().into_iter().filter(|r| r.kind == "way").map(|r| r.payload_json).collect();
+        assert!(ways.iter().any(|w| w.contains("two-ways")), "{ways:?}");
+
+        // The change can be undone like any other.
+        let set = crate::agent::changes::change_set(&rig.db, &conv, 0);
+        assert!(set.files.iter().any(|f| f.display.ends_with("fix.txt")), "{:?}", set.files.iter().map(|f| &f.display).collect::<Vec<_>>());
+    }
+
+    /// The phrase that tells the handover call from every other call on the side.
+    const HANDOVER: &str = "You are about to be replaced";
+
+    /// `WRK-4`: a look that cannot be read lets the item stand. A check that cannot
+    /// be made must not stop the work it checks.
+    #[tokio::test]
+    async fn a_second_look_that_gives_no_verdict_lets_the_item_stand() {
+        let rig = Rig::new();
+        let (url, _bodies) = scripted_model_with(
+            vec![
+                call("plan", serde_json::json!({ "items": [{ "text": "Only item", "done_when": "it is done" }] })),
+                call("plan", serde_json::json!({ "updates": [{ "index": 1, "status": "done" }] })),
+                serde_json::json!({ "content": "Done." }),
+            ],
+            vec![(LOOK, vec!["Hmm, hard to say really.".to_string()])],
+        )
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        rig.db.set_conversation_style(&conv, Some("lean")).unwrap();
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Do the thing");
+        turn.tools_enabled = true;
+        run_turn(&rig.env(), turn, channel).await;
+        let events = events.lock().unwrap();
+        assert!(events.iter().any(|e| e["type"] == "item_ended" && e["outcome"] == "done"));
+        assert!(!events.iter().any(|e| e["type"] == "review" && e["state"] == "sent_back"));
+    }
+
+    /// `WRK-T`: the same problem twice is put to the person. Until it is asked,
+    /// the one thing on the menu is the question; a model that answers in words
+    /// instead is asked once more and then let go. Ad hoc, because the base rules
+    /// hold in every preset.
+    #[tokio::test]
+    async fn the_same_problem_twice_leaves_only_the_question_on_the_menu() {
+        use crate::agent::toolsets::Toolset;
+        let rig = Rig::new();
+        Toolset::FileSystem.set_enabled(&rig.db, true);
+        let read = call("read_file", serde_json::json!({ "path": "nope.txt" }));
+        let (url, bodies) = scripted_model(vec![
+            read.clone(),
+            read,
+            serde_json::json!({ "content": "I cannot read it." }),
+        ])
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Read nope.txt");
+        turn.tools_enabled = true;
+        run_turn(&rig.env(), turn, channel).await;
+
+        let turns = loop_turns(&bodies);
+        assert!(tools_of(&turns[0]).len() > 1 && tools_of(&turns[1]).len() > 1, "a first failure is only a mistake");
+        assert_eq!(tools_of(&turns[2]), vec!["ask_user"], "the same failure twice: only the question is offered");
+        assert!(says(&turns[2], "You have hit the same problem twice"));
+        assert!(says(&turns[2], "I've hit the same problem twice:"), "it is told how to begin the question");
+        // The model answered in words; it is asked once more, still with only the question.
+        assert_eq!(tools_of(&turns[3]), vec!["ask_user"]);
+        assert!(says(&turns[3], "have not asked yet"));
+        assert_eq!(turns.len(), 4, "and then it is let go: a model that will not ask is not made to");
+
+        // The person sees a move on the board's account, and the log keeps the signal.
+        let events = events.lock().unwrap();
+        let moved = events.iter().find(|e| e["type"] == "move").expect("a move was shown");
+        assert_eq!((moved["mv"].as_str(), moved["rule"].as_str()), (Some("check-in"), Some("ask-on-repeat")));
+        let ways: Vec<_> = rig
+            .db
+            .session_events(&conv)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.kind == "way" && !r.payload_json.contains("\"rule\":\"style\""))
+            .collect();
+        assert_eq!(ways.len(), 1);
+        assert!(ways[0].payload_json.contains("same-problem-twice"), "{}", ways[0].payload_json);
+        // A way row never reaches the model if the run is resumed.
+        assert!(crate::agent::log::replay(&rig.db, events.iter().find(|e| e["type"] == "run_started").unwrap()["run_id"].as_str().unwrap())
+            .iter()
+            .all(|m| m.get("rule").is_none()));
+    }
+
     /// The window saved the rows before it started the engine (`save_turn_cmd`):
     /// the turn runs on them and adds none of its own.
+    /// `WRK-11`: the advice a risky call gathered goes above the first question that
+    /// call raises, and only that one.
+    #[test]
+    fn advice_rides_on_the_next_permission_question_once() {
+        use crate::permissions::{Mode, PermissionRequest};
+        let (channel, events) = recording_channel();
+        let sink = crate::agent::run::AgentEventSink::new(channel);
+        let ask = |id: &str| PermissionRequest::scope(id.into(), "Delete it?".into(), "old/notes.md".into(), Mode::ReadWrite);
+        sink.advise_next_permission("I asked first: your notes say /old is a backup folder.".into());
+        sink.send_permission(ask("p1"));
+        sink.send_permission(ask("p2"));
+        sink.advise_next_permission("stale".into());
+        sink.clear_advice();
+        sink.send_permission(ask("p3"));
+        let events = events.lock().unwrap();
+        let advice: Vec<Option<&str>> = events.iter().map(|e| e["request"]["advice"].as_str()).collect();
+        assert_eq!(advice, vec![Some("I asked first: your notes say /old is a backup folder."), None, None]);
+    }
+
+    /// `WRK-14`: a swarm hands items to helpers, several in one call. The board says who
+    /// has each item while they work, the way of working says what it did, and the lead
+    /// finishes the items itself once the helpers' reports are in.
+    #[tokio::test]
+    async fn a_swarm_hands_items_to_helpers_side_by_side_and_the_board_says_who_has_each() {
+        let rig = Rig::new();
+        // Children take the next scripted turn after the lead's delegate call; both
+        // are told the same words, so which one asks first does not matter.
+        let (url, _bodies) = scripted_model_with(
+            vec![
+                call("plan", serde_json::json!({ "items": ["Write the export", "Write the button"] })),
+                call(
+                    "delegate",
+                    serde_json::json!({ "tasks": [
+                        { "task": "Write the export function.", "item": 1 },
+                        { "task": "Write the button.", "item": 2 },
+                    ]}),
+                ),
+                serde_json::json!({ "content": "My part is finished." }),
+                serde_json::json!({ "content": "My part is finished." }),
+                call("plan", serde_json::json!({ "updates": [{ "index": 1, "status": "done" }, { "index": 2, "status": "done" }] })),
+                serde_json::json!({ "content": "Both pieces are done." }),
+            ],
+            vec![(LOOK, vec!["VERDICT: CHECKED\nREASON: fine".to_string()])],
+        )
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        rig.db.set_conversation_style(&conv, Some("swarm")).unwrap();
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Build the export and its button");
+        turn.tools_enabled = true;
+        run_turn(&rig.env(), turn, channel).await;
+
+        let events = events.lock().unwrap();
+        assert_eq!(events.iter().filter(|e| e["type"] == "sub_spawned").count(), 2, "two helpers on the Fleet card");
+        let held = events
+            .iter()
+            .filter(|e| e["type"] == "plan")
+            .find(|e| e["plan"]["items"][0]["by"] == "helper")
+            .expect("the board said who had item 1 while they worked");
+        assert_eq!(held["plan"]["items"][1]["by"], "helper");
+        assert_eq!(held["plan"]["items"][0]["status"], "doing", "handed over, so it is being worked on");
+        let moves: Vec<&str> = events.iter().filter(|e| e["type"] == "move").map(|e| e["mv"].as_str().unwrap()).collect();
+        assert!(moves.contains(&"parallel"), "two items at once is the parallel move: {moves:?}");
+        let ended = events.iter().filter(|e| e["type"] == "run_ended").last().unwrap();
+        assert_eq!(ended["plan"]["items"][0]["status"], "done");
+        assert_eq!(ended["plan"]["items"][1]["by"], "helper", "who did it stays on the board");
+        // `WRK-18`: a helper works one thing at a time unless the lead said otherwise.
+        for run in rig.db.list_subagent_runs(&conv).unwrap() {
+            let child = rig.db.get_conversation(&run.child_conversation_id).unwrap().unwrap();
+            assert_eq!(child.style.as_deref(), Some("lean"));
+        }
+    }
+
+    const CRITERIA: &str = "You are checking whether work meets what the person agreed";
+
+    /// `WRK-10`: Mission Command agrees what done means before anything changes. The
+    /// run reads and writes the plan with its criteria, and then it stops and waits for
+    /// the person's yes: the plan is saved awaiting approval, with the criteria on it.
+    #[tokio::test]
+    async fn mission_command_agrees_what_done_means_first_and_waits_for_the_yes() {
+        let rig = Rig::new();
+        let (url, bodies) = scripted_model(vec![
+            call(
+                "plan",
+                serde_json::json!({
+                    "criteria": ["The Fleet view has an Export button", "The file opens in Excel with all columns"],
+                    "items": ["Export function", "Button"],
+                }),
+            ),
+            // What a model left running did: work on without the yes.
+            call("plan", serde_json::json!({ "updates": [{ "index": 1, "status": "done" }] })),
+            serde_json::json!({ "content": "Done." }),
+        ])
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        rig.db.set_conversation_style(&conv, Some("mission-command")).unwrap();
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Add an export button");
+        turn.tools_enabled = true;
+        run_turn(&rig.env(), turn, channel).await;
+
+        let turns = loop_turns(&bodies);
+        assert_eq!(turns.len(), 1, "the turn ends once the plan is ready: the card asks for the yes");
+        assert!(says(&turns[0], "agree with the person what done means"), "the run is told what to do first");
+        let spec = turns[0]["tools"].to_string();
+        assert!(spec.contains("What done means for the whole task"), "the plan tool offers criteria");
+
+        let rows = rig.db.list_messages(&conv).unwrap();
+        let plan: serde_json::Value = serde_json::from_str(&rig.db.message_plan_json(&rows[1].id).unwrap().unwrap()).unwrap();
+        assert_eq!(plan["awaiting_approval"], true, "nothing changes until the person says yes");
+        assert_eq!(plan["criteria"].as_array().unwrap().len(), 2);
+        assert_eq!(plan["style"], "mission-command");
+        assert_eq!(plan["items"][0]["status"], "todo", "no item was started");
+        assert!(rows[1].content.contains("Nothing changes until you say go ahead"), "{}", rows[1].content);
+        // The window is told the message is finished: a message still streaming
+        // never shows the card's Go ahead.
+        assert!(events.lock().unwrap().iter().any(|e| e["type"] == "done"), "the turn is finished for the window");
+    }
+
+    /// `WRK-10`/`WRK-12`: after the yes, the run works, and the answer is held to the
+    /// criteria by someone who never saw the path. A criterion that is not met sends the
+    /// answer back once with its reason; when the look agrees, the boxes are ticked. The
+    /// way of working is carried from the approved plan, not from the chat.
+    #[tokio::test]
+    async fn the_answer_is_held_to_the_criteria_and_sent_back_with_the_reason() {
+        let rig = Rig::new();
+        let (url, bodies) = scripted_model_with(
+            vec![
+                serde_json::json!({ "content": "Done. The button is there." }),
+                serde_json::json!({ "content": "Fixed: the file now has both columns." }),
+            ],
+            vec![(
+                CRITERIA,
+                vec![
+                    "1: MET - the button is in the Fleet view\n2: NOT MET - Excel shows one column".to_string(),
+                    "1: MET - the button is in the Fleet view\n2: MET - both columns are written".to_string(),
+                ],
+            )],
+        )
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        let mut agreed = Plan::default();
+        agreed.set_criteria(vec!["The Fleet view has an Export button".into(), "The file opens in Excel with all columns".into()]);
+        agreed.style = Some("mission-command".into());
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Go ahead with the plan.");
+        turn.tools_enabled = true;
+        turn.options.approved_plan = Some(agreed);
+        run_turn(&rig.env(), turn, channel).await;
+
+        let turns = loop_turns(&bodies);
+        assert_eq!(turns.len(), 2, "one answer, sent back once, then the second");
+        assert!(says(&turns[1], "not everything the person agreed to is met yet"), "{:?}", turns[1]["messages"]);
+        assert!(says(&turns[1], "Excel shows one column"), "with the reason");
+
+        // The look was given the criteria and the answer, never the transcript.
+        let looks: Vec<serde_json::Value> = bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|b| b["messages"][0]["content"].as_str().is_some_and(|c| c.contains(CRITERIA)))
+            .cloned()
+            .collect();
+        assert_eq!(looks.len(), 2);
+        assert_eq!(looks[0]["messages"].as_array().unwrap().len(), 2);
+        assert!(says(&looks[0], "Done. The button is there.") && says(&looks[0], "1. The Fleet view has an Export button"));
+
+        let rows = rig.db.list_messages(&conv).unwrap();
+        let plan: serde_json::Value = serde_json::from_str(&rig.db.message_plan_json(&rows[1].id).unwrap().unwrap()).unwrap();
+        assert_eq!(plan["criteria"][0]["met"], true);
+        assert_eq!(plan["criteria"][1]["met"], true, "ticked once the second look agreed");
+        let ways: Vec<String> =
+            rig.db.session_events(&conv).unwrap().into_iter().filter(|r| r.kind == "way").map(|r| r.payload_json).collect();
+        assert!(ways.iter().any(|w| w.contains("not met: The file opens in Excel with all columns")), "{ways:?}");
+        assert!(ways.iter().any(|w| w.contains("all criteria met")), "{ways:?}");
+        let _ = events;
+    }
+
+    /// `WRK-12`: `/goal x until y` is Mission Command with `y` already agreed. The run asks
+    /// nothing about it and starts at once, says how it worked even though it never wrote a
+    /// plan, and its answer is still held to `y` by someone who never saw the path.
+    #[tokio::test]
+    async fn a_goal_is_mission_command_with_its_condition_already_agreed() {
+        let rig = Rig::new();
+        let (url, bodies) = scripted_model_with(
+            vec![serde_json::json!({ "content": "I ran npm test and it exited 0." })],
+            vec![(CRITERIA, vec!["1: MET - npm test exited 0 in the answer, with the command named".to_string()])],
+        )
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        let (channel, _events) = recording_channel();
+        let mut turn = typed(&conv, target, "make the tests pass");
+        turn.tools_enabled = true;
+        turn.options.style = Some("mission-command".into());
+        turn.options.criteria = vec!["npm test exits 0".into()];
+        run_turn(&rig.env(), turn, channel).await;
+
+        let turns = loop_turns(&bodies);
+        assert_eq!(turns.len(), 1, "it went straight to the work: nothing was agreed, nothing was waited for");
+        assert!(!says(&turns[0], "agree with the person what done means"));
+        assert!(says(&turns[0], "The person agreed what done means"));
+        let rows = rig.db.list_messages(&conv).unwrap();
+        let plan: serde_json::Value = serde_json::from_str(&rig.db.message_plan_json(&rows[1].id).unwrap().unwrap()).unwrap();
+        assert!(plan["awaiting_approval"].is_null() || plan["awaiting_approval"] == false);
+        assert_eq!(plan["style"], "mission-command");
+        assert_eq!(plan["criteria"][0]["text"], "npm test exits 0");
+        assert_eq!(plan["criteria"][0]["met"], true);
+    }
+
+    /// `WRK-10`: a look that gives no verdict leaves the criteria unticked and lets the
+    /// answer stand: a check that cannot be made must not stop the work it checks.
+    #[tokio::test]
+    async fn a_criteria_check_with_no_verdict_lets_the_answer_stand() {
+        let rig = Rig::new();
+        let (url, bodies) = scripted_model_with(
+            vec![serde_json::json!({ "content": "All done." })],
+            vec![(CRITERIA, vec!["Looks fine to me.".to_string()])],
+        )
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        let mut agreed = Plan::default();
+        agreed.set_criteria(vec!["It works".into()]);
+        agreed.style = Some("mission-command".into());
+        let (channel, _events) = recording_channel();
+        let mut turn = typed(&conv, target, "Go ahead with the plan.");
+        turn.tools_enabled = true;
+        turn.options.approved_plan = Some(agreed);
+        run_turn(&rig.env(), turn, channel).await;
+
+        assert_eq!(loop_turns(&bodies).len(), 1, "nothing was sent back");
+        let rows = rig.db.list_messages(&conv).unwrap();
+        let plan: serde_json::Value = serde_json::from_str(&rig.db.message_plan_json(&rows[1].id).unwrap().unwrap()).unwrap();
+        assert!(plan["criteria"][0]["met"].is_null(), "not ticked on a verdict nobody can read");
+    }
+
+    /// `WRK-10`: Command & Control checks in after each item. The loop asks, with its
+    /// own three answers; "I'll take it from here" ends the work there, and the run is
+    /// offered no tools for its last words.
+    #[tokio::test]
+    async fn command_and_control_checks_in_after_an_item_and_the_person_can_take_it_over() {
+        let rig = Rig::new();
+        let (url, bodies) = scripted_model_with(
+            vec![
+                call(
+                    "plan",
+                    serde_json::json!({ "items": [
+                        { "text": "Export function", "done_when": "the function writes a file" },
+                        { "text": "Button", "done_when": "the button is there" },
+                    ]}),
+                ),
+                call("plan", serde_json::json!({ "updates": [{ "index": 1, "status": "done" }] })),
+                serde_json::json!({ "content": "I stopped after the export function; the button is left." }),
+            ],
+            vec![(LOOK, vec!["VERDICT: CHECKED\nREASON: It wrote the file.".to_string()])],
+        )
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        // The plan is agreed already, so the run goes straight to work.
+        let mut agreed = Plan::default();
+        agreed.set_criteria(vec!["The button exports the runs".into()]);
+        agreed.style = Some("command-and-control".into());
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Go ahead with the plan.");
+        turn.tools_enabled = true;
+        turn.options.approved_plan = Some(agreed);
+
+        // Answer the check-in the moment it is asked.
+        let answering = async {
+            for _ in 0..400 {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                let asked = events.lock().unwrap().iter().find(|e| e["type"] == "question").cloned();
+                if let Some(q) = asked {
+                    assert!(q["question"].as_str().unwrap().starts_with("\"Export function\" is done and checked. Next: Button."), "{q}");
+                    let labels: Vec<String> = q["options"].as_array().unwrap().iter().map(|o| o["label"].as_str().unwrap().to_string()).collect();
+                    assert_eq!(labels, vec!["Continue", "Change the next step", "I'll take it from here"]);
+                    let run = rig.fleet.get(q["run_id"].as_str().unwrap()).expect("the run is live");
+                    run.answer(
+                        q["id"].as_str().unwrap(),
+                        crate::agent::fleet::Answer { choices: vec!["I'll take it from here".into()], text: None },
+                    );
+                    return;
+                }
+            }
+            panic!("the run never checked in");
+        };
+        let env = rig.env();
+        tokio::join!(run_turn(&env, turn, channel), answering);
+
+        // The last request is the words that say where things stand: the model was told,
+        // and was offered no tool, so it could not start the next item.
+        let all = bodies.lock().unwrap().clone();
+        let last = all
+            .iter()
+            .find(|b| says(b, "The person will take it from here"))
+            .unwrap_or_else(|| panic!("the model was never told: {all:?}"));
+        assert!(last["tools"].as_array().map_or(true, |t| t.is_empty()), "no tools for the last words");
+        let ways: Vec<String> =
+            rig.db.session_events(&conv).unwrap().into_iter().filter(|r| r.kind == "way").map(|r| r.payload_json).collect();
+        assert!(ways.iter().any(|w| w.contains("check-in") && w.contains("after an item")), "{ways:?}");
+    }
+
+    /// `WRK-13`: a preset asked for in the middle of a run starts between items, never
+    /// in the middle of one, and is said once. Command & Control checks in after item 1,
+    /// which pauses the run with item 2 already in hand: the switch is asked for then, and
+    /// has to wait for item 2 to end.
+    #[tokio::test]
+    async fn a_switch_asked_for_mid_run_starts_at_the_end_of_the_item_and_is_said_once() {
+        let rig = Rig::new();
+        let (url, _bodies) = scripted_model_with(
+            vec![
+                call(
+                    "plan",
+                    serde_json::json!({ "items": [
+                        { "text": "One", "done_when": "one works" },
+                        { "text": "Two", "done_when": "two works" },
+                    ]}),
+                ),
+                call("plan", serde_json::json!({ "updates": [{ "index": 1, "status": "done" }] })),
+                call("plan", serde_json::json!({ "updates": [{ "index": 2, "status": "done" }] })),
+                serde_json::json!({ "content": "All done." }),
+            ],
+            vec![(LOOK, vec!["VERDICT: CHECKED
+REASON: fine".to_string()])],
+        )
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        let mut carried = Plan::default();
+        carried.style = Some("command-and-control".into());
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Do two things");
+        turn.tools_enabled = true;
+        turn.options.approved_plan = Some(carried);
+
+        let asking = async {
+            for _ in 0..400 {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                let asked = events.lock().unwrap().iter().find(|e| e["type"] == "question").cloned();
+                if let Some(q) = asked {
+                    let run = rig.fleet.get(q["run_id"].as_str().unwrap()).expect("the run is live");
+                    *run.style_switch.lock().unwrap() = Some("swarm".into());
+                    run.answer(q["id"].as_str().unwrap(), crate::agent::fleet::Answer { choices: vec!["Continue".into()], text: None });
+                    return;
+                }
+            }
+            panic!("the run never checked in");
+        };
+        let env = rig.env();
+        tokio::join!(run_turn(&env, turn, channel), asking);
+
+        let events = events.lock().unwrap();
+        let story: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e["type"].as_str()? {
+                "style_set" => Some(format!("style {} {}", e["preset"].as_str()?, e["source"].as_str()?)),
+                "item_ended" => Some(format!("ended {}", e["item"])),
+                "harness_command" if e["name"] == "style" => Some(format!("said: {}", e["note"].as_str()?)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            story,
+            vec![
+                "style command-and-control chat",
+                "ended 0",
+                // Item 2 was in hand when it was asked for; the switch comes as it ends, before
+                // anything further is started under the old way.
+                "style swarm switch",
+                "said: I'm switching to Swarm from here.",
+                "ended 1",
+            ],
+            "the switch waits for item 2 to end, and is said once"
+        );
+    }
+
     #[tokio::test]
     async fn a_turn_saved_ahead_runs_on_its_rows() {
         let rig = Rig::new();
@@ -1394,6 +2289,10 @@ mod tests {
                 added: false,
                 judged: None,
                 decision: None,
+                done_when: None,
+                review: None,
+                branches: None,
+                by: None,
             }],
             ..Default::default()
         };

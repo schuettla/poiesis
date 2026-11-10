@@ -256,6 +256,67 @@ impl Db {
         )?;
         Ok(())
     }
+
+    // ---- WRK-19: what evolution of the ways of working reads ----
+
+    /// Every way-of-working signal since `since` (ms): the conversation, when, and the payload.
+    pub fn way_signals_since(&self, since: i64) -> Result<Vec<(String, i64, String)>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT conversation_id, created_at, payload_json FROM session_events
+             WHERE kind = 'way' AND created_at >= ?1 ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// The conversations where the person put my file changes back since `since`.
+    pub fn undone_conversations_since(&self, since: i64) -> Result<Vec<String>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT conversation_id FROM activity_log
+             WHERE kind = 'file' AND substr(detail, 1, 21) = 'undid my changes to '
+               AND conversation_id IS NOT NULL AND created_at >= ?1",
+        )?;
+        let rows = stmt.query_map([since], |r| r.get(0))?.collect::<Result<Vec<String>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Finished conversations since `since` with how they ended, and the way of working
+    /// they last ran under: `(id, kind, project, outcome, style, ended_at)`. The style is
+    /// the latest run's own signal (`work::STYLE_RULE`), because a default can choose a
+    /// preset the chat itself does not name; failing that, the chat's own choice.
+    #[allow(clippy::type_complexity)]
+    pub fn ended_conversations_since(
+        &self,
+        since: i64,
+    ) -> Result<Vec<(String, Option<String>, Option<String>, String, Option<String>, i64)>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.task_kind, c.project_id, c.outcome,
+                    COALESCE(
+                        (SELECT json_extract(e.payload_json, '$.move') FROM session_events e
+                         WHERE e.conversation_id = c.id AND e.kind = 'way'
+                           AND json_extract(e.payload_json, '$.rule') = 'style'
+                         ORDER BY e.seq DESC LIMIT 1),
+                        c.style),
+                    c.updated_at
+             FROM conversations c
+             WHERE c.encode_version > 0 AND c.outcome IS NOT NULL AND c.updated_at >= ?1 ORDER BY c.updated_at",
+        )?;
+        let rows = stmt
+            .query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Has a proposal about this subject ever been made, answered or not?
+    pub fn way_proposal_exists(&self, slug: &str) -> bool {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM change_proposals WHERE target = 'way' AND slug = ?1", [slug], |r| r.get::<_, i64>(0))
+            .map(|n| n > 0)
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]
@@ -264,6 +325,33 @@ mod tests {
 
     fn chat(db: &Db) -> String {
         db.create_conversation("A chat", None, false).unwrap().id
+    }
+
+    /// `WRK-19`: a chat counts under the preset it really ran under, which a default may
+    /// have chosen without the chat naming it, and the last one when it switched.
+    #[test]
+    fn an_ended_chat_counts_under_the_preset_it_last_ran_under() {
+        let db = Db::open_in_memory().unwrap();
+        let style = |conv: &str, slug: &str| {
+            let payload = serde_json::json!({ "rule": "style", "trigger": "run", "move": slug, "what": "chat" });
+            db.append_session_event(conv, Some("r"), "way", &payload).unwrap();
+        };
+        let by_default = chat(&db);
+        style(&by_default, "lean");
+        let switched = chat(&db);
+        db.set_conversation_style(&switched, Some("lean")).unwrap();
+        style(&switched, "lean");
+        style(&switched, "swarm");
+        let untouched = chat(&db);
+        db.set_conversation_style(&untouched, Some("mission-command")).unwrap();
+        for c in [&by_default, &switched, &untouched] {
+            db.save_episode_rules(c, "done", "code", "{}").unwrap();
+        }
+        let got: std::collections::HashMap<String, Option<String>> =
+            db.ended_conversations_since(0).unwrap().into_iter().map(|(id, _, _, _, s, _)| (id, s)).collect();
+        assert_eq!(got[&by_default].as_deref(), Some("lean"), "the default it ran under, not nothing");
+        assert_eq!(got[&switched].as_deref(), Some("swarm"), "the last way it worked");
+        assert_eq!(got[&untouched].as_deref(), Some("mission-command"), "no signal: the chat's own choice");
     }
 
     #[test]

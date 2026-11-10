@@ -115,8 +115,13 @@ function render(m: Message = message()) {
 
 const q = (sel: string) => container.querySelector<HTMLElement>(sel);
 const qa = (sel: string) => Array.from(container.querySelectorAll<HTMLElement>(sel));
-const actions = () => qa(".turn-actions button").map((b) => b.textContent);
 const click = (el: HTMLElement | null) => act(() => el!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+/** The turn's actions, with the `⋯` opened: Check more deeply waits behind it. */
+const actions = () => {
+  const more = q(".turn-more-btn");
+  if (more && more.getAttribute("aria-expanded") !== "true") click(more);
+  return qa(".turn-actions button").map((b) => b.textContent);
+};
 const button = (label: string) => qa("button").find((b) => b.textContent === label) ?? null;
 
 describe("the Check more deeply action", () => {

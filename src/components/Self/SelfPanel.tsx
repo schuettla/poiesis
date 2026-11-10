@@ -6,17 +6,19 @@ import { Evidence, LetGo, RecentChanges } from "../Memory/BeliefSections";
 import MemoryPanel from "../Memory/MemoryPanel";
 import ProposalCard from "../Conversation/ProposalCard";
 import TriedFixes from "./TriedFixes";
+import WaysTab from "./WaysTab";
 import "../../routes/Models.css";
 import "../Context/Context.css";
 import "./Self.css";
 
-type Tab = "memory" | "lessons" | "health" | "autonomy";
+type Tab = "memory" | "lessons" | "health" | "autonomy" | "ways";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "memory", label: "Memory" },
   { id: "lessons", label: "Lessons" },
   { id: "health", label: "Health" },
   { id: "autonomy", label: "Autonomy" },
+  { id: "ways", label: "How I work" },
 ];
 
 const RUNG_LABELS: Record<string, string> = {
@@ -78,6 +80,7 @@ export default function SelfPanel() {
         {tab === "lessons" && <LessonsTab />}
         {tab === "health" && <HealthTab />}
         {tab === "autonomy" && <AutonomyTab />}
+        {tab === "ways" && <WaysTab />}
       </div>
     </>
   );

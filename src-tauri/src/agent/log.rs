@@ -351,10 +351,18 @@ pub fn replay(db: &Db, run_id: &str) -> Vec<serde_json::Value> {
         // `command` and `rewound` are records *about* the conversation, like
         // `summary`: the model must never see its own command trace. A
         // `decision` is the same kind of record: the model is not shown the
-        // questions the runtime asked on its behalf.
+        // questions the runtime asked on its behalf. A `way` is a signal about
+        // how it worked, kept for what is learned from it, not for the model.
         if matches!(
             row.kind.as_str(),
-            "steer" | "stop" | COMPACTION_KIND | PLAN_KIND | COMMAND_KIND | REWOUND_KIND | DECISION_KIND
+            "steer"
+                | "stop"
+                | COMPACTION_KIND
+                | PLAN_KIND
+                | COMMAND_KIND
+                | REWOUND_KIND
+                | DECISION_KIND
+                | super::work::WAY_KIND
         ) {
             continue;
         }

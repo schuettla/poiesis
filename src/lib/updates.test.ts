@@ -69,6 +69,7 @@ describe("describeUpdateError", () => {
   it("maps the codes Rust sends to plain words", () => {
     expect(describeUpdateError("network")).toBe("I couldn't reach GitHub");
     expect(describeUpdateError("signature")).toBe("that download didn't verify");
+    expect(describeUpdateError("readonly")).toContain("download the new version from GitHub");
   });
 
   it("never lets a raw error through", () => {

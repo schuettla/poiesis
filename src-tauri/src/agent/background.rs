@@ -239,6 +239,7 @@ async fn run_one(spawn: Spawn) {
         deadline: Some(Instant::now() + Duration::from_secs(spawn.timeout_secs)),
         // Never. See the module doc.
         max_depth: 0,
+        plan_ceiling: None,
     };
     let rc = RunContext {
         run: &run,

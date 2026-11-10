@@ -46,13 +46,16 @@ export function trackDownload(
 
 /**
  * The reason, in words. Rust sends a code, never prose, and anything that isn't
- * one of the two we can say something useful about is "something went wrong" —
+ * one of the codes we can say something useful about is "something went wrong" —
  * a raw error string in this UI is a bug.
  */
 export function describeUpdateError(e: unknown): string {
   const code = typeof e === "string" ? e : e instanceof Error ? e.message : "";
   if (code === "network") return "I couldn't reach GitHub";
   if (code === "signature") return "that download didn't verify";
+  // The portable exe can't replace its own file (a read-only folder).
+  if (code === "readonly")
+    return "I can't change files in the folder I'm in, so please download the new version from GitHub";
   return "something went wrong";
 }
 

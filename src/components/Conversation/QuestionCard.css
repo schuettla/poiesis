@@ -28,6 +28,16 @@
   font-size: var(--fs-body);
   line-height: 1.5;
   color: var(--ink);
+  /* A long question (an outline to approve) scrolls inside the card, so the
+     options stay in reach. */
+  max-height: 45vh;
+  overflow-y: auto;
+}
+.question-card-text .run-text > :first-child {
+  margin-top: 0;
+}
+.question-card-text .run-text > :last-child {
+  margin-bottom: 0;
 }
 .question-card-options {
   display: flex;

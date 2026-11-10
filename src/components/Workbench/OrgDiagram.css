@@ -1,0 +1,216 @@
+/* `WRK-15`: Coordination, how this chat is being worked. Ink only: the shape, the words
+   and the fills carry it, never a colour for good or bad. A fixed box that the drawing
+   scales inside, on a recessed panel so it reads as one picture. */
+.org-diagram {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--hairline);
+}
+.org-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+}
+.org-head-name {
+  flex: none;
+  font-weight: 600;
+}
+.org-head-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-muted);
+}
+.org-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 210px;
+  padding: 4px 0;
+  color: var(--ink-muted);
+  background: var(--fill-quiet);
+  border: 1px solid var(--paper-edge);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+}
+.org-edge {
+  fill: none;
+  stroke: var(--ink-muted);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+}
+.org-edge.back {
+  stroke: var(--ink-faint);
+  stroke-dasharray: 3 4;
+}
+.org-arrow {
+  fill: var(--ink-muted);
+}
+.org-board {
+  fill: var(--paper);
+  stroke: var(--ink-faint);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+.org-board.belt {
+  stroke-dasharray: none;
+  stroke: var(--paper-edge-2);
+}
+.org-ghost {
+  fill: none;
+  stroke: var(--ink-faint);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  opacity: 0.7;
+}
+.org-note {
+  fill: var(--ink-faint);
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+}
+.org-node .org-shape {
+  fill: var(--paper);
+  stroke: currentColor;
+  stroke-width: 1.4;
+}
+.org-node.you,
+.org-node.lead {
+  color: var(--ink);
+}
+.org-node.lead .org-shape {
+  stroke-width: 1.6;
+}
+.org-node .org-nucleus {
+  fill: currentColor;
+}
+.org-node .org-tick {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.org-node .org-name {
+  fill: var(--ink-muted);
+  font-size: 10px;
+}
+.org-node .org-name.inside {
+  fill: currentColor;
+  font-weight: 600;
+}
+.org-node[role="button"] {
+  cursor: pointer;
+}
+.org-node[role="button"]:hover .org-shape,
+.org-node[role="button"]:focus-visible .org-shape {
+  stroke-width: 2.4;
+}
+.org-node:focus-visible {
+  outline: none;
+}
+/* An item: an empty ring waiting, a ring with a dot in hand, filled when done. */
+.org-node.item.todo,
+.org-node.item.dropped {
+  color: var(--ink-faint);
+}
+.org-node.item.dropped .org-shape,
+.org-node.item.checking .org-shape,
+.org-node.item.sent-back .org-shape {
+  stroke-dasharray: 2 2;
+}
+.org-node.item.doing,
+.org-node.item.checking,
+.org-node.item.sent-back {
+  color: var(--ink);
+}
+.org-node.item.doing .org-shape {
+  stroke-width: 2;
+}
+.org-node.item.done {
+  color: var(--ink-muted);
+}
+.org-node.item.done .org-shape {
+  fill: currentColor;
+}
+.org-node.helper {
+  color: var(--ink-muted);
+}
+.org-node.helper.working {
+  color: var(--ink);
+}
+.org-node.helper.working .org-shape {
+  fill: currentColor;
+  fill-opacity: 0.3;
+}
+.org-node.result .org-shape,
+.org-node.gate .org-shape {
+  stroke-width: 1.4;
+}
+@media (prefers-reduced-motion: no-preference) {
+  /* The line is stopped: the item in hand pulses slowly, and nothing else moves. */
+  .org-node.halt .org-shape {
+    animation: org-halt 2.6s ease-in-out infinite;
+  }
+  /* Waiting for you: a quiet glow where you are. */
+  .org-node.waiting .org-shape {
+    animation: org-halt 3.4s ease-in-out infinite;
+  }
+  /* Between tasks I breathe. */
+  .org-svg.shape-ad-hoc .org-node.lead .org-shape {
+    animation: org-halt 5s ease-in-out infinite;
+  }
+  /* Work flows along the lines while a run is live. */
+  .org-svg.live .org-edge:not(.back) {
+    stroke-dasharray: 6 3;
+    animation: org-flow 1.6s linear infinite;
+  }
+  .org-svg.stopped .org-edge,
+  .org-svg.stopped .org-node.helper .org-shape {
+    animation: none;
+  }
+}
+@keyframes org-halt {
+  0%,
+  100% {
+    stroke-opacity: 1;
+  }
+  50% {
+    stroke-opacity: 0.3;
+  }
+}
+@keyframes org-flow {
+  to {
+    stroke-dashoffset: -9;
+  }
+}
+.org-sentence {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  text-align: center;
+}
+.org-now {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink);
+  text-align: center;
+}
+.org-gate-note {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink);
+}

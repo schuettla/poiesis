@@ -1,0 +1,108 @@
+/* `WRK-6`: the other way, read-only. A fixed size: the dialog never changes
+   height, whatever the patch holds; the patch scrolls inside it. */
+.branch-backdrop {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+  backdrop-filter: blur(3px);
+  animation: fade-in var(--dur) var(--ease-out);
+  z-index: 60;
+}
+.branch-dialog {
+  position: fixed;
+  z-index: 61;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(44rem, calc(100vw - 32px));
+  height: min(32rem, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-modal);
+  font-family: var(--font-sans);
+  color: var(--ink);
+}
+.branch-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.branch-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs-body, 1rem);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.branch-close {
+  background: none;
+  border: none;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.branch-close:hover {
+  color: var(--ink);
+  background: var(--fill-hover);
+}
+.branch-empty {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-timeline);
+}
+.branch-tabs {
+  display: flex;
+  gap: 4px;
+}
+.branch-tab {
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  padding: 4px 9px;
+  font-family: inherit;
+  font-size: var(--fs-timeline);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.branch-tab:hover,
+.branch-tab:focus-visible {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.branch-tab.on {
+  background: var(--fill-hover);
+  color: var(--ink);
+  font-weight: 600;
+}
+.branch-said {
+  margin: 0;
+  font-size: var(--fs-timeline);
+  line-height: 1.5;
+}
+.branch-meta {
+  margin: 0;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.branch-patch {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  background: var(--paper-edge);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: var(--fs-footnote);
+  line-height: 1.45;
+  white-space: pre;
+}

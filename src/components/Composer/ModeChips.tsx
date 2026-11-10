@@ -1,6 +1,7 @@
 import { useAppStore, useSelectedModel } from "../../lib/store";
 import { tierOf, tierTag } from "../../lib/tier";
 import { usePersonaAppsLine } from "../Apps/personaAppsLine";
+import { CloseIcon } from "../Icons/Icons";
 import "./ModeChips.css";
 
 /**
@@ -13,7 +14,22 @@ import "./ModeChips.css";
  * Workspace is the exception: its label switches between the workspace and the
  * message stream, because that is the thing you reach for, and the x leaves the mode.
  */
-export default function ModeChips() {
+export interface ModeChip {
+  key: "workspace" | "tools" | "tier" | "external" | "persona";
+  label: string;
+  command: string;
+  off: () => void;
+  offLabel: string;
+  /** Said in the tooltip before "Change this". */
+  hint?: string | null;
+  /** Replaces "open the command" as what the label does. */
+  open?: { run: () => void; title: string };
+}
+
+/** The chat's standing state, one entry per thing that is not at its default.
+ * `ModeChips` draws some of them as chips beside the footer; the composer's
+ * "this chat" menu (`ChatSetup`) lists the others. */
+export function useModeChips(): ModeChip[] {
   const workspaceMode = useAppStore((s) => s.workspaceMode);
   const workspaceShown = useAppStore((s) => s.workspaceShown);
   const setWorkspaceShown = useAppStore((s) => s.setWorkspaceShown);
@@ -21,9 +37,6 @@ export default function ModeChips() {
   const setWorkspaceMode = useAppStore((s) => s.setWorkspaceMode);
   const setToolsEnabled = useAppStore((s) => s.setToolsEnabled);
   const applyPersona = useAppStore((s) => s.applyPersona);
-  const requestComposer = useAppStore((s) => s.requestComposer);
-  const stopGoal = useAppStore((s) => s.stopGoal);
-  const goal = useAppStore((s) => (s.activeConversationId ? s.goals[s.activeConversationId] : undefined));
   const convId = useAppStore((s) => s.activeConversationId);
   // `CLI-UI-6`: only when this chat has turned agent apps off, and only if there
   // is an agent app that could have been used.
@@ -44,17 +57,7 @@ export default function ModeChips() {
   // `CA-UI-6`: a persona narrowed to some apps says which.
   const appsLine = usePersonaAppsLine(persona?.id);
 
-  const chips: {
-    key: string;
-    label: string;
-    command: string;
-    off: () => void;
-    offLabel: string;
-    /** Said in the tooltip before "Change this". */
-    hint?: string | null;
-    /** Replaces "open the command" as what the label does. */
-    open?: { run: () => void; title: string };
-  }[] = [];
+  const chips: ModeChip[] = [];
   if (workspaceMode) {
     chips.push({
       key: "workspace",
@@ -111,17 +114,6 @@ export default function ModeChips() {
       offLabel: "Let me hand work to external agents again",
     });
   }
-  // `GOL-UI-1`: while a goal is running it is a mode of the chat like the others.
-  if (goal?.status === "active" && convId) {
-    const said = goal.text.length > 24 ? `${goal.text.slice(0, 23).trimEnd()}…` : goal.text;
-    chips.push({
-      key: "goal",
-      label: `Goal: ${said}`,
-      command: "/goal stop",
-      off: () => stopGoal(convId),
-      offLabel: "Stop working toward this goal",
-    });
-  }
   if (persona && convId) {
     chips.push({
       key: "persona",
@@ -132,6 +124,23 @@ export default function ModeChips() {
       hint: appsLine,
     });
   }
+  return chips;
+}
+
+/** What a chip's label does when clicked, and what it says on hover. */
+export function chipTitle(c: ModeChip): string {
+  return c.open?.title ?? (c.hint ? `${c.hint} · Change this` : "Change this");
+}
+
+/**
+ * The chips themselves. `only` keeps the ones named: under the composer that is
+ * the states that take something away from me (tools, tier, external agents),
+ * because those change what I can do and should be seen without opening anything.
+ */
+export default function ModeChips({ only }: { only?: ModeChip["key"][] }) {
+  const all = useModeChips();
+  const requestComposer = useAppStore((s) => s.requestComposer);
+  const chips = only ? all.filter((c) => only.includes(c.key)) : all;
   if (!chips.length) return null;
 
   return (
@@ -140,13 +149,13 @@ export default function ModeChips() {
         <span className="mode-chip" key={c.key}>
           <button
             className="mode-chip-label"
-            title={c.open?.title ?? (c.hint ? `${c.hint} · Change this` : "Change this")}
+            title={chipTitle(c)}
             onClick={() => (c.open ? c.open.run() : requestComposer(c.command))}
           >
             {c.label}
           </button>
           <button className="mode-chip-x" aria-label={c.offLabel} title={c.offLabel} onClick={c.off}>
-            ×
+            <CloseIcon size={10} strokeWidth={1.6} />
           </button>
         </span>
       ))}

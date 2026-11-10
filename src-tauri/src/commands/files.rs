@@ -444,6 +444,64 @@ pub fn read_dir_tree_cmd(
     list_dir_nodes(&dir, show_hidden.unwrap_or(false)).map_err(err)
 }
 
+/// `@` in the composer searches by name, so this walks deeper and wider than the
+/// indexer does (500 files would hide most of a real project).
+const MENTION_MAX_FILES: usize = 5000;
+const MENTION_MAX_DEPTH: usize = 10;
+
+fn collect_mention_files(root: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
+    if depth == 0 || out.len() >= MENTION_MAX_FILES {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        if out.len() >= MENTION_MAX_FILES {
+            return;
+        }
+        let name = e.file_name().to_string_lossy().to_string();
+        if crate::agent::filesystem::is_ignored(&name, false) {
+            continue;
+        }
+        // `file_type` does not follow links, so a link back up the tree is
+        // neither a file nor a folder here and cannot loop the walk.
+        let Ok(kind) = e.file_type() else { continue };
+        if kind.is_dir() {
+            collect_mention_files(root, &e.path(), depth - 1, out);
+        } else if kind.is_file() {
+            if let Ok(rel) = e.path().strip_prefix(root) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+}
+
+/// Every file under the working folder, as paths relative to it, for the
+/// composer's `@` menu. Shallow files first, so an empty query lists the top of
+/// the project; the window ranks the rest by what is typed.
+pub fn list_mention_files(root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_mention_files(root, root, MENTION_MAX_DEPTH, &mut out);
+    out.sort_by_cached_key(|p| (p.matches('/').count(), p.to_lowercase()));
+    out
+}
+
+/// The files `@` can point at: the conversation's working folder (or its
+/// project's), nothing when it has none.
+#[tauri::command]
+pub async fn list_folder_files_cmd(
+    db: State<'_, Db>,
+    grants: State<'_, DialogGrants>,
+    conversation_id: String,
+) -> Cmd<Vec<String>> {
+    let (folder, _) = db.conversation_folder(&conversation_id).map_err(err)?;
+    let Some(folder) = folder else { return Ok(Vec::new()) };
+    let root = canonicalize_lenient(Path::new(&folder));
+    assert_ui_readable(&db, &grants, Some(&conversation_id), &root)?;
+    tauri::async_runtime::spawn_blocking(move || list_mention_files(&root))
+        .await
+        .map_err(err)
+}
+
 /// Read a file for the Workbench viewer. Bounded, because the viewer is a
 /// preview — anything genuinely huge should be opened in a real editor.
 #[tauri::command]
@@ -805,6 +863,27 @@ mod tests {
             .is_err(),
             "…and nothing outside it"
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `@` lists project files by relative path, skips build noise and hidden
+    /// entries, and puts the shallow ones first.
+    #[test]
+    fn mention_files_are_relative_shallow_first_and_skip_noise() {
+        let dir = std::env::temp_dir().join(format!("poiesis_mention_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("src").join("deep")).unwrap();
+        std::fs::create_dir_all(dir.join("node_modules").join("x")).unwrap();
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(dir.join("README.md"), "").unwrap();
+        std::fs::write(dir.join("src").join("main.rs"), "").unwrap();
+        std::fs::write(dir.join("src").join("deep").join("a.rs"), "").unwrap();
+        std::fs::write(dir.join("node_modules").join("x").join("junk.js"), "").unwrap();
+        std::fs::write(dir.join(".git").join("HEAD"), "").unwrap();
+        std::fs::write(dir.join(".hidden"), "").unwrap();
+
+        let got = list_mention_files(&dir);
+        assert_eq!(got, ["README.md", "src/main.rs", "src/deep/a.rs"]);
 
         std::fs::remove_dir_all(&dir).ok();
     }

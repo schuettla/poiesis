@@ -103,12 +103,27 @@ pub fn handles(name: &str) -> bool {
 /// `EXP-3`: the modes `switch_mode` may name. Workspace is an experiment, so the
 /// model is not told it exists until the user has turned it on.
 pub fn modes_offered(db: &Db) -> Vec<&'static str> {
-    let mut modes = Vec::with_capacity(2);
+    let mut modes = Vec::with_capacity(6);
     if crate::experiments::is_on(db, "workspace") {
         modes.push("workspace");
     }
     modes.push("plan_first");
+    modes.extend(STYLE_MODES.iter().map(|(slug, _)| *slug));
     modes
+}
+
+/// `WRK-13`: the ways of working `switch_mode` may offer, as `(slug, name)`. Ad hoc
+/// is the way back and is the person's to choose, not something to offer.
+const STYLE_MODES: [(&str, &str); 4] = [
+    ("lean", "Lean"),
+    ("command-and-control", "Command & Control"),
+    ("mission-command", "Mission Command"),
+    ("swarm", "Swarm"),
+];
+
+/// Is this `switch_mode` value a way of working rather than a composer mode?
+pub fn is_style_mode(mode: &str) -> bool {
+    STYLE_MODES.iter().any(|(slug, _)| *slug == mode)
 }
 
 /// `AGC-1`: the `harness` spec for the names this run offers. `None` when there
@@ -294,7 +309,20 @@ pub fn decide(
                 }
                 Some("workspace") => ("workspace", "Workspace"),
                 Some("plan_first") => ("plan_first", "Plan first"),
-                _ => return Err("mode must be \"workspace\" or \"plan_first\".".to_string()),
+                // `WRK-13`: another way of working. Always a question: how the person
+                // wants work done is theirs to say, whatever the rung.
+                Some(style) if is_style_mode(style) => {
+                    let (slug, name) = STYLE_MODES.iter().find(|(s, _)| *s == style).copied().expect("checked above");
+                    return Ok(Act::Propose {
+                        name: "switch_mode".into(),
+                        args: slug.into(),
+                        note: format!("I asked to switch to {name}: {reason}"),
+                        reason,
+                        payload: serde_json::json!({ "mode": slug, "style": true, "auto": false }),
+                        reply: asked,
+                    });
+                }
+                _ => return Err("mode must be \"workspace\", \"plan_first\" or one of the styles.".to_string()),
             };
             let auto = rung == Rung::Auto;
             Ok(Act::Propose {
@@ -342,7 +370,13 @@ pub fn describe_harness(args: &serde_json::Value) -> (String, String) {
             ("suggested".into(), format!("/{}", command.trim().trim_start_matches('/')))
         }
         "switch_mode" => {
-            let mode = if call.mode.as_deref() == Some("plan_first") { "Plan first" } else { "Workspace" };
+            let mode = match call.mode.as_deref() {
+                Some("plan_first") => "Plan first",
+                Some(style) if is_style_mode(style) => {
+                    STYLE_MODES.iter().find(|(s, _)| *s == style).map(|(_, n)| *n).unwrap_or("another way")
+                }
+                _ => "Workspace",
+            };
             ("asked to switch to".into(), mode.into())
         }
         "schedule" => ("asked to schedule".into(), call.task.unwrap_or_default()),
@@ -427,9 +461,33 @@ mod tests {
             let spec = harness_spec(&["switch_mode"], &modes_offered(db)).unwrap();
             spec.pointer("/function/parameters/properties/mode/enum").unwrap().clone()
         };
-        assert_eq!(modes_in(&db), serde_json::json!(["plan_first"]), "plan first is not an experiment");
+        let styles = ["lean", "command-and-control", "mission-command", "swarm"];
+        let with = |first: &[&str]| serde_json::json!(first.iter().chain(styles.iter()).collect::<Vec<_>>());
+        assert_eq!(modes_in(&db), with(&["plan_first"]), "plan first is not an experiment");
         db.set_setting("experiment.workspace", "on").unwrap();
-        assert_eq!(modes_in(&db), serde_json::json!(["workspace", "plan_first"]));
+        assert_eq!(modes_in(&db), with(&["workspace", "plan_first"]));
+    }
+
+    /// `WRK-13`: a way of working is offered as a question, never done by itself,
+    /// whatever the rung says, and Ad hoc is not something to offer.
+    #[test]
+    fn switching_to_a_way_of_working_is_always_a_question() {
+        let db = Db::open_in_memory().unwrap();
+        db.set_setting("autonomy.modes", "auto").ok();
+        let mut switch = call("switch_mode");
+        switch.mode = Some("mission-command".into());
+        switch.reason = "This is bigger than it looked: 9 files so far.".into();
+        match decide(&db, "c1", &["switch_mode"], &switch).unwrap() {
+            Act::Propose { payload, note, .. } => {
+                assert_eq!(payload["style"], true);
+                assert_eq!(payload["auto"], false);
+                assert!(note.contains("Mission Command"));
+            }
+            other => panic!("{other:?}"),
+        }
+        switch.mode = Some("ad-hoc".into());
+        assert!(decide(&db, "c1", &["switch_mode"], &switch).is_err());
+        assert!(is_style_mode("swarm") && !is_style_mode("plan_first"));
     }
 
     /// A model copying an old call, or a setting turned off mid-run, is refused.

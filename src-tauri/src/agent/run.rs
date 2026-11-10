@@ -27,6 +27,15 @@ use super::AgentEvent;
 /// of an error that throws all of it away.
 const WRAP_UP_PROMPT: &str = "You are out of room for tool calls. Answer now with what you already have. Say plainly what you did not get to.";
 
+/// Working steps a run with a plan may take without finishing an item before it
+/// is stopped as stuck. Plan bookkeeping is not counted, and a search, a draft
+/// and adding it to the document fit well inside it.
+const NO_PROGRESS_STEPS: usize = 10;
+
+/// The same call with the same input giving the same result this many times is
+/// going in circles.
+const SAME_RESULT_TIMES: usize = 3;
+
 /// How many times one run will ask a model to make a tool call for real after it
 /// merely described one. Two is enough to cover a slip; a model that genuinely
 /// cannot emit tool calls would burn the whole iteration budget otherwise.
@@ -81,8 +90,19 @@ const MAX_FREE_PLAN_STEPS: usize = 6;
 /// `PLF-3`: what a plan-first run is told, as the last thing in its transcript.
 const PLAN_FIRST_NOTE: &str = "Plan first: investigate as much as you need, but change nothing. Write the plan with the plan tool, then stop and summarise it. The user approves it before anything changes.";
 
+/// `PLF-3`: what a status change is told while planning first.
+const PLAN_FIRST_NO_PROGRESS: &str = "Nothing is started or done before the person approves the plan. Write the plan and stop.";
+
+/// `PLF-3`: the answer of a planning-first run whose plan is ready. The card under
+/// it shows the plan and asks for the yes.
+const PLAN_READY: &str = "Here is my plan. Nothing changes until you say go ahead.";
+
 /// `PLF-2`: what a call that would change something is told while planning first.
 const PLAN_FIRST_REFUSAL: &str = "I'm planning first. Nothing changes until you approve the plan.";
+
+/// `WRK-10`: what a call that would change something is told while the run looks
+/// around first. Write the plan if it is clear what is wanted, or ask.
+const LOOK_REFUSAL: &str = "I'm looking around first, so nothing changes yet. If it is clear what the person wants, write the plan with the `plan` tool; if not, ask them with ask_user.";
 
 /// Where an MCP-provided tool lives, so a call can be routed to its server.
 #[derive(Clone)]
@@ -475,6 +495,19 @@ fn safe_prefix(buf: &str, tool_names: &[String]) -> usize {
         }
         at = next;
     }
+    // The XML shape (`<tool_call>`, `<function=…>`), and a tail that may be the
+    // start of one still arriving.
+    for tag in ["<tool_call", "<function="] {
+        if let Some(i) = buf[..cut].find(tag) {
+            cut = i;
+        }
+    }
+    if let Some(lt) = buf[..cut].rfind('<') {
+        let tail = &buf[lt..cut];
+        if ["<tool_call", "<function="].iter().any(|t| t.starts_with(tail)) {
+            cut = lt;
+        }
+    }
     // A line that starts a bare JSON object is the other shape a tool call
     // arrives in mid-prose. Hold from the start of that line.
     let head = &buf[..cut];
@@ -517,11 +550,24 @@ pub struct AgentEventSink {
     /// turn run in Rust can save what the window would have saved. A child's
     /// events leave wrapped in `Sub` and are never shown to it.
     tap: Option<std::sync::Arc<dyn Fn(&AgentEvent) + Send + Sync>>,
+    /// `WRK-11`: advice gathered before a risky call, for the permission question
+    /// that call raises. Taken by the first question and cleared when the call ends.
+    advice: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl AgentEventSink {
     pub fn new(channel: Channel<AgentEvent>) -> Self {
-        Self { channel, sub: None, tap: None }
+        Self { channel, sub: None, tap: None, advice: Default::default() }
+    }
+
+    /// `WRK-11`: the next permission question carries this line.
+    pub fn advise_next_permission(&self, line: String) {
+        *self.advice.lock().unwrap() = Some(line);
+    }
+
+    /// `WRK-11`: the risky call is over; advice nobody asked for goes nowhere.
+    pub fn clear_advice(&self) {
+        *self.advice.lock().unwrap() = None;
     }
 
     /// The same sink, with `tap` shown every event the lead run sends.
@@ -537,6 +583,7 @@ impl AgentEventSink {
             channel: self.channel.clone(),
             sub: Some(run_id.to_string()),
             tap: None,
+            advice: Default::default(),
         }
     }
 
@@ -606,6 +653,9 @@ impl AgentEventSink {
     pub fn send_permission(&self, mut request: PermissionRequest) {
         // `USE-12`: a question a tool raises about itself carries the line a quick
         // decision found worth saying about the call, if it did.
+        if request.advice.is_none() {
+            request.advice = self.advice.lock().unwrap().take();
+        }
         if request.reason.is_none() {
             request.reason = super::decide::toolgate::line_for(&request);
             request.reason_hover = super::decide::toolgate::hover_for(&request);
@@ -982,8 +1032,15 @@ fn run_effort(tier: ModelTier, options: &RunOptions, db: &Db) -> Effort {
 /// offered even where the setting says never. `TIER-5`: below Full the setting is
 /// not asked, so a small model never plans on its own; planning first, which the
 /// user chose for this one message, still works.
-fn plan_mode_for(tier: ModelTier, plan_first: bool, db: &Db) -> super::plan::PlanMode {
+fn plan_mode_for(tier: ModelTier, plan_first: bool, rounds: bool, db: &Db) -> super::plan::PlanMode {
     use super::plan::PlanMode;
+    // `WRK-2`: a run that works item by item has a plan, because the plan is the
+    // items. The person chose the preset, which is the more specific choice
+    // than the general setting for whether plans are offered. Not below Full:
+    // a small model never plans on its own (`TIER-5`).
+    if rounds && tier.is_full() {
+        return PlanMode::Always;
+    }
     let setting = if tier.is_full() { PlanMode::current(db) } else { PlanMode::Never };
     match setting {
         PlanMode::Never if plan_first => PlanMode::Auto,
@@ -1078,6 +1135,25 @@ fn refuses_in_plan_first(registry: &ToolRegistry, name: &str) -> bool {
                 && name == crate::connectors::composio::MULTI_EXECUTE;
             binding.kind != CallKind::Read && !batch
         }),
+    }
+}
+
+/// `WRK-11`: what a call is about to do, in a few words, when it is one of the
+/// three things advice is for: delete, send, or change something in an app. A
+/// Composio batch is judged by what is in it, at the call, so it is not named here.
+fn risky_act_in(registry: &ToolRegistry, name: &str, args: &serde_json::Value) -> Option<String> {
+    let arg = |key: &str| args.get(key).and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty());
+    match name {
+        "delete_file" => Some(format!("deleting {}", arg("path").unwrap_or("a file"))),
+        "send_mail" => Some(format!("sending mail to {}", arg("to").unwrap_or("someone"))),
+        "reply_mail" => Some("replying to a message by mail".to_string()),
+        _ => {
+            let binding = registry.mcp.get(name)?;
+            let batch = binding.transport == crate::connectors::composio::TRANSPORT
+                && name == crate::connectors::composio::MULTI_EXECUTE;
+            (binding.kind != CallKind::Read && !batch)
+                .then(|| format!("changing something in {}: {}", binding.connector_name, connector_gate::humanise(name)))
+        }
     }
 }
 
@@ -1457,6 +1533,14 @@ pub struct RunOptions {
     /// and the lead is told so.
     #[serde(default)]
     pub no_handover: bool,
+    /// `WRK-3`: the preset (its slug or name) the user named with `/style <preset>
+    /// <message>`, for this message alone. The chat's own setting is untouched.
+    #[serde(default)]
+    pub style: Option<String>,
+    /// `WRK-12`: what the person said done means, when they said it up front (`/goal
+    /// … until …`). The run starts with these agreed, so it asks nothing about them.
+    #[serde(default)]
+    pub criteria: Vec<String>,
 }
 
 impl RunOptions {
@@ -1764,6 +1848,9 @@ struct TurnCtx<'a> {
     /// `PLN-3`: whether the plan tool is offered and what the prompt says about
     /// it. Resolved once per run, like `cheap` and `effort`.
     plan_mode: super::plan::PlanMode,
+    /// `WRK-1`: the way this run works: the rules it holds and what they have
+    /// done so far. A `Mutex` inside, for the same reason `plan` has one.
+    work: super::work::Work,
     /// What a turn might be trying to invoke, as opposed to what we can
     /// dispatch. Drives the hold-back and the narration check.
     tool_names: Vec<String>,
@@ -1833,6 +1920,19 @@ struct RunState {
     /// something rather than by discarding what it learned.
     wrap_up: Option<StopReason>,
     iteration: usize,
+    /// The plan as the last turn left it: how many items, how many done, and
+    /// whether it is being worked (written and not waiting for a yes).
+    plan_state: (usize, usize, bool),
+    /// `charged()` when `plan_state` last changed: the last sign of progress.
+    progress_at: usize,
+    /// Each call (name and input) with a hash of its last result and how many
+    /// times in a row it came back the same.
+    repeats: std::collections::HashMap<String, (u64, usize)>,
+    /// Why the run is going in circles, once it is.
+    stuck: Option<String>,
+    /// `WRK-5`: how many messages the run began with (the chat and the request).
+    /// A fresh start keeps the request and drops what came after.
+    opening: usize,
 }
 
 /// What the `classify` phase decided this turn amounts to.
@@ -2143,12 +2243,37 @@ async fn run_agent_inner(
     let (run, limits) = (rc.run, rc.limits);
     sink.run_started(&run.id, limits.max_iterations, rc.context_window, rc.tier);
 
+    // `WRK-1`/`WRK-3`: how this run works. Only a lead run somebody watches takes a
+    // preset; every run holds the base rules. Resolved first because what it holds
+    // can make this run plan first (`WRK-10`).
+    let mut work = super::work::Work::resolve(
+        db,
+        memory,
+        conversation_id,
+        &run.id,
+        rc.options.style.as_deref(),
+        rc.plan.as_ref().and_then(|p| p.style.as_deref()),
+        run.parent.is_none() && !headless,
+    );
+    // `WRK-10`: the person has not yet agreed what done means. Like planning first,
+    // the run reads and writes the plan, and nothing changes until they say yes. Not
+    // when they chose to plan first themselves, when a plan carries on from an
+    // earlier run (it was agreed, or is being resumed), when `/goal` brought the
+    // criteria with it, or on a model that cannot plan.
+    let criteria_phase = work.wants_criteria()
+        && rc.tier.is_full()
+        && tools_enabled
+        && rc.plan.is_none()
+        && rc.options.criteria.is_empty()
+        && !rc.options.plan_first
+        && !rc.is_read_only();
+
     // `PLF`: planning first. One system message on the run's own transcript, not
     // on the assembled system prompt, so the golden gate does not move.
-    let read_only = rc.is_read_only();
-    let plan_first = rc.options.plan_first;
+    let read_only = rc.is_read_only() || criteria_phase;
+    let plan_first = rc.options.plan_first || criteria_phase;
     let mut messages = messages;
-    if plan_first {
+    if rc.options.plan_first {
         messages.push(serde_json::json!({ "role": "system", "content": PLAN_FIRST_NOTE }));
     }
 
@@ -2202,7 +2327,20 @@ async fn run_agent_inner(
         tool_names.push(name.to_string());
         invocable.push(name.to_string());
     }
-    let plan_mode = plan_mode_for(rc.tier, plan_first, db);
+    let plan_mode = plan_mode_for(rc.tier, plan_first, work.plans(), db);
+    // Items are written with the plan tool: a run that has none cannot work by them.
+    work.can_plan = plan_mode.offers_tool();
+    // `WRK-10`: a plan that carries on is clear enough to work to; `/goal`'s criteria
+    // are what the person already said done means.
+    work.begin(rc.plan.is_some() || !rc.options.criteria.is_empty(), criteria_phase);
+    // `WRK-6`: helpers in copies of the folder need a lead run that may delegate,
+    // on a model that can, working in a folder.
+    work.can_branch = run.parent.is_none()
+        && !headless
+        && rc.tier == ModelTier::Full
+        && rc.fleet.is_some()
+        && limits.max_depth > 0
+        && db.conversation_folder(conversation_id).ok().and_then(|(f, _)| f).is_some();
     if plan_mode.offers_tool() {
         tool_names.push("plan".to_string());
         invocable.push("plan".to_string());
@@ -2262,8 +2400,20 @@ async fn run_agent_inner(
         loaded_skills: Default::default(),
         results: super::results::ResultStore::new(data_dir, conversation_id, &run.id),
         // `PLN-T4`: a resumed run continues its plan rather than starting blank.
-        plan: std::sync::Mutex::new(rc.plan.clone().unwrap_or_default()),
+        plan: std::sync::Mutex::new({
+            let mut plan = rc.plan.clone().unwrap_or_default();
+            // `WRK-12`: criteria the person brought are agreed from the first moment.
+            if plan.criteria.is_empty() && !rc.options.criteria.is_empty() {
+                plan.set_criteria(rc.options.criteria.iter().take(super::plan::MAX_CRITERIA).cloned().collect());
+                // A run that never writes a plan still says how it worked.
+                if !work.is_ad_hoc() && plan.style.is_none() {
+                    plan.style = Some(work.preset());
+                }
+            }
+            plan
+        }),
         plan_mode,
+        work,
         tool_names,
         invocable,
         ledger: Default::default(),
@@ -2308,6 +2458,7 @@ async fn run_agent_inner(
 
     let mut st = RunState {
         logged: messages.len(),
+        opening: messages.len(),
         messages,
         final_text: String::new(),
         retried: Default::default(),
@@ -2319,6 +2470,10 @@ async fn run_agent_inner(
         strict_template: false,
         wrap_up: None,
         iteration: 0,
+        plan_state: (0, 0, false),
+        progress_at: 0,
+        repeats: Default::default(),
+        stuck: None,
     };
 
     // `HRN-3`: every exit announces why it stopped, so a stump is never shown
@@ -2387,6 +2542,11 @@ async fn run_agent_inner(
         RunOutcome { text, stop_reason: reason, steps: run.steps(), usage: run.usage() }
     };
 
+    // `WRK-3`: how this run works, once, before anything is asked of the model.
+    sink.emit(cx.work.style_event());
+    // `WRK-19`: and in the log, so evolution knows how the chat really worked, default or not.
+    super::work::record(db, conversation_id, &cx.rc.run.id, &cx.work.style_signal());
+
     // `PLN-T4`: a resumed run shows the plan it is continuing from its first
     // moment, rather than only once the model next touches it.
     {
@@ -2409,6 +2569,8 @@ async fn run_agent_inner(
         if let Some(reason) = cx.prepare_turn(&mut st, obs) {
             return end(std::mem::take(&mut st.final_text), reason);
         }
+        // `WRK-5`: my head is full and my way of working says to start fresh.
+        cx.maybe_start_fresh(&mut st).await;
 
         // `HRN-5`: the wrap-up turn always ends the run, so it is its own phase
         // rather than a flag threaded through the ordinary one.
@@ -2431,9 +2593,15 @@ async fn run_agent_inner(
                 // finished: the sign-in is what resumes the conversation.
                 let waiting = cx.waiting_on_person.lock().unwrap().take();
                 if let Some(note) = waiting {
+                    // Said as well as kept: the saved message is what was streamed.
                     if st.final_text.trim().is_empty() {
+                        cx.sink.token(&note);
                         st.final_text = note;
                     }
+                    // The message is finished: without this the window keeps it
+                    // streaming, and a card that waits for the person (the plan's
+                    // Go ahead) never shows its buttons.
+                    cx.sink.done();
                     return end(std::mem::take(&mut st.final_text), StopReason::Completed);
                 }
             }
@@ -2479,15 +2647,34 @@ fn open_turn(
     }
 
     if st.wrap_up.is_none() && tools_enabled {
+        // A run working to a plan goes on while items get done, up to the
+        // runaway guard; anything else keeps the plain budget.
+        let (_, _, working) = st.plan_state;
+        let ceiling = match limits.plan_ceiling {
+            Some(c) if working => c.max(limits.max_iterations),
+            _ => limits.max_iterations,
+        };
+        let idle = st.charged().saturating_sub(st.progress_at);
+        let stalled = (working && limits.plan_ceiling.is_some() && idle >= NO_PROGRESS_STEPS)
+            .then(|| format!("{idle} steps went by without an item of the plan getting done"));
+        let stuck = st.stuck.clone().or(stalled);
         let spent = if limits.out_of_time() {
-            Some(StopReason::Timeout)
-        } else if st.charged() + 1 >= limits.max_iterations {
-            Some(StopReason::MaxSteps)
+            Some((StopReason::Timeout, WRAP_UP_PROMPT.to_string()))
+        } else if let Some(why) = stuck {
+            Some((
+                StopReason::Stuck,
+                format!(
+                    "Stop working now: {why}. Answer with what you have. Say which item you were stuck on and \
+                     what got in the way, in one or two sentences, so the person can decide how to go on."
+                ),
+            ))
+        } else if st.charged() + 1 >= ceiling {
+            Some((StopReason::MaxSteps, WRAP_UP_PROMPT.to_string()))
         } else {
             None
         };
-        if let Some(reason) = spent {
-            st.messages.push(serde_json::json!({ "role": "system", "content": WRAP_UP_PROMPT }));
+        if let Some((reason, prompt)) = spent {
+            st.messages.push(serde_json::json!({ "role": "system", "content": prompt }));
             st.wrap_up = Some(reason);
         }
     }
@@ -2520,6 +2707,111 @@ fn hide_plan(messages: &mut Vec<serde_json::Value>, pushed: bool) {
 }
 
 impl TurnCtx<'_> {
+    /// `WRK-14`: tasks handed to helpers name their plan item; mark who has each, say
+/// what the way of working did, and send the board again.
+fn assign_items(&self, args: &serde_json::Value) {
+    let Some(tasks) = args.get("tasks") else { return };
+    let assigned = self.plan.lock().unwrap().assign(tasks);
+    if assigned.is_empty() {
+        return;
+    }
+    let _ = self.show(self.work.delegated(&assigned));
+    let mut plan = self.plan.lock().unwrap();
+    plan.moves = self.work.moves();
+    self.sink.plan(&self.rc.run.id, &plan);
+    super::log::record_plan(self.db, self.conversation_id, &self.rc.run.id, &plan);
+}
+
+/// `WRK-11`: what a call is about to do, in a few words, when it is one of the
+/// three things advice is for: delete, send, or change something in an app. A
+/// Composio batch is judged by what is in it, at the call, so it is not named here.
+fn risky_act(&self, name: &str, args: &serde_json::Value) -> Option<String> {
+    risky_act_in(&self.registry, name, args)
+}
+
+/// `WRK-11`: ask for advice before a risky call. One call on the side, given the
+/// act and the notes of the person's own that share words with it, and none of how
+/// the work went. The advice is a step of its own in the timeline, and the one line
+/// goes above the question the call raises, if it raises one. Whether to go on is
+/// still the person's, and the call is never held for want of advice: when none can
+/// be had, nothing is added. Returns whether a line was put aside for the question.
+/// `parent` is the script step a sandbox's call sits under (`RPC-1`), so the advice
+/// sits there too.
+async fn advise(&self, call_id: &str, name: &str, args: &serde_json::Value, parent: Option<&str>) -> bool {
+    if self.read_only_now() {
+        return false;
+    }
+    let Some(act) = self.risky_act(name, args) else { return false };
+    let (due, reactions) = self.work.advice(&act);
+    let _ = self.show(reactions);
+    self.publish_moves();
+    if !due {
+        return false;
+    }
+    let step = format!("{call_id}-advice");
+    match parent {
+        Some(parent) => self.sink.nested_step_start(&step, "asked for advice before", &act, parent),
+        None => self.sink.step_start(&step, "asked for advice before", &act),
+    }
+    let notes: Vec<(String, String)> = [crate::memory::FACTS, crate::memory::LESSONS]
+        .into_iter()
+        .flat_map(|c| self.memory.list_in(c))
+        .map(|f| (f.description, f.body))
+        .collect();
+    let notes = super::aside::relevant_notes(&act, &notes);
+    let messages = super::aside::advice_messages(&self.request, &act, &notes);
+    let line = match super::aside::ask(self.client, self.endpoint, &self.cancel, messages).await {
+        Ok((reply, usage)) => {
+            if let Some(usage) = usage {
+                self.rc.run.add_usage(usage);
+            }
+            super::aside::clean_advice(&reply)
+        }
+        Err(why) => {
+            eprintln!("advice: none ({why})");
+            None
+        }
+    };
+    match line {
+        Some(line) => {
+            self.sink.step_done(&step, Some(format!("\u{2014} {}", crate::media::ellipsize(&line, 110))));
+            self.sink.advise_next_permission(line);
+            true
+        }
+        None => {
+            self.sink.step_done(&step, Some("\u{2014} nothing to add".to_string()));
+            false
+        }
+    }
+}
+
+/// `WRK-13`: work another way from here: the new preset's rules replace the old
+/// ones, and the change is shown once in one line.
+fn apply_switch(&self, slug: &str) {
+    match super::work::Work::rules_of(self.db, self.memory, self.conversation_id, slug) {
+        Some((name, rules)) => {
+            let reactions = self.work.switch_to(slug, &name, rules);
+            let _ = self.show(reactions);
+        }
+        None => self.work.drop_switch(),
+    }
+}
+
+    /// `WRK-10`: may this run change nothing right now? Planning first and being
+    /// below a run that is, or looking around before it is clear what is wanted.
+    fn read_only_now(&self) -> bool {
+        self.read_only || self.work.looking()
+    }
+
+    /// What a call that would change something is told.
+    fn refusal(&self) -> &'static str {
+        if self.read_only {
+            PLAN_FIRST_REFUSAL
+        } else {
+            LOOK_REFUSAL
+        }
+    }
+
     /// **prepare_turn** — drain the inbox, apply the limits, and decide whether
     /// this is the last turn. `Some` means the run is over before it started.
     fn prepare_turn(&self, st: &mut RunState, obs: &dyn RunObserver) -> Option<StopReason> {
@@ -2537,6 +2829,16 @@ impl TurnCtx<'_> {
         // Everything this preamble does to the transcript happens in one place,
         // where it can be tested without a model. What is left here is the part
         // that talks to the outside world.
+        // Progress is the plan moving: an item done, or the plan written or grown.
+        let now = {
+            let plan = self.plan.lock().unwrap();
+            let done = plan.items.iter().filter(|i| i.status == super::plan::PlanStatus::Done).count();
+            (plan.items.len(), done, !plan.items.is_empty() && !plan.awaiting_approval)
+        };
+        if now != st.plan_state {
+            st.plan_state = now;
+            st.progress_at = st.charged();
+        }
         for text in open_turn(run, limits, self.tools_enabled, st, obs) {
             self.sink.steered(&run.id, &text);
         }
@@ -2544,6 +2846,21 @@ impl TurnCtx<'_> {
         // A steer and the wrap-up prompt are both things the model is about to
         // see, so they belong in the log before the request, not after it.
         flush_log(obs, &st.messages, &mut st.logged);
+
+        // `WRK-7`: "not this time", clicked on the board since the last turn.
+        for rule in std::mem::take(&mut *run.skips.lock().unwrap()) {
+            self.work.skip_next(&rule);
+        }
+
+        // `WRK-13`: another way of working was asked for. It starts when no item is in
+        // hand; a run with items switches at the end of one (`dispatch`).
+        if let Some(slug) = run.style_switch.lock().unwrap().take() {
+            self.work.request_switch(&slug);
+        }
+        if let Some(slug) = self.work.switch_ready() {
+            self.apply_switch(&slug);
+            self.publish_moves();
+        }
 
         self.make_room(st);
 
@@ -2616,8 +2933,16 @@ impl TurnCtx<'_> {
     /// it — unlike `read_result` it is useful before anything has happened, and
     /// a plan written after the work is a report, not a plan.
     fn assemble<'t>(&'t self, scratch: &'t mut Vec<serde_json::Value>) -> &'t [serde_json::Value] {
-        if !self.tools_enabled {
+        // `WRK-10`: the person said they will take it from here, so the next turn is
+        // the words that say where things stand.
+        if !self.tools_enabled || self.work.taken_over() {
             return &[];
+        }
+        // `WRK-1`: the loop owes the person a question (the same problem twice), so
+        // that is the only thing on the menu until it is asked.
+        if self.ask_offered && self.work.asking() {
+            *scratch = vec![super::commands::ask_user_spec()];
+            return scratch;
         }
         let plans = self.plan_mode.offers_tool();
         // `AGC-1`/`AGC-3`: the loop's own two tools, for the whole run.
@@ -2643,8 +2968,22 @@ impl TurnCtx<'_> {
                     !s.pointer("/function/name").and_then(|n| n.as_str()).is_some_and(|n| out.contains(n))
                 })
                 .cloned()
+                // `WRK-14`: a swarm says which plan item each helper has.
+                .map(|s| {
+                    let delegate = s.pointer("/function/name").and_then(|n| n.as_str()) == Some("delegate");
+                    if delegate && self.work.hands_out() {
+                        super::subagents::with_item(s)
+                    } else {
+                        s
+                    }
+                })
                 .chain(self.results.has_any().then(super::results::tool_specs).unwrap_or_default())
-                .chain(plans.then(super::plan::tool_specs).unwrap_or_default())
+                // `WRK-2`: working item by item, each item says what done means for it.
+                .chain(
+                    plans
+                        .then(|| super::plan::tool_specs_for(self.work.rounds(), self.work.in_criteria_phase()))
+                        .unwrap_or_default(),
+                )
                 .chain(own)
                 .chain(need)
                 .collect();
@@ -2717,6 +3056,15 @@ impl TurnCtx<'_> {
         // Rendered last, so what the model is working to is the freshest thing
         // it read before it acts.
         let planned_pushed = show_plan(&mut st.messages, &self.plan.lock().unwrap());
+        // `WRK-1`: what the way of working has to say this turn, on top of the plan
+        // and taken off with it, so it is always the current one.
+        let noted = match self.work.note(&self.plan.lock().unwrap()) {
+            Some(note) => {
+                st.messages.push(serde_json::json!({ "role": "system", "content": note }));
+                true
+            }
+            None => false,
+        };
         let outcome = drive_turn_adapting(
             self.client,
             self.endpoint,
@@ -2729,6 +3077,9 @@ impl TurnCtx<'_> {
             &mut on_token,
         )
         .await;
+        if noted {
+            st.messages.pop();
+        }
         hide_plan(&mut st.messages, planned_pushed);
 
         // `OBS-1`: charge this turn to the run before branching on how it ended,
@@ -2780,7 +3131,7 @@ impl TurnCtx<'_> {
                     // finished turn, not just fully-buffered ones: a model that
                     // opens in prose and then calls a tool used to end the run
                     // here with the call left on screen as text.
-                    if let Some(calls) = parse_text_tool_calls(unshown, &self.registry) {
+                    if let Some(calls) = parse_text_tool_calls(unshown, &self.registry, &self.invocable) {
                         return Next::Calls(calls);
                     }
                     // Not parseable, but it reads as a tool call the model only
@@ -2819,6 +3170,18 @@ impl TurnCtx<'_> {
                         return Next::Again;
                     }
 
+                    // `WRK-1`: a question the loop owes the person, and a line that is
+                    // still stopped. Each asked for a bounded number of times and
+                    // never a gate: the answer goes out and says what it must.
+                    if let Some(note) = self.work.ask_missed() {
+                        st.push_nudge(&text, note);
+                        return Next::Again;
+                    }
+                    if let Some(note) = self.work.before_answer() {
+                        st.push_nudge(&text, note);
+                        return Next::Again;
+                    }
+
                     // `PLN-2`: an answer that arrives with the plan half done.
                     // Asked once, after the prose has been shown — the user
                     // keeps what was written either way, and what follows
@@ -2826,13 +3189,22 @@ impl TurnCtx<'_> {
                     // decision model ticks what the answer already finished, so
                     // the nudge names only what is really open.
                     let probably = self.judge_plan(&text).await;
-                    if st.nudge_unfinished_plan(&self.plan.lock().unwrap(), &text, &probably) {
+                    // `WRK-10`: not when the person took it over: the plan is theirs now.
+                    if !self.work.taken_over() && st.nudge_unfinished_plan(&self.plan.lock().unwrap(), &text, &probably) {
                         return Next::Again;
                     }
 
                     // `COD-12`: code changed in a project with a check, and the
                     // check never ran after it. Asked once; never a gate.
                     if let Some(note) = self.unverified_note(&text).await {
+                        st.push_nudge(&text, note);
+                        return Next::Again;
+                    }
+
+                    // `WRK-10`: what the person agreed done means is checked against what
+                    // was actually said and done, by someone who never saw the path. Last,
+                    // so it looks at the answer that would really go out.
+                    if let Some(note) = self.check_criteria(&text).await {
                         st.push_nudge(&text, note);
                         return Next::Again;
                     }
@@ -3056,7 +3428,11 @@ async fn dispatch_batch(&self, st: &mut RunState, calls: &[ToolCallReq]) {
     // `PLN-2`: a turn that only kept the plan current is not work, and must not
     // be charged as if it were. Decided here, on what the turn actually did,
     // rather than guessed anywhere else.
-    if is_bookkeeping(calls) && st.free_steps < MAX_FREE_PLAN_STEPS {
+    // A longer plan has more to keep current: finishing one item and starting the
+    // next is a turn per item, and a second look that sends one back is another.
+    // A seven-item plan once spent eleven of its eighteen steps on that alone.
+    let free_cap = MAX_FREE_PLAN_STEPS.max(self.plan.lock().unwrap().items.len() * 2 + 2);
+    if is_bookkeeping(calls) && st.free_steps < free_cap {
         st.free_steps += 1;
     }
     let (db, sink, registry) = (self.db, self.sink, &self.registry);
@@ -3120,9 +3496,15 @@ async fn dispatch_batch(&self, st: &mut RunState, calls: &[ToolCallReq]) {
             if cancel.is_cancelled() {
                 break;
             }
+            // `WRK-11`: before something is deleted, sent or changed in an app, some ways
+            // of working ask for advice first. Its own step, before the call's.
+            let advised = self.advise(&call.id, &call.name, &parsed[i], None).await;
             let (verb, target) = describe(&call.name, &parsed[i], registry);
             sink.step_start(&call.id, &verb, &target);
             outcomes[i] = Some(self.dispatch(rpc, &call.id, &call.name, &parsed[i]).await);
+            if advised {
+                sink.clear_advice();
+            }
         }
         outcomes
     };
@@ -3140,10 +3522,16 @@ async fn dispatch_batch(&self, st: &mut RunState, calls: &[ToolCallReq]) {
                 let result = match script_refusal(registry, &call.name) {
                     Some(why) => Err(why),
                     None => {
+                        // `WRK-11`: a script that deletes, sends or changes something in
+                        // an app is asked about like the model's own call would be.
+                        let advised = self.advise(&id, &call.name, &call.args, Some(&call.parent)).await;
                         let (verb, target) = describe(&call.name, &call.args, registry);
                         sink.nested_step_start(&id, &verb, &target, &call.parent);
                         // No gate passed down: a script may not start a script.
                         let out = self.dispatch(None, &id, &call.name, &call.args).await;
+                        if advised {
+                            sink.clear_advice();
+                        }
                         db.add_tool_stat(model_name, &call.name, conversation_id, out.is_ok());
                         match &out {
                             Ok((output, note)) => {
@@ -3164,6 +3552,11 @@ async fn dispatch_batch(&self, st: &mut RunState, calls: &[ToolCallReq]) {
         .then(|| db.conversation_folder(conversation_id).ok().and_then(|(f, _)| f).map(std::path::PathBuf::from))
         .flatten();
 
+    // `WRK-1`: what the way of working makes of this batch. Collected here and
+    // applied once the results are in the transcript: a system turn between a
+    // call and its result would break the shape every engine expects.
+    let mut reactions: Vec<super::work::Reaction> = Vec::new();
+
     // Results land in the order the model asked for them, whatever order they
     // finished in, so the transcript is the same every time.
     for (i, call) in calls.iter().enumerate() {
@@ -3176,6 +3569,30 @@ async fn dispatch_batch(&self, st: &mut RunState, calls: &[ToolCallReq]) {
         };
         // GRM-4/LOOP-5: record every dispatched call's outcome (content-free).
         db.add_tool_stat(model_name, &call.name, conversation_id, result.is_ok());
+        // Going in circles: the same call with the same input, the same result.
+        if call.name != "ask_user" {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            match &result {
+                Ok((out, _)) => out.hash(&mut h),
+                Err(e) => e.hash(&mut h),
+            }
+            let h = h.finish();
+            let seen = st.repeats.entry(format!("{}\u{0}{}", call.name, call.arguments)).or_insert((h, 0));
+            if seen.0 == h {
+                seen.1 += 1;
+            } else {
+                *seen = (h, 1);
+            }
+            if seen.1 >= SAME_RESULT_TIMES && st.stuck.is_none() {
+                st.stuck = Some(format!("`{}` was called {SAME_RESULT_TIMES} times the same way and came back the same", call.name));
+            }
+        }
+        // `WRK-4`: what was done in the item in hand, for the second look.
+        if !matches!(call.name.as_str(), "plan" | "ask_user" | "harness" | "read_result" | "search_result") {
+            let (verb, target) = describe(&call.name, &parsed[i], registry);
+            self.work.note_step(&verb, &target, result.is_ok());
+        }
         match result {
             Ok((output, note)) => {
                 let spoken = self.habit(&call.id, &call.name, &parsed[i], Some(&output), folder.as_deref());
@@ -3185,6 +3602,7 @@ async fn dispatch_batch(&self, st: &mut RunState, calls: &[ToolCallReq]) {
                 if let Some((failed_args, error)) = st.last_failure.succeeded(&call.name) {
                     db.add_tool_fix(conversation_id, &call.name, &failed_args, &error, &call.arguments);
                 }
+                self.work.succeeded(&call.name);
                 // `HRN-8`: too big to paste means kept on disk, with a handle
                 // for the model and the whole thing for the user.
                 match results.keep(&call.id, &output) {
@@ -3210,6 +3628,14 @@ async fn dispatch_batch(&self, st: &mut RunState, calls: &[ToolCallReq]) {
             Err(e) => {
                 let spoken = self.habit(&call.id, &call.name, &parsed[i], None, folder.as_deref());
                 st.last_failure.failed(&call.name, &call.arguments, &e);
+                // The loop's own bookkeeping and a refusal the user asked for are
+                // not a problem the model keeps hitting.
+                if !matches!(call.name.as_str(), "plan" | "ask_user" | "harness" | "read_result" | "search_result")
+                    && e != PLAN_FIRST_REFUSAL
+                    && e != LOOK_REFUSAL
+                {
+                    reactions.extend(self.work.failed(&call.name, &e));
+                }
                 sink.step_error(&call.id, &e);
                 st.messages.push(tool_result_message(&call.id, &format!("Error: {e}{spoken}")));
                 // GRM-3: give a failed *built-in* call one guided retry. MCP
@@ -3225,6 +3651,394 @@ async fn dispatch_batch(&self, st: &mut RunState, calls: &[ToolCallReq]) {
             }
         }
     }
+    reactions.extend(self.work.after_checks(self.ledger.take_check_results()));
+    reactions.extend(self.work.after_changes(self.ledger.edited_count()));
+    // `WRK-13`: a run working Ad hoc that has grown is told it may offer a switch.
+    if let Some(note) = self.work.bigger(self.ledger.edited_count(), self.harness_names.contains(&"switch_mode")) {
+        reactions.push(super::work::Reaction::Tell(note));
+    }
+    self.react(st, reactions);
+    // `WRK-6`: an item that failed twice is tried two ways.
+    if let Some((item, what)) = self.work.take_branch() {
+        self.try_two_ways(st, item, &what).await;
+    }
+}
+
+/// `WRK-1`: carry out what a way of working asked for.
+fn react(&self, st: &mut RunState, reactions: Vec<super::work::Reaction>) {
+    for text in self.show(reactions) {
+        st.messages.push(serde_json::json!({ "role": "system", "content": text }));
+    }
+    self.publish_moves();
+}
+
+/// `WRK-7`: a move was made outside a plan write (a split, a fresh start, a
+/// skipped one): the board that remembers it is sent again. Never called with the
+/// plan locked.
+fn publish_moves(&self) {
+    let moves = self.work.moves();
+    let mut plan = self.plan.lock().unwrap();
+    if plan.is_empty() || plan.moves == moves {
+        return;
+    }
+    plan.moves = moves;
+    self.sink.plan(&self.rc.run.id, &plan);
+    super::log::record_plan(self.db, self.conversation_id, &self.rc.run.id, &plan);
+}
+
+/// Show what is to be shown and write down what is to be recorded; what the model
+/// is to be told comes back, because only the caller knows where it may go: a
+/// system turn between a call and its result would break the transcript.
+fn show(&self, reactions: Vec<super::work::Reaction>) -> Vec<String> {
+    use super::work::Reaction;
+    let mut tell = Vec::new();
+    for reaction in reactions {
+        match reaction {
+            Reaction::Tell(text) => tell.push(text),
+            Reaction::Show(event) => self.sink.emit(event),
+            Reaction::Record(signal) => super::work::record(self.db, self.conversation_id, &self.rc.run.id, &signal),
+        }
+    }
+    tell
+}
+
+/// `WRK-5`: when the transcript has grown past what a head holds well and the
+/// way of working says so, the run writes itself a handover note and goes on
+/// from that alone: the request, the note and the plan. What it read and tried
+/// is gone from its view, on purpose; the files and the log are not.
+async fn maybe_start_fresh(&self, st: &mut RunState) {
+    if !self.tools_enabled {
+        return;
+    }
+    let tokens = estimate_tokens(&st.messages);
+    let (due, reactions) = self.work.head_full(tokens, self.rc.context_window, st.iteration);
+    self.show(reactions);
+    self.publish_moves();
+    if !due {
+        return;
+    }
+    let asked = super::aside::ask(self.client, self.endpoint, &self.cancel, super::aside::handover_messages(&st.messages)).await;
+    let note = match asked {
+        Ok((reply, usage)) => {
+            if let Some(usage) = usage {
+                self.rc.run.add_usage(usage);
+            }
+            super::aside::clean_note(&reply)
+        }
+        Err(why) => {
+            eprintln!("fresh start: no note ({why})");
+            None
+        }
+    };
+    let Some(note) = note else {
+        self.work.fresh_failed();
+        return;
+    };
+    st.messages = super::aside::fresh_transcript(&st.messages, st.opening, &note);
+    // The session log already holds what came before; the new start is not
+    // written over it. A resume replays the original and starts fresh again.
+    st.logged = st.messages.len();
+    self.ledger.forget_reads();
+    // The new start must be roomier than the old, or it would only do it again.
+    if let Some(window) = self.rc.context_window {
+        if estimate_tokens(&st.messages) * 3 > window * 2 {
+            self.work.fresh_failed();
+        }
+    }
+    self.show(self.work.fresh_started(&note));
+    self.publish_moves();
+}
+
+/// What one tool call is given. One per call, so `rendered` is RND-3's one-render
+/// budget; the loop's own side doings (`WRK-6`) build one the same way.
+fn tool_context<'a>(&'a self, call_id: &'a str, rpc: Option<&'a super::toolrpc::Gate>) -> ToolContext<'a> {
+    ToolContext {
+        client: self.client,
+        local_endpoint: self.local_endpoint,
+        db: self.db,
+        mgr: self.mgr,
+        embed_mgr: self.embed_mgr,
+        rerank_mgr: self.rerank_mgr,
+        perms: self.perms,
+        sink: self.sink,
+        conversation_id: self.conversation_id,
+        assistant_message_id: self.assistant_message_id,
+        data_dir: self.data_dir,
+        call_id,
+        memory: self.memory,
+        headless: self.headless,
+        rendered: std::sync::atomic::AtomicBool::new(false),
+        step_note: std::sync::Mutex::new(None),
+        extra_read_roots: &self.extra_read_roots,
+        loaded_skills: &self.loaded_skills,
+        browser_pool: self.browser_pool,
+        delegation: self.delegation.as_ref(),
+        rpc,
+        ledger: &self.ledger,
+        cancel: Some(&self.cancel),
+        run_started_at: self.started_at_ms,
+    }
+}
+
+/// `WRK-6`: an item failed twice. Two helpers each try it in their own copy of
+/// the folder, one copy's changes are kept (written into the real folder, every
+/// file snapshotted so it can be undone) and the other way stays readable as a
+/// patch. Nothing here may stop the run: whatever goes wrong, the lead is told
+/// plainly and goes on with one way.
+async fn try_two_ways(&self, st: &mut RunState, item: usize, what: &str) {
+    use super::aside::WayReport;
+    use super::branch;
+    let tell = |st: &mut RunState, text: String| st.messages.push(serde_json::json!({ "role": "system", "content": text }));
+    let (text, done_when) = {
+        let plan = self.plan.lock().unwrap();
+        match plan.items.get(item) {
+            Some(i) => (i.text.clone(), i.done_when.clone()),
+            None => return,
+        }
+    };
+    let Some(folder) = self.db.conversation_folder(self.conversation_id).ok().and_then(|(f, _)| f).map(std::path::PathBuf::from) else {
+        self.work.branch_failed();
+        return;
+    };
+    let id = uuid::Uuid::new_v4().to_string();
+    let (a, b) = (branch::workdir(self.data_dir, &id).join("a"), branch::workdir(self.data_dir, &id).join("b"));
+    let copied = {
+        let (folder, a, b) = (folder.clone(), a.clone(), b.clone());
+        tokio::task::spawn_blocking(move || branch::copy_folder(&folder, &a).and_then(|_| branch::copy_folder(&folder, &b))).await
+    };
+    match copied {
+        Ok(Ok(_)) => {}
+        other => {
+            let why = match other {
+                Ok(Err(why)) => why,
+                _ => "The copy did not finish.".to_string(),
+            };
+            branch::discard_copies(self.data_dir, &id);
+            self.work.branch_failed();
+            tell(st, format!("I could not try two ways: {why} Carry on with one way."));
+            return;
+        }
+    }
+    self.sink.emit(AgentEvent::Branched { run_id: self.rc.run.id.clone(), item, id: id.clone() });
+
+    let brief = |way: &str| {
+        let goal = done_when.as_deref().map(|d| format!("Done when: {d}\n")).unwrap_or_default();
+        format!(
+            "You are one of two helpers. The lead is stuck on this item: it has failed twice.\n\n\
+             Item: {text}\n{goal}What went wrong: {what}\n\n\
+             You work in your own copy of the folder. Whatever you change there is compared with the other helper's \
+             copy and only one is kept, so make the change you would stand behind. Run what proves it works before \
+             you finish. Do not ask questions.\n\nYour way: {way}"
+        )
+    };
+    let task = |way: &str| super::subagents::TaskSpec {
+        agent: None,
+        task: brief(way),
+        output: Some("two or three sentences: what you changed, and how you know it works".into()),
+        because: None,
+        // The judge compares the two copies; a second look inside either would only
+        // cost a call the comparison makes anyway.
+        style: Some(crate::memory::ways::AD_HOC.to_string()),
+    };
+    let tasks = vec![
+        task("the most direct fix you can see, as small a change as possible."),
+        task(
+            "a different route from the obvious one. If the obvious fix is to change one thing, find another way to \
+             the same result; do not just vary the first idea.",
+        ),
+    ];
+    let ctx = self.tool_context("branch", None);
+    let delegated = super::subagents::run_delegation(&ctx, tasks, false, Some(&[a.clone(), b.clone()])).await;
+    let children = match delegated {
+        Ok(d) if d.children.len() == 2 => d.children,
+        other => {
+            let why = match other {
+                Err(e) => e,
+                _ => "The helpers did not both finish.".to_string(),
+            };
+            branch::discard_copies(self.data_dir, &id);
+            self.work.branch_failed();
+            tell(st, format!("I could not try two ways: {why} Carry on with one way."));
+            return;
+        }
+    };
+
+    let sides = {
+        let (folder, a, b) = (folder.clone(), a.clone(), b.clone());
+        tokio::task::spawn_blocking(move || {
+            let ca = branch::changes(&folder, &a);
+            let cb = branch::changes(&folder, &b);
+            let (pa, pb) = (branch::patch(&folder, &a, &ca), branch::patch(&folder, &b, &cb));
+            (ca, cb, pa, pb)
+        })
+        .await
+    };
+    let Ok((ca, cb, pa, pb)) = sides else {
+        branch::discard_copies(self.data_dir, &id);
+        self.work.branch_failed();
+        tell(st, "I could not try two ways: comparing the copies did not finish. Carry on with one way.".to_string());
+        return;
+    };
+    let way = |name: &'static str, n: usize, patch: &str| WayReport { name, report: children[n].text.clone(), patch: patch.to_string(), files: if n == 0 { ca.len() } else { cb.len() } };
+    let (wa, wb) = (way("A", 0, &pa), way("B", 1, &pb));
+
+    // Which way is kept. A judge who has not seen how either went; when it cannot
+    // say, the smaller change, and the person is told that is why.
+    let judged = match super::aside::ask(self.client, self.endpoint, &self.cancel, super::aside::judge_messages(&self.request, &text, done_when.as_deref(), &wa, &wb)).await {
+        Ok((reply, usage)) => {
+            if let Some(usage) = usage {
+                self.rc.run.add_usage(usage);
+            }
+            super::aside::parse_judge(&reply)
+        }
+        Err(_) => None,
+    };
+    let (kept, reason) = match judged {
+        Some(j) => j,
+        None => {
+            let pick = if ca.is_empty() && !cb.is_empty() {
+                "b"
+            } else if cb.is_empty() && !ca.is_empty() || ca.len() <= cb.len() {
+                "a"
+            } else {
+                "b"
+            };
+            (pick.to_string(), "the smaller change; nothing could tell the two apart".to_string())
+        }
+    };
+    let (kept_dir, kept_changes, n) = if kept == "a" { (&a, &ca, 0) } else { (&b, &cb, 1) };
+    let written = branch::apply(self.db, self.data_dir, self.conversation_id, &self.ledger, &folder, kept_dir, kept_changes);
+
+    let short = |s: &str| -> String {
+        let one: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+        crate::media::ellipsize(&one, 140)
+    };
+    let record = branch::Record {
+        id: id.clone(),
+        item,
+        text: text.clone(),
+        kept: kept.clone(),
+        reason: reason.clone(),
+        ways: children.iter().map(|c| short(&c.text)).collect(),
+        patches: vec![pa, pb],
+        files: vec![ca.len(), cb.len()],
+        children: children.iter().map(|c| c.conversation_id.clone()).collect(),
+    };
+    let _ = branch::save(self.data_dir, &record);
+    branch::discard_copies(self.data_dir, &id);
+    self.work.branch_done(item);
+
+    {
+        let mut plan = self.plan.lock().unwrap();
+        if let Some(i) = plan.items.get_mut(item) {
+            i.branches = Some(super::plan::Branches {
+                kept: kept.clone(),
+                reason: reason.clone(),
+                ways: record.ways.clone(),
+                id: id.clone(),
+            });
+        }
+        plan.moves = self.work.moves();
+        self.sink.plan(&self.rc.run.id, &plan);
+        super::log::record_plan(self.db, self.conversation_id, &self.rc.run.id, &plan);
+    }
+    self.sink.emit(AgentEvent::BranchKept { run_id: self.rc.run.id.clone(), item, id, kept: kept.clone(), reason: reason.clone() });
+    tell(
+        st,
+        format!(
+            "Item {} failed twice, so I had two helpers try it, each in its own copy of the folder, and kept way {} ({reason}). \
+             Its changes ({written} file{}) are now in the folder. It said: {} \
+             Run what proves it works, then go on with the item. The other way said: {}",
+            item + 1,
+            kept.to_uppercase(),
+            if written == 1 { "" } else { "s" },
+            short(&children[n].text),
+            short(&children[1 - n].text),
+        ),
+    );
+}
+
+/// `WRK-10`: hold the answer to the criteria the person agreed. One fresh-context
+/// call, no tools. Whatever it finds is ticked on the plan card; when the way of
+/// working says to send an unmet answer back, the note comes back for the model.
+/// A check that cannot be made lets the answer stand.
+async fn check_criteria(&self, answer: &str) -> Option<String> {
+    let (criteria, due) = {
+        let plan = self.plan.lock().unwrap();
+        (plan.criteria.iter().map(|c| c.text.clone()).collect::<Vec<_>>(), self.work.criteria_look_due(&plan))
+    };
+    if !due {
+        return None;
+    }
+    let checks = self.work.evidence().checks;
+    let patch = super::changes::render_for_model(&super::changes::change_set(self.db, self.conversation_id, self.started_at_ms));
+    // Everything the chat has made, because a report written over several runs is
+    // judged as the report, not as this run's last part of it.
+    let made = self.artifacts_made(|_| true);
+    let messages = super::aside::criteria_messages(&self.request, &criteria, answer, &patch, &checks, &made);
+    let found = match super::aside::ask(self.client, self.endpoint, &self.cancel, messages).await {
+        Ok((reply, usage)) => {
+            if let Some(usage) = usage {
+                self.rc.run.add_usage(usage);
+            }
+            super::aside::parse_criteria(&reply, criteria.len())
+        }
+        Err(why) => {
+            eprintln!("criteria: no check ({why})");
+            None
+        }
+    };
+    let (reactions, note) = {
+        let mut plan = self.plan.lock().unwrap();
+        let out = self.work.criteria_looked(&mut plan, found);
+        plan.moves = self.work.moves();
+        self.sink.plan(&self.rc.run.id, &plan);
+        super::log::record_plan(self.db, self.conversation_id, &self.rc.run.id, &plan);
+        out
+    };
+    let _ = self.show(reactions);
+    note
+}
+
+/// The written artifacts of this chat that `keep` picks, as text for a look that
+/// never saw the work: a report or a page is made as an artifact, not as a file.
+fn artifacts_made(&self, keep: impl Fn(&crate::db::Artifact) -> bool) -> String {
+    self.db
+        .list_artifacts(self.conversation_id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| a.kind != "image" && a.kind != "video" && keep(a))
+        .map(|a| format!("## {} ({})\n{}", a.title, a.kind, a.content))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// `WRK-4`: the second look at one item. It is given what the work left behind
+/// (the patch, the checks, what was done in outline) and not how it went. `None`
+/// when it could not be made or read: the item then stands.
+async fn look_at(&self, item: &str, done_when: Option<&str>) -> Option<super::aside::Look> {
+    let evidence = self.work.evidence();
+    // This run's changes since the item began; never older than the run itself.
+    let since = evidence.since_ms.max(self.started_at_ms);
+    let patch = super::changes::render_for_model(&super::changes::change_set(self.db, self.conversation_id, since));
+    // What the item made in the chat: artifacts written since it began, so
+    // writing is judged on the writing.
+    // Made since the item began, or changed in it (an update keeps the
+    // artifact's old date; the step it took names its id).
+    let made = self.artifacts_made(|a| a.created_at >= since || evidence.trail.iter().any(|t| t.contains(&a.id)));
+    let messages = super::aside::look_messages(&self.request, item, done_when, &evidence.trail, &patch, &evidence.checks, &made);
+    match super::aside::ask(self.client, self.endpoint, &self.cancel, messages).await {
+        Ok((reply, usage)) => {
+            if let Some(usage) = usage {
+                self.rc.run.add_usage(usage);
+            }
+            super::aside::parse_look(&reply)
+        }
+        Err(why) => {
+            eprintln!("second look: no verdict ({why})");
+            None
+        }
+    }
 }
 }
 
@@ -3233,15 +4047,23 @@ async fn dispatch_batch(&self, st: &mut RunState, calls: &[ToolCallReq]) {
 /// `{"name": "...", "parameters": {...}}`) instead of structured `tool_calls`
 /// deltas. Recognize that shape — but only when the `name` is a real built-in
 /// tool, so a model that legitimately answers with JSON isn't misread.
-fn parse_text_tool_calls(content: &str, registry: &ToolRegistry) -> Option<Vec<ToolCallReq>> {
+fn parse_text_tool_calls(content: &str, registry: &ToolRegistry, own: &[String]) -> Option<Vec<ToolCallReq>> {
     let body = strip_code_fence(strip_think(content.trim()));
+    // The XML shape Qwen-style chat templates use, which a provider sometimes
+    // passes through as text: `<tool_call><function=plan><parameter=updates>…`.
+    let xml = xml_tool_calls(body, registry, own);
+    if !xml.is_empty() {
+        return Some(xml);
+    }
+    // `<tool_call>{json}</tool_call>`: the tags are only wrapping.
+    let body = body.trim().strip_prefix("<tool_call>").map(|b| b.trim_end().trim_end_matches("</tool_call>").trim()).unwrap_or(body);
     // Whole-string parse first: an array of calls or a single call object.
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(body) {
         let calls: Vec<ToolCallReq> = match &value {
             serde_json::Value::Array(items) => {
-                items.iter().filter_map(|v| one_text_call(v, registry)).collect()
+                items.iter().filter_map(|v| one_text_call(v, registry, own)).collect()
             }
-            serde_json::Value::Object(_) => one_text_call(&value, registry).into_iter().collect(),
+            serde_json::Value::Object(_) => one_text_call(&value, registry, own).into_iter().collect(),
             _ => Vec::new(),
         };
         if !calls.is_empty() {
@@ -3256,7 +4078,7 @@ fn parse_text_tool_calls(content: &str, registry: &ToolRegistry) -> Option<Vec<T
         let mut stream =
             serde_json::Deserializer::from_str(&body[start..]).into_iter::<serde_json::Value>();
         if let Some(Ok(value)) = stream.next() {
-            let calls: Vec<ToolCallReq> = one_text_call(&value, registry).into_iter().collect();
+            let calls: Vec<ToolCallReq> = one_text_call(&value, registry, own).into_iter().collect();
             if !calls.is_empty() {
                 return Some(calls);
             }
@@ -3276,6 +4098,52 @@ fn parse_text_tool_calls(content: &str, registry: &ToolRegistry) -> Option<Vec<T
         return invocation_line_call(body, registry).map(|c| vec![c]);
     }
     None
+}
+
+/// Is `name` something this run can dispatch: a tool from the registry, or one the
+/// loop owns (`plan`, `ask_user`, …), which `own` lists when this run offers it.
+fn callable(registry: &ToolRegistry, own: &[String], name: &str) -> bool {
+    registry.builtin_for(name).is_some() || registry.mcp.contains_key(name) || own.iter().any(|n| n == name)
+}
+
+/// Every `<function=NAME> <parameter=KEY>VALUE</parameter> </function>` block in
+/// `body`, as calls, when NAME is callable. A value that parses as JSON is taken
+/// as that JSON (`[{"index": 1}]` is a list, not a string); anything else is text.
+fn xml_tool_calls(body: &str, registry: &ToolRegistry, own: &[String]) -> Vec<ToolCallReq> {
+    let mut calls = Vec::new();
+    let mut rest = body;
+    while let Some(start) = rest.find("<function=") {
+        let after = &rest[start + "<function=".len()..];
+        let Some(close) = after.find('>') else { break };
+        let name = after[..close].trim().trim_matches(['"', '\'']);
+        let inner_all = &after[close + 1..];
+        let end = inner_all.find("</function>").unwrap_or(inner_all.len());
+        let inner = &inner_all[..end];
+        rest = &inner_all[end..];
+        if !callable(registry, own, name) {
+            continue;
+        }
+        let mut args = serde_json::Map::new();
+        let mut p = inner;
+        while let Some(ps) = p.find("<parameter=") {
+            let a = &p[ps + "<parameter=".len()..];
+            let Some(pc) = a.find('>') else { break };
+            let key = a[..pc].trim().trim_matches(['"', '\'']).to_string();
+            let v = &a[pc + 1..];
+            let ve = v.find("</parameter>").unwrap_or(v.len());
+            let raw = v[..ve].trim();
+            let value = serde_json::from_str::<serde_json::Value>(raw)
+                .unwrap_or_else(|_| serde_json::Value::String(raw.to_string()));
+            args.insert(key, value);
+            p = &v[ve..];
+        }
+        calls.push(ToolCallReq {
+            id: format!("call_{}", uuid::Uuid::new_v4().simple()),
+            name: name.to_string(),
+            arguments: serde_json::Value::Object(args).to_string(),
+        });
+    }
+    calls
 }
 
 /// Parse `<tool> <argument>` / `<tool>(<json>)` / `<tool> {json}` as a call, when
@@ -3402,7 +4270,7 @@ fn strip_think(s: &str) -> &str {
 /// Convert a single `{name, parameters|arguments}` object into a [`ToolCallReq`]
 /// if `name` is a known tool (built-in or from an enabled MCP connector). Some
 /// chat templates (Llama 3.x) name the tool under `function` instead of `name`.
-fn one_text_call(v: &serde_json::Value, registry: &ToolRegistry) -> Option<ToolCallReq> {
+fn one_text_call(v: &serde_json::Value, registry: &ToolRegistry, own: &[String]) -> Option<ToolCallReq> {
     let name = v
         .get("name")
         .or_else(|| v.get("function"))
@@ -3415,7 +4283,7 @@ fn one_text_call(v: &serde_json::Value, registry: &ToolRegistry) -> Option<ToolC
             arguments: serde_json::json!({ "name": skill }).to_string(),
         });
     }
-    if registry.builtin_for(name).is_none() && !registry.mcp.contains_key(name) {
+    if !callable(registry, own, name) {
         return None;
     }
     let args_val = v.get("parameters").or_else(|| v.get("arguments"));
@@ -3474,18 +4342,113 @@ async fn dispatch(
     // model gets the new list back, the user's card is updated, and the log has
     // a row that a resume or a fork can read.
     if super::plan::handles(name) && self.plan_mode.offers_tool() {
-        let output = super::plan::execute(&self.plan, args)?;
-        let mut plan = self.plan.lock().unwrap();
-        // `PLF-3`: written while planning first, so it waits for approval.
-        if self.plan_first {
-            plan.awaiting_approval = true;
+        // `WRK-2`: the plan is held to the way of working: one item at a time, and
+        // nothing called done while the line is stopped.
+        let before = self.plan.lock().unwrap().statuses();
+        // Planning first, nothing is started or done: the person has not said yes.
+        // Ticking items here is how a run once "finished" a report it was never
+        // allowed to write.
+        if self.plan_first && (args.get("updates").is_some() || args.get("update").is_some()) {
+            return Err(PLAN_FIRST_NO_PROGRESS.into());
         }
+        // `WRK-22`: changed project files are not done until the project's check ran.
+        let unchecked = if self.ledger.unchecked_edits() {
+            super::project::for_conversation(self.db, self.conversation_id)
+                .and_then(|(_, card)| card.check_task().map(|t| t.name.clone()))
+        } else {
+            None
+        };
+        super::plan::execute_with(&self.plan, args, &self.work.discipline_with(unchecked))?;
+        // `WRK-10`: a plan means it was clear enough to write one.
+        self.work.plan_written();
+        // `PLF-3`: written while planning first, so it waits for approval. Once it
+        // has its steps (and, when what done means is being agreed, that too) the
+        // turn ends here: the plan card is the answer, and its Go ahead is what
+        // carries on. A model left running only rewrites the plan or works without
+        // being allowed to change anything.
+        if self.plan_first {
+            let mut plan = self.plan.lock().unwrap();
+            plan.awaiting_approval = true;
+            let ready = !plan.items.is_empty() && (!self.work.in_criteria_phase() || !plan.criteria.is_empty());
+            if ready {
+                *self.waiting_on_person.lock().unwrap() = Some(PLAN_READY.to_string());
+            }
+        }
+        // `WRK-4`: an item called done is looked at by someone who never saw the
+        // work, before it counts. Nothing is held while that call is made.
+        let mut told: Vec<String> = Vec::new();
+        let owed = {
+            let mut plan = self.plan.lock().unwrap();
+            let (owed, skipped) = self.work.owe_looks(&mut plan, &before);
+            told.extend(self.show(skipped));
+            owed
+        };
+        for n in owed {
+            let (text, done_when) = {
+                let mut plan = self.plan.lock().unwrap();
+                let begun = self.work.begin_look(&mut plan, n);
+                plan.moves = self.work.moves();
+                self.sink.plan(&self.rc.run.id, &plan);
+                told.extend(self.show(begun));
+                (plan.items[n].text.clone(), plan.items[n].done_when.clone())
+            };
+            let look = self.look_at(&text, done_when.as_deref()).await;
+            let mut plan = self.plan.lock().unwrap();
+            let (reactions, said) = self.work.looked(&mut plan, n, look);
+            told.extend(self.show(reactions));
+            if !said.is_empty() {
+                told.push(said);
+            }
+        }
+        // The lock is held in a block so no guard is alive across the check-in's await.
+        let (mut output, note, finished) = {
+        let mut plan = self.plan.lock().unwrap();
+        // The loop starts the next item itself and says where items began and
+        // ended. The model reads the plan back as it now stands, so what it is
+        // told is what the board shows.
+        // `WRK-13`: a switch the person asked for starts between items, never in the
+        // middle of one: here, before the next item would be started under the old way.
+        if let Some(slug) = self.work.switch_pending() {
+            let ended = plan
+                .changes_since(&before)
+                .iter()
+                .any(|(_, c)| matches!(c, super::plan::Change::Done | super::plan::Change::Dropped));
+            if ended {
+                self.apply_switch(&slug);
+            }
+        }
+        let mut finished: Vec<usize> = Vec::new();
+        for event in self.work.after_plan_write(&mut plan, &before, self.ledger.edited_count(), !self.plan_first) {
+            if let AgentEvent::ItemEnded { item, outcome, .. } = &event {
+                if outcome == "done" {
+                    finished.push(*item);
+                }
+            }
+            self.sink.emit(event);
+        }
+        let mut output = format!("The plan now reads:\n{}", plan.render());
+        for line in &told {
+            output.push_str("\n\n");
+            output.push_str(line);
+        }
+        plan.moves = self.work.moves();
         self.sink.plan(&self.rc.run.id, &plan);
         super::log::record_plan(self.db, self.conversation_id, &self.rc.run.id, &plan);
         let note = match plan.current() {
             Some(item) => format!("\u{2014} {}", crate::media::ellipsize(&item.text, 48)),
             None => "\u{2014} every step done".to_string(),
         };
+        (output, note, finished)
+        };
+        // `WRK-10`: after an item, some ways of working check in with the person. The
+        // board already shows the item done; the answer is told to the model here.
+        // Items finished in one write are one thought, so they are one check-in: the last.
+        if let Some(&n) = finished.last() {
+            if let Some(said) = self.check_in(call_id, n).await {
+                output.push_str("\n\n");
+                output.push_str(&said);
+            }
+        }
         return Ok((output, Some(note)));
     }
     // `AGC-1`/`AGC-3`: the agent's own session. Like `plan`, this belongs to the
@@ -3495,6 +4458,10 @@ async fn dispatch(
     }
     if name == "ask_user" && self.ask_offered {
         return self.ask_user(call_id, args).await;
+    }
+    // `WRK-14`: helpers handed plan items: the board says who has each.
+    if name == "delegate" && self.work.hands_out() {
+        self.assign_items(args);
     }
     // `USE-4`: bringing a held-back tool group back. Only live while something is held.
     if super::decide::tools::handles(name) && !self.rc.run.held.lock().unwrap().is_empty() {
@@ -3507,37 +4474,11 @@ async fn dispatch(
     // `PLF-2`: a registry without the mutating specs is not enough. A content-form
     // call is parsed by name, and a model that remembers a tool from earlier in
     // the conversation can still ask for it.
-    if self.read_only && refuses_in_plan_first(registry, name) {
-        return Err(PLAN_FIRST_REFUSAL.to_string());
+    if self.read_only_now() && refuses_in_plan_first(registry, name) {
+        return Err(self.refusal().to_string());
     }
     if let Some(toolset) = registry.builtin_for(name) {
-        let ctx = ToolContext {
-            client: self.client,
-            local_endpoint: self.local_endpoint,
-            db: self.db,
-            mgr: self.mgr,
-            embed_mgr: self.embed_mgr,
-            rerank_mgr: self.rerank_mgr,
-            perms: self.perms,
-            sink: self.sink,
-            conversation_id: self.conversation_id,
-            assistant_message_id: self.assistant_message_id,
-            data_dir: self.data_dir,
-            call_id,
-            memory: self.memory,
-            headless: self.headless,
-            // One context per tool call, so this is RND-3's one-render budget.
-            rendered: std::sync::atomic::AtomicBool::new(false),
-            step_note: std::sync::Mutex::new(None),
-            extra_read_roots: &self.extra_read_roots,
-            loaded_skills: &self.loaded_skills,
-            browser_pool: self.browser_pool,
-            delegation: self.delegation.as_ref(),
-            rpc,
-            ledger: &self.ledger,
-            cancel: Some(&self.cancel),
-            run_started_at: self.started_at_ms,
-        };
+        let ctx = self.tool_context(call_id, rpc);
         // `USE-12`: a quick look at a call that runs code, sends, drives a page or
         // changes files the person would be asked about. It can add a question or a
         // line to one, or refuse where nobody could answer; it removes nothing.
@@ -3598,8 +4539,8 @@ async fn dispatch(
             .await;
             if notes.raised.is_some() {
                 // Only a tool that reads is offered while planning first.
-                if self.read_only {
-                    return Err(PLAN_FIRST_REFUSAL.to_string());
+                if self.read_only_now() {
+                    return Err(self.refusal().to_string());
                 }
                 kind = CallKind::Send;
             }
@@ -3747,6 +4688,13 @@ impl TurnCtx<'_> {
         use super::commands::Act;
         let call: super::commands::HarnessCall = serde_json::from_value(args.clone())
             .map_err(|e| format!("That is not a valid harness call: {e}"))?;
+        // `WRK-13`: a switch to another way of working is offered once per run.
+        if call.name == "switch_mode"
+            && call.mode.as_deref().is_some_and(super::commands::is_style_mode)
+            && !self.work.offer_switch()
+        {
+            return Err("You already offered a switch in this run. Do not offer it again.".to_string());
+        }
         let mut act = super::commands::decide(self.db, self.conversation_id, &self.harness_names, &call)?;
         if self.read_only {
             act = act.asked_only();
@@ -3785,6 +4733,9 @@ impl TurnCtx<'_> {
     /// long as it takes, and a Stop ends the wait with the same words the model
     /// is given for any other stopped call.
     async fn ask_user(&self, call_id: &str, args: &serde_json::Value) -> Result<(String, Option<String>), String> {
+        // `WRK-1`: asking is what the loop wanted. A call that is refused below for
+        // having too few options is the model's to redo, and the menu has opened.
+        self.work.asked_now();
         let question = args
             .get("question")
             .and_then(|q| q.as_str())
@@ -3804,6 +4755,23 @@ impl TurnCtx<'_> {
         options.truncate(4);
         let multi = args.get("multi").and_then(|m| m.as_bool()).unwrap_or(false);
 
+        let answer = self.question(call_id, question, options, multi).await?;
+        // `WRK-10`: a question answered while looking around settles that it is clear.
+        let settled = self.work.answered();
+        self.show(settled);
+        self.publish_moves();
+        Ok((answer.to_result(), Some(answer.to_note())))
+    }
+
+    /// Put a question to the person and wait. The run is paused for as long as it
+    /// takes, and a Stop ends the wait with the words every stopped call gets.
+    async fn question(
+        &self,
+        call_id: &str,
+        question: String,
+        options: Vec<super::QuestionOption>,
+        multi: bool,
+    ) -> Result<super::fleet::Answer, String> {
         let run = self.rc.run;
         let waiting = run.ask(call_id);
         self.sink.emit(AgentEvent::Question {
@@ -3814,13 +4782,33 @@ impl TurnCtx<'_> {
             multi,
         });
         match crate::runtime::proxy::until_cancelled(&self.cancel, waiting).await {
-            Some(Ok(answer)) => Ok((answer.to_result(), Some(answer.to_note()))),
+            Some(Ok(answer)) => Ok(answer),
             Some(Err(_)) => Err("The question was withdrawn before the user answered.".to_string()),
             None => {
                 run.drop_question(call_id);
                 Err("The user stopped the run before answering.".to_string())
             }
         }
+    }
+
+    /// `WRK-10`: after an item, check in with the person when the way of working
+    /// says to. The question and its three answers are the loop's own; what the
+    /// person says comes back as one line for the model. `None` when nothing was
+    /// asked, or when asking failed (the run was stopped).
+    async fn check_in(&self, call_id: &str, n: usize) -> Option<String> {
+        use super::work::{CHECK_CHANGE, CHECK_CONTINUE, CHECK_TAKE};
+        let (due, reactions) = {
+            let plan = self.plan.lock().unwrap();
+            self.work.check_in(&plan, n)
+        };
+        // A check-in only shows and records; there is nothing in it for the model.
+        let _ = self.show(reactions);
+        self.publish_moves();
+        let due = due?;
+        let option = |label: &str| super::QuestionOption { label: label.to_string(), detail: None };
+        let options = vec![option(CHECK_CONTINUE), option(CHECK_CHANGE), option(CHECK_TAKE)];
+        let answer = self.question(&format!("{call_id}-checkin-{n}"), due.question, options, false).await.ok()?;
+        Some(self.work.checked_in(&answer.choices, answer.text.as_deref()))
     }
 }
 
@@ -3849,7 +4837,7 @@ impl TurnCtx<'_> {
             cancel: &self.cancel,
             conversation_id: self.conversation_id,
             headless: self.headless,
-            read_only: self.read_only,
+            read_only: self.read_only_now(),
             pool: &self.mcp_pool,
             request: Some(&self.request),
         };
@@ -4475,6 +5463,33 @@ mod tests {
         assert!(refuses_in_plan_first(&registry, "post_note"));
     }
 
+    /// `WRK-11`: advice is for deleting, sending and changing something in an app,
+    /// and for nothing that only reads.
+    #[test]
+    fn advice_is_for_a_delete_a_send_and_an_app_change_and_nothing_that_only_reads() {
+        let db = Db::open_in_memory().unwrap();
+        let conv = db.create_conversation("c", None, false).unwrap().id;
+        let mut registry = registry_for(&db, &conv, None, false);
+        let binding = |kind| McpBinding {
+            connector_id: "c".into(),
+            connector_name: "Notes".into(),
+            url: "http://x".into(),
+            transport: "http".into(),
+            kind,
+        };
+        registry.mcp.insert("list_notes".into(), binding(CallKind::Read));
+        registry.mcp.insert("update_note".into(), binding(CallKind::Change));
+        registry.mcp.insert("post_note".into(), binding(CallKind::Send));
+        let act = |name: &str, args: serde_json::Value| risky_act_in(&registry, name, &args);
+        assert_eq!(act("delete_file", serde_json::json!({ "path": "old/notes.md" })).as_deref(), Some("deleting old/notes.md"));
+        assert_eq!(act("send_mail", serde_json::json!({ "to": "ann@example.com" })).as_deref(), Some("sending mail to ann@example.com"));
+        assert!(act("update_note", serde_json::json!({})).unwrap().starts_with("changing something in Notes"));
+        assert!(act("post_note", serde_json::json!({})).is_some());
+        for quiet in ["read_file", "list_notes", "write_file", "edit_file", "plan", "nothing_like_it"] {
+            assert!(act(quiet, serde_json::json!({})).is_none(), "{quiet}");
+        }
+    }
+
     /// A one-purpose MCP server on a loopback port: it answers `initialize`,
     /// acknowledges notifications, and answers every `tools/call` with `reply`
     /// as a result, or as a JSON-RPC error when `as_error`.
@@ -4772,9 +5787,14 @@ mod tests {
     fn below_full_only_plan_first_plans() {
         use super::super::plan::PlanMode;
         let db = Db::open_in_memory().unwrap();
-        assert_eq!(plan_mode_for(ModelTier::Full, false, &db), PlanMode::current(&db));
-        assert_eq!(plan_mode_for(ModelTier::Basic, false, &db), PlanMode::Never);
-        assert_eq!(plan_mode_for(ModelTier::Basic, true, &db), PlanMode::Auto);
+        assert_eq!(plan_mode_for(ModelTier::Full, false, false, &db), PlanMode::current(&db));
+        assert_eq!(plan_mode_for(ModelTier::Basic, false, false, &db), PlanMode::Never);
+        assert_eq!(plan_mode_for(ModelTier::Basic, true, false, &db), PlanMode::Auto);
+        // `WRK-2`: working item by item means having the items, whatever the
+        // setting says, but not on a model too small to plan.
+        db.set_setting(super::super::plan::PLAN_MODE_KEY, "never").unwrap();
+        assert_eq!(plan_mode_for(ModelTier::Full, false, true, &db), PlanMode::Always);
+        assert_eq!(plan_mode_for(ModelTier::Basic, false, true, &db), PlanMode::Never);
     }
 
     /// `TIER-T-4`: thinking is off below Full, and the user's chip counts only at Full.
@@ -5000,6 +6020,7 @@ mod tests {
     fn state(messages: Vec<serde_json::Value>) -> RunState {
         RunState {
             logged: messages.len(),
+            opening: messages.len(),
             messages,
             final_text: String::new(),
             retried: Default::default(),
@@ -5011,6 +6032,10 @@ mod tests {
             strict_template: false,
             wrap_up: None,
             iteration: 0,
+            plan_state: (0, 0, false),
+            progress_at: 0,
+            repeats: Default::default(),
+            stuck: None,
         }
     }
 
@@ -5311,6 +6336,45 @@ mod tests {
     /// that ends with an error after doing all the work. The last iteration is
     /// spent asking the model to say what it found, so the person gets the
     /// partial result rather than nothing.
+    /// A run working to a plan is not cut off at the plain budget while its items
+    /// keep getting done; it is stopped as stuck when they stop getting done, and
+    /// a call going in circles stops it too.
+    #[test]
+    fn a_plan_run_goes_on_while_it_makes_progress_and_stops_when_it_does_not() {
+        let fleet = Fleet::new();
+        let run = fleet.open("conv", CancelFlag::default(), None, 0);
+        let limits = RunLimits { max_iterations: 12, plan_ceiling: Some(100), ..RunLimits::default() };
+        let mut st = state(vec![user("write the report")]);
+        st.plan_state = (7, 0, true);
+        // Twenty steps, an item done every five: well past 12, and never stuck.
+        for step in 0..20 {
+            if step % 5 == 0 {
+                st.progress_at = st.charged();
+            }
+            open_turn(&run, &limits, true, &mut st, &());
+            assert!(st.wrap_up.is_none(), "step {step}");
+            st.iteration += 1;
+        }
+        // Then ten steps with nothing done.
+        st.progress_at = st.charged();
+        st.iteration += NO_PROGRESS_STEPS;
+        open_turn(&run, &limits, true, &mut st, &());
+        assert_eq!(st.wrap_up, Some(StopReason::Stuck));
+        assert!(content(st.messages.last().unwrap()).contains("without an item of the plan getting done"));
+
+        // Without a plan the plain budget holds.
+        let mut plain = state(vec![user("a question")]);
+        plain.iteration = 11;
+        open_turn(&run, &limits, true, &mut plain, &());
+        assert_eq!(plain.wrap_up, Some(StopReason::MaxSteps));
+
+        // Going in circles stops a run at once, plan or not.
+        let mut circles = state(vec![user("x")]);
+        circles.stuck = Some("`web_search` was called 3 times the same way and came back the same".into());
+        open_turn(&run, &limits, true, &mut circles, &());
+        assert_eq!(circles.wrap_up, Some(StopReason::Stuck));
+    }
+
     #[test]
     fn running_out_of_steps_buys_one_closing_turn_rather_than_an_abort() {
         let fleet = Fleet::new();
@@ -5352,6 +6416,7 @@ mod tests {
             max_iterations: 50,
             deadline: Some(std::time::Instant::now() - std::time::Duration::from_secs(1)),
             max_depth: 0,
+            plan_ceiling: None,
         };
         let mut st = state(vec![user("find it")]);
 
@@ -5811,17 +6876,50 @@ mod tests {
     #[test]
     fn a_skill_named_as_though_it_were_a_tool_becomes_a_skill_call() {
         let line = r#"content-research-writer:outline {topic: "How will AI impact the job market?"}"#;
-        let calls = parse_text_tool_calls(&format!("```tool\n{line}\n```"), &registry()).expect("parses");
+        let calls = parse_text_tool_calls(&format!("```tool\n{line}\n```"), &registry(), &[]).expect("parses");
         assert_eq!(calls[0].name, "skill");
         assert_eq!(calls[0].arguments, r#"{"name":"content-research-writer"}"#);
     }
 
     /// The same confusion in JSON form.
     #[test]
+    fn a_tool_call_written_as_xml_is_made() {
+        let text = "<tool_call>
+<function=plan>
+<parameter=updates>
+[{\"index\": 1, \"status\": \"doing\"}]
+</parameter>
+</function>
+</tool_call>
+";
+        assert!(parse_text_tool_calls(text, &registry(), &[]).is_none(), "plan is not offered");
+        let calls = parse_text_tool_calls(text, &registry(), &["plan".to_string()]).expect("parses");
+        assert_eq!(calls[0].name, "plan");
+        assert_eq!(calls[0].arguments, r#"{"updates":[{"index":1,"status":"doing"}]}"#);
+        let search = parse_text_tool_calls(
+            "<tool_call><function=web_search><parameter=query>ai in marketing</parameter></function></tool_call>",
+            &registry(),
+            &[],
+        )
+        .expect("parses");
+        assert_eq!(search[0].arguments, r#"{"query":"ai in marketing"}"#);
+        // Held back while it streams, from the first character of the tag.
+        assert_eq!(safe_prefix("Sure.
+<tool", &[]), "Sure.
+".len());
+        assert_eq!(safe_prefix("Sure.
+<tool_call>
+<function=pl", &[]), "Sure.
+".len());
+        assert_eq!(safe_prefix("a < b", &[]), "a < b".len());
+    }
+
+    #[test]
     fn a_skill_named_in_json_becomes_a_skill_call() {
         let calls = parse_text_tool_calls(
             r#"{"name": "content-research-writer", "parameters": {"topic": "x"}}"#,
             &registry(),
+            &[],
         )
         .expect("parses");
         assert_eq!(calls[0].name, "skill");
@@ -5839,7 +6937,7 @@ mod tests {
             mcp: HashMap::new(),
             skills: vec!["content-research-writer".to_string()],
         };
-        assert!(parse_text_tool_calls("content-research-writer:outline {}", &without).is_none());
+        assert!(parse_text_tool_calls("content-research-writer:outline {}", &without, &[]).is_none());
     }
 
     /// A skill name is kebab-case, so the narration check has to keep hyphens
@@ -5863,7 +6961,7 @@ mod tests {
         assert!(shown.ends_with("I'll use the tool.\n\n"), "prose is still shown live: {shown:?}");
         assert!(held.starts_with("```tool"), "the call is withheld: {held:?}");
 
-        let calls = parse_text_tool_calls(held, &registry()).expect("the held tail parses as a call");
+        let calls = parse_text_tool_calls(held, &registry(), &[]).expect("the held tail parses as a call");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "skill");
         assert_eq!(calls[0].arguments, r#"{"name":"content-research-writer"}"#);
@@ -5900,7 +6998,7 @@ mod tests {
         let cut = safe_prefix(turn, &tool_names());
         assert_eq!(&turn[..cut], "I'll search for that.\n");
 
-        let calls = parse_text_tool_calls(&turn[cut..], &registry()).expect("parses");
+        let calls = parse_text_tool_calls(&turn[cut..], &registry(), &[]).expect("parses");
         assert_eq!(calls[0].name, "web_search");
     }
 
@@ -5916,11 +7014,11 @@ mod tests {
     /// The bare argument binds to the tool's single required property.
     #[test]
     fn parses_a_bare_invocation_line() {
-        let calls = parse_text_tool_calls("skill content-research-writer", &registry()).expect("parses");
+        let calls = parse_text_tool_calls("skill content-research-writer", &registry(), &[]).expect("parses");
         assert_eq!(calls[0].name, "skill");
         assert_eq!(calls[0].arguments, r#"{"name":"content-research-writer"}"#);
 
-        let fenced = parse_text_tool_calls("```\nskill(content-research-writer)\n```", &registry()).expect("parses");
+        let fenced = parse_text_tool_calls("```\nskill(content-research-writer)\n```", &registry(), &[]).expect("parses");
         assert_eq!(fenced[0].arguments, r#"{"name":"content-research-writer"}"#);
     }
 
@@ -5929,13 +7027,13 @@ mod tests {
     #[test]
     fn a_sentence_about_a_tool_is_not_a_call() {
         let r = registry();
-        assert!(parse_text_tool_calls("I could use skill to read the instructions first.", &r).is_none());
-        assert!(parse_text_tool_calls("skill", &r).is_none());
-        assert!(parse_text_tool_calls("Skills are useful here.", &r).is_none());
+        assert!(parse_text_tool_calls("I could use skill to read the instructions first.", &r, &[]).is_none());
+        assert!(parse_text_tool_calls("skill", &r, &[]).is_none());
+        assert!(parse_text_tool_calls("Skills are useful here.", &r, &[]).is_none());
         // The case that forced the "fenced, or nothing but the call" guard: a
         // paragraph whose line happens to open on a tool's name.
         let paragraph = "Here is how it works.\nweb_search works.\nThat is all.";
-        assert!(parse_text_tool_calls(paragraph, &r).is_none());
+        assert!(parse_text_tool_calls(paragraph, &r, &[]).is_none());
     }
 
     /// The nudge fires only when an advertised tool name appears as *code* —

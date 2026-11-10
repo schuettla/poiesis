@@ -18,6 +18,7 @@ import ProjectsOverview from "./routes/ProjectsOverview";
 import PermissionPanel from "./components/SidePanel/PermissionPanel";
 import ContextPanel from "./components/Context/ContextPanel";
 import MediaConsentDialog from "./components/Confirm/MediaConsentDialog";
+import PresetDialog from "./components/Self/PresetDialog";
 import ImageLightbox from "./components/Conversation/ImageLightbox";
 import CommandPalette from "./components/CommandPalette/CommandPalette";
 import "./App.css";
@@ -169,6 +170,7 @@ export default function App() {
       <PermissionPanel />
       <ContextPanel />
       <MediaConsentDialog />
+      <PresetDialog />
       <ImageLightbox />
       <CommandPalette />
     </div>

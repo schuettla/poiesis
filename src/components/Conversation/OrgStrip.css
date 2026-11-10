@@ -1,0 +1,207 @@
+/* `WRK-9`: the organization as one line above the answer. Ink only; every mark is
+   also a word in the title or the label, and under reduced motion nothing moves. */
+.org-strip {
+  appearance: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 6px 12px;
+  background: none;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  text-align: left;
+  cursor: pointer;
+}
+.org-strip:hover,
+.org-strip:focus-visible {
+  color: var(--ink);
+  background: var(--fill-hover);
+}
+.org-name {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: 1px;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.org-belt {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+}
+.org-item {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 6.5em;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+/* The belt: a thin line from one dot to the next. */
+.org-item + .org-item {
+  position: relative;
+  margin-left: 14px;
+}
+.org-item + .org-item::before {
+  content: "";
+  position: absolute;
+  top: 0.7em;
+  left: -14px;
+  width: 14px;
+  border-top: 1px solid var(--ink-faint);
+}
+.org-dot {
+  line-height: 1.4;
+  font-size: var(--fs-timeline);
+  color: var(--ink);
+}
+.org-item.todo .org-dot,
+.org-item.dropped .org-dot {
+  color: var(--ink-faint);
+}
+.org-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-faint);
+}
+/* `WRK-12`: Command & Control's node, and Mission Command's gate. Both sit on the same belt
+   as the dots, in ink, with a word. */
+.org-you,
+.org-gate {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  color: var(--ink);
+}
+.org-you {
+  margin-right: 14px;
+}
+.org-gate {
+  position: relative;
+  margin-left: 14px;
+}
+.org-gate::before {
+  content: "";
+  position: absolute;
+  top: 0.7em;
+  left: -14px;
+  width: 14px;
+  border-top: 1px solid var(--ink-faint);
+}
+/* `WRK-14`: who has an item, under its dot. */
+.org-by {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-muted);
+}
+/* Swarm: the dots side by side on a board, no line between them. */
+.org-strip.shape-swarm .org-belt {
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.org-strip.shape-swarm .org-item + .org-item {
+  margin-left: 0;
+}
+.org-strip.shape-swarm .org-item + .org-item::before {
+  display: none;
+}
+.org-who {
+  flex: none;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+@media (prefers-reduced-motion: no-preference) {
+  /* Done: the strip settles into the answer, a short contraction. */
+  .org-strip.settled {
+    animation: org-contract 0.5s var(--ease-out) 1;
+  }
+}
+@keyframes org-contract {
+  from {
+    transform: scaleY(1.25);
+    opacity: 0.6;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+/* In the head of the plan card (`PlanCard`): one line beside "My plan", no frame
+   of its own, at the right. The words under the dots stay in each dot's title and
+   label; the line holds the glyph, the name and the dots. */
+.plan-head .org-strip {
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+  margin: 0 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: var(--radius);
+}
+.plan-head .org-name {
+  padding-top: 0;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.plan-head .org-strip:hover .org-name {
+  color: var(--ink);
+}
+.plan-head .org-belt {
+  align-items: center;
+}
+.plan-head .org-label,
+.plan-head .org-by {
+  display: none;
+}
+.plan-head .org-who {
+  flex-direction: row;
+  gap: 8px;
+}
+.plan-head .org-strip.settled {
+  animation: none;
+}
+/* The head stays one line: the strip gives way (its belt clips) before it would
+   wrap under "My plan" and float in the middle of the card. */
+.plan-head:has(.org-strip) {
+  flex-wrap: nowrap;
+}
+/* A dot never deforms: the "revised" note gives way first, and a long belt clips
+   at its end rather than squeezing its dots together. */
+.plan-head .org-item {
+  flex: none;
+}
+.plan-head .plan-revised {
+  flex-shrink: 8;
+}
+.plan-head .org-belt {
+  flex: none;
+}
+.plan-head .org-strip {
+  overflow: hidden;
+}

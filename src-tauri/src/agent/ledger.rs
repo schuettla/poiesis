@@ -27,6 +27,18 @@ struct Inner {
     last_check: u64,
     clock: u64,
     nudged: bool,
+    /// `WRK-1`: how check-shaped tasks ended since the loop last looked.
+    results: Vec<CheckResult>,
+}
+
+/// `WRK-1`: how one check ended, for the loop's way of working. `signature` is
+/// what identifies the failure (the first thing it complained about), so the same
+/// problem twice can be told from two different ones.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckResult {
+    pub label: String,
+    pub passed: bool,
+    pub signature: String,
 }
 
 #[derive(Default)]
@@ -124,9 +136,31 @@ impl Ledger {
         !inner.edited.is_empty() && inner.last_check <= inner.last_edit
     }
 
+    /// `WRK-5`: the run started fresh, so nothing it read is in front of it any
+    /// more. Edits are against a guess again until the file is read again.
+    pub fn forget_reads(&self) {
+        self.0.lock().unwrap().reads.clear();
+    }
+
     pub fn edited_count(&self) -> usize {
         self.0.lock().unwrap().edited.len()
     }
+
+    /// `WRK-1`: a check-shaped task ended, passed or not. A task the user stopped
+    /// is neither, and is not recorded.
+    pub fn record_check_result(&self, label: &str, passed: bool, signature: &str) {
+        self.0.lock().unwrap().results.push(CheckResult {
+            label: label.to_string(),
+            passed,
+            signature: signature.to_string(),
+        });
+    }
+
+    /// `WRK-1`: what checks ended since the last call, oldest first.
+    pub fn take_check_results(&self) -> Vec<CheckResult> {
+        std::mem::take(&mut self.0.lock().unwrap().results)
+    }
+
 }
 
 #[cfg(test)]

@@ -108,6 +108,8 @@ function Location() {
  */
 export default function TopBar() {
   const view = useAppStore((s) => s.view);
+  const runLive = useAppStore((s) => !!(s.activeConversationId && s.runSummaries[s.activeConversationId]?.live));
+  const openOrganization = useAppStore((s) => s.openOrganization);
   const { items } = useLiveItems();
   // Exactly the condition `TabStrip` draws under, asked here so the two cannot
   // both claim the row — the strip names this chat when it is showing.
@@ -119,7 +121,14 @@ export default function TopBar() {
     <div className={`topbar ${framelessWindow() ? "is-titlebar" : ""}`} onMouseDown={onTitleBarMouseDown}>
       <div className="topbar-left">
         <div className="brand">
-          <PoiesisMark />
+          {runLive ? (
+            // `WRK-15`: while a run is going, the mark opens how I am organised.
+            <button className="brand-mark" aria-label="Show how this chat is coordinated" onClick={openOrganization}>
+              <PoiesisMark />
+            </button>
+          ) : (
+            <PoiesisMark />
+          )}
           {/* Matches the mockup's compact wordmark — the fuller "Poiesis
               Agent" name still applies everywhere outside this cramped
               232px-wide segment (About, window title, and so on). */}

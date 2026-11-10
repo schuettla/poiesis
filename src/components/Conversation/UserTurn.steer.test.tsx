@@ -44,7 +44,10 @@ const buttons = () => Array.from(container.querySelectorAll<HTMLButtonElement>("
 describe("a message sent mid-run", () => {
   it("shows the class as a quiet tag, in words a person uses", () => {
     show(turn({ midRun: "pending", steer: { kind: "add", p: 0.82, decision: "d1" } }));
-    expect(tag()?.textContent).toBe("addition");
+    expect(tag()?.textContent).toBe("read as an addition");
+    expect(container.querySelector(".mid-run-mark")?.textContent, "one line, not two tags").toBe(
+      "sending…, read as an addition"
+    );
     expect(tag()?.getAttribute("title")).toBe("Read as an addition (0.82)");
     expect(container.querySelector(".steer-stop")).toBeNull();
   });
@@ -55,10 +58,10 @@ describe("a message sent mid-run", () => {
       return tag()?.textContent;
     };
     expect(["stop", "redirect", "add", "question"].map((k) => words(k as "stop"))).toEqual([
-      "stop",
-      "redirect",
-      "addition",
-      "question",
+      "read as a stop",
+      "read as a redirect",
+      "read as an addition",
+      "read as a question",
     ]);
   });
 
@@ -76,7 +79,7 @@ describe("a held stop", () => {
 
   it("says it was not sent and asks, with both answers", () => {
     show(held);
-    expect(container.querySelector(".mid-run-mark")?.textContent).toBe("not sent yet");
+    expect(container.querySelector(".mid-run-mark")?.textContent).toBe("not sent yet, read as a stop");
     expect(container.querySelector(".steer-stop")?.getAttribute("aria-label")).toBe("Stop the run?");
     expect(container.querySelector(".steer-stop-q")?.textContent).toBe("Stop the run?");
     expect(buttons().map((b) => b.textContent)).toEqual(["Stop", "Keep going"]);

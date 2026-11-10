@@ -77,6 +77,8 @@
   --fs-answer: 15.5px;
   --lh-answer: 1.72;
   --measure: 64ch;
+  /* Width of the message column and the composer (Settings → Chat width). */
+  --chat-width: 700px;
   /* User-adjustable reading size (Settings, §5.5). Scales the serif reading
      column; content reflows rather than truncating. */
   --reading-scale: 1;

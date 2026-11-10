@@ -440,6 +440,17 @@ async fn run_streamed(
     let _ = ctx.db.log_activity(Some(ctx.conversation_id), "task", &format!("ran {label}: {outcome}"));
     if kind != TaskKind::Other {
         ctx.ledger.record_check();
+        // `WRK-1`: the line stops on a check that fails, and starts again when
+        // the same check passes. A task the user stopped is neither.
+        if !out.cancelled {
+            let passed = !out.timed_out && out.exit_code == Some(0);
+            let signature = report
+                .items
+                .first()
+                .map(|d| d.message.clone())
+                .unwrap_or_else(|| outcome.clone());
+            ctx.ledger.record_check_result(label, passed, &signature);
+        }
     }
 
     if out.cancelled {

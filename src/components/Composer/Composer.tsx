@@ -4,11 +4,13 @@ import { useAppStore, useExpert, useSelectedModel } from "../../lib/store";
 import { detectIntent } from "../../lib/mediaIntent";
 import type { Attachment, ContextRef, Model, SendOptions } from "../../lib/types";
 import ModelControl from "./ModelControl";
-import ContextChip from "../Context/ContextChip";
 import ImageByPath from "../Conversation/ImageByPath";
 import ConfirmDialog from "../Confirm/ConfirmDialog";
 import CommandMenu from "./CommandMenu";
 import PlusMenu from "./PlusMenu";
+import MentionMenu from "./MentionMenu";
+import { useMentionInput } from "./useMentionInput";
+import { libraryAdd } from "../../lib/mentions";
 import ModifierChips from "./ModifierChips";
 import ComposerHintLine from "./ComposerHintLine";
 import { useComposerHint } from "./useComposerHint";
@@ -16,11 +18,13 @@ import LastTimeLine from "./LastTimeLine";
 import { useLastTimeHint } from "./useLastTimeHint";
 import { experimentOn } from "../../lib/experiments";
 import ModeChips from "./ModeChips";
+import ChatSetup from "./ChatSetup";
 import RunBar from "./RunBar";
 import SuggestionChip from "./SuggestionChip";
 import BtwCard from "./BtwCard";
 import { useCommandInput } from "./useCommandInput";
 import VoiceControl from "../Voice/VoiceControl";
+import { ChevronIcon, CloseIcon, FileIcon, ImageIcon, MessageIcon, PlayIcon, SlashIcon } from "../Icons/Icons";
 import { joinSpoken } from "../../lib/voice/dictation";
 import "./Composer.css";
 
@@ -177,12 +181,32 @@ export default function Composer({
   const showImplicitRef =
     wantsMedia && !!lastMediaArtifact && lastMediaArtifact.conversationId === activeConversationId;
 
+  // `@`: files from the working folder and things from the library. A library
+  // item lands where the `+` menu puts it; a file stays in the text as `@path`.
+  const mention = useMentionInput({
+    value,
+    setValue,
+    inputRef,
+    onLibrary: (a) => {
+      const add = libraryAdd(a);
+      if ("attachment" in add) addAttachment(add.attachment);
+      else addRef(add.ref);
+    },
+  });
+
+  function addRef(r: ContextRef) {
+    setRefs((list) => (list.some((x) => x.id === r.id) ? list : [...list, r]));
+  }
+
   function sendWithExtras(text: string, opts?: SendOptions) {
-    const extras: SendOptions = { ...opts, refs: refs.length ? refs : undefined };
+    // The files still mentioned in the words that go out, after the chips.
+    const all = [...refs, ...mention.refsFor(text)];
+    const extras: SendOptions = { ...opts, refs: all.length ? all : undefined };
     onSend(text, attachments, extras.skill || extras.refs ? extras : undefined);
     setValue("");
     setAttachments([]);
     setRefs([]);
+    mention.clear();
   }
 
   // `CMP-1`: the `/` menu, its query, its keys and running a command live in one
@@ -467,6 +491,16 @@ export default function Composer({
     else setTurnModifier({ asAddition: true });
   }
 
+  // One notice at a time, in one slot: what just failed first, then what the
+  // drop said, then the standing model notice. Each still has its own dismiss.
+  const notice = cmd.error
+    ? { text: cmd.error, dismiss: cmd.clearError }
+    : dropNotice
+      ? { text: dropNotice, dismiss: () => setDropNotice(null) }
+      : modelNotice
+        ? { text: modelNotice, dismiss: dismissModelNotice }
+        : null;
+
   const placeholder = asking
     ? "Answer my question, in your own words or from the choices above"
     : planRevising
@@ -479,53 +513,23 @@ export default function Composer({
       ? "Describe a video…"
       : mediaTarget === "image"
         ? "Describe an image…"
-        : "Message Poiesis Agent  ·  / for commands  ·  + to add files";
+        : "Message Poiesis";
 
   return (
     <div className={`composer-wrap ${dragOver ? "drag-over" : ""}`}>
       <div className="composer-col">
         {/* `RUN`: what the run is doing and did, above everything else here. */}
         <RunBar />
-        {/* `AGC-2`: at most one, and only for what could run right now. */}
-        <SuggestionChip />
         {/* `BTW-UI-1`: a side answer, outside the conversation. */}
         <BtwCard />
-        {(attachments.length > 0 || refs.length > 0) && (
-          <div className="attachment-row">
-            {attachments.map((a) => (
-              <span className="attachment-chip" key={a.id}>
-                <span className="attachment-kind">{a.kind === "image" ? "▣" : "▤"}</span>
-                {a.name}
-                <button
-                  className="attachment-remove"
-                  aria-label={`Remove ${a.name}`}
-                  onClick={() => removeAttachment(a.id)}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-            {refs.map((r) => (
-              <span className="attachment-chip" key={`${r.kind}:${r.id}`}>
-                <span className="attachment-kind">{r.kind === "conversation" ? "↳" : "▤"}</span>
-                {r.label}
-                <button
-                  className="attachment-remove"
-                  aria-label={`Remove ${r.label}`}
-                  onClick={() => setRefs((list) => list.filter((x) => x !== r))}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
 
         {/* Path E's target bar (`PIK-2`): what sending does now, and one click
             back to a normal chat. */}
         {mediaTarget !== null && (
           <div className="media-target-bar">
-            <span className="media-target-glyph" aria-hidden="true">◈</span>
+            <span className="media-target-glyph" aria-hidden="true">
+              {mediaTarget === "video" ? <PlayIcon size={14} /> : <ImageIcon size={14} />}
+            </span>
             <span className="media-target-label">
               {mediaTarget === "video" ? "Video" : "Image"} · {selected.name}
             </span>
@@ -567,7 +571,8 @@ export default function Composer({
               </button>
             )}
             <button className="media-target-back" onClick={backToChat}>
-              ← Back to chat
+              <ChevronIcon dir="left" size={11} strokeWidth={1.6} />
+              Back to chat
             </button>
           </div>
         )}
@@ -648,7 +653,9 @@ export default function Composer({
             silent hijack, so it always names the model and offers a dismiss. */}
         {chipModality !== null && (
           <div className={`media-intent-chip ${intent.confidence === "low" ? "low-confidence" : ""}`}>
-            <span className="mic-glyph" aria-hidden="true">{chipModality === "video" ? "🎬" : "🖼"}</span>
+            <span className="mic-glyph" aria-hidden="true">
+              {chipModality === "video" ? <PlayIcon size={14} /> : <ImageIcon size={14} />}
+            </span>
             <span className="mic-label">
               {intent.confidence === "low"
                 ? `${chipModality === "video" ? "Video" : "Image"}?`
@@ -683,51 +690,61 @@ export default function Composer({
           </div>
         )}
 
-        {/* The implicit reference (`EDT-2`): always shown before send, never
-            silent — "make it warmer" is unambiguous to the user, not just the
-            model. */}
-        {showImplicitRef && lastMediaArtifact && (
-          <div className="implicit-ref-chip">
-            <ImageByPath path={lastMediaArtifact.path} className="implicit-ref-thumb" alt="Refining this image" />
-            <span className="implicit-ref-label">↳ refining</span>
-            <button
-              className="implicit-ref-remove"
-              aria-label="Don't refine from this image"
-              onClick={clearImplicitReference}
-            >
-              ×
-            </button>
-          </div>
-        )}
+        {/* Everything that goes out with the next message alone, in one row:
+            files and pictures (`+`, paste, drop), an earlier chat or a library
+            item (`CMP-3`), the picture being refined (`EDT-2`, always shown,
+            never silent), and what this message has been told to do
+            (`CMP-6`). Empty, the row takes no space. */}
+        <div className="next-row" role="group" aria-label="For this message only">
+          {attachments.map((a) => (
+            <span className="attachment-chip" key={a.id}>
+              <span className="attachment-kind" aria-hidden="true">
+                {a.kind === "image" ? <ImageIcon size={13} /> : <FileIcon size={13} />}
+              </span>
+              <span className="attachment-name">{a.name}</span>
+              <button className="attachment-remove" aria-label={`Remove ${a.name}`} onClick={() => removeAttachment(a.id)}>
+                <CloseIcon size={10} strokeWidth={1.6} />
+              </button>
+            </span>
+          ))}
+          {refs.map((r) => (
+            <span className="attachment-chip" key={`${r.kind}:${r.id}`}>
+              <span className="attachment-kind" aria-hidden="true">
+                {r.kind === "conversation" ? <MessageIcon size={13} /> : <FileIcon size={13} />}
+              </span>
+              <span className="attachment-name">{r.label}</span>
+              <button
+                className="attachment-remove"
+                aria-label={`Remove ${r.label}`}
+                onClick={() => setRefs((list) => list.filter((x) => x !== r))}
+              >
+                <CloseIcon size={10} strokeWidth={1.6} />
+              </button>
+            </span>
+          ))}
+          {showImplicitRef && lastMediaArtifact && (
+            <span className="attachment-chip implicit-ref-chip">
+              <ImageByPath path={lastMediaArtifact.path} className="implicit-ref-thumb" alt="Refining this image" />
+              <span className="attachment-name">Refining this</span>
+              <button
+                className="attachment-remove"
+                aria-label="Don't refine from this image"
+                onClick={clearImplicitReference}
+              >
+                <CloseIcon size={10} strokeWidth={1.6} />
+              </button>
+            </span>
+          )}
+          <ModifierChips />
+        </div>
 
-        {/* `CMP-6`: what the next message alone has been told to do. */}
-        <ModifierChips />
-
-        {/* `CMP-9`: a command that couldn't run says why, in the same quiet
-            voice as the model notice. */}
-        {cmd.error && (
+        {/* `CMP-9`, `MOD-3`: a command that couldn't run, a file that couldn't
+            be attached, or a default model that couldn't be used. One slot. */}
+        {notice && (
           <div className="composer-model-notice" role="status">
-            <span>{cmd.error}</span>
-            <button className="implicit-ref-remove" aria-label="Dismiss" onClick={cmd.clearError}>
-              ×
-            </button>
-          </div>
-        )}
-
-        {/* `MOD-3`: said once when the default model couldn't be used. */}
-        {dropNotice && (
-          <div className="composer-model-notice" role="status">
-            <span>{dropNotice}</span>
-            <button className="implicit-ref-remove" aria-label="Dismiss" onClick={() => setDropNotice(null)}>
-              ×
-            </button>
-          </div>
-        )}
-        {modelNotice && (
-          <div className="composer-model-notice" role="status">
-            <span>{modelNotice}</span>
-            <button className="implicit-ref-remove" aria-label="Dismiss" onClick={dismissModelNotice}>
-              ×
+            <span>{notice.text}</span>
+            <button className="attachment-remove" aria-label="Dismiss" onClick={notice.dismiss}>
+              <CloseIcon size={10} strokeWidth={1.6} />
             </button>
           </div>
         )}
@@ -738,14 +755,19 @@ export default function Composer({
         <div className="composer">
           <div className="composer-input-wrap">
             {cmd.model.popover && <div className="composer-menu-backdrop" onClick={cmd.closePopover} />}
-            <CommandMenu
-              model={cmd.model}
-              onHover={cmd.setIndex}
-              onChoose={cmd.activateAt}
-              onControl={cmd.controlAt}
-              onBack={cmd.goBack}
-              onFilter={cmd.model.popover ? cmd.setFilter : undefined}
-            />
+            {/* The `@` list wins while a mention is being typed, so the two never overlap. */}
+            {mention.model.open ? (
+              <MentionMenu model={mention.model} onHover={mention.setIndex} onChoose={mention.choose} />
+            ) : (
+              <CommandMenu
+                model={cmd.model}
+                onHover={cmd.setIndex}
+                onChoose={cmd.activateAt}
+                onControl={cmd.controlAt}
+                onBack={cmd.goBack}
+                onFilter={cmd.model.popover ? cmd.setFilter : undefined}
+              />
+            )}
             <div className="composer-field">
             {/* While a command is being typed, the rest of the best match, faint
                 after the cursor. Tab or → takes it. */}
@@ -761,16 +783,22 @@ export default function Composer({
               placeholder={placeholder}
               aria-label={mediaTarget === "video" ? "Describe a video to create" : mediaTarget === "image" ? "Describe an image to create" : "Message Poiesis Agent"}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(e) => {
+                setValue(e.target.value);
+                mention.track(e.target);
+              }}
+              onSelect={(e) => mention.track(e.currentTarget)}
               onPaste={onPaste}
               autoComplete="off"
               role="combobox"
-              aria-expanded={cmd.model.open}
-              aria-controls={cmd.model.listId}
-              aria-activedescendant={cmd.activeId}
+              aria-expanded={mention.model.open || cmd.model.open}
+              aria-controls={mention.model.open ? mention.model.listId : cmd.model.listId}
+              aria-activedescendant={mention.model.open ? mention.activeId : cmd.activeId}
               onKeyDown={(e) => {
-                // The command list owns the arrows, Tab, Escape and Enter while
-                // it is open — otherwise Enter would send "/we" as a message.
+                // The `@` list, then the command list, own the arrows, Tab,
+                // Escape and Enter while open — otherwise Enter would send
+                // "@src/a" or "/we" as a message.
+                if (mention.onKeyDown(e)) return;
                 if (cmd.onKeyDown(e)) return;
                 // `PLF-5`: Shift+Tab is the one mode-cycling key. It flips the
                 // Plan first chip for this message and does nothing else.
@@ -804,6 +832,8 @@ export default function Composer({
           {/* `SEE-3`: what was read in the message, before the send button. */}
           <ComposerHintLine hint={shownHint} onTake={takeHint} onDismiss={hintFx.dismiss} />
           <LastTimeLine offer={shownLastTime} onTake={takeLastTime} onDismiss={lastTimeFx.dismiss} />
+          {/* `AGC-2`: a suggested command takes the same one slot, last. */}
+          {!shownHint && !shownLastTime && <SuggestionChip />}
           {busy && canSteer && value.trim() ? (
             // Typing during a run means you have something to say to it, not
             // that you want it stopped — so the same key sends, and Stop is
@@ -836,8 +866,7 @@ export default function Composer({
           )}
         </div>
         {/* Under the box. Left: add to it (`+`), do something (`/`), say
-            it (mic, and voice mode behind its chevron), then what I'm working
-            from. Right: which model answers, how hard it thinks, and how full
+            it (mic), talk (voice mode), and how this chat is set up. Right: which model answers, how hard it thinks, and how full
             its window is — one control (`ModelControl`). Everything here stays
             mounted in media mode too (`PIK-2`): making a picture is not
             leaving the conversation. */}
@@ -847,7 +876,7 @@ export default function Composer({
               <PlusMenu
                 onAttachFiles={attach}
                 onAddAttachment={addAttachment}
-                onAddRef={(r) => setRefs((list) => (list.some((x) => x.id === r.id) ? list : [...list, r]))}
+                onAddRef={addRef}
                 pending={attachments.length > 0 || refs.length > 0}
               />
               {/* `CMP-4`: `+` adds to the message, `/` does something. The
@@ -860,16 +889,18 @@ export default function Composer({
                 title="Commands  ( / )"
                 onClick={cmd.openFromButton}
               >
-                /
+                <SlashIcon size={16} strokeWidth={1.5} />
               </button>
               <VoiceControl
                 onText={(t) => setValue((v) => joinSpoken(v, t))}
                 onSendText={(t) => sendWithExtras(joinSpoken(value, t))}
                 canSend={!busy}
               />
+              {/* How I work, what I'm working from, Workspace and Persona. */}
+              <ChatSetup />
             </div>
-            <ContextChip />
-            <ModeChips />
+            {/* What takes something away from me stays readable without a click. */}
+            <ModeChips only={["tools", "tier", "external"]} />
           </div>
           <div className="cf-right">
             <ModelControl

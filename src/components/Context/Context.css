@@ -1,34 +1,5 @@
-/* PRES-5-style ambient line, sitting just below the composer box — a
-   non-crucial detail, not another control competing in the input row. */
-.context-chip-wrap {
-  position: relative;
-  display: flex;
-  justify-content: flex-start;
-  min-width: 0;
-  padding: 4px 4px 0;
-}
-
-.context-chip {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: none;
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: 3px 6px;
-  font-family: var(--font-sans);
-  font-size: var(--fs-caption);
-  color: var(--ink-faint);
-  cursor: pointer;
-}
-.context-chip:hover {
-  color: var(--ink);
-  background: var(--fill-hover);
-}
-
-/* Same hover as the model/reasoning pickers and the context chip under the
-   composer (`.model-picker.compact .model-picker-trigger`): no border, a filled
+/* Same hover as the model/reasoning pickers under the composer
+   (`.model-picker.compact .model-picker-trigger`): no border, a filled
    background and darker ink, so every quiet control answers the pointer the same
    way instead of plain text links drawing an outline. */
 .why-link {

@@ -36,6 +36,8 @@ pub mod tidy;
 pub mod updater;
 pub mod usage;
 pub mod verify;
+pub mod ways;
+pub mod ways_self;
 #[cfg(feature = "voice")]
 pub mod voice;
 

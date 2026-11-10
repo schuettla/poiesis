@@ -7,12 +7,17 @@ import RunText from "../Conversation/RunText";
 import { ContinueThere, EngineChips, UndoHandover } from "../Conversation/EngineChips";
 import Orb from "../Orb/Orb";
 import { orbForSubRun } from "../Orb/orbState";
+import OrgDiagram from "./OrgDiagram";
 
 /**
  * `SUB-UI-2`, split by `SHL-22`: the Agents sub-view is the run list, an
  * overview that lives in the sidebar. One child's live transcript is a single
  * item, so pressing a row opens it as a tab in the strip (`RunView`), at the
  * width of the conversation rather than squeezed under the list.
+ *
+ * `WRK-15`: it is also the Coordination view. The same agents, now inside their
+ * organization: above the list, a diagram with a shape for the way of working, drawn
+ * from the run's own events (`OrgDiagram`).
  *
  * This is what makes a child feel like an agent rather than a spinner. A row
  * tells you one is working; only opening it tells you what it is actually
@@ -64,17 +69,22 @@ export default function AgentsPanel({ conversationId }: { conversationId: string
     .filter((r) => r.parentConversationId === conversationId)
     .sort((a, b) => a.startedAt - b.startedAt);
 
-  if (runs.length === 0) {
-    return (
-      <div className="wb-empty">
-        <p className="wb-empty-title">No agents yet</p>
-        <p className="wb-empty-blurb">I have not handed any work out in this conversation yet.</p>
-      </div>
-    );
-  }
-
   return (
     <div className="agents-panel">
+      <OrgDiagram conversationId={conversationId} />
+      {runs.length === 0 && (
+        <div className="wb-empty">
+          <p className="wb-empty-title">No agents yet</p>
+          <p className="wb-empty-blurb">I have not handed any work out in this conversation yet.</p>
+        </div>
+      )}
+      {runs.length > 0 && (
+        <div className="agents-list-head">
+          <h3 className="agents-list-title">Agents</h3>
+          <span className="agents-list-count">{runs.length}</span>
+          <p className="agents-list-blurb">Helpers I started for this chat. Open one to follow its work.</p>
+        </div>
+      )}
       <div className="agents-list" aria-label="Agents I started">
         {runs.map((run) => {
           const open = activeItemId === `run:${run.runId}`;
@@ -110,48 +120,56 @@ export function RunView({ run }: { run: SubRun }) {
 
   return (
     <div className="agents-detail">
-      <div className="agents-detail-head">
-        <span className="agents-detail-agent">{run.agent}</span>
-        <EngineChips run={run} />
-        {!ended(run) && (
-          <button className="fleet-action" onClick={() => stopSubRun(run.runId)}>
-            Stop
-          </button>
-        )}
-      </div>
-      {ended(run) && run.engine && (
-        <div className="engine-after">
-          <ContinueThere run={run} />
-          <UndoHandover run={run} />
+      <div className="agents-detail-col">
+        <div className="agents-detail-head">
+          <span className="agents-detail-agent">{run.agent}</span>
+          <span className={`agents-detail-state ${ended(run) ? "done" : "live"}`}>
+            {ended(run) ? "Finished" : "Working"}
+          </span>
+          <EngineChips run={run} />
+          {!ended(run) && (
+            <button className="agents-detail-stop" onClick={() => stopSubRun(run.runId)}>
+              Stop
+            </button>
+          )}
         </div>
-      )}
-      <p className="agents-task">{run.task}</p>
-      {run.steps.length > 0 && <Timeline steps={run.steps} />}
-      {run.text && <RunText text={run.text} streaming={!ended(run)} />}
-      <ChildArtifacts conversationId={run.conversationId} />
-      {!ended(run) && (
-        <form
-          className="agents-steer"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const text = draft.trim();
-            if (!text) return;
-            setDraft("");
-            steerSubRun(run.runId, text);
-          }}
-        >
-          <input
-            value={draft}
-            placeholder={
-              run.engine && !run.engine.can_steer
-                ? "I'll pass this on when it's done with this job"
-                : "Tell this agent something"
-            }
-            onChange={(e) => setDraft(e.target.value)}
-          />
-        </form>
-      )}
-      {run.steerPending && <p className="fleet-note">Sent. It will pick this up after the step it is on.</p>}
+        {ended(run) && run.engine && (
+          <div className="engine-after">
+            <ContinueThere run={run} />
+            <UndoHandover run={run} />
+          </div>
+        )}
+        <section className="agents-task" aria-label="Task">
+          <p className="agents-section-label">Task</p>
+          <p className="agents-task-text">{run.task}</p>
+        </section>
+        {run.steps.length > 0 && <Timeline steps={run.steps} />}
+        {run.text && <RunText text={run.text} streaming={!ended(run)} />}
+        <ChildArtifacts conversationId={run.conversationId} />
+        {!ended(run) && (
+          <form
+            className="agents-steer"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const text = draft.trim();
+              if (!text) return;
+              setDraft("");
+              steerSubRun(run.runId, text);
+            }}
+          >
+            <input
+              value={draft}
+              placeholder={
+                run.engine && !run.engine.can_steer
+                  ? "I'll pass this on when it's done with this job"
+                  : "Tell this agent something"
+              }
+              onChange={(e) => setDraft(e.target.value)}
+            />
+          </form>
+        )}
+        {run.steerPending && <p className="fleet-note">Sent. It will pick this up after the step it is on.</p>}
+      </div>
     </div>
   );
 }

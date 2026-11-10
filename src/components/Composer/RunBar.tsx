@@ -3,6 +3,7 @@ import { stillWorking } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import type { SubRun } from "../../lib/types";
 import ConfirmDialog from "../Confirm/ConfirmDialog";
+import { CloseIcon } from "../Icons/Icons";
 import "./RunBar.css";
 
 /**
@@ -100,11 +101,7 @@ export default function RunBar() {
   const openUsage = useAppStore((s) => s.openUsage);
   const keepChanges = useAppStore((s) => s.keepChanges);
   const undoChanges = useAppStore((s) => s.undoChanges);
-  const resumeLastRun = useAppStore((s) => s.resumeLastRun);
-  const busy = useAppStore((s) => s.busy);
-  // `GOL-UI-1`: the goal this chat is working toward, or ended with.
-  const goal = useAppStore((s) => (s.activeConversationId ? s.goals[s.activeConversationId] : undefined));
-  const stopGoal = useAppStore((s) => s.stopGoal);
+  const requestComposer = useAppStore((s) => s.requestComposer);
   // `AGC-3`: the run is paused on a question for this chat.
   const asking = useAppStore((s) => !!s.pendingQuestion && s.pendingQuestion.convId === s.activeConversationId);
 
@@ -139,49 +136,70 @@ export default function RunBar() {
       });
     }
 
-    // The goal, the user's own: where I am in it, or how it ended.
-    if (goal) {
-      const said = goal.text.length > 60 ? `${goal.text.slice(0, 59).trimEnd()}…` : goal.text;
-      const toLatest = () => {
-        const notes = document.querySelectorAll(".command-note");
-        notes[notes.length - 1]?.scrollIntoView?.({ behavior: "smooth", block: "center" });
-      };
-      // `USE-UI-11`, `SEE-4`: the quick decision's verdict is said in words, `not yet` or
-      // `met`, and its probability is the hover. Only there when the check had one; the
-      // written fallback shows none.
-      const p = goal.lastCheck?.p;
-      const chance = typeof p === "number" ? `Quick decision: ${p.toFixed(2)} that the goal holds` : "";
-      const hover = (words?: string) => [words, chance].filter(Boolean).join("\n");
-      if (goal.status === "active") {
-        out.push({
-          key: "goal",
-          text: goal.checking
-            ? `◎ ${said} · checking`
-            : `◎ ${said} · round ${goal.round} of ${goal.maxRounds}${chance ? " · not yet" : ""}`,
-          title: hover(goal.lastCheck?.next || "Show where I am in this goal"),
-          onClick: toLatest,
-          extra: [{ label: "Stop goal", onClick: () => stopGoal(convId) }],
-        });
-      } else if (goal.status === "met") {
-        out.push({
-          key: "goal",
-          text: `◆ Done: ${goal.lastCheck?.evidence ?? said}${chance ? " · met" : ""}`,
-          title: hover(said),
-          onClick: toLatest,
-        });
-      } else {
-        out.push({
-          key: "goal",
-          text:
-            goal.status === "exhausted"
-              ? `◎ ${said} · not reached in ${goal.maxRounds} rounds`
-              : goal.status === "stalled"
-                ? `◎ ${said} · stalled`
-                : `◎ ${said} · stopped`,
-          title: goal.stalled || goal.lastCheck?.next || said,
-          onClick: toLatest,
-        });
-      }
+    // `WRK-1`: a check is failing and the line is stopped. Before the goal and the
+    // plan, because it is the thing the run is doing about everything else.
+    if (live && summary.stopped) {
+      out.push({
+        key: "stopped",
+        text: `stopped: ${summary.stopped.check} failing`,
+        title: "Go to the plan",
+        onClick: () => {
+          const bands = document.querySelectorAll(".plan-stopped");
+          bands[bands.length - 1]?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+        },
+      });
+    }
+
+    // `WRK-4`: someone who never saw the work is looking at an item.
+    if (live && summary.looking) {
+      out.push({
+        key: "looking",
+        text: `second look at item ${summary.looking.item + 1}`,
+        title: "Go to the item",
+        onClick: () => {
+          const rows = document.querySelectorAll(".plan-item.checking");
+          rows[rows.length - 1]?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+        },
+      });
+    }
+
+    // `WRK-6`: two helpers each trying the item in a copy of the folder.
+    if (live && summary.branching) {
+      out.push({
+        key: "branching",
+        text: "trying two ways",
+        title: "Go to the two ways",
+        onClick: () => {
+          const rows = document.querySelectorAll(".plan-ways");
+          rows[rows.length - 1]?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+        },
+      });
+    }
+
+    // `WRK-12`: what done means, agreed before the work, and how much of it is met. This is
+    // where the goal used to be: `/goal` is Mission Command with its one criterion.
+    const agreed = summary.plan?.criteria ?? [];
+    if (agreed.length && !summary.plan?.awaiting_approval) {
+      const met = agreed.filter((c) => c.met === true).length;
+      out.push({
+        key: "criteria",
+        text: `\u25ce ${met} of ${agreed.length} criteria met`,
+        title: agreed.find((c) => c.met === false && c.why)?.why ?? "Show what done means",
+        onClick: () => {
+          const cards = document.querySelectorAll(".plan-criteria");
+          cards[cards.length - 1]?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+        },
+      });
+    }
+
+    // `WRK-13`: another way of working was asked for; it starts after this item.
+    if (live && summary.switching) {
+      out.push({
+        key: "switching",
+        text: `${summary.switching.name} after this item`,
+        title: "Change how I work",
+        onClick: () => requestComposer("/style "),
+      });
     }
 
     // Plan. Dropped items are not part of the count: a plan that dropped two of
@@ -273,19 +291,17 @@ export default function RunBar() {
     subRuns,
     changes,
     asking,
-    goal,
-    stopGoal,
+    requestComposer,
     setDockView,
     setDockOpen,
     openUsage,
     keepChanges,
   ]);
 
-  const interrupted =
-    !!summary && !summary.live && !!summary.stopReason && summary.stopReason !== "completed";
   const announced = useThrottled(segments.map((s) => s.text).join(", "), ANNOUNCE_MS);
 
-  if (!summary || !convId || (segments.length === 0 && !interrupted)) return null;
+  // "Continue where I stopped" is on the turn's own stopped line, not here.
+  if (!summary || !convId || segments.length === 0) return null;
 
   const shown = narrow ? segments.slice(0, 2) : segments;
   const folded = narrow ? segments.slice(2) : [];
@@ -329,14 +345,6 @@ export default function RunBar() {
             {overflowOpen && <div className="run-bar-popover">{folded.map(render)}</div>}
           </span>
         )}
-        {interrupted && !busy && (
-          <span className="run-bar-segment">
-            <span className="run-bar-sep" aria-hidden="true"> · </span>
-            <button className="run-bar-link run-bar-act" onClick={() => void resumeLastRun()}>
-              Continue where I stopped
-            </button>
-          </span>
-        )}
       </div>
       <button
         className="run-bar-x"
@@ -344,7 +352,7 @@ export default function RunBar() {
         title="Dismiss"
         onClick={() => dismiss(convId)}
       >
-        ×
+        <CloseIcon size={10} strokeWidth={1.6} />
       </button>
       {/* Said, not drawn, and not more than once in a while. */}
       <div className="run-bar-live" role="status" aria-live="polite">

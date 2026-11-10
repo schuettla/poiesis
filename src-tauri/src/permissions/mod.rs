@@ -182,6 +182,11 @@ pub struct PermissionRequest {
     /// decision gave. The line itself has none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason_hover: Option<String>,
+    /// `WRK-11`: what was asked for before this was put to the person, one line:
+    /// "I asked first: your notes say /old is a backup folder; a second look found
+    /// nothing against it." Set when a way of working asked for advice first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advice: Option<String>,
 }
 
 /// The page a `"page"` card shows (`USE-UI-9`): where it is, what the quick check
@@ -238,12 +243,12 @@ pub struct AppTool {
 impl PermissionRequest {
     /// A scope request: "may I reach into this folder at all?"
     pub fn scope(id: String, summary: String, path: String, mode: Mode) -> Self {
-        Self { id, summary, path, mode, diff: None, in_folder: false, capability: None, argv: None, project: None, timeout_secs: None, remember: None, call_kind: None, cap: None, tools: None, engine: None, tool: None, rule: None, page: None, reason: None, reason_hover: None }
+        Self { id, summary, path, mode, diff: None, in_folder: false, capability: None, argv: None, project: None, timeout_secs: None, remember: None, call_kind: None, cap: None, tools: None, engine: None, tool: None, rule: None, page: None, reason: None, reason_hover: None, advice: None }
     }
 
     /// An operation confirm inside the already-attached folder.
     pub fn operation(id: String, summary: String, path: String, mode: Mode, diff: Option<String>) -> Self {
-        Self { id, summary, path, mode, diff, in_folder: true, capability: None, argv: None, project: None, timeout_secs: None, remember: None, call_kind: None, cap: None, tools: None, engine: None, tool: None, rule: None, page: None, reason: None, reason_hover: None }
+        Self { id, summary, path, mode, diff, in_folder: true, capability: None, argv: None, project: None, timeout_secs: None, remember: None, call_kind: None, cap: None, tools: None, engine: None, tool: None, rule: None, page: None, reason: None, reason_hover: None, advice: None }
     }
 
     /// `MCG-3`: a connected app's tool wants to run. `path` is the app's name,
@@ -278,6 +283,7 @@ impl PermissionRequest {
             page: None,
             reason: None,
             reason_hover: None,
+            advice: None,
         }
     }
 
@@ -306,6 +312,7 @@ impl PermissionRequest {
             page: None,
             reason: None,
             reason_hover: None,
+            advice: None,
         }
     }
 
@@ -343,6 +350,7 @@ impl PermissionRequest {
             page: None,
             reason: None,
             reason_hover: None,
+            advice: None,
         }
     }
 
@@ -379,6 +387,7 @@ impl PermissionRequest {
             page: None,
             reason: None,
             reason_hover: None,
+            advice: None,
         }
     }
 
@@ -407,6 +416,7 @@ impl PermissionRequest {
             page: None,
             reason: None,
             reason_hover: None,
+            advice: None,
         }
     }
 
@@ -435,6 +445,7 @@ impl PermissionRequest {
             page: Some(page),
             reason: None,
             reason_hover: None,
+            advice: None,
         }
     }
 
@@ -463,6 +474,7 @@ impl PermissionRequest {
             page: None,
             reason: Some(reason),
             reason_hover: None,
+            advice: None,
         }
     }
 

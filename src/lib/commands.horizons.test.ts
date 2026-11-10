@@ -18,11 +18,8 @@ vi.mock("./api", async (importOriginal) => ({
 
 import { commandViews, parseCommandLine, parsePromptArgs, runCommand } from "./commands";
 import { useAppStore } from "./store";
-import { newGoal } from "./goal";
 import type { McpPromptView } from "./api";
 
-const startGoal = vi.fn(() => Promise.resolve());
-const stopGoal = vi.fn();
 const exportConversation = vi.fn(() => Promise.resolve<string | null>("C:/notes/trip.md"));
 
 function prompt(name: string, over: Partial<McpPromptView> = {}): McpPromptView {
@@ -38,14 +35,11 @@ function prompt(name: string, over: Partial<McpPromptView> = {}): McpPromptView 
 }
 
 beforeEach(() => {
-  startGoal.mockClear();
-  stopGoal.mockClear();
   exportConversation.mockClear();
   getMcpPrompt.mockReset();
   useAppStore.setState({
     skills: [],
     mcpPrompts: [],
-    goals: {},
     turnModifiers: {},
     conversations: [{ id: "c1", title: "Plan the trip", updatedAt: 0, messages: [] }],
     activeConversationId: "c1",
@@ -56,8 +50,6 @@ beforeEach(() => {
     taskDraft: null,
     memoryToast: null,
     view: "chat",
-    startGoal,
-    stopGoal,
     exportConversation,
   });
 });
@@ -69,49 +61,46 @@ async function run(text: string) {
   return runCommand(cmd, s);
 }
 
-describe("/goal (GOL-1)", () => {
-  it("starts a goal with its condition, and does not wait for it", async () => {
+describe("/goal (WRK-12)", () => {
+  it("is Mission Command with what done means already agreed, sent as the work", async () => {
     const r = await run("/goal make the tests pass until npm test exits 0");
-    expect(r).toMatchObject({ kind: "done" });
-    expect(startGoal).toHaveBeenCalledWith("c1", "make the tests pass", "npm test exits 0");
+    expect(r).toEqual({ kind: "modifier", send: "make the tests pass" });
+    expect(useAppStore.getState().turnModifiers).toMatchObject({
+      style: "mission-command",
+      criteria: ["npm test exits 0"],
+    });
   });
 
   it("without a condition the goal is its own condition", async () => {
-    await run("/goal tidy the docs folder");
-    expect(startGoal).toHaveBeenCalledWith("c1", "tidy the docs folder", "tidy the docs folder");
+    const r = await run("/goal tidy the docs folder");
+    expect(r).toEqual({ kind: "modifier", send: "tidy the docs folder" });
+    expect(useAppStore.getState().turnModifiers.criteria).toEqual(["tidy the docs folder"]);
   });
 
   it("asks for the goal when none was given", async () => {
     const r = await run("/goal");
     expect(r).toMatchObject({ kind: "needsArg" });
-    expect(startGoal).not.toHaveBeenCalled();
-  });
-
-  it("one goal at a time in a chat", async () => {
-    useAppStore.setState({ goals: { c1: newGoal("a", "a") } });
-    const r = await run("/goal b");
-    expect(r).toMatchObject({ kind: "error", message: expect.stringContaining("/goal stop") });
-    expect(startGoal).not.toHaveBeenCalled();
+    expect(useAppStore.getState().turnModifiers.style).toBeUndefined();
   });
 
   it("will not start while I am busy", async () => {
     useAppStore.setState({ busy: true });
     const r = await run("/goal b");
     expect(r).toMatchObject({ kind: "error" });
-    expect(startGoal).not.toHaveBeenCalled();
+    expect(useAppStore.getState().turnModifiers.criteria).toBeUndefined();
   });
 
-  it("stop ends it, even while a round is running", async () => {
-    useAppStore.setState({ goals: { c1: newGoal("a", "a") }, busy: true });
+  it("stop stops the run that is working toward it", async () => {
+    const stopGenerating = vi.fn();
+    useAppStore.setState({ busy: true, stopGenerating });
     const r = await run("/goal stop");
     expect(r).toMatchObject({ kind: "done" });
-    expect(stopGoal).toHaveBeenCalledWith("c1");
+    expect(stopGenerating).toHaveBeenCalled();
   });
 
-  it("stop with no goal says there is none", async () => {
+  it("stop with nothing running says there is no goal", async () => {
     const r = await run("/goal stop");
     expect(r).toMatchObject({ kind: "error", message: expect.stringContaining("not working toward") });
-    expect(stopGoal).not.toHaveBeenCalled();
   });
 
   it("is the user's: not something the agent may call", () => {

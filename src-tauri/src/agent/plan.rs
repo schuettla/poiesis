@@ -68,6 +68,61 @@ impl PlanStatus {
     }
 }
 
+/// `WRK-4`: where the second look at an item stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewState {
+    /// Someone who never saw the work is looking at it now.
+    Checking,
+    Checked,
+    /// Not done after all: `reason` says what is missing.
+    SentBack,
+}
+
+/// `WRK-4`: the second look's verdict on an item. A verdict that sends an item
+/// back always has its reason: one without a reason does not exist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Review {
+    pub state: ReviewState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// `WRK-7`: a move a way of working made, kept with the plan so the board can
+/// say why, now and after a reload. `item` is the 0-based place, when it was
+/// about one item; `state` is `fired` or `skipped`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MoveNote {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<usize>,
+    /// What it fired on (`WRK-17`), so a run's moves can be kept as a preset.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub when: String,
+    #[serde(rename = "move")]
+    pub mv: String,
+    pub rule: String,
+    /// The rule as a sentence: "When an item has failed twice, I try two ways."
+    pub text: String,
+    /// `always` | `preset` | `learned` | `trying`.
+    pub from: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub since: String,
+    pub state: String,
+}
+
+/// `WRK-6`: two ways were tried for this item, and one was kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Branches {
+    /// `a` | `b`.
+    pub kept: String,
+    /// Why the kept one was kept, in a sentence.
+    pub reason: String,
+    /// What each way did, in a sentence, `[a, b]`.
+    pub ways: Vec<String>,
+    /// The id the other way's changes are read back by (`branch_view_cmd`).
+    pub id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanItem {
     pub text: String,
@@ -89,6 +144,33 @@ pub struct PlanItem {
     /// The decision behind `judged`, so reopening the item can label it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<String>,
+    /// `WRK-2`: what has to be true for this item to count as done, in one
+    /// sentence. Written with the item, shown under it, and what the final check
+    /// is held against. Only plans written under a way of working carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done_when: Option<String>,
+    /// `WRK-4`: the second look, while it runs and after it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<Review>,
+    /// `WRK-6`: two ways were tried, and which one was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branches: Option<Branches>,
+    /// `WRK-14`: who is working on this item, when it is not the lead: "helper",
+    /// or the name of an agent app. Set by the loop from a `delegate` call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+}
+
+/// `WRK-10`: one thing that has to be true for the whole task to count as done,
+/// agreed with the person before work starts. The final check ticks it: `met` is
+/// `None` until then, and a criterion that was not met stays open with `why`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Criterion {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub met: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 /// One run's plan. `revisions` counts *rewrites* — a `set` over an existing
@@ -110,36 +192,184 @@ pub struct Plan {
     /// the approval row is still there after a reload.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub awaiting_approval: bool,
+    /// `WRK-2`: the preset (its slug) the run was working under, when it was not
+    /// Ad hoc. Persisted with the plan so the board's header survives a reload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    /// `WRK-7`: what the way of working did in this run, for the board's ⓘ.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moves: Vec<MoveNote>,
+    /// `WRK-10`: what done means for the whole task, agreed before work starts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub criteria: Vec<Criterion>,
+}
+
+/// `WRK-2`: what the run's way of working holds this plan to. Nothing here
+/// authorises or refuses a tool call: it decides what the *plan* may be told.
+/// The default holds the plan to nothing, which is every run that is not working
+/// under a preset.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Discipline {
+    /// "I finish one thing before the next": only the first open item may be
+    /// started, and nothing is called done while an earlier item is open.
+    pub one_at_a_time: bool,
+    /// The line is stopped by this check. Nothing is called done and no other
+    /// item is started until it passes.
+    pub stopped_by: Option<String>,
+    /// `WRK-22`: project files were changed and this check (the project's own) has
+    /// not run since. Nothing is called done until it has: "done" is something a
+    /// program says, not only a second look. Never set in Ad hoc.
+    pub unchecked: Option<String>,
+}
+
+impl Discipline {
+    /// May the item at `index` (1-based) be moved to `status` now? An error is
+    /// written for the model to read and act on, like every other one here.
+    fn check(&self, plan: &Plan, index: usize, status: PlanStatus) -> Result<(), String> {
+        let Some(item) = plan.items.get(index.wrapping_sub(1)) else {
+            // Out of range: `Plan::update` words that mistake.
+            return Ok(());
+        };
+        let starting = status == PlanStatus::Doing && item.status != PlanStatus::Doing;
+        let finishing = status == PlanStatus::Done && item.status != PlanStatus::Done;
+        if let Some(check) = &self.stopped_by {
+            if starting || finishing {
+                return Err(format!(
+                    "Stopped: `{check}` is failing. Fix that before anything else. Item {index} can't be                      {} until it passes.",
+                    if starting { "started" } else { "called done" }
+                ));
+            }
+        }
+        if let Some(check) = &self.unchecked {
+            if finishing {
+                return Err(format!(
+                    "You changed files and `{check}` has not run since. Run it with run_task; item {index} can be called done once it passes."
+                ));
+            }
+        }
+        if self.one_at_a_time && (starting || finishing) {
+            // The first item still open, other than this one, that comes before it.
+            let earlier = plan
+                .items
+                .iter()
+                .take(index - 1)
+                .position(|i| matches!(i.status, PlanStatus::Todo | PlanStatus::Doing));
+            if let Some(j) = earlier {
+                return Err(format!(
+                    "Item {} comes first. Finish it, or drop it with a reason, before {} item {index}.",
+                    j + 1,
+                    if starting { "starting" } else { "finishing" },
+                ));
+            }
+            if starting {
+                if let Some(j) = plan
+                    .items
+                    .iter()
+                    .position(|i| i.status == PlanStatus::Doing)
+                {
+                    return Err(format!(
+                        "Item {} is still in hand. Finish it, or drop it with a reason, before starting item {index}.",
+                        j + 1
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// What a plan write did to an item the board draws a divider for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    Started,
+    Done,
+    Dropped,
 }
 
 impl Plan {
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.items.is_empty() && self.criteria.is_empty()
     }
 
     /// Replace the list. The first `set` of a run is the plan being written; a
     /// later one is a revision, and says so.
-    fn set(&mut self, texts: Vec<String>) {
+    fn set(&mut self, texts: Vec<(String, Option<String>)>) {
+        // The same list written again is not a revision: nothing about it changed,
+        // and starting its items over would undo work already marked.
+        let same = texts.len() == self.items.len()
+            && texts.iter().zip(&self.items).all(|((t, d), i)| *t == i.text && *d == i.done_when);
+        if same {
+            return;
+        }
         if !self.items.is_empty() {
             self.previous.push(self.items.iter().map(|i| i.text.clone()).collect());
             self.revisions += 1;
         }
         self.items = texts
             .into_iter()
-            .map(|text| PlanItem {
+            .map(|(text, done_when)| PlanItem {
                 text,
                 status: PlanStatus::Todo,
                 why: None,
                 added: false,
                 judged: None,
                 decision: None,
+                done_when,
+                review: None,
+                branches: None,
+                by: None,
             })
             .collect();
     }
 
+    /// `WRK-14`: tasks handed to helpers say which plan item they are (`item`,
+    /// numbered from 1). Each such item is marked as being worked on by that helper:
+    /// the agent's own name, or "helper" for a general one. Returns the items
+    /// assigned (0-based) and whether each went to a named agent. An item that is
+    /// done or dropped, or a number that is not in the plan, is left alone.
+    pub fn assign(&mut self, tasks: &serde_json::Value) -> Vec<(usize, bool)> {
+        let mut out = Vec::new();
+        for task in tasks.as_array().into_iter().flatten() {
+            let Some(n) = task.get("item").and_then(|v| v.as_u64()).and_then(|n| usize::try_from(n).ok()) else {
+                continue;
+            };
+            let Some(item) = n.checked_sub(1).and_then(|i| self.items.get_mut(i)) else { continue };
+            if matches!(item.status, PlanStatus::Done | PlanStatus::Dropped) {
+                continue;
+            }
+            let agent = task.get("agent").and_then(|a| a.as_str()).map(str::trim).filter(|a| !a.is_empty());
+            item.by = Some(agent.unwrap_or("helper").to_string());
+            if item.status == PlanStatus::Todo {
+                item.status = PlanStatus::Doing;
+            }
+            out.push((n - 1, agent.is_some()));
+        }
+        out
+    }
+
+    /// `WRK-10`: the criteria the person is asked to agree to. Writing them again
+    /// replaces them: an agreement the person has not given yet is a draft.
+    pub fn set_criteria(&mut self, texts: Vec<String>) {
+        self.criteria = texts.into_iter().map(|text| Criterion { text, met: None, why: None }).collect();
+    }
+
+    /// `WRK-10`: what the final check found, one entry per criterion in order.
+    /// Fewer entries than criteria leaves the rest as they were.
+    pub fn tick_criteria(&mut self, found: &[(bool, Option<String>)]) {
+        for (c, (met, why)) in self.criteria.iter_mut().zip(found) {
+            c.met = Some(*met);
+            c.why = if *met { None } else { why.clone().filter(|w| !w.trim().is_empty()) };
+        }
+    }
+
+    /// `WRK-10`: criteria the final check has not met (or not looked at yet).
+    pub fn criteria_open(&self) -> Vec<&Criterion> {
+        self.criteria.iter().filter(|c| c.met != Some(true)).collect()
+    }
+
     /// Append work the plan did not foresee, marked as an addition.
-    fn add(&mut self, texts: Vec<String>) {
-        for text in texts {
+    fn add(&mut self, texts: Vec<(String, Option<String>)>) {
+        for (text, done_when) in texts {
             self.items.push(PlanItem {
                 text,
                 status: PlanStatus::Todo,
@@ -147,8 +377,51 @@ impl Plan {
                 added: true,
                 judged: None,
                 decision: None,
+                done_when,
+                review: None,
+                branches: None,
+                by: None,
             });
         }
+    }
+
+    /// `WRK-2`: the loop starts the next item itself. When nothing is being
+    /// worked on and something is still to do, the first such item becomes the
+    /// one in hand, so the board is true without the model spending a call on it.
+    /// Returns the place (0-based) of the item it started.
+    pub fn start_next(&mut self) -> Option<usize> {
+        if self.items.iter().any(|i| i.status == PlanStatus::Doing) {
+            return None;
+        }
+        let n = self.items.iter().position(|i| i.status == PlanStatus::Todo)?;
+        self.items[n].status = PlanStatus::Doing;
+        Some(n)
+    }
+
+    /// `WRK-2`: the statuses as they stand, to compare a write against.
+    pub fn statuses(&self) -> Vec<PlanStatus> {
+        self.items.iter().map(|i| i.status).collect()
+    }
+
+    /// `WRK-2`: what a write changed, item by item, against the statuses taken
+    /// before it. An item the earlier list did not have counts as `Todo`.
+    pub fn changes_since(&self, before: &[PlanStatus]) -> Vec<(usize, Change)> {
+        self.items
+            .iter()
+            .enumerate()
+            .filter_map(|(n, item)| {
+                let was = before.get(n).copied().unwrap_or(PlanStatus::Todo);
+                if was == item.status {
+                    return None;
+                }
+                match item.status {
+                    PlanStatus::Doing => Some((n, Change::Started)),
+                    PlanStatus::Done => Some((n, Change::Done)),
+                    PlanStatus::Dropped => Some((n, Change::Dropped)),
+                    PlanStatus::Todo => None,
+                }
+            })
+            .collect()
     }
 
     /// The items still open, with their 0-based place in the list.
@@ -202,6 +475,11 @@ impl Plan {
             ));
         }
         let item = &mut self.items[index - 1];
+        // A verdict belongs to the work it judged: moving the item ends it. An item
+        // that stays where it is keeps what the second look said about it.
+        if item.status != status {
+            item.review = None;
+        }
         item.status = status;
         // The model has now spoken for the item itself, which replaces the guess.
         item.judged = None;
@@ -238,7 +516,18 @@ impl Plan {
 
     /// The list as the model reads it back.
     pub fn render(&self) -> String {
-        let mut lines = Vec::with_capacity(self.items.len());
+        let mut lines = Vec::with_capacity(self.items.len() + self.criteria.len() + 1);
+        if !self.criteria.is_empty() {
+            lines.push("Done means:".to_string());
+            for c in &self.criteria {
+                let mark = match c.met {
+                    Some(true) => "met",
+                    Some(false) => "not met",
+                    None => "not checked yet",
+                };
+                lines.push(format!("- {} ({mark})", c.text));
+            }
+        }
         for (n, item) in self.items.iter().enumerate() {
             let mut line = format!("{}. {} — {}", n + 1, item.text, item.status.as_note());
             if let Some(why) = &item.why {
@@ -250,6 +539,12 @@ impl Plan {
             }
             if item.judged.is_some() {
                 line.push_str(" (judged finished from your answer)");
+            }
+            if let Some(done_when) = &item.done_when {
+                line.push_str(&format!(" (done when: {done_when})"));
+            }
+            if let Some(Review { state: ReviewState::SentBack, reason }) = &item.review {
+                line.push_str(&format!(" (sent back by the second look: {})", reason.as_deref().unwrap_or("not done")));
             }
             lines.push(line);
         }
@@ -370,6 +665,22 @@ pub fn handles(name: &str) -> bool {
 }
 
 pub fn tool_specs() -> Vec<serde_json::Value> {
+    tool_specs_with(false)
+}
+
+/// How many criteria one task is agreed on. More than this is a list nobody
+/// reads, and a final check that cannot be held to any of them.
+pub const MAX_CRITERIA: usize = 5;
+
+/// `WRK-2`: with `done_when`, each item of `items` is an object that says what
+/// has to be true for it to count as done. Plain JSON Schema either way.
+pub fn tool_specs_with(done_when: bool) -> Vec<serde_json::Value> {
+    tool_specs_for(done_when, false)
+}
+
+/// `WRK-10`: with `criteria`, the plan also says what done means for the whole
+/// task, which the person is asked to agree to before anything changes.
+pub fn tool_specs_for(done_when: bool, criteria: bool) -> Vec<serde_json::Value> {
     // Deliberately plain JSON Schema: no `$ref`, no `oneOf`. The engines this
     // has to survive include free-tier hosts and small local servers, and an
     // exotic schema is refused by more of them than it helps. `update` and
@@ -388,6 +699,50 @@ pub fn tool_specs() -> Vec<serde_json::Value> {
         },
         "required": ["index", "status"]
     });
+    let items = if done_when {
+        serde_json::json!({
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string", "description": "The item, as a short phrase." },
+                    "done_when": {
+                        "type": "string",
+                        "description": "One sentence: what has to be true for this item to count as done, so it can be checked."
+                    }
+                },
+                "required": ["text", "done_when"]
+            },
+            "description": "The whole plan, replacing any earlier one, in the order you mean to do it. Each item says what done means for it."
+        })
+    } else {
+        serde_json::json!({
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "The whole plan, replacing any earlier one. Short phrases, in the order you mean to do them."
+        })
+    };
+    let mut properties = serde_json::json!({
+        "items": items,
+        "add": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Extra items appended to the current plan, marked as later additions."
+        },
+        "update": one_update,
+        "updates": {
+            "type": "array",
+            "items": one_update,
+            "description": "Several moves in one call — finishing one item and starting the next is one thought, not two turns."
+        }
+    });
+    if criteria {
+        properties["criteria"] = serde_json::json!({
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "What done means for the whole task: two to four statements, each one something that can be seen to be true or false when the work is over. The person agrees to these before anything changes, and they are checked against your answer at the end."
+        });
+    }
     vec![serde_json::json!({
         "type": "function",
         "function": {
@@ -395,24 +750,7 @@ pub fn tool_specs() -> Vec<serde_json::Value> {
             "description": "Write or revise the short plan for this run, and keep it current. Pass `items` to write the whole plan (a handful of short phrases, in order). Pass `update` to move an item, or `updates` to move several at once — items are numbered from 1, as shown when the plan is read back. Pass `add` for work you did not foresee. The plan is shown to the user as you work, so it must stay true: drop an item with a reason rather than leaving it hanging. Do not spend a whole turn on bookkeeping — call this in the same turn as the work it describes, and finish one item and start the next in a single call: updates: [{index:2,status:\"done\"},{index:3,status:\"doing\"}].",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "items": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "The whole plan, replacing any earlier one. Short phrases, in the order you mean to do them."
-                    },
-                    "add": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Extra items appended to the current plan, marked as later additions."
-                    },
-                    "update": one_update,
-                    "updates": {
-                        "type": "array",
-                        "items": one_update,
-                        "description": "Several moves in one call — finishing one item and starting the next is one thought, not two turns."
-                    }
-                }
+                "properties": properties
             }
         }
     })]
@@ -422,6 +760,9 @@ pub fn tool_specs() -> Vec<serde_json::Value> {
 pub fn describe(_name: &str, args: &serde_json::Value) -> (String, String) {
     if let Some(items) = args.get("items").and_then(|v| v.as_array()) {
         return ("planned".to_string(), format!("{} steps", items.len()));
+    }
+    if args.get("criteria").is_some() {
+        return ("agreed what done means".to_string(), String::new());
     }
     if let Some(items) = args.get("add").and_then(|v| v.as_array()) {
         return (
@@ -443,21 +784,59 @@ pub fn describe(_name: &str, args: &serde_json::Value) -> (String, String) {
 /// out-of-range index is the single most likely mistake, and a run must not die
 /// of a bad plan edit.
 pub fn execute(plan: &Mutex<Plan>, args: &serde_json::Value) -> Result<String, String> {
+    execute_with(plan, args, &Discipline::default())
+}
+
+/// [`execute`], with the plan held to a way of working (`WRK-2`).
+pub fn execute_with(plan: &Mutex<Plan>, args: &serde_json::Value, rules: &Discipline) -> Result<String, String> {
     let mut plan = plan.lock().unwrap();
 
-    let strings = |v: Option<&serde_json::Value>| -> Vec<String> {
+    // An item is a phrase, or an object with the phrase and what done means for
+    // it. Either is accepted whatever the schema offered: small models guess.
+    let strings = |v: Option<&serde_json::Value>| -> Vec<(String, Option<String>)> {
         v.and_then(|v| v.as_array())
             .map(|a| {
                 a.iter()
-                    .filter_map(|x| x.as_str())
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
+                    .filter_map(|x| match x {
+                        serde_json::Value::String(s) => Some((s.trim().to_string(), None)),
+                        serde_json::Value::Object(o) => {
+                            let text = o.get("text")?.as_str()?.trim().to_string();
+                            let done_when = o
+                                .get("done_when")
+                                .and_then(|d| d.as_str())
+                                .map(|d| d.trim().to_string())
+                                .filter(|d| !d.is_empty());
+                            Some((text, done_when))
+                        }
+                        _ => None,
+                    })
+                    .filter(|(text, _)| !text.is_empty())
                     .collect()
             })
             .unwrap_or_default()
     };
 
     let mut did_something = false;
+
+    // `WRK-10`: what done means for the whole task. Strings, or objects with a
+    // `text`: small models guess here too.
+    if let Some(list) = args.get("criteria").and_then(|v| v.as_array()) {
+        let texts: Vec<String> = list
+            .iter()
+            .filter_map(|x| match x {
+                serde_json::Value::String(s) => Some(s.trim().to_string()),
+                serde_json::Value::Object(o) => o.get("text").and_then(|t| t.as_str()).map(|t| t.trim().to_string()),
+                _ => None,
+            })
+            .filter(|t| !t.is_empty())
+            .take(MAX_CRITERIA)
+            .collect();
+        if texts.is_empty() {
+            return Err("`criteria` needs at least one statement that can be seen to be true or false.".into());
+        }
+        plan.set_criteria(texts);
+        did_something = true;
+    }
 
     if args.get("items").is_some() {
         let items = strings(args.get("items"));
@@ -509,6 +888,7 @@ pub fn execute(plan: &Mutex<Plan>, args: &serde_json::Value) -> Result<String, S
             );
         }
         let index = usize::try_from(index).unwrap_or(0);
+        rules.check(&plan, index, status)?;
         plan.update(index, status, why)?;
         did_something = true;
     }
@@ -730,6 +1110,116 @@ mod tests {
         // A judgement is not written for a plan that never had one.
         let json = serde_json::to_string(&plan.items[0]).unwrap();
         assert!(!json.contains("judged") && !json.contains("decision"), "{json}");
+    }
+
+    /// `WRK-2`: an item can say what done means for it, and the model reads that
+    /// back with the item. A phrase with no such sentence still works.
+    #[test]
+    fn an_item_can_say_what_done_means_and_the_model_reads_it_back() {
+        let m = Mutex::new(Plan::default());
+        execute(
+            &m,
+            &serde_json::json!({
+                "items": [{ "text": "export", "done_when": "the file opens in Excel" }, "plain"]
+            }),
+        )
+        .unwrap();
+        let plan = m.lock().unwrap();
+        assert_eq!(plan.items[0].done_when.as_deref(), Some("the file opens in Excel"));
+        assert_eq!(plan.items[1].done_when, None);
+        assert!(
+            plan.render().contains("1. export \u{2014} to do (done when: the file opens in Excel)"),
+            "{}",
+            plan.render()
+        );
+        assert!(!serde_json::to_string(&plan.items[1]).unwrap().contains("done_when"), "nothing written for none");
+    }
+
+    #[test]
+    fn the_work_schema_asks_for_objects_and_the_plain_one_for_phrases() {
+        let plain = tool_specs();
+        let work = tool_specs_with(true);
+        let items = |spec: &Vec<serde_json::Value>| {
+            spec[0].pointer("/function/parameters/properties/items/items/type").cloned()
+        };
+        assert_eq!(items(&plain), Some(serde_json::json!("string")));
+        assert_eq!(items(&work), Some(serde_json::json!("object")));
+        assert!(work[0].pointer("/function/parameters/properties/items/items/properties/done_when").is_some());
+    }
+
+    /// `WRK-2`: what a write changed, so the board can draw a divider for it.
+    #[test]
+    fn the_changes_since_a_write_name_what_started_and_what_ended() {
+        let m = plan_with(&["one", "two", "three"]);
+        let mut plan = m.lock().unwrap();
+        let before = plan.statuses();
+        assert_eq!(plan.start_next(), Some(0));
+        assert_eq!(plan.start_next(), None, "one is already in hand");
+        assert_eq!(plan.changes_since(&before), vec![(0, Change::Started)]);
+
+        let before = plan.statuses();
+        plan.items[0].status = PlanStatus::Done;
+        plan.items[1].status = PlanStatus::Dropped;
+        assert_eq!(plan.changes_since(&before), vec![(0, Change::Done), (1, Change::Dropped)]);
+
+        // An item the earlier list did not have counts as one still to do.
+        let before = plan.statuses();
+        plan.add(vec![("four".into(), None)]);
+        assert!(plan.changes_since(&before).is_empty());
+    }
+
+    /// `WRK-10`: criteria ride on the plan, are read back to the model, are ticked
+    /// one by one, and a met criterion carries no excuse.
+    #[test]
+    fn criteria_are_written_read_back_and_ticked() {
+        let m = Mutex::new(Plan::default());
+        execute(
+            &m,
+            &serde_json::json!({ "items": ["export"], "criteria": ["Fleet has an Export button", { "text": "Excel opens the file" }, "  "] }),
+        )
+        .unwrap();
+        let mut plan = m.lock().unwrap();
+        assert_eq!(plan.criteria.len(), 2, "a blank one is not a criterion");
+        assert!(plan.render().contains("- Fleet has an Export button (not checked yet)"));
+
+        plan.tick_criteria(&[(true, Some("ignored".into())), (false, Some("it opens with one column".into()))]);
+        assert_eq!(plan.criteria[0], Criterion { text: "Fleet has an Export button".into(), met: Some(true), why: None });
+        assert_eq!(plan.criteria[1].why.as_deref(), Some("it opens with one column"));
+        assert_eq!(plan.criteria_open().len(), 1);
+        assert!(plan.render().contains("(not met)"));
+    }
+
+    /// `WRK-10`: criteria alone are a plan write, and an empty list is not.
+    #[test]
+    fn criteria_alone_count_and_an_empty_list_does_not() {
+        let m = Mutex::new(Plan::default());
+        assert!(execute(&m, &serde_json::json!({ "criteria": ["it works"] })).is_ok());
+        assert!(execute(&m, &serde_json::json!({ "criteria": [] })).is_err());
+        let spec = tool_specs_for(true, true);
+        assert!(spec[0].pointer("/function/parameters/properties/criteria").is_some());
+        assert!(tool_specs_for(true, false)[0].pointer("/function/parameters/properties/criteria").is_none());
+    }
+
+    /// `WRK-14`: tasks handed to helpers mark the item they are, and nothing else.
+    #[test]
+    fn handing_an_item_to_a_helper_marks_who_has_it_and_leaves_the_rest_alone() {
+        let m = plan_with(&["export", "button", "docs", "done already"]);
+        let mut plan = m.lock().unwrap();
+        plan.items[3].status = PlanStatus::Done;
+        let tasks = serde_json::json!([
+            { "task": "a", "item": 1 },
+            { "task": "b", "item": 2, "agent": " Claude Code " },
+            { "task": "c", "item": 4 },
+            { "task": "d", "item": 9 },
+            { "task": "e", "item": 0 },
+            { "task": "no item" },
+        ]);
+        let assigned = plan.assign(&tasks);
+        assert_eq!(assigned, vec![(0, false), (1, true)], "done work and numbers outside the plan are left alone");
+        assert_eq!((plan.items[0].by.as_deref(), plan.items[0].status), (Some("helper"), PlanStatus::Doing));
+        assert_eq!(plan.items[1].by.as_deref(), Some("Claude Code"));
+        assert!(plan.items[2].by.is_none() && plan.items[2].status == PlanStatus::Todo);
+        assert!(plan.items[3].by.is_none());
     }
 
     /// A call with no recognised argument says what the tool wants instead of

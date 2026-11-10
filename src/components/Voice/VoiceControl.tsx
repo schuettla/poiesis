@@ -1,71 +1,40 @@
-import { useState } from "react";
 import { useAppStore } from "../../lib/store";
 import { openVoice } from "../../lib/voice/controller";
 import { useVoiceStore } from "../../lib/voice/voiceStore";
-import { ChevronIcon, MicIcon, WaveformIcon } from "../Icons/Icons";
+import { WaveformIcon } from "../Icons/Icons";
 import MicButton from "./MicButton";
-import VoiceButton from "./VoiceButton";
 
 /**
- * Voice, under the composer on the left: the mic dictates into the box as it
- * always has, and the chevron beside it opens a drop-up with the switch into
- * voice mode — the back-and-forth conversation that `/talk` also starts. While
- * a voice conversation is live but hidden, `VoiceButton` stays one click away.
+ * Voice, under the composer on the left: two buttons, both drawn icons.
+ *
+ * The mic dictates into the box (tap), or talks and sends (hold). The waveform
+ * opens voice mode, the back-and-forth conversation that `/talk` also starts.
+ * While a voice conversation is live but hidden, the same waveform carries the
+ * red "mic is open" dot (`VXP-3`) and takes you back to it (`VOC-UI-13`).
  */
 export default function VoiceControl(props: React.ComponentProps<typeof MicButton>) {
-  const [open, setOpen] = useState(false);
   const workspaceMode = useAppStore((s) => s.workspaceMode && s.workspaceShown);
   const live = useVoiceStore((s) => s.floor !== "off");
+  const shown = useVoiceStore((s) => s.shown);
+  const back = live && !shown;
+  const title = back
+    ? "Back to voice. The microphone is on."
+    : workspaceMode
+      ? "Voice mode: talk back and forth. Opens in the chat view, the workspace waits."
+      : "Voice mode: talk back and forth, I answer out loud";
 
   return (
-    <div className="voice-control">
+    <>
       <MicButton {...props} />
-      <div className="composer-menu-wrap">
-        <button
-          className={`icon-btn voice-more ${open ? "on" : ""}`}
-          aria-label="Voice options"
-          aria-haspopup="menu"
-          aria-expanded={open}
-          title="Voice options"
-          onClick={() => setOpen((v) => !v)}
-        >
-          <ChevronIcon dir={open ? "down" : "up"} size={10} strokeWidth={1.8} />
-        </button>
-        {open && (
-          <>
-            <div className="composer-menu-backdrop" onClick={() => setOpen(false)} />
-            <div className="composer-menu voice-menu" role="menu">
-              <button
-                className="composer-menu-item"
-                role="menuitem"
-                onClick={() => {
-                  setOpen(false);
-                  void openVoice();
-                }}
-              >
-                <span className="mi-icon" aria-hidden="true"><WaveformIcon size={15} /></span>
-                <span className="mi-body">
-                  {live ? "Back to the voice conversation" : "Voice mode"}
-                  <span className="mi-hint">
-                    {live
-                      ? "the microphone is still on"
-                      : workspaceMode
-                        ? "opens in the chat view, the workspace waits"
-                        : "talk back and forth, I answer out loud"}
-                  </span>
-                </span>
-                <span className="mi-check" />
-              </button>
-              <div className="composer-menu-sep" />
-              <div className="voice-menu-note">
-                <span className="mi-icon" aria-hidden="true"><MicIcon size={13} /></span>
-                Tap the mic to dictate, hold it to talk and send.
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-      <VoiceButton />
-    </div>
+      <button
+        className={`icon-btn voice-mode-btn${back ? " on" : ""}`}
+        aria-label={back ? "Back to the voice conversation" : "Voice mode"}
+        title={title}
+        onClick={() => void openVoice()}
+      >
+        <WaveformIcon size={16} />
+        {back && <span className="mic-dot" aria-hidden="true" />}
+      </button>
+    </>
   );
 }

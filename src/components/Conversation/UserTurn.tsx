@@ -2,6 +2,7 @@ import type { SteerKind } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import type { Message } from "../../lib/types";
 import ImageByPath from "./ImageByPath";
+import { FileIcon } from "../Icons/Icons";
 import { SpokenGlyph } from "./SpokenMark";
 
 /** Split off a trailing ```poiesis-action …``` fence (Generative UI, Phase B) so
@@ -14,10 +15,10 @@ function splitAction(text: string): { human: string; isAction: boolean } {
 
 /** `USE-UI-2`: the words for what a quick decision read a mid-run message as. */
 const STEER_TAG: Record<SteerKind, string> = {
-  stop: "stop",
-  redirect: "redirect",
-  add: "addition",
-  question: "question",
+  stop: "read as a stop",
+  redirect: "read as a redirect",
+  add: "read as an addition",
+  question: "read as a question",
 };
 
 export default function UserTurn({ message }: { message: Message }) {
@@ -33,21 +34,22 @@ export default function UserTurn({ message }: { message: Message }) {
           only when there is a mark — an empty row still carried its margin
           and made the top padding visibly deeper than the bottom.
           `USE-UI-2`: a held message has not been sent at all, so it says so. */}
+      {/* One quiet line: where it went, then what it was read as. */}
       {(message.midRun || steer) && (
         <div className="role">
-          {message.midRun && (
-            <span className={`mid-run-mark ${message.midRun}`}>
-              {message.midRun === "pending" ? "sending…" : message.midRun === "held" ? "not sent yet" : "sent mid-run"}
-            </span>
-          )}
-          {steer && (
-            <span
-              className="steer-tag"
-              title={`Read as ${steer.kind === "add" ? "an addition" : `a ${steer.kind}`} (${steer.p.toFixed(2)})`}
-            >
-              {STEER_TAG[steer.kind]}
-            </span>
-          )}
+          <span className={`mid-run-mark ${message.midRun ?? ""}`}>
+            {message.midRun &&
+              (message.midRun === "pending" ? "sending…" : message.midRun === "held" ? "not sent yet" : "sent mid-run")}
+            {message.midRun && steer && ", "}
+            {steer && (
+              <span
+                className="steer-tag"
+                title={`Read as ${steer.kind === "add" ? "an addition" : `a ${steer.kind}`} (${steer.p.toFixed(2)})`}
+              >
+                {STEER_TAG[steer.kind]}
+              </span>
+            )}
+          </span>
         </div>
       )}
       {/* `SKC-2`: a skill command went out as `/name`, with that skill's
@@ -111,7 +113,8 @@ export default function UserTurn({ message }: { message: Message }) {
               </button>
             ) : (
               <span className="user-attachment" key={a.id}>
-                ▤ {a.name}
+                <FileIcon size={13} />
+                {a.name}
               </span>
             )
           )}

@@ -109,7 +109,11 @@ export function TreeFolderIcon({ open, ...props }: IconProps & { open: boolean }
       <path
         d={
           open
-            ? "M2.5 15V6A1.5 1.5 0 0 1 4 4.5h3.2l1.4 1.8H15A1.5 1.5 0 0 1 16.5 8H5.6L2.5 15z"
+            ? // The back of the folder, then the lifted front flap as its own
+              // closed shape, so it has a bottom edge instead of an open end.
+              // Same 2.5-17.5 by 4.5-15.5 box as the closed folder, so the
+              // icon does not shrink or shift when a row opens.
+              "M2.5 15.5V6A1.5 1.5 0 0 1 4 4.5h3.2l1.4 1.8H16A1.5 1.5 0 0 1 17.5 8M2.5 15.5 5.6 8H17.5L14.4 15.5z"
             : "M2.5 6A1.5 1.5 0 0 1 4 4.5h3.2l1.4 1.8H16A1.5 1.5 0 0 1 17.5 8v6A1.5 1.5 0 0 1 16 15.5H4A1.5 1.5 0 0 1 2.5 14z"
         }
         strokeLinejoin="round"
@@ -296,6 +300,26 @@ export function PlusIcon(props: IconProps) {
   return (
     <Glyph {...props}>
       <path d="M10 4.5v11M4.5 10h11" strokeLinecap="round" />
+    </Glyph>
+  );
+}
+
+/** Three sheets stacked: what I am working from, layer by layer. */
+export function LayersIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M10 3 17 6.8 10 10.6 3 6.8z" strokeLinejoin="round" />
+      <path d="M3 10.2 10 14l7-3.8M3 13.6l7 3.8 7-3.8" strokeLinecap="round" strokeLinejoin="round" />
+    </Glyph>
+  );
+}
+
+/** One forward stroke: the `/` commands. Drawn, so it sits on the same line and
+ * weight as the `+` beside it rather than as a mono character. */
+export function SlashIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M12.5 4 7.5 16" strokeLinecap="round" />
     </Glyph>
   );
 }

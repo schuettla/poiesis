@@ -81,6 +81,7 @@ function seed(over: Partial<ReturnType<typeof useAppStore.getState>> = {}) {
     artifacts: {},
     browserSessions: {},
     subRuns: {},
+    runSummaries: {},
     selected: null,
     itemTabs: [],
     activeItemId: null,
@@ -164,6 +165,56 @@ describe("Workbench sub-views", () => {
     expect(container.querySelector(".wb-files")).not.toBeNull();
     expect(navLabels()).toEqual(["Files", "Artifacts", "Changes"]);
     expect(selectedLabel()).toBe("Files");
+  });
+
+  // `WRK-15`: the Agents sub-view is the Organization view: the same agents, inside their
+  // organization. It exists once helpers do, or once a run works under a way of working.
+  it("is the Coordination view once helpers exist, and once a run works a way", () => {
+    seed({ subRuns: { r1: subRun() } });
+    render();
+    expect(navLabels()).toEqual(["Files", "Artifacts", "Changes", "Coordination1"]);
+    act(() => root.unmount());
+    root = createRoot(container);
+    seed({
+      runSummaries: {
+        [CONV]: { runId: "r1", startedAt: 0, live: true, files: [], costUsd: null, localRun: false, style: { preset: "lean", name: "Lean" } },
+      },
+    });
+    render();
+    expect(navLabels()).toEqual(["Files", "Artifacts", "Changes", "Coordination"]);
+    expect(container.querySelector(".wb-tab-live")).not.toBeNull();
+  });
+
+  // After the app is opened again there is no live run, only what was saved: the
+  // plan on the last message says how that run was worked.
+  it("keeps the Coordination view when the chat is opened again", () => {
+    seed({
+      conversations: [
+        conversation({
+          messages: [
+            {
+              id: "m1",
+              role: "assistant",
+              text: "Here is my plan.",
+              createdAt: 0,
+              plan: { items: [{ text: "Draft", status: "todo" }], revisions: 0, style: "command-and-control" },
+            } as unknown as Conversation["messages"][number],
+          ],
+        }),
+      ],
+    });
+    render();
+    expect(navLabels()).toEqual(["Files", "Artifacts", "Changes", "Coordination"]);
+  });
+
+  it("has no Coordination view for a run that works Ad hoc", () => {
+    seed({
+      runSummaries: {
+        [CONV]: { runId: "r1", startedAt: 0, live: true, files: [], costUsd: null, localRun: false, style: { preset: "ad-hoc", name: "Ad hoc" } },
+      },
+    });
+    render();
+    expect(navLabels()).toEqual(["Files", "Artifacts", "Changes"]);
   });
 
   it("no longer carries the chat's own actions — scheduling lives in the chat's menu", () => {

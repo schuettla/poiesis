@@ -182,7 +182,7 @@ describe("the menu", () => {
   it("opens a group in place, and the way back returns to the groups", async () => {
     openDialog();
     openGroup("modes");
-    expect(rowNames()).toEqual(["workspace", "tools", "persona", "model"]);
+    expect(rowNames()).toEqual(["workspace", "tools", "style", "persona", "model"]);
     expect(groups()).toEqual([]);
     act(() => container.querySelector<HTMLButtonElement>(".command-menu-back")!.click());
     expect(rowNames()).toEqual([]);
@@ -496,13 +496,16 @@ describe("the + menu (CMP-T3)", () => {
 });
 
 describe("mode chips (CMP-7)", () => {
-  it("name Workspace mode in the footer, and the x turns it off", async () => {
+  it("name Workspace mode in the this-chat menu, light its button, and the x turns it off", async () => {
     act(() => {
       useAppStore.setState({ workspaceMode: true });
     });
-    const chip = container.querySelector(".mode-chip")!;
-    expect(chip.textContent).toContain("Workspace");
-    act(() => chip.querySelector<HTMLButtonElement>(".mode-chip-x")!.click());
+    expect(container.querySelector(".mode-chip"), "Workspace is not a footer chip").toBeNull();
+    const button = container.querySelector<HTMLButtonElement>(".chat-setup-btn")!;
+    expect(button.className).toContain("lit");
+    act(() => button.click());
+    expect(container.querySelector(".chat-setup-menu")?.textContent).toContain("Workspace");
+    act(() => container.querySelector<HTMLButtonElement>(".chat-setup-off")!.click());
     expect(useAppStore.getState().workspaceMode).toBe(false);
   });
 

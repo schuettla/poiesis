@@ -1,16 +1,20 @@
 /* `PRJ-UI-4`: the project view.
-   One reading column on paper, the same measure the rest of the app reads at.
-   Not a dashboard — no tiles, no counts, no charts. Four sections, each of
-   them a thing the project *is*, edited where it is shown. */
+   Laid out like Settings, the app's other page of editable things: a serif page
+   title, then one block per thing the project *is*, each with a title, a line
+   of help and its control, divided by a hairline. Buttons, the segmented
+   choice and the text field are the shared ones (global.css), not a set of its
+   own. Not a dashboard — no tiles, no counts, no charts. */
 .project-view {
   grid-column: 2 / -1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   background: var(--paper);
-  padding: 28px 32px 60px;
+  padding: 40px 48px 56px;
 }
 
 .pv-column {
-  max-width: 620px;
+  max-width: 760px;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 28px;
@@ -18,16 +22,25 @@
 
 /* The name is the page's heading and its own input. A separate "Rename" field
    would say the name is metadata about the project rather than the project's
-   first line. */
+   first line. Same type as every page title (`.surface h1`). */
 .pv-name {
+  width: 100%;
   font-family: var(--font-serif);
-  font-size: 21px;
+  font-weight: 500;
+  font-size: var(--fs-page);
+  line-height: 1.15;
+  letter-spacing: var(--tracking-display);
   color: var(--ink);
   background: none;
   border: none;
   border-bottom: 1px solid transparent;
-  padding: 2px 0;
+  border-radius: 0;
+  padding: 2px 0 6px;
+  margin-bottom: -8px;
   outline: none;
+}
+.pv-name::placeholder {
+  color: var(--ink-faint);
 }
 .pv-name:hover {
   border-bottom-color: var(--paper-edge-2);
@@ -36,24 +49,43 @@
   border-bottom-color: var(--ink-faint);
 }
 
+/* A block, as `.setting-block`: title, help, control, then a hairline. */
 .pv-section {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--paper-edge-2);
 }
 
 .pv-label {
-  font-size: var(--fs-caption);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
   font-weight: 600;
-  color: var(--ink-faint);
+  color: var(--ink);
   margin: 0;
+}
+.pv-subtitle {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink);
+  margin: 10px 0 0;
 }
 
 .pv-hint {
-  font-size: var(--fs-footnote);
-  color: var(--ink-faint);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.55;
+  color: var(--ink-muted);
+  max-width: 60ch;
   margin: 0;
+}
+/* A help line directly under a title sits close to it. */
+.pv-label + .pv-hint {
+  margin-top: -4px;
+  margin-bottom: 4px;
 }
 
 .pv-error {
@@ -62,116 +94,115 @@
   margin: 0;
 }
 
+/* The same field as Settings' system prompt. */
 .pv-instructions {
   width: 100%;
   font-family: var(--font-sans);
-  font-size: var(--fs-ui);
-  line-height: 1.55;
+  font-size: var(--fs-callout);
+  line-height: 1.6;
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--paper-edge-2);
   border-radius: var(--radius);
-  padding: 10px 12px;
+  padding: 12px 14px;
   resize: vertical;
   outline: none;
+}
+.pv-instructions::placeholder {
+  color: var(--ink-faint);
 }
 .pv-instructions:focus {
   border-color: var(--ink-faint);
 }
 
+/* A suggestion from another project: a quiet panel, not a block. */
+.pv-offer {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 14px 16px;
+  background: var(--fill-quiet);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+}
+.pv-offer .pv-hint {
+  flex: 1 1 100%;
+  max-width: none;
+}
+
+/* The folder, as one row: where it is, and the way to let go of it. */
+.pv-folder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--control);
+  padding: 0 6px 0 12px;
+  background: var(--fill-quiet);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+.pv-folder-icon {
+  display: flex;
+  flex: none;
+  color: var(--ink-faint);
+}
 .pv-path {
+  flex: 1;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: var(--fs-footnote);
-  color: var(--ink-muted);
+  color: var(--ink);
   margin: 0;
-  max-width: 100%;
-  overflow-x: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-/* One row of three, the hairline-box language the rest of the app uses for a
-   choice between a few named states. */
-.pv-trust {
-  display: flex;
-  gap: 0;
-}
-.pv-trust-btn {
-  font-family: var(--font-sans);
+.pv-folder-remove {
+  flex: none;
   font-size: var(--fs-footnote);
-  color: var(--ink-muted);
-  background: var(--paper);
-  border: 1px solid var(--paper-edge-2);
-  border-left-width: 0;
-  padding: 5px 11px;
-  cursor: pointer;
-}
-.pv-trust-btn:first-child {
-  border-left-width: 1px;
-  border-radius: var(--radius) 0 0 var(--radius);
-}
-.pv-trust-btn:last-child {
-  border-radius: 0 var(--radius) var(--radius) 0;
-}
-.pv-trust-btn:hover {
-  color: var(--ink);
-}
-.pv-trust-btn.active {
-  color: var(--paper);
-  background: var(--ink);
-  border-color: var(--ink);
+  padding: 4px 6px;
 }
 
-.pv-action {
-  font-family: var(--font-sans);
-  font-size: var(--fs-ui);
-  color: var(--ink);
-  background: var(--paper);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  padding: 6px 14px;
-  cursor: pointer;
-}
-.pv-action:hover {
-  border-color: var(--ink-faint);
-}
+/* The access choice is the shared segmented control (`.wb-segments`). */
 
-/* The two actions that take something away are the quietest things on the
-   page, not the loudest. Nothing here deletes anything. */
-.pv-quiet {
-  font-family: var(--font-sans);
-  font-size: var(--fs-footnote);
-  color: var(--ink-faint);
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-}
-.pv-quiet:hover {
-  color: var(--ink);
-}
-
+/* Sessions: rows in the rail's language — a flat fill on hover, radius 4 —
+   in the UI's own face. */
 .pv-sessions {
   list-style: none;
-  margin: 0;
+  margin: 0 0 6px;
   padding: 0;
   width: 100%;
   display: flex;
   flex-direction: column;
+  gap: 1px;
 }
 .pv-sessions li {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 5px 0;
-  border-bottom: 1px solid var(--paper-edge);
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 8px 0 10px;
+  border-radius: var(--radius);
+}
+.pv-sessions li:hover,
+.pv-sessions li:focus-within {
+  background: var(--fill-hover);
+}
+.pv-session-icon {
+  display: flex;
+  flex: none;
+  color: var(--ink-faint);
 }
 .pv-session {
   flex: 1;
+  align-self: stretch;
   min-width: 0;
   text-align: left;
-  font-family: var(--font-serif);
-  font-size: var(--fs-ui-lg);
-  color: var(--ink-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
   background: none;
   border: none;
   padding: 0;
@@ -180,24 +211,32 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pv-session:hover {
-  color: var(--ink);
-}
 /* Revealed on hover, like the rail's own per-row actions — visible enough to
    find, quiet enough not to invite a mis-click. */
 .pv-session-remove {
   opacity: 0;
   flex: none;
+  font-size: var(--fs-footnote);
+  padding: 4px 6px;
 }
 .pv-sessions li:hover .pv-session-remove,
 .pv-session-remove:focus-visible {
   opacity: 1;
 }
 
+/* The last block takes something away, so it is the quietest thing on the
+   page, not the loudest. Nothing here deletes anything. */
 .pv-footer {
-  margin-top: 8px;
-  padding-top: 20px;
-  border-top: 1px solid var(--paper-edge);
+  border-bottom: none;
+  padding-bottom: 0;
+  gap: 2px;
+}
+.pv-footer .btn-text {
+  padding-left: 0;
+}
+.pv-footer .pv-hint {
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
 }
 
 .pv-gone {

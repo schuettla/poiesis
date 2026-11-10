@@ -1,10 +1,13 @@
 import { useMemo } from "react";
 import { useAppStore } from "../../lib/store";
 import { commandViews } from "../../lib/commands";
+import { SparkleIcon } from "../Icons/Icons";
 import "./SuggestionChip.css";
 
 /**
- * `AGC-2`: one slash command I think would clearly help, offered once.
+ * `AGC-2`: one slash command I think would clearly help, offered once. It
+ * takes the composer's one hint slot, after the read of the message (`SEE-3`)
+ * and "Last time" (`EPI-UI-1`): one line beside the send button at a time.
  *
  * One at a time: a newer suggestion replaces this one, and the backend never
  * offers the same command twice in a conversation. There is no badge, no count
@@ -34,17 +37,22 @@ export default function SuggestionChip() {
   if (!view || view.disabledReason) return null;
 
   return (
-    <div className="suggestion-chip" role="group" aria-label="A suggestion from me">
-      <span className="suggestion-chip-text">
-        <span aria-hidden="true">◆ </span>
+    <div
+      className="composer-hint suggestion-chip"
+      role="group"
+      aria-label="A suggestion from me"
+      title={`${suggestion.reason} · /${suggestion.command}`}
+    >
+      <SparkleIcon size={12} className="composer-hint-icon" />
+      <span className="composer-hint-text">
         {suggestion.reason}
         <span className="suggestion-chip-command"> · /{suggestion.command}</span>
       </span>
       <span className="suggestion-chip-actions">
-        <button className="btn-text" onClick={accept}>
+        <button type="button" className="composer-hint-action" onClick={accept}>
           Do it
         </button>
-        <button className="btn-text" onClick={dismiss}>
+        <button type="button" className="composer-hint-action" onClick={dismiss}>
           Not now
         </button>
       </span>

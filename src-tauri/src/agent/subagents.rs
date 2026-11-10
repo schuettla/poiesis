@@ -129,6 +129,23 @@ pub fn handles(name: &str) -> bool {
     matches!(name, "delegate" | "check_agents" | "collect_agents")
 }
 
+/// `WRK-14`: the `delegate` spec, with each task able to say which plan item it is.
+/// Only offered to a way of working that hands items out, so the spec every other
+/// run sees is untouched.
+pub fn with_item(mut spec: serde_json::Value) -> serde_json::Value {
+    if let Some(props) = spec.pointer_mut("/function/parameters/properties/tasks/items/properties") {
+        props["item"] = serde_json::json!({
+            "type": "integer",
+            "description": "Which item of your plan this task is, numbered from 1. The board shows who has it."
+        });
+        props["style"] = serde_json::json!({
+            "type": "string",
+            "description": "How the helper works: Lean (the default), Ad hoc, Command & Control, Mission Command or Swarm."
+        });
+    }
+    spec
+}
+
 pub fn describe(name: &str, args: &serde_json::Value) -> (String, String) {
     match name {
         "check_agents" => return ("checked".into(), "on my agents".into()),
@@ -171,6 +188,9 @@ pub struct TaskSpec {
     /// `RTE-4`: the label of the user's rule that fits (`U2`). Required when the
     /// agent is an agent app.
     pub because: Option<String>,
+    /// `WRK-18`: the way of working the helper runs under, as the lead named it.
+    /// `None` is Lean.
+    pub style: Option<String>,
 }
 
 impl TaskSpec {
@@ -207,6 +227,7 @@ pub fn parse_tasks(args: &serde_json::Value) -> Result<Vec<TaskSpec>, String> {
                 task: task.trim().to_string(),
                 output: None,
                 because: None,
+                style: None,
             },
             serde_json::Value::Object(_) => {
                 let task = ["task", "prompt", "instruction", "objective", "description"]
@@ -233,6 +254,11 @@ pub fn parse_tasks(args: &serde_json::Value) -> Result<Vec<TaskSpec>, String> {
                     because: entry
                         .get("because")
                         .or_else(|| entry.get("rule"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty()),
+                    style: entry
+                        .get("style")
                         .and_then(|v| v.as_str())
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty()),
@@ -728,6 +754,38 @@ pub async fn execute(
 }
 
 async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
+    let tasks = parse_tasks(args)?;
+    run_delegation(ctx, tasks, wants_background(args), None).await.map(|d| d.report)
+}
+
+/// How one child ended, for a caller that wants more than the lead's report.
+#[derive(Debug, Clone)]
+pub struct Finished {
+    pub conversation_id: String,
+    pub run_id: String,
+    pub text: String,
+    pub stop: crate::agent::fleet::StopReason,
+}
+
+/// What a delegation gave back: the report the lead reads, and how each child
+/// ended (empty when the children were left running in the background).
+#[derive(Debug, Clone)]
+pub struct Delegated {
+    pub report: String,
+    pub children: Vec<Finished>,
+}
+
+/// Start children for `tasks` and, unless they are left in the background, wait
+/// for them. `folders` is for the loop's own use (`WRK-6`: each way works in a
+/// copy of the folder): child `i` works in `folders[i]` instead of the lead's
+/// folder. It is never read from a model's arguments, so a model cannot point a
+/// child anywhere.
+pub async fn run_delegation(
+    ctx: &ToolContext<'_>,
+    tasks: Vec<TaskSpec>,
+    asked_background: bool,
+    folders: Option<&[std::path::PathBuf]>,
+) -> Result<Delegated, String> {
     let Some(del) = ctx.delegation else {
         return Err("Delegation isn't available in this run. Do the work yourself.".to_string());
     };
@@ -744,7 +802,7 @@ async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
     }
 
     let db = ctx.db;
-    let mut tasks = parse_tasks(args)?;
+    let mut tasks = tasks;
 
     // Caps, and say so — a lead that silently loses a branch reports on work
     // nobody did.
@@ -782,7 +840,6 @@ async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
     // for its own run and ends when it ends; a child that outlives it would
     // report to nobody, and its permission prompts would already have been
     // refused for exactly the same reason.
-    let asked_background = wants_background(args);
     let background = asked_background && !ctx.headless && crate::agent::background::available();
     if asked_background && !background {
         clipped_note.push_str(
@@ -900,14 +957,19 @@ async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
             .create_conversation(&title, None, false)
             .map_err(|e| format!("I couldn't open a workspace for the agent: {e}"))?;
         let _ = db.set_conversation_parent(&conv.id, ctx.conversation_id);
-        // Inherited, never widened: the child works where the parent works.
-        if let Some(path) = folder.as_deref() {
+        // Inherited, never widened: the child works where the parent works, or in
+        // the copy the loop made for it.
+        let child_folder = folders.and_then(|f| f.get(index)).map(|p| p.to_string_lossy().to_string()).or_else(|| folder.clone());
+        if let Some(path) = child_folder.as_deref() {
             let _ = db.set_conversation_folder(&conv.id, Some(path));
             let _ = db.set_conversation_trust(&conv.id, &trust);
         }
         if let Some(p) = &persona {
             let _ = db.set_conversation_persona(&conv.id, Some(&p.id), None);
         }
+        // `WRK-18`: a helper works one thing at a time unless the lead said otherwise.
+        // A preset that is gone is Ad hoc (`Work::resolve`), so nothing here can stop the job.
+        let _ = db.set_conversation_style(&conv.id, Some(spec.style.as_deref().unwrap_or("lean")));
 
         let run = del.fleet.open(
             &conv.id,
@@ -1022,11 +1084,11 @@ async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
         let count = spawns.len();
         crate::agent::background::submit(spawns);
         set_step_note(ctx, format!("{count} agent{} in the background", plural(count)));
-        return Ok(format!(
+        return Ok(Delegated { children: Vec::new(), report: format!(
             "{count} agent{} {} now working in the background. You do not have their answers yet:\n{started}\nCarry on without them. Use check_agents to see how they are doing, or collect_agents to read their reports once you need them — that one waits, so do not call it until you have nothing else to do. If you have nothing left in this turn, tell the user what you started and finish; they are told the moment each one lands.{clipped_note}",
             plural(count),
             if count == 1 { "is" } else { "are" }
-        ));
+        ) });
     }
 
     // --- run them together.
@@ -1034,6 +1096,7 @@ async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
         max_iterations: max_steps,
         deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64)),
         max_depth: usize::from(nested),
+        plan_ceiling: None,
     };
     let started = std::time::Instant::now();
     // For an agent-app child: where it works, and the most the folder allows.
@@ -1111,6 +1174,7 @@ async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
 
     // --- report back.
     let mut report = String::new();
+    let mut finished: Vec<Finished> = Vec::new();
     for (i, (child, outcome)) in children.iter().zip(outcomes.iter()).enumerate() {
         let secs = child.run.elapsed_ms() / 1000;
         let status = match outcome.stop_reason {
@@ -1126,6 +1190,12 @@ async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
             flag_report(ctx, &child.agent, text);
         }
 
+        finished.push(Finished {
+            conversation_id: child.conversation_id.clone(),
+            run_id: child.run.id.clone(),
+            text: text.to_string(),
+            stop: outcome.stop_reason,
+        });
         let _ = db.finish_subagent_run(
             &child.run.id,
             status,
@@ -1169,7 +1239,7 @@ async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
             if children.len() == 1 { "" } else { "s" }
         ),
     );
-    Ok(report.trim_end().to_string())
+    Ok(Delegated { report: report.trim_end().to_string(), children: finished })
 }
 
 /// `USE-8`: an agent app's report is outside text for the lead. The frame below
@@ -1226,6 +1296,7 @@ fn headline(stop_reason: &str, steps: usize, secs: u64) -> String {
         "aborted" => format!("stopped by the user after {steps} steps — this is what it had"),
         "timeout" => format!("ran out of time after {steps} steps — this is what it had"),
         "max_steps" => format!("hit its step limit ({steps} steps) — this is what it had"),
+        "stuck" => format!("was not getting anywhere ({steps} steps) — this is what it had"),
         "error" => format!("failed after {steps} steps"),
         _ => format!("finished after {steps} steps"),
     }
@@ -1944,5 +2015,16 @@ mod prematch_tests {
         let other = handover::against(pre.as_ref(), "claude-code", "U1");
         assert!(!other.agreed && other.matched.is_none(), "a different rule still asks");
         assert_eq!(handover::against(None, "claude-code", "U2"), handover::Against::default());
+    }
+
+    /// `WRK-14`: the `item` property exists only on the spec a swarm is given.
+    #[test]
+    fn a_swarm_spec_lets_a_task_name_its_plan_item_and_the_plain_spec_does_not() {
+        let plain = tool_specs()[0].clone();
+        let path = "/function/parameters/properties/tasks/items/properties/item";
+        assert!(plain.pointer(path).is_none());
+        let swarm = with_item(plain.clone());
+        assert_eq!(swarm.pointer(path).unwrap()["type"], "integer");
+        assert_eq!(swarm.pointer("/function/name"), plain.pointer("/function/name"));
     }
 }

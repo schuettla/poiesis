@@ -192,12 +192,10 @@ describe("what shows (RUN-T2)", () => {
     expect(line()).not.toContain("I asked you something");
   });
 
-  it("offers Continue where I stopped after a run that ran out", () => {
+  it("leaves Continue where I stopped to the turn's own stopped line", () => {
     put({
       runSummaries: { [CONV]: summary({ live: false, stopReason: "max_steps", files: ["a"] }) },
     });
-    expect(container.textContent).toContain("Continue where I stopped");
-    put({ runSummaries: { [CONV]: summary({ live: false, stopReason: "completed", files: ["a"] }) } });
     expect(container.textContent).not.toContain("Continue where I stopped");
   });
 });

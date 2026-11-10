@@ -40,7 +40,11 @@
   background: var(--paper);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xs);
+  /* The second shadow is a frame of canvas around the card. Pinned, the answer
+     scrolls past beneath it and showed through the rounded corners and the
+     gap below; the frame covers those. Listed last so it paints under the
+     soft shadow. */
+  box-shadow: var(--shadow-xs), 0 0 0 8px var(--canvas);
   animation: rise-in var(--dur-slow) var(--ease-out);
 }
 /* While pinned, the stream's top padding is a gap above the card that the
@@ -94,6 +98,9 @@
   margin-top: 8px;
 }
 .user-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-family: var(--font-sans);
   font-size: var(--fs-footnote);
   color: var(--ink-muted);
@@ -445,6 +452,28 @@
   line-height: 1.55;
   color: var(--ink-muted);
 }
+/* The way on, on the line that says why it stopped: the one action this line
+   exists to offer, so it reads as a button and not as more text. */
+.run-continue {
+  margin-left: 10px;
+  padding: 2px 9px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-xs);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+}
+.run-continue:hover {
+  border-color: var(--ink-faint);
+  background: color-mix(in srgb, var(--paper) 94%, var(--ink));
+}
+.run-continue:active {
+  transform: scale(0.97);
+}
 /* `SEE-2`: what the quick decisions understood, above the first text, and the
    receipt it becomes at the foot. Both are one muted line of the timeline's own
    size: they are a reading of the turn, not part of the answer, and the turn
@@ -604,17 +633,10 @@
 .mid-run-mark.pending {
   opacity: 0.7;
 }
-/* `USE-UI-2`: what a quick decision read the message as. Quiet, like the mark
-   beside it: it is a reading, and the words above it are what was said. */
+/* `USE-UI-2`: what a quick decision read the message as, continuing the mark's
+   own line: a reading in the same quiet words, never a badge. */
 .steer-tag {
-  margin-left: 8px;
-  padding: 0 6px;
-  font-weight: 400;
-  font-size: var(--fs-timeline);
-  letter-spacing: 0.02em;
-  color: var(--ink-faint);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-pill);
+  cursor: help;
 }
 /* A sure stop waits for an answer, in the same step as the plan's approval row. */
 .steer-stop {
@@ -683,6 +705,51 @@
   flex-direction: column;
   gap: 2px;
   margin-top: 10px;
+}
+.changed-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* More than one file folds to one line that opens to the list, hanging off a
+   hairline like a timeline's rows. */
+.changed-files.folds .changed-files-list {
+  margin: 2px 0 0 5px;
+  padding-left: 13px;
+  border-left: 1px solid var(--paper-edge);
+}
+.changed-files-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  min-height: var(--control-sm);
+  margin-left: -8px;
+  padding: 0 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.changed-files-head:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.changed-files-twisty {
+  display: inline-flex;
+  color: var(--ink-faint);
+}
+.changed-files-twisty svg {
+  transition: transform var(--dur) var(--ease-out);
+}
+.changed-files.open .changed-files-twisty svg {
+  transform: rotate(90deg);
+}
+.changed-files-undone {
+  color: var(--ink-faint);
 }
 .changed-file {
   display: flex;
@@ -860,6 +927,22 @@
 .timeline-rows > .step-band + .step,
 .timeline-rows > .step-band + .step-band {
   border-top: 1px solid var(--paper-edge);
+}
+/* `WRK-2`: where an item of the plan ended. A thin line with its words, like the
+   divider where the history was summarized, and not a step. */
+/* Where a plan item ended: a quiet band in line with the steps, one plain line. */
+.timeline-rows > .item-divider {
+  padding: 5px 12px;
+  border-top: 1px solid var(--paper-edge);
+  background: var(--fill-quiet);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  font-weight: 500;
+  color: var(--ink-muted);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .timeline-earlier {
   padding: 6px 12px;
@@ -1821,26 +1904,73 @@
 /* `HRN-UI-5`: what you can do with an answer once it exists. Quiet by design —
    these sit under every finished turn, so they have to be findable without
    competing with the answer they follow. */
+/* The foot of an answer: the quick-thinking receipt on the left, the actions and
+   the time on the right, on one line. A grid, so an opened receipt grows down in
+   its own column and the actions stay where they were. */
+.turn-foot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 14px;
+  margin-top: 6px;
+}
+.turn-foot > .thought-receipt {
+  grid-column: 1;
+  margin: 0;
+}
 .turn-actions {
+  grid-column: 2;
   display: flex;
   flex-direction: row;
-  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 14px;
-  margin-top: 6px;
+  gap: 2px;
+  min-height: var(--control-sm);
   opacity: 0;
   transition: opacity var(--dur) var(--ease-out);
 }
 .agent-run:hover .turn-actions,
-.turn-actions:focus-within {
+.turn-actions:focus-within,
+.turn-actions.menu-open {
   opacity: 1;
 }
 .turn-time {
+  margin-left: 8px;
   font-family: var(--font-sans);
   font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
   color: var(--ink-faint);
   white-space: nowrap;
+}
+/* The rarer actions behind a `⋯`, opening upward: the last answer sits right
+   above the composer, and a menu that dropped down would open under it. */
+.turn-more {
+  position: relative;
+  display: inline-flex;
+}
+.turn-more-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.turn-more-btn:hover,
+.turn-more-btn[aria-expanded="true"] {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.turn-more .row-menu {
+  top: auto;
+  bottom: calc(100% + 4px);
+  transform-origin: bottom right;
+  animation-name: pop-up;
 }
 
 /* ---- the plan (`PLN-UI-1`) ----
@@ -1862,15 +1992,52 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  min-height: 32px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--paper-edge);
+  min-height: 34px;
+  padding: 0 12px 0 10px;
   font-family: var(--font-sans);
   font-size: var(--fs-timeline);
 }
 .plan-title {
   font-weight: 500;
   color: var(--ink);
+}
+/* The head opens and closes the plan the way the steps head does: same size,
+   same chevron, a line under it only while it is open. */
+.plan-card.open .plan-head {
+  border-bottom: 1px solid var(--paper-edge);
+}
+.plan-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.plan-twisty {
+  flex: none;
+  display: inline-flex;
+  color: var(--ink-faint);
+}
+.plan-twisty svg {
+  transition: transform var(--dur) var(--ease-out);
+}
+.plan-card.open .plan-twisty svg {
+  transform: rotate(90deg);
+}
+.plan-toggle:hover .plan-twisty,
+.plan-toggle:hover .plan-title {
+  color: var(--ink);
+}
+.plan-toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 .plan-progress {
   font-family: var(--font-sans);
@@ -1880,6 +2047,11 @@
 }
 /* `PLN-UI-3`: the mark that says this list is not the first one. */
 .plan-revised {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--ink-faint);
   font-style: italic;
 }
@@ -1977,6 +2149,75 @@ button.plan-mark.ringed:hover {
 .plan-added {
   font-style: italic;
 }
+/* `WRK-2`: the preset a plan ran under, on the right of the head, muted. */
+.plan-style {
+  margin-left: auto;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+/* What done means for an item, under it, quieter than the item itself. */
+.plan-done-when {
+  display: block;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.plan-item.done .plan-done-when,
+.plan-item.dropped .plan-done-when {
+  display: none;
+}
+/* `WRK-14`: who has the item, when it is not me. Muted like the other asides. */
+.plan-by {
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+/* `WRK-10`: what done means. The same two columns as an item, set off from the list
+   by its own heading and a hairline: the agreement, then the work. */
+.plan-criteria {
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid var(--hairline);
+}
+.plan-criteria-title {
+  margin: 0 0 4px;
+  font-size: var(--fs-footnote);
+  font-weight: 600;
+  color: var(--ink-faint);
+}
+.plan-criteria ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.plan-criterion {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 9px;
+  align-items: start;
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  line-height: 1.5;
+  color: var(--ink);
+}
+.plan-criterion.met .plan-text {
+  color: var(--ink-faint);
+}
+/* `WRK-1`: the line is stopped. A band across the top of the card, plain ink on
+   the card's own edge colour: no alarm colour, the words carry it. */
+.plan-stopped {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--paper-edge);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--paper-edge);
+  font-family: var(--font-sans);
+  font-size: var(--fs-timeline);
+  color: var(--ink);
+}
+.plan-stopped code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
 .plan-history {
   margin: -2px 0 0;
   padding: 0 12px 10px;
@@ -2062,18 +2303,166 @@ button.plan-mark.ringed:hover {
 }
 
 /* `PLF-4`: the approval row under a plan I wrote while planning first. */
+/* The question under a plan that waits for a yes: the sentence, then the two
+   answers as real buttons, inside the card's own gutter. */
 .plan-approval {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 8px;
-  padding-top: 8px;
+  gap: 8px 12px;
+  padding: 10px 12px;
   border-top: 1px solid var(--hairline);
+  background: var(--fill-quiet);
+  font-family: var(--font-sans);
   font-size: var(--fs-ui);
 }
 .plan-approval-text {
-  flex: 1;
-  min-width: 180px;
+  flex: 1 1 220px;
   color: var(--ink-muted);
+}
+.plan-approval-actions {
+  display: flex;
+  gap: 8px;
+}
+.plan-approval + .plan-history {
+  padding-top: 8px;
+}
+
+/* `WRK-4`: what the second look said, under the item, quiet like "Done when". */
+.plan-review {
+  display: block;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.plan-review.back {
+  color: var(--ink-muted);
+}
+/* `WRK-6`: two ways while they are tried, and the line that says which was kept. */
+.plan-ways {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0 0 0 4px;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.plan-kept {
+  display: block;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.plan-other {
+  padding: 0;
+  font-size: inherit;
+}
+/* `WRK-7`: ⓘ on a move. The card opens on hover or focus and has a fixed width, so
+   it never reflows the list under it. */
+.plan-moves {
+  display: inline-flex;
+  gap: 2px;
+}
+.plan-move {
+  position: relative;
+  display: inline-block;
+}
+.plan-info {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0 3px;
+  font-family: inherit;
+  font-size: var(--fs-footnote);
+  line-height: 1.4;
+  color: var(--ink-faint);
+  cursor: help;
+}
+.plan-info:hover,
+.plan-info:focus-visible {
+  color: var(--ink);
+}
+.plan-move-card {
+  display: none;
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  top: 100%;
+  width: 17rem;
+  padding: 8px 10px;
+  flex-direction: column;
+  gap: 3px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  line-height: 1.4;
+  color: var(--ink);
+  text-align: left;
+}
+.plan-move:hover .plan-move-card,
+.plan-move:focus-within .plan-move-card {
+  display: flex;
+}
+.plan-move-from {
+  color: var(--ink-faint);
+}
+.plan-move-skip {
+  align-self: flex-start;
+  padding: 0;
+  font-size: inherit;
+}
+/* `WRK-5`: a fresh start is a line that opens the note the run wrote itself. */
+.timeline-rows > .item-divider.has-note {
+  padding: 0;
+}
+.item-divider-btn {
+  appearance: none;
+  display: block;
+  width: 100%;
+  padding: 5px 12px;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.item-divider-btn:hover,
+.item-divider-btn:focus-visible {
+  color: var(--ink);
+}
+.item-divider-note {
+  margin: 0;
+  padding: 6px 12px 8px;
+  max-height: 14rem;
+  overflow: auto;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  text-align: left;
+  color: var(--ink-muted);
+}
+
+/* `WRK-17`: the ⋯ at the end of the plan head. */
+.plan-more {
+  position: relative;
+  display: inline-flex;
+  margin-left: auto;
+}
+.plan-more-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.plan-more-btn:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
 }

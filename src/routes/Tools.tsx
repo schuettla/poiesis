@@ -169,8 +169,9 @@ function StepLimit() {
         </label>
         <p className="delegation-note">
           A step is one round of tool calls. When the count runs out I stop and answer with what I
-          have, rather than failing. Raise it for long builds; most questions never reach 12. For
-          one message, type <code>/steps 30</code>.
+          have, rather than failing. Work with a plan is not held to it: I go on while its steps
+          get done, and stop when 10 steps pass without one, or after 100. For one message, type{" "}
+          <code>/steps 30</code> to hold me to that number.
         </p>
       </div>
     </section>

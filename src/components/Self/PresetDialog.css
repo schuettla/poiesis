@@ -1,0 +1,70 @@
+/* The fields of the preset dialog. The card is the shared confirm shell; this only
+   lays the fields out, and keeps the sentence under them at a fixed height so the
+   dialog never jumps when a problem appears. */
+.preset-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+.preset-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+.preset-field .select {
+  display: block;
+  width: 100%;
+}
+.preset-note,
+.preset-problem {
+  margin: 0;
+  min-height: 1.4em;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.4;
+  color: var(--ink-muted);
+}
+.preset-problem {
+  color: var(--danger);
+}
+/* The rules the chosen start brings, in a box of fixed height: picking another start
+   never makes the dialog grow. */
+.preset-rules {
+  height: 128px;
+  overflow-y: auto;
+  padding: 8px 12px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--fill-quiet);
+  border: 1px solid var(--paper-edge);
+  border-radius: var(--radius);
+}
+.preset-rules ul {
+  margin: 0;
+  padding-left: 16px;
+}
+.preset-rules-empty {
+  margin: 0;
+  color: var(--ink-muted);
+}
+.preset-improve {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  cursor: pointer;
+}
+.preset-improve-help {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}

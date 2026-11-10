@@ -4,8 +4,10 @@
 //! visible timeline of steps as it goes (CHT-9).
 
 pub mod artifacts;
+pub mod aside;
 pub mod autocheck;
 pub mod background;
+pub mod branch;
 pub mod browser;
 pub mod changes;
 pub mod checkup;
@@ -23,6 +25,7 @@ pub mod diagnostics;
 pub mod diff;
 pub mod duplicates;
 pub mod episode;
+pub mod evolve;
 pub mod export;
 pub mod filesystem;
 pub mod fleet;
@@ -63,6 +66,7 @@ pub mod turn;
 pub mod untrusted;
 pub mod verify;
 pub mod websearch;
+pub mod work;
 
 use serde::{Deserialize, Serialize};
 
@@ -388,6 +392,44 @@ pub enum AgentEvent {
     /// A mid-run instruction was picked up and is now part of the transcript
     /// (`HRN-2`). The UI settles its optimistic "sent mid-run" mark on this.
     Steered { run_id: String, text: String },
+    /// `WRK-3`: how this run works. `preset` is the slug, `source` is where the
+    /// choice came from: `chat` (what the chat is set to) or `message` (a
+    /// `/style` for this message alone). Sent once, before the first request.
+    StyleSet { run_id: String, preset: String, name: String, source: String },
+    /// `WRK-2`: the loop began an item. `item` is its place in the plan, 0-based.
+    ItemStarted { run_id: String, item: usize, text: String, done_when: Option<String> },
+    /// `WRK-2`: an item is over. `outcome` is `done` or `dropped`. The timeline
+    /// draws the divider from this, so it is still there after a reload.
+    ItemEnded { run_id: String, item: usize, text: String, outcome: String, why: Option<String> },
+    /// `WRK-1`: a way of working did something. `mv` is the move's slug, `rule`
+    /// the id of the rule behind it, `text` that rule as a sentence (what the
+    /// hover will say), `from` where the rule comes from (`always`, `preset`,
+    /// `learned`, `trying`) and `since` when it was learned. `state` is `fired`,
+    /// or `skipped` when the person said "not this time" to it.
+    Move {
+        run_id: String,
+        item: Option<usize>,
+        mv: String,
+        rule: String,
+        text: String,
+        from: String,
+        since: String,
+        state: String,
+    },
+    /// `WRK-4`: someone who never saw the work is looking at an item. `state` is
+    /// `checking`, `checked` or `sent_back`; a send-back always has its `reason`.
+    Review { run_id: String, item: usize, state: String, reason: Option<String> },
+    /// `WRK-5`: the run forgot on purpose. The old transcript is gone; `note` is
+    /// what the new start was handed. The timeline draws a divider that opens it.
+    FreshStart { run_id: String, note: String },
+    /// `WRK-6`: two ways of doing an item are being tried, each in its own copy.
+    Branched { run_id: String, item: usize, id: String },
+    /// `WRK-6`: one of them was kept. `kept` is `a` or `b`.
+    BranchKept { run_id: String, item: usize, id: String, kept: String, reason: String },
+    /// `WRK-1`: a check failed and the line is stopped until it passes.
+    LineStopped { run_id: String, check: String, rule: String, text: String },
+    /// `WRK-1`: the check that stopped the line passes again.
+    LineCleared { run_id: String, check: String },
     /// `USE-4`: a quick decision left these tool groups off this turn's menu.
     /// `p` is how likely the model thought each was needed. Sent once, before the
     /// first request.

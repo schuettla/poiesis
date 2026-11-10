@@ -157,13 +157,6 @@ pub fn goal(state: String) -> SiteAsk {
     }
 }
 
-pub fn goal_from(v: &Verdict) -> Option<crate::agent::goal::Decision> {
-    match v.get("met")? {
-        Answer::Noul { p_true } => Some(crate::agent::goal::Decision { p: *p_true, calibrated: v.calibrated }),
-        _ => None,
-    }
-}
-
 // ---- RTE-7: what would the lead do with this request? ----
 
 /// What a routing choice says to do.
@@ -314,13 +307,6 @@ mod tests {
         let (state, cut) = crate::agent::decide::truncate_middle(&ask.state, 12_000);
         assert!(cut);
         assert!(state.contains("be-brief") && state.contains("Answer in one line."));
-    }
-
-    #[test]
-    fn the_goal_decision_carries_its_probability_and_calibration() {
-        let d = goal_from(&verdict("met", Answer::Noul { p_true: 0.83 })).unwrap();
-        assert!((d.p - 0.83).abs() < 1e-6);
-        assert!(!d.calibrated);
     }
 
     #[test]

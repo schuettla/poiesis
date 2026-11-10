@@ -6,23 +6,18 @@
 //!   already left that in `engine_signals`. Calibration joins it to the decision
 //!   when it runs. Nothing is copied into `decision_outcomes`, so the two cannot
 //!   drift.
-//! - **Written new**, for the things nothing else records. [`record_goal_event`]
-//!   is the first: the goal's end state lives on the screen, and this is the
-//!   hook the goal loop (`LRN-1`) left for this.
+//! - **Written new**, for the things nothing else records. The goal loop's
+//!   (`LRN-1`) was the first; it went with the loop (`ORG_LOOP_PLAN` `WRK-12`).
 //!
 //! Labels are data for calibration. They are never read as instructions.
 
 use super::calibration::{self, Obs, Truth, WEAK_WEIGHT};
 use super::policy::Purpose;
 use crate::db::decisions::DecisionRow;
-use crate::db::{now_ms, Db};
+use crate::db::Db;
 
 /// How far after a decision a signal still counts as the user's answer to it.
 const JOIN_WINDOW_MS: i64 = 6 * 60 * 60 * 1000;
-/// "At once" for a new goal after one judged met: ten minutes.
-const NEW_GOAL_WINDOW_MS: i64 = 10 * 60 * 1000;
-/// A goal round judged "not yet" counts as a confident one at or below this.
-const CONFIDENT_NOT_YET: f32 = 0.2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -196,64 +191,6 @@ pub fn observations(db: &Db, purpose: &str, model: &str) -> Vec<Obs> {
         .collect()
 }
 
-/// What happened to a goal that a decision had judged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GoalEvent {
-    /// The goal loop stopped because it was stuck (`LRN-1`).
-    Stalled,
-    /// The goal ran out of rounds.
-    Exhausted,
-    /// The user set a new goal.
-    NewGoal,
-}
-
-impl GoalEvent {
-    pub fn parse(s: &str) -> Option<GoalEvent> {
-        Some(match s {
-            "stalled" => GoalEvent::Stalled,
-            "exhausted" => GoalEvent::Exhausted,
-            "new-goal" => GoalEvent::NewGoal,
-            _ => return None,
-        })
-    }
-
-    fn source(self) -> &'static str {
-        match self {
-            GoalEvent::Stalled => "goal-stalled",
-            GoalEvent::Exhausted => "goal-exhausted",
-            GoalEvent::NewGoal => "goal-replaced",
-        }
-    }
-}
-
-/// `CTL-3`: label the goal check's last decision in a conversation.
-/// - Stalled or exhausted after a round the decision judged "not yet" with high
-///   confidence: weak right (the goal really was not met).
-/// - A new goal at once after one the decision judged met: weak wrong (the user
-///   did not think it was done).
-///
-/// Returns the label written, if any.
-pub fn record_goal_event(db: &Db, conversation_id: &str, event: GoalEvent) -> Option<Kind> {
-    record_goal_event_at(db, conversation_id, event, now_ms())
-}
-
-fn record_goal_event_at(db: &Db, conversation_id: &str, event: GoalEvent, now: i64) -> Option<Kind> {
-    let row = db.latest_decision(conversation_id, Purpose::GoalMet.name()).ok().flatten()?;
-    let (_, probs) = calibration::probs_of(&row.answers)?;
-    let p_met = *probs.first()?;
-    let kind = match event {
-        GoalEvent::Stalled | GoalEvent::Exhausted if p_met <= CONFIDENT_NOT_YET => Kind::WeakRight,
-        GoalEvent::NewGoal
-            if p_met >= Purpose::GoalMet.policy().act_at.at(row.calibrated) && now - row.at <= NEW_GOAL_WINDOW_MS =>
-        {
-            Kind::WeakWrong
-        }
-        _ => return None,
-    };
-    let written = db.add_outcome(&row.id, kind.code(), None, event.source()).ok()?;
-    written.then_some(kind)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,59 +279,6 @@ mod tests {
         assert!(!same_request("fix", "fix the thing in the other place"));
     }
 
-    // ---- CTL-T-2: written new ----
-
-    fn goal_answer(p: f32) -> serde_json::Value {
-        serde_json::json!({ "met": { "p": p } })
-    }
-
-    #[test]
-    fn a_goal_that_stalls_after_a_confident_not_yet_is_a_weak_right() {
-        let db = Db::open_in_memory().unwrap();
-        let conv = db.create_conversation("t", None, false).unwrap().id;
-        add(&db, "d1", "goal-met", Some(&conv), goal_answer(0.05), "Goal: x");
-        assert_eq!(record_goal_event(&db, &conv, GoalEvent::Stalled), Some(Kind::WeakRight));
-        assert_eq!(row(&db, "d1").outcomes[0].source, "goal-stalled");
-        // The same event twice counts once.
-        assert_eq!(record_goal_event(&db, &conv, GoalEvent::Stalled), None);
-    }
-
-    #[test]
-    fn a_goal_that_stalls_after_an_unsure_round_is_not_a_label() {
-        let db = Db::open_in_memory().unwrap();
-        let conv = db.create_conversation("t", None, false).unwrap().id;
-        add(&db, "d1", "goal-met", Some(&conv), goal_answer(0.5), "Goal: x");
-        assert_eq!(record_goal_event(&db, &conv, GoalEvent::Exhausted), None);
-        assert!(row(&db, "d1").outcomes.is_empty());
-    }
-
-    #[test]
-    fn a_new_goal_right_after_a_met_one_is_a_weak_wrong() {
-        let db = Db::open_in_memory().unwrap();
-        let conv = db.create_conversation("t", None, false).unwrap().id;
-        add(&db, "d1", "goal-met", Some(&conv), goal_answer(0.93), "Goal: x");
-        assert_eq!(record_goal_event(&db, &conv, GoalEvent::NewGoal), Some(Kind::WeakWrong));
-    }
-
-    #[test]
-    fn a_new_goal_long_after_is_just_a_new_goal() {
-        let db = Db::open_in_memory().unwrap();
-        let conv = db.create_conversation("t", None, false).unwrap().id;
-        add(&db, "d1", "goal-met", Some(&conv), goal_answer(0.93), "Goal: x");
-        let later = now_ms() + NEW_GOAL_WINDOW_MS + 60_000;
-        assert_eq!(record_goal_event_at(&db, &conv, GoalEvent::NewGoal, later), None);
-        // And a new goal after a "not yet" says nothing about the check.
-        add(&db, "d2", "goal-met", Some(&conv), goal_answer(0.1), "Goal: x");
-        assert_eq!(record_goal_event(&db, &conv, GoalEvent::NewGoal), None);
-    }
-
-    #[test]
-    fn with_no_decision_in_the_conversation_there_is_nothing_to_label() {
-        let db = Db::open_in_memory().unwrap();
-        let conv = db.create_conversation("t", None, false).unwrap().id;
-        assert_eq!(record_goal_event(&db, &conv, GoalEvent::Stalled), None);
-    }
-
     // ---- observations for the fit ----
 
     #[test]
@@ -413,6 +297,10 @@ mod tests {
         // A correction to something that was never an option still says "not the winner".
         assert_eq!(observation(&r, &[lab(Kind::Corrected, Some("nonsense"))]).unwrap().truth, Truth::NotClass(0));
         assert!(observation(&r, &[]).is_none());
+    }
+
+    fn goal_answer(p: f32) -> serde_json::Value {
+        serde_json::json!({ "met": { "p": p } })
     }
 
     #[test]

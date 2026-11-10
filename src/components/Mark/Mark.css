@@ -52,6 +52,109 @@
   }
 }
 
+/* `WRK-8`: the organization on the mark. Every shape here is a real event and
+   every one is also in the label; ink only, and when it is stopped everything
+   stands still. */
+.poiesis-mark .mark-flow circle {
+  fill: currentColor;
+  opacity: 0.8;
+}
+.poiesis-mark .mark-hub circle,
+.poiesis-mark .mark-aim circle,
+.poiesis-mark .mark-swarm circle {
+  fill: currentColor;
+  opacity: 0.8;
+}
+.poiesis-mark .mark-hub path,
+.poiesis-mark .mark-aim path {
+  stroke: currentColor;
+  stroke-width: 0.9;
+  stroke-linecap: round;
+  opacity: 0.7;
+}
+.poiesis-mark .mark-bud {
+  stroke: currentColor;
+  stroke-width: 1;
+  opacity: 0.7;
+}
+.poiesis-mark .mark-second {
+  stroke: currentColor;
+  stroke-width: 0.8;
+  opacity: 0.45;
+}
+/* The line is stopped: the nucleus holds its breath, whole. */
+.poiesis-mark.org-stopped .mark-nucleus {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .poiesis-mark .mark-flow {
+    transform-origin: 12px 12px;
+    animation: mark-orbit 3.2s linear infinite;
+  }
+  .poiesis-mark .mark-bud {
+    animation: mark-bud-in 0.8s ease-out both;
+  }
+  .poiesis-mark .mark-second {
+    animation: mark-second-in 0.9s ease-out both;
+  }
+  /* An item is done: a soft pulse, once. */
+  .poiesis-mark.org-pulse .mark-nucleus {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: mark-pulse 1.2s ease-out 1;
+  }
+  /* A fresh start: the nucleus fades and forms again. */
+  .poiesis-mark.org-fresh .mark-nucleus {
+    animation: mark-reform 1.6s ease-in-out 1;
+  }
+  /* The task is done: one slow breath of the membrane. */
+  .poiesis-mark.org-done .mark-membrane {
+    animation: mark-breathe-slow 3.6s ease-in-out 1;
+  }
+  .poiesis-mark.org-stopped,
+  .poiesis-mark.org-stopped * {
+    animation-play-state: paused;
+  }
+}
+@keyframes mark-bud-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.7;
+  }
+}
+@keyframes mark-second-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.45;
+  }
+}
+@keyframes mark-pulse {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.35);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes mark-reform {
+  0% {
+    opacity: 1;
+  }
+  45% {
+    opacity: 0.1;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
 @keyframes mark-breathe {
   0%,
   100% {
@@ -91,4 +194,48 @@
 /* The same mark, standing in as the Self destination's rail icon (PRES-3). */
 .rail .nav-icon .poiesis-mark {
   vertical-align: middle;
+}
+
+/* `WRK-3`: the glyph of a way of working. Ink only, nothing moves. */
+/* `WRK-21`: the fine layers. They fade in the first time they are drawn. */
+.poiesis-mark .mark-layer {
+  stroke: currentColor;
+  stroke-width: 0.5;
+  opacity: 0.35;
+  animation: mark-layer-in 2.4s ease-out;
+}
+@keyframes mark-layer-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .poiesis-mark .mark-layer {
+    animation: none;
+  }
+}
+.lock-mark {
+  margin-left: 6px;
+  vertical-align: -1px;
+  color: var(--ink-muted);
+}
+.style-glyph {
+  flex: none;
+  color: currentColor;
+}
+.style-glyph .glyph-membrane {
+  stroke: currentColor;
+  opacity: 0.7;
+}
+.style-glyph .glyph-nucleus,
+.style-glyph .glyph-dot {
+  fill: currentColor;
+}
+.style-glyph .glyph-line {
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }

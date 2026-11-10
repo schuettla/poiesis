@@ -30,7 +30,7 @@ pub mod episodes;
 mod episodes_tools;
 
 const SCHEMA: &str = include_str!("schema.sql");
-pub const SCHEMA_VERSION: i64 = 44;
+pub const SCHEMA_VERSION: i64 = 45;
 
 /// The rationale a skill-revision proposal is written with (`OUT-2`). Only
 /// display text — the proposal is *identified* by its `skill-revision` target,
@@ -104,6 +104,10 @@ pub struct Conversation {
     /// is offered to the lead in it.
     #[serde(default)]
     pub engines_off: bool,
+    /// `WRK-3`: how this chat works: the slug of a preset (`memory::ways`). `None`
+    /// means nobody chose, and the chat starts where its place says.
+    #[serde(default)]
+    pub style: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -1358,6 +1362,10 @@ impl Db {
                 Self::add_column(&conn, "change_proposals", column, "TEXT")?;
             }
         }
+        if current < 45 {
+            // v45 (`WRK-3`): how a chat works, as the slug of a preset. NULL is Ad hoc.
+            Self::add_column(&conn, "conversations", "style", "TEXT")?;
+        }
         //
         // v24 (`OBS-2`): `run_usage` is created by SCHEMA above and has no
         // columns to add to an existing table, so there is nothing to do here
@@ -1443,6 +1451,7 @@ impl Db {
             parent_conversation_id: None,
             project_id: None,
             engines_off: false,
+            style: None,
             created_at: ts,
             updated_at: ts,
         })
@@ -1844,7 +1853,7 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT id, title, model_id, persona_id, overrides_json, workspace, created_at, updated_at,
                     summary, summary_upto_message_id, reflected_at, folder_path, folder_trust,
-                    parent_conversation_id, project_id, engines_off
+                    parent_conversation_id, project_id, engines_off, style
              FROM conversations ORDER BY updated_at DESC",
         )?;
         let rows = stmt
@@ -2045,7 +2054,7 @@ impl Db {
             .query_row(
                 "SELECT id, title, model_id, persona_id, overrides_json, workspace, created_at, updated_at,
                         summary, summary_upto_message_id, reflected_at, folder_path, folder_trust,
-                        parent_conversation_id, project_id, engines_off
+                        parent_conversation_id, project_id, engines_off, style
                  FROM conversations WHERE id = ?1",
                 [id],
                 Self::map_conversation,
@@ -2293,6 +2302,14 @@ impl Db {
         conn.query_row("SELECT engine_session FROM conversations WHERE id = ?1", [id], |r| r.get(0))
             .ok()
             .flatten()
+    }
+
+    /// `WRK-3`: how this chat works, as a preset's slug. `None` means nobody chose:
+    /// the chat starts where its place says (`MemoryStore::default_for`).
+    pub fn set_conversation_style(&self, id: &str, style: Option<&str>) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE conversations SET style = ?2 WHERE id = ?1", params![id, style])?;
+        Ok(())
     }
 
     /// `RTE-5`: keep agent apps out of this chat (or let them back in).
@@ -2712,8 +2729,8 @@ impl Db {
         };
         conn.execute(
             "INSERT INTO conversations(id, title, model_id, persona_id, overrides_json, workspace,
-                                      folder_path, folder_trust, project_id, engines_off, created_at, updated_at)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+                                      folder_path, folder_trust, project_id, engines_off, style, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
             params![
                 new_conv_id,
                 title,
@@ -2728,6 +2745,8 @@ impl Db {
                 source.project_id,
                 // A chat told to keep agent apps out stays that way when forked.
                 source.engines_off as i64,
+                // How a chat works is a choice about the work, so a branch keeps it.
+                source.style,
                 ts
             ],
         )?;
@@ -2818,6 +2837,7 @@ impl Db {
                 parent_conversation_id: None,
                 project_id: source.project_id,
                 engines_off: source.engines_off,
+                style: source.style,
                 created_at: ts,
                 updated_at: ts,
             },
@@ -5226,6 +5246,7 @@ impl Db {
             parent_conversation_id: row.get(13)?,
             project_id: row.get(14)?,
             engines_off: row.get::<_, i64>(15)? != 0,
+            style: row.get(16)?,
         })
     }
 

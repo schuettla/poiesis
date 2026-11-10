@@ -17,6 +17,18 @@
     padding-right: 56px;
   }
 }
+/* Container queries cannot read `--chat-width`, so the wider settings repeat
+   the rule at their own threshold (width + gutters + the menu lane). */
+@container (max-width: 960px) {
+  :root[data-chat-width="medium"] .chat-body .main {
+    padding-right: 56px;
+  }
+}
+@container (max-width: 1140px) {
+  :root[data-chat-width="wide"] .chat-body .main {
+    padding-right: 56px;
+  }
+}
 
 /* Session actions, pinned to the top-right of the reading area. Outside the
    scroll container so it stays put as the conversation moves under it. */
@@ -59,7 +71,7 @@
 
 .conversation {
   width: 100%;
-  max-width: 700px;
+  max-width: var(--chat-width);
   /* The gap to the composer lives here, on the scrolled child — not as
      padding-bottom on `.main`. A flex scroll container's end padding is not
      reliably part of the scrollable overflow region, so putting it there

@@ -105,6 +105,9 @@ pub enum StopReason {
     Timeout,
     /// The tool-step budget ran out.
     MaxSteps,
+    /// Not getting anywhere: no plan item finished for a long stretch, or the
+    /// same call gave the same result again and again.
+    Stuck,
     /// The model call itself failed.
     Error,
 }
@@ -116,6 +119,7 @@ impl StopReason {
             StopReason::Aborted => "aborted",
             StopReason::Timeout => "timeout",
             StopReason::MaxSteps => "max_steps",
+            StopReason::Stuck => "stuck",
             StopReason::Error => "error",
         }
     }
@@ -151,11 +155,19 @@ pub struct RunLimits {
     pub deadline: Option<Instant>,
     /// How deep delegation may go below this run.
     pub max_depth: usize,
+    /// A run working to a plan is not held to `max_iterations`: it goes on while
+    /// items keep getting done, up to this runaway guard. `None` keeps the plain
+    /// budget (a helper, or a turn whose `/steps` was set by hand).
+    pub plan_ceiling: Option<usize>,
 }
+
+/// The runaway guard for a run working to a plan. Not a budget: the run stops
+/// long before it when it stops making progress.
+pub const PLAN_CEILING: usize = 100;
 
 impl Default for RunLimits {
     fn default() -> Self {
-        Self { max_iterations: 12, deadline: None, max_depth: 1 }
+        Self { max_iterations: 12, deadline: None, max_depth: 1, plan_ceiling: None }
     }
 }
 
@@ -174,7 +186,7 @@ impl RunLimits {
             .and_then(|v| v.trim().parse::<usize>().ok())
             .unwrap_or(12)
             .clamp(1, 50);
-        Self { max_iterations, ..Self::default() }
+        Self { max_iterations, plan_ceiling: Some(PLAN_CEILING), ..Self::default() }
     }
 
     /// `REG-5`: `/steps n` for one turn. Same clamp as the setting, so a chip
@@ -182,6 +194,8 @@ impl RunLimits {
     pub fn with_max_steps(mut self, steps: Option<usize>) -> Self {
         if let Some(n) = steps {
             self.max_iterations = n.clamp(1, 50);
+            // Asked for by hand, for this turn: it holds, plan or not.
+            self.plan_ceiling = None;
         }
         self
     }
@@ -193,6 +207,7 @@ impl RunLimits {
             max_iterations: 8,
             deadline: Some(Instant::now() + std::time::Duration::from_secs(300)),
             max_depth: 0,
+            plan_ceiling: None,
         }
     }
 
@@ -242,6 +257,13 @@ pub struct RunHandle {
     /// `HAB-1`: the lessons that spoke up at a tool call in this run, once each, for
     /// the record of what reached the answer.
     pub fired: Mutex<Vec<String>>,
+    /// `WRK-7`: rules the person said "not this time" to, waiting for the loop to
+    /// pick them up at the top of its next turn. Here because the click arrives from
+    /// outside the loop.
+    pub skips: Mutex<Vec<String>>,
+    /// `WRK-13`: a preset (its slug) the person asked for in the middle of the run,
+    /// waiting for the loop to apply it when no item is in hand.
+    pub style_switch: Mutex<Option<String>>,
 }
 
 impl RunHandle {
@@ -351,6 +373,8 @@ impl Fleet {
             thought: Mutex::new(Default::default()),
             check: Mutex::new(None),
             fired: Mutex::new(Vec::new()),
+            skips: Mutex::new(Vec::new()),
+            style_switch: Mutex::new(None),
             prematch: Mutex::new(None),
         });
         if let Ok(mut runs) = self.runs.lock() {

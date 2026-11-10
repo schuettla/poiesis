@@ -265,8 +265,9 @@ pub fn tool_specs() -> serde_json::Value {
                     "type": "object",
                     "properties": {
                         "id": { "type": "string", "description": "The artifact's id" },
-                        "content": { "type": "string", "description": "The full replacement content" },
-                        "title": { "type": "string", "description": "New title, if it should change. Omit to keep the current one." }
+                        "content": { "type": "string", "description": "The full replacement content, or with `append` the part to add" },
+                        "title": { "type": "string", "description": "New title, if it should change. Omit to keep the current one." },
+                        "append": { "type": "boolean", "description": "Add `content` to the end instead of replacing everything: how a long document is written part by part into one artifact." }
                     },
                     "required": ["id", "content"]
                 }
@@ -448,6 +449,14 @@ fn update(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, Str
         .get("content")
         .and_then(|c| c.as_str())
         .ok_or("missing 'content' argument")?;
+    // `append`: the next part of a document goes under what is there.
+    let joined;
+    let content = if args.get("append").and_then(|v| v.as_bool()).unwrap_or(false) {
+        joined = format!("{}\n\n{}", a.content.trim_end(), content.trim_start());
+        joined.as_str()
+    } else {
+        content
+    };
     let title = args
         .get("title")
         .and_then(|t| t.as_str())

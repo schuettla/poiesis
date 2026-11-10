@@ -48,7 +48,6 @@ beforeEach(() => {
       thinking: "",
     },
     pendingQuestion: null,
-    goals: {},
     busy: true,
   });
 });

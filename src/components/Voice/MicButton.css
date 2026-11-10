@@ -22,43 +22,14 @@
   cursor: progress;
   animation: mic-breathe 1.4s var(--ease-in-out) infinite;
 }
-/* The way back to voice mode (VOC-UI-2); its dot is the same "mic is open" dot. */
-.composer-wrap .voice-return {
+/* Voice mode, and the way back to a live one (VOC-UI-13): its dot is the same
+   "mic is open" dot as the mic's. */
+.composer-wrap .voice-mode-btn {
   position: relative;
 }
-.composer-wrap .voice-return.on {
+.composer-wrap .voice-mode-btn.on {
   color: var(--danger);
-}
-/* Mic and its chevron sit together as one control under the composer. */
-.voice-control {
-  display: flex;
-  align-items: center;
-}
-.cf-tools .icon-btn.voice-more {
-  width: 16px;
-  margin-left: -2px;
-  border-radius: var(--radius-sm);
-  color: var(--ink-faint);
-}
-.cf-tools .icon-btn.voice-more.on {
   background: var(--fill-press);
-  color: var(--ink);
-}
-.voice-menu {
-  min-width: 280px;
-}
-.voice-menu-note {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 10px 5px;
-  font-size: var(--fs-footnote);
-  color: var(--ink-faint);
-}
-.voice-menu-note .mi-icon {
-  display: inline-flex;
-  justify-content: center;
-  width: 18px;
 }
 
 .mic-dot {

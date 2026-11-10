@@ -96,6 +96,11 @@ pub struct Job {
     /// "Run now" never checks it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_if: Option<String>,
+    /// `WRK-18`: the way of working the task runs under (a preset slug). `None` is
+    /// Ad hoc. Nobody watches a scheduled run, so what needs a person (criteria,
+    /// check-ins) does not happen in it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
 }
 
 /// One entry of a task's history: a completed run, or a run the condition skipped.
@@ -134,6 +139,7 @@ fn seed_nightly_job() -> Job {
         source_conversation_id: None,
         runs: Vec::new(),
         run_if: None,
+        style: None,
     }
 }
 
@@ -159,6 +165,22 @@ fn load_jobs(db: &Db) -> Vec<Job> {
 fn save_jobs(db: &Db, jobs: &[Job]) -> Result<(), String> {
     let json = serde_json::to_string(jobs).map_err(|e| e.to_string())?;
     db.set_setting(JOBS_KEY, &json).map_err(|e| e.to_string())
+}
+
+/// `WRK-17`: the tasks that run under a preset, by name, for the check before it is deleted.
+pub fn jobs_using_style(db: &Db, slug: &str) -> Vec<String> {
+    load_jobs(db).into_iter().filter(|j| j.style.as_deref() == Some(slug)).map(|j| j.name).collect()
+}
+
+/// `WRK-17`: a preset is gone, so the tasks that named it run Ad hoc again.
+pub fn clear_job_style(db: &Db, slug: &str) {
+    let mut jobs = load_jobs(db);
+    if jobs.iter().any(|j| j.style.as_deref() == Some(slug)) {
+        for j in jobs.iter_mut().filter(|j| j.style.as_deref() == Some(slug)) {
+            j.style = None;
+        }
+        let _ = save_jobs(db, &jobs);
+    }
 }
 
 /// The most recent nightly first-person summary (SCH-UI-1), and whether the
@@ -432,6 +454,10 @@ async fn run_nightly_reflection_digest(app: &AppHandle, cancel: CancelFlag) -> (
     // `SLP-1`, step 3: the tidy-up. Input that stopped the reading stops it too, and
     // what it did not reach stays due.
     let tidy = if cancel.is_cancelled() { crate::commands::tidy::PassResult::default() } else { crate::commands::tidy::run_pass(app, &cancel).await };
+    // `WRK-19`: how I work evolves by what happened; its own class decides how.
+    if !cancel.is_cancelled() {
+        crate::commands::ways_self::evolve_daily(app).await;
+    }
     let stopped = cancel.is_cancelled();
 
     let bits = TidyBits {
@@ -700,6 +726,12 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
     if let Some(scope) = &job.scope {
         let _ = db.set_conversation_folder(&conversation_id, Some(scope));
     }
+    // `WRK-18`: the task's way of working. A preset that is gone is Ad hoc.
+    if let Some(preset) = job.style.as_deref().and_then(|s| memory.find_preset(s)) {
+        if preset.slug != crate::memory::ways::AD_HOC {
+            let _ = db.set_conversation_style(&conversation_id, Some(&preset.slug));
+        }
+    }
 
     // `TIER-4`: a scheduled run is on the local engine, so it is on that model's tier.
     let tier = crate::commands::agent::tier_of(&mgr, &db, &crate::commands::agent::ChatTarget::default()).await;
@@ -889,6 +921,9 @@ pub struct JobInput {
     /// `USE-7`: the "only run if" condition; blank or absent means none.
     #[serde(default)]
     pub run_if: Option<String>,
+    /// `WRK-18`: a preset slug or name; blank or absent means Ad hoc.
+    #[serde(default)]
+    pub style: Option<String>,
 }
 
 /// A condition as it is stored: trimmed, and `None` when it is blank.
@@ -918,6 +953,7 @@ pub fn create_scheduler_job_cmd(db: State<'_, Db>, input: JobInput) -> Result<Jo
         source_conversation_id: input.source_conversation_id,
         runs: Vec::new(),
         run_if: clean_condition(input.run_if),
+        style: clean_condition(input.style),
     };
     jobs.push(job.clone());
     save_jobs(&db, &jobs).map_err(PoiesisError::Message)?;
@@ -941,6 +977,7 @@ pub fn update_scheduler_job_cmd(
     existing.scope = input.scope;
     existing.enabled = input.enabled;
     existing.run_if = clean_condition(input.run_if);
+    existing.style = clean_condition(input.style);
     if input.enabled && !was_enabled {
         existing.next_run_at = crate::db::now_ms();
     }
@@ -1068,6 +1105,7 @@ mod tests {
             source_conversation_id: None,
             runs: Vec::new(),
             run_if: None,
+            style: None,
         });
         save_jobs(&db, &again).unwrap();
         let reloaded = load_jobs(&db);
@@ -1104,6 +1142,7 @@ mod tests {
             source_conversation_id: None,
             runs: Vec::new(),
             run_if: Some("there is a new release".into()),
+            style: None,
         }
     }
 

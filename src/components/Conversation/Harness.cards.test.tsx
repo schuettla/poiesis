@@ -141,6 +141,32 @@ describe("something I asked to change (AGC-4)", () => {
     expect(texts(".harness-proposal-actions button")).toEqual(["Switch", "Not now"]);
   });
 
+  it("offers another way of working by its name and line, with Switch and Keep going like this (WRK-13)", () => {
+    useAppStore.setState({
+      presets: [
+        {
+          slug: "mission-command",
+          name: "Mission Command",
+          line: "You set the goal, I find the way",
+          glyph: "mission-command",
+          built_in: true,
+          locked: false,
+          version: 1,
+          rules: [],
+          lineage: null,
+          parent: null,
+        },
+      ],
+    });
+    const offer = { ...proposal("switch_mode", { mode: "mission-command", style: true }), reason: "This is bigger than it looked: 9 files so far." };
+    render(<HarnessProposal proposal={offer} />);
+    expect(container.textContent).toContain(
+      "This is bigger than it looked: 9 files so far. Shall I switch to Mission Command: you set the goal, I find the way?"
+    );
+    expect(container.textContent).not.toContain("Workspace");
+    expect(texts(".harness-proposal-actions button")).toEqual(["Switch", "Keep going like this"]);
+  });
+
   it("asks to schedule, saying when and what, with Set it up and Not now", () => {
     render(<HarnessProposal proposal={proposal("schedule", { when: "every weekday at 9", task: "summarise my mail" })} />);
     expect(container.textContent).toContain("I'd like to run this every weekday at 9: summarise my mail");

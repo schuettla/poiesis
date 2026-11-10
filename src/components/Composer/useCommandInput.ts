@@ -276,7 +276,12 @@ export function useCommandInput({ value, setValue, focus, sendSkill, sendText, b
       lines.push({ kind: "header", key: "h:arg", label: argView.title });
       if (a.type === "choice" && a.source) {
         const choices = argChoices(a.source, typed, useAppStore.getState(), { facts });
+        let group: string | undefined;
         for (const choice of choices) {
+          if (choice.group && choice.group !== group) {
+            lines.push({ kind: "header", key: `h:g:${choice.group}`, label: choice.group });
+          }
+          group = choice.group;
           lines.push({ kind: "choice", key: `choice:${choice.value}`, choice, index: count++ });
         }
         if (!choices.length) {
@@ -339,7 +344,12 @@ export function useCommandInput({ value, setValue, focus, sendSkill, sendText, b
       for (const v of rankCommands(visible, q)) lines.push(commandLine(v, SECTION_LABEL[v.section], q));
     } else if (pickView && pickControl?.kind === "pick") {
       heading = { title: pickView.title };
+      let group: string | undefined;
       for (const choice of pickControl.options) {
+        if (choice.group && choice.group !== group) {
+          lines.push({ kind: "header", key: `h:g:${choice.group}`, label: choice.group });
+        }
+        group = choice.group;
         lines.push({
           kind: "choice",
           key: `pick:${choice.value}`,

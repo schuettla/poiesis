@@ -37,6 +37,10 @@ pub mod belief;
 /// Things I was asked to do later, fired by a trigger (`INT-1`/`INT-2`).
 pub mod intention;
 
+/// How I work: rules of "when …, I …" and the presets that bundle them
+/// (`WRK-1`/`WRK-3`).
+pub mod ways;
+
 /// Collections that hold entry files. Procedures used to be a third one; they
 /// are skills now (`SKL-5`), which live outside `memory/` entirely — they are
 /// files the user can hand to another agent, not part of this self.
@@ -778,6 +782,7 @@ impl MemoryStore {
         };
         // A fresh install still gets an index file, so the folder explains itself.
         store.write_index();
+        store.ensure_ways();
         Ok(store)
     }
 

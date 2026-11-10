@@ -38,6 +38,8 @@ pub fn reads(event: &AgentEvent) -> bool {
             | AgentEvent::Code { .. }
             | AgentEvent::UntrustedFlag { .. }
             | AgentEvent::Untrusted { .. }
+            | AgentEvent::ItemEnded { .. }
+            | AgentEvent::FreshStart { .. }
     )
 }
 
@@ -225,6 +227,34 @@ impl Timeline {
                     }
                 }
             }
+            // `WRK-2`: where one item of the plan ended. A thin divider, not a
+            // step: it has no verb and no target, so it is saved as a step that
+            // only says what it is, and the window draws it as a line.
+            "item_ended" => {
+                let what = text(event, "text").unwrap_or_default();
+                let outcome = text(event, "outcome").unwrap_or("done");
+                let n = self.steps.iter().filter(|s| s.get("divider").is_some()).count();
+                self.steps.push(json!({
+                    "id": format!("item-{n}"),
+                    "verb": "",
+                    "target": "",
+                    "status": "done",
+                    "divider": format!("{what} \u{b7} {outcome}"),
+                }));
+            }
+            // `WRK-5`: the run forgot on purpose. A divider like the item ones, that
+            // carries the handover note so a click can open it after a reload.
+            "fresh_start" => {
+                let n = self.steps.iter().filter(|s| s.get("divider").is_some()).count();
+                self.steps.push(json!({
+                    "id": format!("item-{n}"),
+                    "verb": "",
+                    "target": "",
+                    "status": "done",
+                    "divider": "Fresh start: I wrote myself a handover note",
+                    "note": text(event, "note").unwrap_or_default(),
+                }));
+            }
             _ => {}
         }
     }
@@ -276,6 +306,23 @@ mod tests {
 
     fn steps(t: &Timeline) -> Value {
         Value::Array(t.steps().to_vec())
+    }
+
+    /// `WRK-2`: an item that ends leaves a thin divider where it ended, saved with
+    /// the turn so a reload draws it again.
+    #[test]
+    fn an_item_that_ends_leaves_a_divider_between_the_steps() {
+        let t = fold(&[
+            json!({"type":"step_start","id":"a","verb":"read","target":"x"}),
+            json!({"type":"step_done","id":"a","result":null}),
+            json!({"type":"item_ended","run_id":"r","item":0,"text":"Export function","outcome":"done"}),
+            json!({"type":"step_start","id":"b","verb":"ran","target":"ls"}),
+            json!({"type":"item_ended","run_id":"r","item":1,"text":"Button","outcome":"dropped"}),
+        ]);
+        let dividers: Vec<&str> = t.steps().iter().filter_map(|s| s["divider"].as_str()).collect();
+        assert_eq!(dividers, vec!["Export function \u{b7} done", "Button \u{b7} dropped"]);
+        assert_eq!(t.steps().len(), 4, "in the order they happened");
+        assert_eq!(t.steps()[1]["divider"], json!("Export function \u{b7} done"));
     }
 
     #[test]

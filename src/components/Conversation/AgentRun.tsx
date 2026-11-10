@@ -15,7 +15,7 @@ import ProposalCard from "./ProposalCard";
 import QuestionCard from "./QuestionCard";
 import HarnessProposal from "./HarnessProposal";
 import Orb from "../Orb/Orb";
-import { ChevronIcon } from "../Icons/Icons";
+import { ChevronIcon, KebabIcon } from "../Icons/Icons";
 import { SpokenGlyph, StoppedHere } from "./SpokenMark";
 import { orbForStep } from "../Orb/orbState";
 import type { OrbState } from "thinking-orbs";
@@ -111,15 +111,13 @@ export function RunMeter({
   }
   const secs = Math.floor((Date.now() - run.startedAt) / 1000);
   const clock = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
-  // `OBS-3`: a percentage only where the window is actually known. Where it is
-  // not, the raw estimate still says something useful and claims nothing.
-  const context =
-    run.contextTokens > 0
-      ? run.contextWindow
-        ? `context ${Math.min(100, Math.round((run.contextTokens / run.contextWindow) * 100))}%`
-        : `about ${Math.round(run.contextTokens / 1000)}k in context`
-      : null;
+  // `OBS-3`: the window's fill is read on the model control's ring under the
+  // composer. The meter says it only once it is tight, the one moment it changes
+  // what to expect from the run.
   const tight = !!run.contextWindow && run.contextTokens / run.contextWindow > 0.8;
+  const context = tight
+    ? `context ${Math.min(100, Math.round((run.contextTokens / run.contextWindow!) * 100))}%`
+    : null;
   // What is happening right now, in this order of confidence: a tool that is
   // actually running, then thinking we can see arriving, then the honest
   // fallback — which names what the loop is really doing between steps, since
@@ -187,19 +185,35 @@ function ThinkingTrace({ text }: { text: string }) {
 /** `HRN-3`: why a turn stopped, when it stopped for anything but finishing.
  * The text above is what the run had in hand, and saying so is the difference
  * between a short answer and a truthful one. */
-export function StoppedNote({ reason }: { reason: StopReason }) {
+export function StoppedNote({ reason, canContinue = false }: { reason: StopReason; canContinue?: boolean }) {
+  const resumeLastRun = useAppStore((s) => s.resumeLastRun);
   const said: Record<StopReason, string> = {
     completed: "",
     aborted: "You stopped me. This is what I had.",
     timeout: "I ran out of time. This is what I had.",
     max_steps: "I stopped at my step limit. This is what I had.",
+    stuck: "I stopped because I was not getting anywhere. This is what I had.",
     error: "The model call failed partway. This is what I had.",
     // `VTN-6`: a spoken reply the user cut off has its own mark (`SpokenMark`).
     interrupted: "",
   };
   const text = said[reason];
   if (!text) return null;
-  return <p className="run-stopped">{text}</p>;
+  // `HRN-UI-5`: the way on sits on the line that says why it stopped. Only a run
+  // that ended at a limit or was interrupted, and only the last one, because
+  // "continue" has one meaning and it is the run at the end. A failed call is
+  // asked again, not continued.
+  const resumable = reason === "aborted" || reason === "timeout" || reason === "max_steps" || reason === "stuck";
+  return (
+    <p className="run-stopped">
+      {text}
+      {canContinue && resumable && (
+        <button className="run-continue" onClick={() => void resumeLastRun()}>
+          Continue where I stopped
+        </button>
+      )}
+    </p>
+  );
 }
 
 /** Inline chips for artifacts produced during this turn (CHT-6). Clicking one
@@ -241,11 +255,26 @@ function ChangedFiles({ ids }: { ids: string[] }) {
   const setDockOpen = useAppStore((s) => s.setDockOpen);
   const undoFileOp = useAppStore((s) => s.undoFileOp);
 
+  const [open, setOpen] = useState(false);
   const entries = ids.map((id) => trash.find((t) => t.id === id)).filter(Boolean);
   if (entries.length === 0) return null;
+  // One file is its own row; more fold into one line that opens to the list.
+  const folds = entries.length > 1;
+  const undone = entries.filter((t) => t!.undone).length;
 
   return (
-    <div className="changed-files">
+    <div className={`changed-files${folds ? " folds" : ""}${open ? " open" : ""}`}>
+      {folds && (
+        <button className="changed-files-head" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+          <span className="changed-files-twisty" aria-hidden="true">
+            <ChevronIcon dir="right" size={11} strokeWidth={1.6} />
+          </span>
+          Changed {entries.length} files
+          {undone > 0 && <span className="changed-files-undone">, {undone} undone</span>}
+        </button>
+      )}
+      {(!folds || open) && (
+        <div className="changed-files-list">
       {entries.map((t) => (
         <div key={t!.id} className={`changed-file ${t!.undone ? "undone" : ""}`}>
           <button
@@ -267,6 +296,8 @@ function ChangedFiles({ ids }: { ids: string[] }) {
           )}
         </div>
       ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -300,9 +331,9 @@ function WhyThisAnswer({ messageId }: { messageId: string }) {
  * meaning and it is the run at the end. It picks that run back up with its tool
  * results intact instead of paying for them twice.
  */
-function TurnActions({ message, last }: { message: Message; last: boolean }) {
+function TurnActions({ message, modelName }: { message: Message; modelName?: string }) {
+  const [more, setMore] = useState(false);
   const forkFromMessage = useAppStore((s) => s.forkFromMessage);
-  const resumeLastRun = useAppStore((s) => s.resumeLastRun);
   const busy = useAppStore((s) => s.busy);
   const requestRewind = useAppStore((s) => s.requestRewind);
   // `USE-UI-7`, `SEE-5`: only while `fast-slow` is on, and not while this answer is being checked.
@@ -320,11 +351,6 @@ function TurnActions({ message, last }: { message: Message; last: boolean }) {
   });
   if (message.streaming) return null;
 
-  const interrupted =
-    message.stopReason === "aborted" ||
-    message.stopReason === "timeout" ||
-    message.stopReason === "max_steps";
-
   const persisted = isPersistedId(message.id);
   const canAct = !busy && persisted;
   const when = message.createdAt
@@ -335,38 +361,71 @@ function TurnActions({ message, last }: { message: Message; last: boolean }) {
     : null;
   if (!when && !canAct) return null;
 
+  // The rarer two wait behind the `⋯`, so the line holds two words and a time.
+  const deeper = canAct && verifyOn && !checking && canVerify(message.text);
+  const rewind = canAct && !!askedBy;
+  const menu = deeper || rewind;
+
   // One line, shown on hover (or keyboard focus) so a finished turn stays as
   // quiet as its text until you reach for it.
   return (
-    <div className="turn-actions">
+    <div className={`turn-actions${more ? " menu-open" : ""}`}>
       {message.text && <WhyThisAnswer messageId={message.id} />}
       {canAct && (
         <button className="why-link" onClick={() => void forkFromMessage(message.id)}>
           Try again from here
         </button>
       )}
-      {canAct && verifyOn && !checking && canVerify(message.text) && (
-        <button
-          className="why-link"
-          onClick={() => void verifyMessage(message.id)}
-          title="Search the web for this answer's claims (their words leave this computer) and have my slower model review the doubtful ones"
-        >
-          Check more deeply
-        </button>
-      )}
-      {canAct && askedBy && (
-        <button className="why-link" onClick={() => requestRewind(askedBy)}>
-          Rewind to before this
-        </button>
-      )}
-      {canAct && last && interrupted && (
-        <button className="why-link" onClick={() => void resumeLastRun()}>
-          Continue where I stopped
-        </button>
+      {menu && (
+        <span className="turn-more">
+          <button
+            className="turn-more-btn"
+            aria-label="More for this answer"
+            aria-haspopup="menu"
+            aria-expanded={more}
+            title="More"
+            onClick={() => setMore((v) => !v)}
+          >
+            <KebabIcon size={14} />
+          </button>
+          {more && (
+            <>
+              <div className="row-menu-backdrop" onClick={() => setMore(false)} />
+              <div className="row-menu" role="menu">
+                {deeper && (
+                  <button
+                    className="row-menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      setMore(false);
+                      void verifyMessage(message.id);
+                    }}
+                    title="Search the web for this answer's claims (their words leave this computer) and have my slower model review the doubtful ones"
+                  >
+                    Check more deeply
+                  </button>
+                )}
+                {rewind && (
+                  <button
+                    className="row-menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      setMore(false);
+                      requestRewind(askedBy!);
+                    }}
+                  >
+                    Rewind to before this
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </span>
       )}
       {when && (
         <span className="turn-time">
           {message.spoken && <SpokenGlyph />}
+          {modelName && <span className="turn-model">{modelName} · </span>}
           {when}
         </span>
       )}
@@ -399,6 +458,33 @@ export function RunAsks({ message }: { message: Message }) {
 export default function AgentRun({ message, last = false }: { message: Message; last?: boolean }) {
   const model = message.model;
   const busyNow = useAppStore((s) => s.busy);
+  // Who answered is said over the answer only when it changed from the answer
+  // before. Otherwise it is in the hover line beside the time.
+  const sameModel = useAppStore((s) => {
+    if (!model) return false;
+    const list = s.conversations.find((c) => c.id === s.activeConversationId)?.messages ?? [];
+    for (let i = list.findIndex((m) => m.id === message.id) - 1; i >= 0; i--) {
+      const prev = list[i].role === "assistant" ? list[i].model : undefined;
+      if (prev) return prev.name === model.name && prev.provenance === model.provenance;
+    }
+    return false;
+  });
+  // Is this the newest turn of the chat that has a plan? Only that one is shown whole.
+  const newestPlan = useAppStore((s) => {
+    const conv = s.conversations.find((c) => c.id === s.activeConversationId);
+    const list = conv?.messages ?? [];
+    for (let i = list.length - 1; i >= 0; i--) if (list[i].plan) return list[i].id === message.id;
+    return true;
+  });
+  // `WRK-1`: the check that stopped the line, while this turn is the one running.
+  const stopped = useAppStore((s) =>
+    message.streaming && s.activeConversationId ? s.runSummaries[s.activeConversationId]?.stopped?.check : undefined
+  );
+  // `WRK-7`/`WRK-6`: while this turn is the one running, the run behind its board
+  // (for "Not this time") and the item being tried two ways.
+  const liveRun = useAppStore((s) =>
+    message.streaming && s.activeConversationId ? s.runSummaries[s.activeConversationId] : undefined
+  );
   // Video counts as media here too — filtering to `"image"` used to drop a
   // generated clip on the floor, leaving the turn showing only its timeline
   // step while the MP4 sat in Library.
@@ -445,7 +531,7 @@ export default function AgentRun({ message, last = false }: { message: Message; 
 
   return (
     <div className="agent-run">
-      {model && (
+      {model && !sameModel && (
         <div className="run-header">
           <span className={`provenance-dot ${model.provenance}`} aria-hidden="true" />
           <span className="agent-label">Agent</span>
@@ -454,7 +540,18 @@ export default function AgentRun({ message, last = false }: { message: Message; 
       )}
       {/* `PLN-UI-1`: above the timeline, because the plan is what the steps
           below it are for. */}
-      {message.plan && <PlanCard plan={message.plan} actionable={last && !message.streaming && !busyNow} />}
+      {/* `WRK-9`: how I am working rides in the plan's own header. */}
+      {message.plan && (
+        <PlanCard
+          plan={message.plan}
+          live={!!message.streaming}
+          actionable={last && !message.streaming && !busyNow}
+          stopped={stopped}
+          runId={liveRun?.live ? liveRun.runId : undefined}
+          branching={liveRun?.branching?.item}
+          folded={!newestPlan}
+        />
+      )}
       {/* `SEE-2`: what the quick decisions understood, before the first word. */}
       <ThoughtStrip message={message} />
       {message.steps && <Timeline steps={message.steps} live={!!message.streaming} />}
@@ -482,19 +579,28 @@ export default function AgentRun({ message, last = false }: { message: Message; 
       )}
       {isThinking && <Thinking label={thinkingLabel} />}
       {message.streaming && <RunMeter steps={message.steps} orb={meterOrb} />}
-      {!message.streaming && message.stopReason && <StoppedNote reason={message.stopReason} />}
+      {!message.streaming && message.stopReason && (
+        <StoppedNote
+          reason={message.stopReason}
+          canContinue={last && !busyNow && isPersistedId(message.id)}
+        />
+      )}
       {!message.streaming && <StoppedHere message={message} />}
       {saidNothing && <SaidNothing />}
       {noAnswer && <NoAnswer />}
-      {/* `SEE-2`: the same strip once the run is over, as a receipt. */}
-      <ThoughtReceipt message={message} />
-      <TurnActions message={message} last={last} />
+      {/* What the turn made, before what you can do with it. */}
       {message.artifactIds && message.artifactIds.length > 0 && (
         <ArtifactChips ids={message.artifactIds} />
       )}
       {message.fileChangeIds && message.fileChangeIds.length > 0 && (
         <ChangedFiles ids={message.fileChangeIds} />
       )}
+      {/* `SEE-2` receipt on the left, the hover actions and time on the right:
+          one line at the foot of the answer. */}
+      <div className="turn-foot">
+        <ThoughtReceipt message={message} />
+        <TurnActions message={message} modelName={model && sameModel ? model.name : undefined} />
+      </div>
       <RunAsks message={message} />
     </div>
   );

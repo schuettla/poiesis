@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useActiveConversation, useAppStore } from "../lib/store";
+import { isPersistedId, useActiveConversation, useAppStore } from "../lib/store";
 import type { BlockView, Message, UINode } from "../lib/types";
 import RunText from "../components/Conversation/RunText";
 import PlanCard from "../components/Conversation/PlanCard";
@@ -171,7 +171,9 @@ function WorkspaceReply({ message }: { message: Message }) {
           )}
         </div>
       )}
-      {!message.streaming && message.stopReason && <StoppedNote reason={message.stopReason} />}
+      {!message.streaming && message.stopReason && (
+        <StoppedNote reason={message.stopReason} canContinue={!busy && isPersistedId(message.id)} />
+      )}
     </>
   );
 }

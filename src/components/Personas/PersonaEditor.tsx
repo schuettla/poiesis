@@ -119,6 +119,10 @@ interface Draft {
   /** `CA-UI-6`: the connected apps this persona may use. `null` is untouched, so
    * Save leaves what is stored alone. */
   appGrants: api.PersonaAppGrant[] | null;
+  /** `WRK-17`: the preset (a slug) chats with this persona start with, or `""` for none. */
+  style: string;
+  /** What was stored when the form opened, so Save only writes a change. */
+  styleWas: string;
 }
 
 const EMPTY: Draft = {
@@ -133,6 +137,8 @@ const EMPTY: Draft = {
   description: "",
   spawnable: false,
   engineId: "",
+  style: "",
+  styleWas: "",
 };
 
 /** `PER-UI-1`: what this persona may do — checked-but-disabled + a note is how
@@ -227,6 +233,8 @@ export default function PersonaEditor() {
   const updatePersona = useAppStore((s) => s.updatePersona);
   const deletePersona = useAppStore((s) => s.deletePersona);
   const setDefaultPersona = useAppStore((s) => s.setDefaultPersona);
+  const presets = useAppStore((s) => s.presets);
+  const loadPresets = useAppStore((s) => s.loadPresets);
 
   const [draft, setDraft] = useState<Draft | null>(null);
   // `CLI-UI-4`: the agent apps a persona can run on: the ones that take jobs and
@@ -286,7 +294,19 @@ export default function PersonaEditor() {
       spawnable: p.spawnable,
       engineId: p.engine_id ?? "",
       appGrants: null,
+      style: "",
+      styleWas: "",
     });
+    // `WRK-17`: how this persona works is read from where the defaults live.
+    if (api.inTauri()) {
+      api
+        .waysView()
+        .then((v) => {
+          const at = v.defaults.find((d) => d.scope === `persona:${p.id}`)?.preset ?? "";
+          setDraft((d) => (d && d.id === p.id ? { ...d, style: at, styleWas: at } : d));
+        })
+        .catch(() => {});
+    }
   }
 
   function toggleTool(id: string) {
@@ -369,6 +389,16 @@ export default function PersonaEditor() {
           engineId: draft.spawnable && draft.engineId ? draft.engineId : null,
         });
         savedId = created?.id ?? null;
+      }
+      // `WRK-17`: how chats with this persona start. Only a change is written.
+      if (savedId && draft.style !== draft.styleWas) {
+        try {
+          await api.setStyleDefault(`persona:${savedId}`, draft.style || null);
+          await loadPresets();
+        } catch (e) {
+          setSaveError(`The persona is saved, but how it works wasn't: ${String(e).replace(/^Error:s*/, "")}`);
+          return;
+        }
       }
       // Which apps it may use is saved with it, like its tools and skills.
       if (draft.appGrants && savedId) {
@@ -473,6 +503,24 @@ export default function PersonaEditor() {
           <p className="field-hint">
             I read this when deciding who to hand a job to, so say what it is good at.
           </p>
+
+          {/* `WRK-17`: the way of working chats with this persona start in. */}
+          <label className="field-label" htmlFor="persona-style">
+            How this persona works
+          </label>
+          <select
+            id="persona-style"
+            className="field-input"
+            value={draft.style}
+            onChange={(e) => setDraft({ ...draft, style: e.target.value })}
+          >
+            <option value="">The default</option>
+            {presets.map((p) => (
+              <option key={p.slug} value={p.slug}>
+                {p.name}
+              </option>
+            ))}
+          </select>
 
           <label className="persona-spawnable">
             <input

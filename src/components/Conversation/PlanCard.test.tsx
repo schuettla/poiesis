@@ -131,7 +131,7 @@ describe("a plan waiting for approval (PLF-4)", () => {
 
   it("offers Go ahead and Change something, and says nothing has changed", () => {
     render(waiting, true);
-    expect(labels()).toEqual(["Go ahead", "Change something"]);
+    expect(labels()).toEqual(["Change something", "Go ahead"]);
     expect(container.querySelector(".plan-approval")?.textContent).toContain("Nothing has changed yet");
   });
 
@@ -150,10 +150,33 @@ describe("a plan waiting for approval (PLF-4)", () => {
     const revisePlan = vi.fn();
     useAppStore.setState({ approvePlan, revisePlan });
     render(waiting, true);
-    const [go, change] = Array.from(container.querySelectorAll<HTMLButtonElement>(".plan-approval button"));
+    const [change, go] = Array.from(container.querySelectorAll<HTMLButtonElement>(".plan-approval button"));
     act(() => go.click());
     expect(approvePlan).toHaveBeenCalledWith(waiting);
     act(() => change.click());
     expect(revisePlan).toHaveBeenCalledTimes(1);
+  });
+});
+
+// An earlier turn's plan is one line, so the chat does not repeat the whole plan
+// on every turn; a click opens it.
+describe("a plan a newer turn has replaced", () => {
+  it("is folded to its head until opened", () => {
+    const plan: PlanView = {
+      items: [
+        { text: "Research", status: "done" },
+        { text: "Draft", status: "todo" },
+      ],
+      revisions: 0,
+    };
+    act(() => root.render(<PlanCard plan={plan} folded />));
+    const head = container.querySelector<HTMLButtonElement>(".plan-toggle")!;
+    expect(head.textContent).toBe("My plan1 of 2 done");
+    expect(head.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".plan-items")).toBeNull();
+    act(() => head.click());
+    expect(container.querySelectorAll(".plan-item")).toHaveLength(2);
+    act(() => head.click());
+    expect(container.querySelector(".plan-items")).toBeNull();
   });
 });

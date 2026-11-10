@@ -110,6 +110,14 @@
   color: var(--ink);
   margin: 0 0 10px;
 }
+/* `WRK-11`: what was asked for before this was put to you. One line above what would
+   change, in the footnote grey: it informs, and the question below is unchanged. */
+.permission-advice {
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  margin: 0 0 10px;
+}
 .permission-remember {
   display: flex;
   align-items: baseline;

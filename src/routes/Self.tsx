@@ -45,6 +45,7 @@ export default function Self() {
   const vitality = useAppStore((s) => s.vitality);
   const born = useAppStore((s) => s.selfBorn);
   const lessons = useAppStore((s) => s.lessons);
+  const growth = useAppStore((s) => s.orgGrowth);
 
   const facts = vitality?.facts ?? 0;
   const lessonCount = vitality?.lessons ?? 0;
@@ -74,7 +75,7 @@ export default function Self() {
               {unsure > 0 && <Stat n={unsure} one="I'm unsure about" many="I'm unsure about" />}
             </div>
           </div>
-          {born && <GrowthRings entries={entries} born={born} />}
+          {born && <GrowthRings entries={entries} born={born} changes={growth.moments.map((m) => ({ created: m.date }))} />}
         </header>
 
         <SelfPanel />

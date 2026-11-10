@@ -54,6 +54,8 @@ export interface DbConversation {
   project_id?: string | null;
   /** `RTE-5`: this chat keeps external agent apps out. */
   engines_off?: boolean;
+  /** `WRK-3`: how this chat works, as a preset's slug. Null is Ad hoc. */
+  style?: string | null;
 }
 
 /** `PRJ-1`: a working directory and the sessions that happened in it. */
@@ -441,7 +443,7 @@ export const stopChat = () => invoke<void>("stop_chat_cmd");
  * what the run had in hand, not what it set out to say. */
 /** `interrupted` (`VTN-6`) is a spoken reply the user cut off: what was saved is
  * only what they heard. */
-export type StopReason = "completed" | "aborted" | "timeout" | "max_steps" | "error" | "interrupted";
+export type StopReason = "completed" | "aborted" | "timeout" | "max_steps" | "stuck" | "error" | "interrupted";
 
 /** What a run cost, when the provider reported it (`OBS-1`). */
 export interface TurnUsage {
@@ -544,6 +546,40 @@ export type AgentEvent =
    * current state cannot drift out of step with the model's copy. */
   | { type: "plan"; run_id: string; plan: PlanView }
   | { type: "steered"; run_id: string; text: string }
+  /** `WRK-3`: how this run works. `source` is `chat` (what the chat is set to) or
+   * `message` (a `/style` for this message alone), or `switch` when it changed in the middle
+   * of the run (`WRK-13`). */
+  | { type: "style_set"; run_id: string; preset: string; name: string; source: "chat" | "message" | "switch" }
+  /** `WRK-2`: an item began. The plan event carries the same fact; this is for
+   * what wants the moment itself. */
+  | { type: "item_started"; run_id: string; item: number; text: string; done_when: string | null }
+  /** `WRK-2`: an item is over. The timeline draws a divider from it. */
+  | { type: "item_ended"; run_id: string; item: number; text: string; outcome: "done" | "dropped"; why: string | null }
+  /** `WRK-1`: a way of working did something (`mv` is the move's slug). `from`
+   * is where its rule comes from, `since` when it was learned. */
+  | {
+      type: "move";
+      run_id: string;
+      item: number | null;
+      mv: string;
+      rule: string;
+      text: string;
+      from: string;
+      since: string;
+      state: string;
+    }
+  /** `WRK-4`: someone who never saw the work is looking at an item. A send-back
+   * always has its reason. */
+  | { type: "review"; run_id: string; item: number; state: "checking" | "checked" | "sent_back"; reason: string | null }
+  /** `WRK-5`: the run forgot on purpose and went on from a handover note. */
+  | { type: "fresh_start"; run_id: string; note: string }
+  /** `WRK-6`: two ways of doing an item are being tried, each in its own copy. */
+  | { type: "branched"; run_id: string; item: number; id: string }
+  /** `WRK-6`: one of the two was kept. */
+  | { type: "branch_kept"; run_id: string; item: number; id: string; kept: "a" | "b"; reason: string }
+  /** `WRK-1`: a check failed, so the line is stopped until it passes. */
+  | { type: "line_stopped"; run_id: string; check: string; rule: string; text: string }
+  | { type: "line_cleared"; run_id: string; check: string }
   /** `USE-4`: a quick decision left these tool groups off this turn's menu.
    * `p` is how likely the model thought each was needed. */
   | { type: "tools_held"; run_id: string; units: HeldTool[] }
@@ -563,7 +599,7 @@ export type AgentEvent =
       id: string;
       name: "switch_mode" | "schedule" | "compact";
       reason: string;
-      payload: { mode?: "workspace" | "plan_first"; auto?: boolean; when?: string; task?: string };
+      payload: { mode?: string; style?: boolean; auto?: boolean; when?: string; task?: string };
     }
   /** `AGC-2`: one of your slash commands would clearly help. */
   | { type: "suggestion"; run_id: string; command: string; reason: string }
@@ -691,6 +727,9 @@ export interface PermissionRequest {
   reason?: string;
   /** `SEE-4`: the hover on that line, with the number the quick decision gave. */
   reason_hover?: string;
+  /** `WRK-11`: what was asked for before this was put to you, one line, shown above
+   * what would change: "I asked first: your notes say /old is a backup folder." */
+  advice?: string;
   /** `USE-11`: for a `page` card, the page that stopped the browser: where it is,
    * what the quick check took it for (`wall`), the screenshot's path and a line
    * saying what was seen and how sure. */
@@ -810,7 +849,7 @@ export interface TurnInput {
   /** A block or surface action: the recall query in place of `text`. */
   action?: string;
   attachments: { kind: string; name: string; path: string; dataUri?: string }[];
-  refs: { kind: "conversation" | "artifact"; id: string; label: string }[];
+  refs: { kind: "conversation" | "artifact" | "file"; id: string; label: string }[];
   /** `W2`: workspace interactions since the last reply, already worded. */
   pendingActions: string[];
   lastTime?: { at: number; conversationId: string; digest: string; skill: string | null };
@@ -848,6 +887,10 @@ export interface TurnRunOptions {
   web?: boolean;
   /** `SEE-3`: no handover rule is matched; the lead does it itself. */
   noHandover?: boolean;
+  /** `WRK-3`: a preset for this message alone (`/style lean <message>`). */
+  style?: string;
+  /** `WRK-12`: what done means, said up front (`/goal ... until ...`): agreed, so not asked. */
+  criteria?: string[];
 }
 
 /** `SEE-3`: the one line the composer may show under what is typed. */
@@ -1015,22 +1058,6 @@ export function sideQuestion(
 
 /** `BTW-UI-1`: Dismiss. Stops the answer that is streaming. */
 export const cancelSideQuestion = () => invoke<void>("cancel_side_question_cmd");
-
-/** `GOL-2`: has the goal been reached. Judged from my last answer and what I
- * changed; it never starts a turn. */
-export interface GoalCheck {
-  met: boolean;
-  /** What shows it. Empty unless `met`. */
-  evidence: string;
-  /** What is left. Empty when `met`. */
-  next: string;
-  /** `DEC-6`: how likely the quick decision judged the goal to hold, 0 to 1.
-   * Absent when the check came from the written answer alone. */
-  p?: number;
-}
-
-export const goalCheck = (conversationId: string, objective: string, until: string, target?: ChatTarget) =>
-  invoke<GoalCheck>("goal_check_cmd", { conversationId, objective, until, target });
 
 /** `UCM-9`: the conversation as Markdown. Nothing is written until it is saved. */
 export const exportConversation = (conversationId: string) =>
@@ -2427,9 +2454,6 @@ export function calibrateDecide(onProgress: (p: CalibrateProgress) => void): Pro
   ch.onmessage = onProgress;
   return invoke<CalibrationReport[]>("calibrate_decide_cmd", { onProgress: ch });
 }
-/** `CTL-3`: something happened to a goal the decision had judged. */
-export const recordGoalOutcome = (conversationId: string, event: "stalled" | "exhausted" | "new-goal") =>
-  invoke<string | null>("record_goal_outcome_cmd", { conversationId, event });
 export const setDefaultDecideModel = (id: string) => invoke<void>("set_default_decide_model_cmd", { id });
 export const deleteDecideModel = (id: string) => invoke<void>("delete_decide_model_cmd", { id });
 export const setDecidePlacement = (placement: DecidePlacement) =>
@@ -3024,6 +3048,211 @@ export const resetEngineRules = (engineId: string) => invoke<EngineInfo[]>("engi
 /** `RTE-5`: keep agent apps out of one chat. */
 export const setConversationEnginesOff = (id: string, off: boolean) =>
   invoke<void>("set_conversation_engines_off_cmd", { id, off });
+/** `WRK-7`: "Not this time": skip a way of working's move the next time it would
+ * happen in this run, once. `false` when the run is over. */
+export const skipMove = (runId: string, ruleId: string) => invoke<boolean>("skip_move_cmd", { runId, ruleId });
+
+/** `WRK-13`: work another way from the next item on. `false` when the run is over. */
+export const switchRunStyle = (runId: string, preset: string) =>
+  invoke<boolean>("switch_run_style_cmd", { runId, preset });
+
+/** `WRK-6`: both ways of an item that was tried two ways, as they were kept. */
+export interface BranchView {
+  kept: "a" | "b";
+  reason: string;
+  text: string;
+  /** What each helper said it did, `[a, b]`. */
+  ways: string[];
+  /** What each changed, as a patch, `[a, b]`. */
+  patches: string[];
+  files: number[];
+  children: string[];
+}
+export const branchView = (id: string) => invoke<BranchView | null>("branch_view_cmd", { id });
+
+/** `WRK-3`: one preset, as the `/style` menu and the chip draw it. */
+export interface PresetView {
+  slug: string;
+  name: string;
+  /** The second line: what it means here, in a sentence. */
+  line: string;
+  /** Which glyph draws it. */
+  glyph: string;
+  built_in: boolean;
+  locked: boolean;
+  version: number;
+  /** What it switches on, as sentences, for the hover. */
+  rules: string[];
+  /** "from Lean, Nov 7": where it comes from, when it came from somewhere (`WRK-20`). */
+  lineage?: string | null;
+  /** The preset it branched off, when evolution made it. */
+  parent?: string | null;
+}
+export const presetsList = () => invoke<PresetView[]>("presets_list_cmd");
+/** How one chat works. `null` puts it back to Ad hoc; resolves to the slug kept. */
+export const setConversationStyle = (id: string, preset: string | null) =>
+  invoke<string | null>("set_conversation_style_cmd", { id, preset });
+
+// ---- Self → How I work (`WRK-16`, `WRK-17`) ----
+
+export interface WaysChoice {
+  value: string;
+  label: string;
+}
+export interface WayEvidence {
+  id: string;
+  title: string;
+}
+export type WayStatus = "always" | "learned" | "trying" | "retired";
+export interface WayView {
+  slug: string;
+  /** "When a check fails, I fix that before anything else." */
+  text: string;
+  when: string;
+  move: string;
+  scope: string;
+  scope_label: string;
+  status: WayStatus;
+  /** `shipped`, `you`, or what proposed it. */
+  origin: string;
+  since: string;
+  evidence: WayEvidence[];
+  /** While it is being tried out (`WRK-19`). */
+  trial?: { done: number; tasks: number; days_left: number } | null;
+}
+/** A change evolution would like to make, waiting for an answer (`WRK-19`). */
+export interface WayProposal {
+  id: string;
+  action: string;
+  lead: string;
+  quote: string;
+  why: string;
+  /** What can be answered, in order, as `[answer, label]`. */
+  answers: [string, string][];
+}
+/** One day there is a copy of how I worked to go back to (`WRK-21`). */
+export interface WayMoment {
+  id: string;
+  at: number;
+  /** `YYYY-MM-DD`. */
+  date: string;
+  label: string;
+}
+/** One line of a preset's history (`WRK-20`). */
+export interface PresetHistoryEntry {
+  seq: number;
+  at: number;
+  by: string;
+  what: "original" | "version" | "back" | "locked" | "unlocked" | string;
+  why: string;
+  version: number;
+  added: string[];
+  removed: string[];
+  rules: string[];
+  current: boolean;
+}
+/** One rule of the preset being shown. A built-in's rule that was switched off is
+ * still listed with `on: false`, so it can be switched on again. */
+export interface WayRuleView {
+  when: string;
+  move: string;
+  text: string;
+  on: boolean;
+  /** The preset shipped with it; on and not original means it was added. */
+  original: boolean;
+}
+export interface WayDefaultView {
+  scope: string;
+  label: string;
+  preset: string;
+  preset_name: string;
+}
+export interface WaysView {
+  narrative: string;
+  ways: WayView[];
+  presets: PresetView[];
+  /** The preset the tab shows. */
+  preset: string;
+  rules: WayRuleView[];
+  /** What new chats start with everywhere unless a place says otherwise. */
+  global_default: string;
+  defaults: WayDefaultView[];
+  deleted: { file: string; name: string; at: number }[];
+  proposals: WayProposal[];
+  moments: WayMoment[];
+  /** What evolution did lately; `undoable` when it did it on its own. */
+  recent: { id: string; said: string; undoable: boolean }[];
+  triggers: WaysChoice[];
+  moves: WaysChoice[];
+  scopes: WaysChoice[];
+  kinds: WaysChoice[];
+}
+export interface RuleRef {
+  when: string;
+  move: string;
+}
+export const waysView = (preset?: string | null) => invoke<WaysView>("ways_view_cmd", { preset: preset ?? null });
+export const addWay = (when: string, move: string, scope: string) =>
+  invoke<string>("way_add_cmd", { when, move, scope });
+export const updateWay = (
+  slug: string,
+  change: { when?: string; move?: string; scope?: string; status?: WayStatus }
+) =>
+  invoke<void>("way_update_cmd", {
+    slug,
+    when: change.when ?? null,
+    move: change.move ?? null,
+    scope: change.scope ?? null,
+    status: change.status ?? null,
+  });
+export const setPresetRule = (slug: string, rule: RuleRef, on: boolean) =>
+  invoke<void>("preset_rule_cmd", { slug, rule, on });
+/** A preset of your own: from another (`from`), from nothing, or from a run (`from` is
+ * what it worked under, `add` what fired on top). Resolves to its slug. */
+export const createPreset = (args: {
+  name: string;
+  line: string;
+  from?: string | null;
+  add?: RuleRef[];
+  locked?: boolean;
+}) =>
+  invoke<string>("preset_create_cmd", {
+    name: args.name,
+    line: args.line,
+    from: args.from ?? null,
+    // Only what a run kept is sent: its being there is what says "from a chat".
+    add: args.add ?? null,
+    locked: args.locked ?? true,
+  });
+export const updatePreset = (slug: string, change: { name?: string; line?: string; locked?: boolean }) =>
+  invoke<void>("preset_update_cmd", {
+    slug,
+    name: change.name ?? null,
+    line: change.line ?? null,
+    locked: change.locked ?? null,
+  });
+/** Without `confirmed`: says where the preset is in use and deletes nothing when it is. */
+export const deletePreset = (slug: string, confirmed: boolean) =>
+  invoke<{ deleted: boolean; used_by: string[] }>("preset_delete_cmd", { slug, confirmed });
+export const restorePreset = (file: string) => invoke<string>("preset_restore_cmd", { file });
+export const presetHistory = (slug: string) => invoke<PresetHistoryEntry[]>("preset_history_cmd", { slug });
+/** Go back to the original (`to` absent) or to the version at that place in the history. */
+export const presetBack = (slug: string, to?: number | null) => invoke<void>("preset_back_cmd", { slug, to: to ?? null });
+/** "Bring back into Lean": resolves to the parent's slug. */
+export const presetMerge = (slug: string) => invoke<string>("preset_merge_cmd", { slug });
+/** `answer` is what the card offered: `try`, `always`, `yes`, `keep`, `retire`, `keep-trying` or `no`. */
+export const wayProposalAnswer = (id: string, answer: string) => invoke<void>("way_proposal_answer_cmd", { id, answer });
+export const waysUndo = (id: string) => invoke<void>("ways_undo_cmd", { id });
+export const waysGoBack = (id: string) => invoke<void>("ways_go_back_cmd", { id });
+/** The organization's growth: a point for every change, and how many I made on my own (`WRK-21`). */
+export const waysGrowth = () => invoke<{ moments: WayMoment[]; layers: number }>("ways_growth_cmd");
+/** Which preset a place starts with: `global`, `project:<id>`, `persona:<id>`, `kind:<kind>`.
+ * `null` takes its default away. */
+export const setStyleDefault = (scope: string, preset: string | null) =>
+  invoke<void>("style_default_set_cmd", { scope, preset });
+/** What a chat starts with when nobody chose a preset for it (`null`: Ad hoc). */
+export const conversationDefaultStyle = (id: string) =>
+  invoke<string | null>("conversation_default_style_cmd", { id });
 /** **Continue there**: opens a terminal in the job's folder, resuming its session.
  * Returns the command, so it can be copied whatever happens to the terminal. */
 export const continueEngineJob = (runId: string) =>
@@ -3322,6 +3551,9 @@ export const setConversationProject = (conversationId: string, projectId: string
 
 export const readDirTree = (path: string, conversationId?: string, showHidden?: boolean) =>
   invoke<FileNode[]>("read_dir_tree_cmd", { path, conversationId, showHidden });
+/** Every file under the chat's working folder, as paths relative to it, for `@`. */
+export const listFolderFiles = (conversationId: string) =>
+  invoke<string[]>("list_folder_files_cmd", { conversationId });
 export const readTextFile = (path: string, conversationId?: string, maxBytes?: number) =>
   invoke<string>("read_text_file_cmd", { path, conversationId, maxBytes });
 
@@ -3584,6 +3816,8 @@ export interface ScheduledJob {
   runs: JobRun[];
   /** `USE-7`: "only run if …", in plain words. Absent when there is none. */
   run_if?: string | null;
+  /** `WRK-18`: the preset (a slug) the task runs under. Absent is Ad hoc. */
+  style?: string | null;
 }
 
 /** One entry of a task's history. A completed run is a real conversation in the
@@ -3606,6 +3840,7 @@ export interface ScheduledJobInput {
   enabled: boolean;
   source_conversation_id?: string | null;
   run_if?: string | null;
+  style?: string | null;
 }
 
 /** What the Rail shows while a job runs (SCH-UI-4). */
@@ -3974,6 +4209,37 @@ export interface PlanItem {
   /** `USE-5`: a quick decision judged the item finished from the answer, with
    * this probability. Set only with `done`; shown as a ringed tick. */
   judged?: number | null;
+  /** `WRK-2`: what has to be true for this item to count as done. */
+  done_when?: string | null;
+  /** `WRK-4`: the second look. A send-back always has its reason. */
+  review?: { state: "checking" | "checked" | "sent_back"; reason?: string | null } | null;
+  /** `WRK-6`: two ways were tried, and which one was kept. */
+  branches?: { kept: "a" | "b"; reason: string; ways: string[]; id: string } | null;
+  /** `WRK-14`: who has this item when it is not me: a helper, or an agent app's name. */
+  by?: string | null;
+}
+
+/** `WRK-10`: one thing that has to be true for the task to count as done, agreed
+ * before work starts. `met` is unset until the final check; one that was not met stays
+ * open with its reason. */
+export interface Criterion {
+  text: string;
+  met?: boolean | null;
+  why?: string | null;
+}
+
+/** `WRK-7`: a move a way of working made, kept with the plan for the board's ⓘ. */
+export interface MoveNote {
+  item?: number | null;
+  /** What it fired on, as a trigger slug. */
+  when?: string;
+  move: string;
+  rule: string;
+  /** The rule as a sentence: "When an item has failed twice, I try two ways." */
+  text: string;
+  from: "always" | "preset" | "learned" | "trying" | string;
+  since?: string;
+  state: "fired" | "skipped" | string;
 }
 
 /** One run's plan. `revisions` counts rewrites, not status changes — rewriting
@@ -3986,6 +4252,12 @@ export interface PlanView {
   /** `PLF-3`: written while planning first, so nothing has changed yet and it
    * waits for your approval. */
   awaiting_approval?: boolean;
+  /** `WRK-2`: the preset (its slug) the run worked under, when not Ad hoc. */
+  style?: string | null;
+  /** `WRK-7`: what its way of working did, with the rule behind each move. */
+  moves?: MoveNote[];
+  /** `WRK-10`: what done means for the whole task. */
+  criteria?: Criterion[];
 }
 
 /** Parse a stored `plan_json` back into the plan a run worked to (`PLN-UI-5`).
@@ -3995,7 +4267,8 @@ export function parsePlan(planJson: string | null): PlanView | undefined {
   if (!planJson) return undefined;
   try {
     const plan = JSON.parse(planJson) as PlanView;
-    return plan?.items?.length ? plan : undefined;
+    // A plan of criteria alone, waiting for the yes, is a plan too.
+    return plan?.items?.length || plan?.criteria?.length ? plan : undefined;
   } catch {
     return undefined;
   }

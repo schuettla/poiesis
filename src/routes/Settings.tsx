@@ -16,7 +16,7 @@ import {
   type RerankSetupStatus,
   type DownloadProgress,
 } from "../lib/api";
-import { useAppStore, READING_SCALES, MESSAGE_FONTS, type PlanMode } from "../lib/store";
+import { useAppStore, READING_SCALES, MESSAGE_FONTS, CHAT_WIDTHS, type PlanMode } from "../lib/store";
 import PersonaEditor from "../components/Personas/PersonaEditor";
 import "./Surface.css";
 import "./Settings.css";
@@ -205,6 +205,8 @@ export default function Settings() {
   const setMode = useAppStore((s) => s.setMode);
   const readingScale = useAppStore((s) => s.readingScale);
   const setReadingScale = useAppStore((s) => s.setReadingScale);
+  const chatWidth = useAppStore((s) => s.chatWidth);
+  const setChatWidth = useAppStore((s) => s.setChatWidth);
   const messageFont = useAppStore((s) => s.messageFont);
   const setMessageFont = useAppStore((s) => s.setMessageFont);
   const contextBudget = useAppStore((s) => s.contextBudget);
@@ -353,6 +355,19 @@ export default function Settings() {
                 onClick={() => setReadingScale(opt.value)}
               >
                 {opt.label}
+              </button>
+            ))}
+          </div>
+          <h3 className="setting-subtitle">Chat width</h3>
+          <div className="setting-actions" role="group" aria-label="Chat width">
+            {CHAT_WIDTHS.map((w) => (
+              <button
+                key={w.id}
+                className={`btn-secondary ${chatWidth === w.id ? "selected" : ""}`}
+                aria-pressed={chatWidth === w.id}
+                onClick={() => setChatWidth(w.id)}
+              >
+                {w.label}
               </button>
             ))}
           </div>

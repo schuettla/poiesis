@@ -6,6 +6,7 @@ import AgentsPanel from "./AgentsPanel";
 import BrowserPanel from "./BrowserPanel";
 import ChangesPanel from "./ChangesPanel";
 import FolderHeader, { FolderIndexStatus } from "./FolderHeader";
+import { useCoordinationStyle } from "./OrgDiagram";
 import Tree from "./Tree";
 import Artifacts from "./Artifacts";
 import Duplicates from "./Duplicates";
@@ -146,6 +147,10 @@ export default function Workbench() {
     [subRunMap, convId]
   );
   const agentsWorking = subRuns.some((r) => stillWorking(r.status));
+  // `WRK-15`: a run working under a way of working has an organization to show, with or
+  // without helpers.
+  const organisedRun = !!useCoordinationStyle(convId);
+  const runLive = useAppStore((s) => !!(convId && s.runSummaries[convId]?.live));
 
   const browsing = !!browserSession && !browserSession.closed;
 
@@ -161,8 +166,15 @@ export default function Workbench() {
     { id: "files", label: "Files" },
     { id: "artifacts", label: "Artifacts", count: artifacts.length || undefined },
     { id: "changes", label: "Changes", count: (folder && changedFiles) || undefined },
-    ...(subRuns.length
-      ? [{ id: "agents" as DockView, label: "Agents", count: subRuns.length, live: agentsWorking }]
+    ...(subRuns.length || organisedRun
+      ? [
+          {
+            id: "agents" as DockView,
+            label: "Coordination",
+            count: subRuns.length || undefined,
+            live: agentsWorking || (organisedRun && runLive),
+          },
+        ]
       : []),
     ...(browserSession ? [{ id: "browser" as DockView, label: "Browser", live: browsing }] : []),
   ];

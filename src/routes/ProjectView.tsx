@@ -4,6 +4,7 @@ import { NEW_PROJECT_NAME } from "../lib/types";
 import { similarProject, type SimilarProject } from "../lib/api";
 import type { FolderTrust } from "../lib/types";
 import ConfirmDialog from "../components/Confirm/ConfirmDialog";
+import { FolderIcon, MessageIcon } from "../components/Icons/Icons";
 import "./ProjectView.css";
 
 const TRUST_LABELS: { value: FolderTrust; label: string; detail: string }[] = [
@@ -156,11 +157,11 @@ function SimilarOffer({
         This looks like <strong>{other.name}</strong> ({found.why}). Start with its instructions? Its notes stay
         where they are.
       </p>
-      <button className="pv-action" onClick={() => onCopy({ name: other.name, instructions: other.instructions ?? "" })}>
+      <button className="btn-secondary" onClick={() => onCopy({ name: other.name, instructions: other.instructions ?? "" })}>
         Copy its instructions
       </button>
       <button
-        className="pv-quiet"
+        className="btn-text"
         onClick={() => {
           setDismissed(true);
           try {
@@ -249,14 +250,23 @@ export default function ProjectView() {
           <h2 className="pv-label">Working folder</h2>
           {project.rootPath ? (
             <>
-              <p className="pv-path" title={project.rootPath}>
-                {project.rootPath}
-              </p>
-              <div className="pv-trust" role="radiogroup" aria-label="What I may do in this folder">
+              <div className="pv-folder">
+                <span className="pv-folder-icon" aria-hidden="true">
+                  <FolderIcon size={15} />
+                </span>
+                <p className="pv-path" title={project.rootPath}>
+                  {project.rootPath}
+                </p>
+                <button className="btn-text pv-folder-remove" onClick={() => setProjectFolder(projectId, false)}>
+                  Remove folder
+                </button>
+              </div>
+              <h3 className="pv-subtitle">What I may do there</h3>
+              <div className="pv-trust wb-segments" role="radiogroup" aria-label="What I may do in this folder">
                 {TRUST_LABELS.map((t) => (
                   <button
                     key={t.value}
-                    className={`pv-trust-btn ${project.trust === t.value ? "active" : ""}`}
+                    className={`wb-segment ${project.trust === t.value ? "active" : ""}`}
                     role="radio"
                     aria-checked={project.trust === t.value}
                     title={t.detail}
@@ -266,9 +276,7 @@ export default function ProjectView() {
                   </button>
                 ))}
               </div>
-              <button className="pv-quiet" onClick={() => setProjectFolder(projectId, false)}>
-                Remove folder
-              </button>
+              <p className="pv-hint">{TRUST_LABELS.find((t) => t.value === project.trust)?.detail}</p>
             </>
           ) : (
             <>
@@ -278,7 +286,7 @@ export default function ProjectView() {
               <p className="pv-hint">
                 A project doesn’t need one. Add a folder if this project is about files on disk.
               </p>
-              <button className="pv-action" onClick={() => setProjectFolder(projectId, true)}>
+              <button className="btn-secondary" onClick={() => setProjectFolder(projectId, true)}>
                 Add a folder
               </button>
             </>
@@ -294,13 +302,16 @@ export default function ProjectView() {
             <ul className="pv-sessions">
               {sessions.map((c) => (
                 <li key={c.id}>
+                  <span className="pv-session-icon" aria-hidden="true">
+                    <MessageIcon size={13} />
+                  </span>
                   <button className="pv-session" onClick={() => openSession(c.id)} title={c.title}>
                     {c.title}
                   </button>
                   {/* Removing a session from a project never deletes it — it
                       goes back to being a loose chat, where it started. */}
                   <button
-                    className="pv-quiet pv-session-remove"
+                    className="btn-text pv-session-remove"
                     aria-label={`Remove ${c.title} from this project`}
                     onClick={() => moveSessionToProject(c.id, null)}
                   >
@@ -310,13 +321,13 @@ export default function ProjectView() {
               ))}
             </ul>
           )}
-          <button className="pv-action" onClick={() => openProject(projectId)}>
+          <button className="btn-secondary" onClick={() => openProject(projectId)}>
             New session in this project
           </button>
         </section>
 
         <section className="pv-section pv-footer">
-          <button className="pv-quiet" onClick={() => setConfirmingArchive(true)}>
+          <button className="btn-text" onClick={() => setConfirmingArchive(true)}>
             Archive project
           </button>
           <p className="pv-hint">Hides it and its chats. Nothing on disk is touched.</p>

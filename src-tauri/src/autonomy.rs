@@ -35,6 +35,7 @@ pub const AUTONOMY_DEFAULTS: &[(&str, &str)] = &[
     ("suggest", "auto"),     // suggestion chips; off means I never suggest commands (AGC-2)
     ("modes", "ask"),        // turning Workspace or Plan first on (AGC-1)
     ("schedule", "ask"),     // proposing scheduled jobs; auto is never offered (AGC-1)
+    ("ways", "ask"),         // changing how I work: ways of working and presets (WRK-19)
 ];
 
 /// Classes that may never be `auto`. A run nobody clicked into being is out of

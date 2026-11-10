@@ -2,11 +2,13 @@ import { useAppStore } from "../../lib/store";
 import type { TurnModifiers } from "../../lib/types";
 import { EFFORTS } from "../../lib/effort";
 import { shortDate } from "../../lib/lastTime";
+import { CloseIcon } from "../Icons/Icons";
 import "./ModifierChips.css";
 
 /**
- * `CMP-6`: what the next message alone has been told to do. One chip each,
- * above the input, gone the moment the message is sent.
+ * `CMP-6`: what the next message alone has been told to do. One chip each, in
+ * the composer's "for this message only" row beside the attachments, gone the
+ * moment the message is sent.
  *
  * `make default` (`DEF-2`) is the other way into a setting: the same decision,
  * kept, so Settings is only where a default is *held* and the chip is where it
@@ -16,6 +18,7 @@ export default function ModifierChips() {
   const mods = useAppStore((s) => s.turnModifiers);
   const clear = useAppStore((s) => s.clearTurnModifier);
   const makeDefault = useAppStore((s) => s.makeModifierDefault);
+  const presets = useAppStore((s) => s.presets);
 
   const chips: { key: keyof TurnModifiers; label: string; fromDefault?: boolean; once?: boolean }[] = [];
   // `DEF-5`: a chip my default put there says so, and removing it is "not this
@@ -33,16 +36,23 @@ export default function ModifierChips() {
   if (mods.web) chips.push({ key: "web", label: "Web search on", once: true });
   if (mods.noHandover) chips.push({ key: "noHandover", label: "Do it yourself", once: true });
   if (mods.asAddition) chips.push({ key: "asAddition", label: "As an addition", once: true });
+  // `WRK-3`: `/style lean <message>`. The chat's own setting is untouched.
+  if (mods.style) {
+    chips.push({
+      key: "style",
+      label: `${presets.find((p) => p.slug === mods.style)?.name ?? mods.style}, this once`,
+      once: true,
+    });
+  }
   if (mods.lastTime) {
     chips.push({ key: "lastTime", label: `Same way as ${shortDate(mods.lastTime.at)}`, once: true });
   }
   if (!chips.length) return null;
 
   return (
-    <div className="modifier-chips" role="group" aria-label="For this message only">
+    <>
       {chips.map((c) => (
         <span className="modifier-chip" key={c.key}>
-          <span className="modifier-chip-glyph" aria-hidden="true">◇</span>
           <span className="modifier-chip-label">{c.label}</span>
           {!c.fromDefault && !c.once && (
             <button
@@ -58,10 +68,10 @@ export default function ModifierChips() {
             aria-label={`Remove: ${c.label}`}
             onClick={() => clear(c.key)}
           >
-            ×
+            <CloseIcon size={10} strokeWidth={1.6} />
           </button>
         </span>
       ))}
-    </div>
+    </>
   );
 }

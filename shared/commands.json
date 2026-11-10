@@ -314,6 +314,17 @@
     "who": "user",
     "needs": []
   },
+  {
+    "name": "ways",
+    "title": "How I work",
+    "aliases": [],
+    "section": "me",
+    "kind": "ui",
+    "args": { "type": "none" },
+    "summary": "I show my styles and the rules I follow in them",
+    "who": "user",
+    "needs": []
+  },
 
   {
     "name": "workspace",
@@ -351,6 +362,17 @@
     "who": "user",
     "needs": ["conv", "engines"],
     "trace": true
+  },
+  {
+    "name": "style",
+    "title": "How I work",
+    "aliases": [],
+    "section": "modes",
+    "kind": "action",
+    "args": { "type": "choice", "source": "styles", "hint": "how, then a message for this one alone (optional)", "required": true },
+    "summary": "How I work in this chat, or for one message",
+    "who": "user",
+    "needs": ["conv"]
   },
   {
     "name": "persona",
@@ -443,7 +465,7 @@
     "section": "work",
     "kind": "action",
     "args": { "type": "text", "hint": "goal until condition", "required": true },
-    "summary": "Keep working until something is true, up to 5 rounds",
+    "summary": "Work toward a goal the Mission Command way: you set it, I find the way",
     "who": "user",
     "needs": ["conv"],
     "trace": true

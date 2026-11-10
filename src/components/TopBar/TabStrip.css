@@ -157,7 +157,6 @@
   /* A firmer edge than the hairline between two item tabs: everything right of
      it is something taken *out* of the chat named to its left. */
   border-right: 1px solid var(--paper-edge-2);
-  margin-right: 3px;
 }
 .ts-session .ts-tab-main {
   font-family: var(--font-sans);

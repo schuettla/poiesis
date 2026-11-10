@@ -50,7 +50,7 @@
 }
 
 .composer-col {
-  max-width: 700px;
+  max-width: var(--chat-width);
   margin: 0 auto;
 }
 /* Keeps the composer's right edge on the stream's when the narrow-column
@@ -61,6 +61,16 @@
 }
 @container (max-width: 752px) {
   .composer-col {
+    margin-right: 32px;
+  }
+}
+@container (max-width: 912px) {
+  :root[data-chat-width="medium"] .composer-col {
+    margin-right: 32px;
+  }
+}
+@container (max-width: 1092px) {
+  :root[data-chat-width="wide"] .composer-col {
     margin-right: 32px;
   }
 }
@@ -85,39 +95,85 @@
   box-shadow: var(--shadow-float);
 }
 
-.attachment-row {
+/* Everything that goes out with the next message alone, in one row. Empty
+   (no chips rendered) it takes no space at all. */
+.next-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  padding-bottom: 10px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 8px;
 }
-.attachment-chip {
+.next-row:empty {
+  display: none;
+}
+
+/* One chip language for the composer: attachments, the picture being refined,
+   this-message modifiers (ModifierChips.css) and the standing mode chips
+   (ModeChips.css). A quiet tile, never a pill: `--fill-quiet`, a hairline,
+   `--radius-sm`, one height, one close button. */
+.attachment-chip,
+.modifier-chip,
+.mode-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-family: var(--font-sans);
-  font-size: var(--fs-footnote);
-  color: var(--ink-muted);
+  height: 24px;
+  max-width: 260px;
+  padding: 0 3px 0 8px;
   background: var(--fill-quiet);
   border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  padding: 4px 6px 4px 10px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  line-height: 1;
+  color: var(--ink-muted);
+  white-space: nowrap;
   animation: pop-in var(--dur) var(--ease-out);
 }
 .attachment-kind {
+  display: inline-flex;
+  flex: none;
   color: var(--ink-faint);
 }
-.attachment-remove {
+.attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink);
+}
+.attachment-remove,
+.modifier-chip-x,
+.mode-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
   background: none;
   border: none;
+  border-radius: var(--radius-xs);
   color: var(--ink-faint);
   cursor: pointer;
-  font-size: var(--fs-callout);
-  line-height: 1;
-  padding: 0 2px;
 }
-.attachment-remove:hover {
+.attachment-remove:hover,
+.modifier-chip-x:hover,
+.mode-chip-x:hover {
+  background: var(--fill-hover);
   color: var(--ink);
+}
+/* `EDT-2`: the picture being refined carries its own thumbnail as its icon. */
+.implicit-ref-chip {
+  padding-left: 3px;
+}
+.implicit-ref-thumb {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  object-fit: cover;
+  border-radius: var(--radius-xs);
 }
 
 /* `PIK-2`: the declared route's target bar — what sending does now. */
@@ -134,8 +190,11 @@
   font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
-.media-target-glyph {
-  color: var(--cloud);
+.media-target-glyph,
+.mic-glyph {
+  display: inline-flex;
+  flex: none;
+  color: var(--ink-muted);
 }
 .media-target-label {
   flex: 1;
@@ -207,6 +266,9 @@
   min-width: 0;
 }
 .media-target-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-family: var(--font-sans);
   font-size: var(--fs-footnote);
   color: var(--ink-muted);
@@ -267,53 +329,23 @@
   color: var(--ink);
 }
 
-/* `EDT-2`: the implicit reference — always visible before send, never a
-   silent attach. */
-/* `MOD-3`: the one-time "your default isn't available" line. */
+/* `CMP-9`, `MOD-3`: the one notice slot above the box. */
 .composer-model-notice {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  margin-bottom: 6px;
-  background: var(--paper-edge);
-  border-radius: var(--radius);
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 24px;
+  padding: 3px 3px 3px 10px;
+  margin: 0 4px 8px;
+  background: var(--fill-quiet);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
   font-family: var(--font-sans);
   font-size: var(--fs-footnote);
   color: var(--ink-muted);
-  width: fit-content;
-}
-.implicit-ref-chip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  margin-bottom: 6px;
-  background: var(--paper-edge);
-  border-radius: var(--radius);
-  font-family: var(--font-sans);
-  font-size: var(--fs-footnote);
-  color: var(--ink-muted);
-  width: fit-content;
-}
-.implicit-ref-thumb {
-  width: 32px;
-  height: 32px;
-  object-fit: cover;
-  border-radius: var(--radius);
-  border: 1px solid var(--paper-edge-2);
-}
-.implicit-ref-remove {
-  background: none;
-  border: none;
-  color: var(--ink-faint);
-  cursor: pointer;
-  font-size: var(--fs-callout);
-  line-height: 1;
-  padding: 0 2px;
-}
-.implicit-ref-remove:hover {
-  color: var(--ink);
+  animation: pop-in var(--dur) var(--ease-out);
 }
 
 /* The `/` menu opens straight above what is being typed, as wide as the box:
@@ -399,11 +431,6 @@
   transform: scale(0.92);
   transition-duration: 60ms;
 }
-.composer-wrap .plus-btn {
-  font-size: 18px;
-  font-weight: 300;
-  line-height: 1;
-}
 /* The + turns into a × while its menu is open: one control, two states. */
 .composer-wrap .plus-btn.on {
   background: var(--fill-press);
@@ -416,13 +443,14 @@
   background: var(--fill-press);
   color: var(--ink);
 }
+/* A standing state is quieter than a waiting one: full ink, no fill. */
+.composer-wrap .chat-setup-btn.lit {
+  color: var(--ink);
+}
 
 /* `CMP-4`: `/` does, where `+` adds. Same size and weight as its neighbour. */
-.composer-wrap .slash-btn {
-  font-family: var(--font-mono);
-  font-size: var(--fs-ui);
-}
-.composer-wrap .slash-btn.on {
+.composer-wrap .slash-btn.on,
+.composer-wrap .chat-setup-btn.on {
   background: var(--fill-press);
   color: var(--ink);
 }
@@ -449,14 +477,11 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  margin-right: 4px;
+  margin-right: 6px;
 }
 .cf-tools .icon-btn {
   width: 28px;
   height: 28px;
-}
-.cf-tools .plus-btn {
-  font-size: 17px;
 }
 .composer-footer .cf-left {
   min-width: 0;
@@ -471,9 +496,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.composer-footer .context-chip-wrap {
-  padding: 0 4px;
 }
 
 /* The image-model select in Create-image mode. Distinct from .model-picker in
@@ -513,8 +535,9 @@
   line-height: 20px;
   color: var(--ink-muted);
 }
-.composer-hint-arrow {
+.composer-hint-icon {
   flex: none;
+  color: var(--ink-faint);
 }
 .composer-hint-text {
   flex: 0 1 auto;
@@ -645,9 +668,62 @@
 }
 /* The affordance that says "this one opens another panel". */
 .composer-menu-item .mi-more {
-  color: var(--ink-faint);
+  align-self: center;
+  display: inline-flex;
+  justify-content: flex-end;
   width: 14px;
-  text-align: right;
+  color: var(--ink-faint);
+}
+/* A section label inside a drop-up (Label: 600, 11px, sentence case). */
+.composer-menu-label {
+  padding: 6px 10px 3px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  color: var(--ink-faint);
+}
+
+/* The "this chat" drop-up (`ChatSetup`): rows like the `+` menu's, and a
+   standing mode's row carries its own way to turn it off. */
+.chat-setup-menu {
+  min-width: 320px;
+  max-width: 360px;
+}
+.chat-setup-menu .mi-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-setup-menu .mi-body {
+  min-width: 0;
+}
+.chat-setup-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.chat-setup-row .composer-menu-item {
+  flex: 1;
+  min-width: 0;
+}
+.chat-setup-off {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin-right: 4px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.chat-setup-off:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
 }
 
 .composer-menu-sep {

@@ -91,6 +91,17 @@
   font-weight: 500;
   white-space: nowrap;
 }
+/* `WRK-15`: while a run is going the mark is a button that opens how I am organised.
+   It looks like the mark and nothing else: no frame, just the pointer. */
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+}
 /* Mirrors the rail's own collapsed state (icon only, label hidden) — the
    brand segment is pinned to `--rail-w` for the strip's alignment, and 52px
    only fits the mark. */

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
 import { useAppStore } from "../lib/store";
+import Select from "../components/Select/Select";
 import type { TaskDraft } from "../lib/when";
 import "./Surface.css";
 import "../components/Self/Self.css";
@@ -362,6 +363,10 @@ function TaskEditor({
   }, []);
   const [scope, setScope] = useState<string | null>(job?.scope ?? null);
   const [runIf, setRunIf] = useState(job?.run_if ?? "");
+  // `WRK-18`: how the task works. Nobody watches it, so what needs a person (criteria,
+  // check-ins) does not happen; the quiet moves (one thing at a time, a second look) do.
+  const presets = useAppStore((s) => s.presets);
+  const [style, setStyle] = useState(job?.style ?? "ad-hoc");
   const [enabled, setEnabled] = useState(job?.enabled ?? true);
   const [saving, setSaving] = useState(false);
 
@@ -386,6 +391,7 @@ function TaskEditor({
         enabled,
         source_conversation_id: job ? job.source_conversation_id : (draft?.conversationId ?? null),
         run_if: runIf.trim() || null,
+        style: style === "ad-hoc" ? null : style,
       });
     } finally {
       setSaving(false);
@@ -462,6 +468,20 @@ function TaskEditor({
           Experiments; without it the task always runs.
         </p>
       )}
+      <div className="self-field">
+        <span>How I work on it</span>
+        <Select
+          label="How I work on it"
+          value={style}
+          options={presets.map((p) => ({ value: p.slug, label: p.name, hint: p.line }))}
+          onChange={setStyle}
+        />
+        {style !== "ad-hoc" && (
+          <p className="self-line self-note">
+            Nobody is there to ask, so the steps that need you are skipped. The rest of how it works still holds.
+          </p>
+        )}
+      </div>
       <label className="toggle-line">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         <span>Run it on this schedule</span>

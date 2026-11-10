@@ -15,7 +15,6 @@ import * as api from "./api";
 import { ranked } from "./fuzzy";
 import { EFFORTS } from "./effort";
 import { proposedDraft, scheduleDraft } from "./when";
-import { parseGoalArgs } from "./goal";
 import { workspaceAvailable } from "./experiments";
 import { openVoice } from "./voice/controller";
 import type { Model } from "./types";
@@ -31,7 +30,17 @@ export type CommandSection =
   | "work"
   | "inspect"
   | "skills";
-export type ArgSource = "effort" | "personas" | "models" | "turns" | "facts" | "skills" | "onoff" | "apps" | "agents";
+export type ArgSource =
+  | "effort"
+  | "personas"
+  | "models"
+  | "turns"
+  | "facts"
+  | "skills"
+  | "onoff"
+  | "apps"
+  | "agents"
+  | "styles";
 export type Need = "conv" | "run" | "norun" | "folder" | "changes" | "interrupted" | "turn" | "engines";
 
 export interface CommandArgs {
@@ -138,7 +147,7 @@ export function isBuiltinName(name: string): boolean {
 
 // ---- state the `needs` list asks about ----
 
-const INTERRUPTED = new Set(["aborted", "timeout", "max_steps"]);
+const INTERRUPTED = new Set(["aborted", "timeout", "max_steps", "stuck"]);
 
 /** The persisted assistant turns of the active chat, newest last. */
 function answers(s: AppState) {
@@ -353,6 +362,14 @@ export interface ArgChoice {
   disabledReason?: string;
   /** For an agent app: choosing it when it is off opens its settings. */
   engineId?: string;
+  /** `WRK-3`: which glyph draws it, for a way of working. The same one as the chip's. */
+  glyph?: string;
+  /** A heading the row sits under in the list; it is drawn when the group changes. */
+  group?: string;
+  /** `WRK-20`: evolution leaves this way of working alone. */
+  locked?: boolean;
+  /** `WRK-20`: it branched off another, so its glyph shows a small bud. */
+  branch?: boolean;
 }
 
 /** The same levels, labels and hints as the model picker's thinking control. */
@@ -364,6 +381,22 @@ export const EFFORT_CHOICES: ArgChoice[] = EFFORTS.map(({ value, label, hint }) 
 
 export function isChatModel(m: Model): boolean {
   return !m.modality || m.modality === "chat";
+}
+
+/** `WRK-17`: the rows at the end of the `/style` list that are about the ways of
+ * working themselves, not a way. They begin with `@`, which no name does. */
+function styleActions(s: AppState): ArgChoice[] {
+  const conv = s.conversations.find((c) => c.id === s.activeConversationId);
+  const own = conv?.style && conv.style !== "ad-hoc" ? conv.style : null;
+  const out: ArgChoice[] = [];
+  if (own && conv?.projectId) {
+    out.push({ value: "@project", label: "Use for this project too", hint: "New chats in this project start this way", group: "Change" });
+  }
+  if (own) {
+    out.push({ value: "@save", label: "Save as my own…", hint: "A preset of yours, starting from this one", group: "Change" });
+  }
+  out.push({ value: "@edit", label: "Change what these do…", hint: "Open How I work", group: "Change" });
+  return out;
 }
 
 /** The options for a `choice` argument, filtered by what has been typed. */
@@ -394,6 +427,23 @@ export function argChoices(
       const chat = s.models.filter(isChatModel);
       const sorted = [...chat].sort((a, b) => Number(favourites.has(b.id)) - Number(favourites.has(a.id)));
       return filter(sorted.map((m) => ({ value: m.name, label: m.name, hint: m.provenance })));
+    }
+    case "styles": {
+      // `WRK-3`: the name is what is typed, so `/style lean` and the row say the same.
+      // `WRK-17`: the ones you made come after the built-in ones, under "Yours".
+      // `WRK-20`: a lock after the name, and where one came from beside its line.
+      const rows = filter(
+        s.presets.map((p) => ({
+          value: p.name,
+          label: p.name,
+          hint: p.lineage ? `${p.line} (${p.lineage})` : p.line,
+          glyph: p.glyph,
+          group: p.built_in ? undefined : "Yours",
+          locked: p.locked && p.slug !== "ad-hoc",
+          branch: !!p.parent,
+        }))
+      );
+      return words.length ? rows : [...rows, ...styleActions(s)];
     }
     case "apps":
       return filter(appChoices(s));
@@ -528,6 +578,12 @@ export function controlFor(name: string, s: AppState, now?: { effort?: string })
         options: STEP_CHOICES,
         value: s.turnModifiers.maxSteps ? String(s.turnModifiers.maxSteps) : null,
       };
+    case "style": {
+      const options = argChoices("styles", "", s);
+      const slug = s.conversations.find((c) => c.id === s.activeConversationId)?.style ?? "ad-hoc";
+      const name = s.presets.find((p) => p.slug === slug)?.name ?? "Ad hoc";
+      return { kind: "pick", options, value: name, current: name };
+    }
     case "persona": {
       const options = argChoices("personas", "", s);
       const id = s.conversations.find((c) => c.id === s.activeConversationId)?.personaId;
@@ -616,6 +672,38 @@ function findByName<T extends { name: string }>(list: T[], typed: string): T | u
   );
 }
 
+/** `/style mission command fix it` -> the preset and the words after its name. A name
+ * can be more than one word, so every preset is tried, longest name first. */
+export function matchPreset(
+  presets: api.PresetView[],
+  typed: string
+): { preset: api.PresetView; rest: string } | null {
+  const lower = typed.trim().toLowerCase();
+  const byLength = [...presets].sort((a, b) => b.name.length - a.name.length);
+  for (const preset of byLength) {
+    for (const key of [preset.name.toLowerCase(), preset.slug]) {
+      if (lower === key) return { preset, rest: "" };
+      if (lower.startsWith(`${key} `)) return { preset, rest: typed.trim().slice(key.length).trim() };
+    }
+  }
+  return null;
+}
+
+/** `/goal make the tests pass until npm test exits 0`, or `/goal stop`. The words before
+ * `until` are the work; what follows is what done means. With no `until`, the goal is its
+ * own condition. */
+export function parseGoalArgs(args: string): { text: string; until: string } | "stop" | null {
+  const t = args.trim();
+  if (!t) return null;
+  if (/^(stop|cancel|clear)$/i.test(t)) return "stop";
+  const at = t.search(/\s+until\s+/i);
+  if (at < 0) return { text: t, until: t };
+  const text = t.slice(0, at).trim();
+  const until = t.slice(at).replace(/^\s+until\s+/i, "").trim();
+  // "until" with nothing on one side is not a split: the whole line is the goal.
+  return text && until ? { text, until } : { text: t, until: t };
+}
+
 /** One tidy-up at a time: it is a model call, and the input stays put while it runs. */
 let tidying = false;
 
@@ -642,6 +730,39 @@ export const HANDLERS: Record<string, Handler> = {
     // sets the chip and sends the words at once.
     s.setTurnModifier({ planFirst: true, planFirstIsDefault: undefined });
     return { kind: "modifier", send: args.trim() || undefined };
+  },
+  style: async (args, s) => {
+    // `WRK-3`: `/style lean` sets how this chat works; `/style lean fix the export`
+    // works that message the lean way and leaves the chat as it was.
+    const id = activeId(s);
+    if (!id) return fail("Start a conversation first.");
+    const typed = args.trim();
+    if (!typed) return { kind: "needsArg" };
+    // `WRK-17`: the rows at the end of the list.
+    if (typed.startsWith("@")) {
+      const conv = s.conversations.find((c) => c.id === id);
+      const own = conv?.style ?? null;
+      if (typed === "@edit") {
+        s.openSelf("ways");
+      } else if (typed === "@save" && own) {
+        s.openPresetDialog({ mode: "new", from: own });
+      } else if (typed === "@project" && own && conv?.projectId) {
+        await api.setStyleDefault(`project:${conv.projectId}`, own);
+        await s.loadPresets();
+      } else {
+        return fail("That does not apply here.");
+      }
+      return done();
+    }
+    const hit = matchPreset(s.presets, typed);
+    if (!hit) return fail(`I don't have a way of working called "${typed.split(/\s+/)[0]}".`);
+    if (hit.rest) {
+      s.setTurnModifier({ style: hit.preset.slug });
+      return { kind: "modifier", send: hit.rest };
+    }
+    // Ad hoc chosen here is a choice like the others, kept so a default cannot override it.
+    await s.setConversationStyle(id, hit.preset.slug);
+    return done();
   },
   btw: (args, s) => {
     const q = args.trim();
@@ -750,6 +871,10 @@ export const HANDLERS: Record<string, Handler> = {
   },
   autonomy: (_args, s) => {
     s.openSelf("autonomy");
+    return done();
+  },
+  ways: (_args, s) => {
+    s.openSelf("ways");
     return done();
   },
 
@@ -981,6 +1106,10 @@ export const HANDLERS: Record<string, Handler> = {
 
   // ---- work ----
   goal: (args, s) => {
+    // `WRK-12`: a goal is Mission Command with its one criterion. You set the goal and
+    // what done means; the run finds the way, and its answer is held to that at the end
+    // by someone who never saw the path. `/goal x until y` is `/style mission command x`
+    // with `y` already agreed.
     const id = activeId(s);
     if (!id) return fail("Start a conversation first.");
     const parsed = parseGoalArgs(args);
@@ -990,18 +1119,14 @@ export const HANDLERS: Record<string, Handler> = {
         message: "Say what you want and when it is done, like /goal fix the build until npm test exits 0.",
       };
     }
-    const current = s.goals[id];
     if (parsed === "stop") {
-      if (current?.status !== "active") return fail("I'm not working toward a goal here.");
-      s.stopGoal(id);
+      if (!s.busy) return fail("I'm not working toward a goal here.");
+      s.stopGenerating();
       return done("stopped working toward the goal");
     }
-    if (current?.status === "active") return fail("I'm already working toward a goal here. Say /goal stop first.");
     if (s.busy) return fail("I'm busy right now");
-    if (!api.inTauri()) return fail("I can only work toward a goal in the desktop app.");
-    // Not awaited: the goal is every round of it, and the box is free meanwhile.
-    void s.startGoal(id, parsed.text, parsed.until);
-    return done(`started a goal: ${parsed.text}`);
+    s.setTurnModifier({ style: "mission-command", criteria: [parsed.until] });
+    return { kind: "modifier", send: parsed.text };
   },
   changes: (_args, s) => {
     s.setDockView("changes");

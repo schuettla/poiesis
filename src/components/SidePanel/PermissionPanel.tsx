@@ -119,6 +119,13 @@ function Reason({ text, hover }: { text?: string; hover?: string }) {
   ) : null;
 }
 
+/** `WRK-11`: what was asked for before this was put to you, one line above what would
+ * change: "I asked first: your notes say /old is a backup folder; a second look found
+ * nothing against it." The question and its buttons are the same with or without it. */
+function Advice({ text }: { text?: string }) {
+  return text ? <p className="permission-advice">{text}</p> : null;
+}
+
 function minutes(secs: number | undefined): string {
   if (!secs) return "";
   return secs % 60 === 0 ? `${secs / 60} min` : `${secs} s`;
@@ -152,6 +159,7 @@ function ExecutionPrompt({
       </p>
       <p className="permission-summary">{request.summary}</p>
       <Reason text={request.reason} hover={request.reason_hover} />
+      <Advice text={request.advice} />
       {isTask ? (
         <code className="permission-command">{argv.join(" ")}</code>
       ) : (
@@ -210,6 +218,7 @@ function EnginePrompt({ request, onResolve }: { request: PermissionRequest; onRe
       <p className="permission-eyebrow">{request.engine} is asking</p>
       <p className="permission-summary">{request.summary}</p>
       <Reason text={request.reason} hover={request.reason_hover} />
+      <Advice text={request.advice} />
       {argv.length > 0 && (
         <ol className="permission-argv" aria-label="The command">
           {argv.map((token, i) => (
@@ -297,6 +306,7 @@ function RiskPrompt({ request, onResolve }: { request: PermissionRequest; onReso
       <p className="permission-eyebrow">Before I do this</p>
       <p className="permission-summary">{request.summary}</p>
       <Reason text={request.reason} hover={request.reason_hover} />
+      <Advice text={request.advice} />
       {request.diff && <ArgumentList key={request.id} json={request.diff} />}
       <div className="permission-actions">
         <button className="permission-btn primary" onClick={() => onResolve("once")}>
@@ -472,6 +482,7 @@ export default function PermissionPanel() {
           </p>
           <p className="permission-summary">{request.summary}</p>
           <Reason text={request.reason} hover={request.reason_hover} />
+          <Advice text={request.advice} />
           {request.diff && <ArgumentList key={request.id} json={request.diff} />}
           {request.tools && request.tools.length > 0 && <ToolKinds key={`kinds-${request.id}`} tools={request.tools} />}
           <div className="permission-actions">
@@ -516,6 +527,7 @@ export default function PermissionPanel() {
             nothing for the panel to restate. */}
         <p className="permission-summary">{request.summary}</p>
         <Reason text={request.reason} hover={request.reason_hover} />
+        <Advice text={request.advice} />
         {!capability && (
           <p className="permission-path">
             {request.path}

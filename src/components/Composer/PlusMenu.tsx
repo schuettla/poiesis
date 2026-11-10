@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useAppStore } from "../../lib/store";
 import type { Attachment, ContextRef } from "../../lib/types";
-import { FolderIcon, MessageIcon, PaperclipIcon, SectionIcon } from "../Icons/Icons";
+import { libraryAdd } from "../../lib/mentions";
+import { ChevronIcon, FolderIcon, MessageIcon, PaperclipIcon, PlusIcon, SectionIcon } from "../Icons/Icons";
 
 type Panel = "library" | "chats";
 
@@ -41,10 +42,12 @@ export default function PlusMenu({
     () => [...allArtifacts].sort((a, b) => b.created_at - a.created_at).slice(0, LIST_LIMIT),
     [allArtifacts]
   );
+  // Only the open chat has its messages loaded (`toConversation` starts every
+  // row empty), so "has messages" cannot be a filter here — it hid them all.
   const chats = useMemo(
     () =>
       conversations
-        .filter((c) => c.id !== activeId && !c.parentConversationId && c.messages.length > 0)
+        .filter((c) => c.id !== activeId && !c.parentConversationId)
         .slice(0, LIST_LIMIT),
     [conversations, activeId]
   );
@@ -63,13 +66,13 @@ export default function PlusMenu({
         aria-label="Add to this message"
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Add files, a folder, or something I made"
+        title="Add files, a folder, or something I made. Type @ for a file."
         onClick={() => {
           setPanel(null);
           setOpen((v) => !v);
         }}
       >
-        +
+        <PlusIcon size={16} strokeWidth={1.5} />
       </button>
       {open && (
         <>
@@ -126,7 +129,9 @@ export default function PlusMenu({
                     From my library
                     <span className="mi-hint">a picture, page or file I made earlier</span>
                   </span>
-                  <span className="mi-more" aria-hidden="true">›</span>
+                  <span className="mi-more" aria-hidden="true">
+                    <ChevronIcon dir="right" size={11} strokeWidth={1.6} />
+                  </span>
                 </button>
                 <button
                   className="composer-menu-item"
@@ -139,7 +144,9 @@ export default function PlusMenu({
                     An earlier conversation
                     <span className="mi-hint">I'll read it before answering</span>
                   </span>
-                  <span className="mi-more" aria-hidden="true">›</span>
+                  <span className="mi-more" aria-hidden="true">
+                    <ChevronIcon dir="right" size={11} strokeWidth={1.6} />
+                  </span>
                 </button>
               </>
             )}
@@ -151,7 +158,7 @@ export default function PlusMenu({
                   onClick={() => setPanel(null)}
                   aria-label="Back to the main menu"
                 >
-                  <span aria-hidden="true">‹</span>
+                  <ChevronIcon dir="left" size={11} strokeWidth={1.6} />
                   {panel === "library" ? "From my library" : "An earlier conversation"}
                 </button>
                 <div className="composer-submenu">
@@ -166,16 +173,9 @@ export default function PlusMenu({
                           key={a.id}
                           onClick={() => {
                             close();
-                            if (a.kind === "image") {
-                              onAddAttachment({
-                                id: `lib-${a.id}`,
-                                kind: "image",
-                                name: a.title,
-                                path: a.content,
-                              });
-                            } else {
-                              onAddRef({ kind: "artifact", id: a.id, label: a.title });
-                            }
+                            const add = libraryAdd(a);
+                            if ("attachment" in add) onAddAttachment(add.attachment);
+                            else onAddRef(add.ref);
                           }}
                         >
                           <span className="mi-icon" aria-hidden="true"><SectionIcon view="library" size={15} /></span>

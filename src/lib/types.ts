@@ -106,6 +106,12 @@ export interface AgentStep {
    * as forty things the agent decided to do. Drawn indented under their step,
    * they read as what they are: the work of the one step above. */
   nestedUnder?: string;
+  /** `WRK-2`: this is not a step but the place an item of the plan ended, drawn
+   * as a thin line with these words ("Done: Export function"). */
+  divider?: string;
+  /** `WRK-5`: with a divider that marks a fresh start, the handover note the
+   * run wrote itself. A click on the line opens it. */
+  note?: string;
   /** `HRN-8`/`HRN-UI-4`: this step's output was too big to paste, so it was
    * kept on disk. The model saw a preview; this is the whole thing. */
   kept?: { reference: string; bytes: number; text: string };
@@ -187,6 +193,23 @@ export interface RunSummary {
   /** `USE-4`: tool groups a quick decision left off this run's menu, and which
    * of them came back since. Absent when nothing was held back. */
   held?: { units: import("./api").HeldTool[]; back: string[] };
+  /** `WRK-3`: how this run worked, when it said. */
+  style?: { preset: string; name: string };
+  /** `WRK-1`: the check that stopped the line, while it is stopped. */
+  stopped?: { check: string };
+  /** `WRK-4`: the item someone is taking a second look at, while they do. */
+  looking?: { item: number };
+  /** `WRK-6`: the item being tried two ways, while it is. */
+  branching?: { item: number; id: string };
+  /** `WRK-13`: a way of working asked for in the middle of the run, which starts at the end
+   * of the item in hand. Cleared when the run says it has switched. */
+  switching?: { to: string; name: string };
+  /** `WRK-8`: when the last item ended and when the run last started fresh
+   * (epoch ms), for the header mark to pulse and fade on. */
+  pulsedAt?: number;
+  freshAt?: number;
+  /** When the run ended (epoch ms), for the mark's one slow breath. */
+  endedAt?: number;
 }
 
 /** The typed workspace-block kinds the renderer understands (Generative UI).
@@ -342,6 +365,8 @@ export interface Conversation {
   folderTrust?: FolderTrust;
   /** `RTE-5`: keep external agent apps out of this chat. */
   enginesOff?: boolean;
+  /** `WRK-3`: how this chat works, as a preset's slug. `null` is Ad hoc. */
+  style?: string | null;
   /** `PRJ-1`: the project this session belongs to, or null for a loose chat.
    * With one set, the project owns the folder and the trust level and the two
    * fields above are only the fallback. */
@@ -541,6 +566,12 @@ export interface TurnModifiers {
   /** `EPI-UI-1`: do it the way a finished conversation did it. Its digest and skill go
    * into this message's copy for the model. Never a default. */
   lastTime?: { conversationId: string; at: number; digest: string; skill: string | null };
+  /** `WRK-3`: work this one message the way a preset says (`/style lean <message>`).
+   * The chat's own setting does not change. Never a default. */
+  style?: string;
+  /** `WRK-12`: what done means, when `/goal ... until ...` said it up front. Agreed, so the
+   * run does not ask. For this message alone. Never a default. */
+  criteria?: string[];
 }
 
 /** `REG-4`: how a traced command ended. Only `done` and `failed` exist until the
@@ -608,13 +639,15 @@ export interface HarnessProposalView {
   messageId: string;
   name: "switch_mode" | "schedule" | "compact";
   reason: string;
-  payload: { mode?: "workspace" | "plan_first"; auto?: boolean; when?: string; task?: string };
+  /** `WRK-13`: `style` is set when `mode` is a way of working (a preset slug), not a composer mode. */
+  payload: { mode?: string; style?: boolean; auto?: boolean; when?: string; task?: string };
 }
 
 /** `CMP-3`: something from elsewhere that the next message should be read
  * against. The model gets a line naming it and reads it with its own tools. */
 export interface ContextRef {
-  kind: "conversation" | "artifact";
+  /** `file` is an `@` mention: `id` is its path under the working folder. */
+  kind: "conversation" | "artifact" | "file";
   id: string;
   label: string;
 }

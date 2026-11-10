@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import type { CommandMenuModel, MenuLine } from "./useCommandInput";
 import type { LiveControl } from "../../lib/commands";
 import { useAppStore } from "../../lib/store";
+import StyleGlyph, { LockMark } from "../Mark/StyleGlyph";
 import "./CommandMenu.css";
 
 type RowLine = Extract<MenuLine, { kind: "command" | "recent" }>;
@@ -165,8 +166,12 @@ export default function CommandMenu({
                 key={line.key}
                 {...optionProps(line.index)}
               >
+                {line.choice.glyph && <StyleGlyph glyph={line.choice.glyph} size={16} branch={line.choice.branch} />}
                 <span className="mi-body">
-                  <span className="command-menu-title command-menu-choice">{line.choice.label}</span>
+                  <span className="command-menu-title command-menu-choice">
+                    {line.choice.label}
+                    {line.choice.locked && <LockMark />}
+                  </span>
                   {(line.choice.disabledReason ?? line.choice.hint) && (
                     <span className="mi-hint">{line.choice.disabledReason ?? line.choice.hint}</span>
                   )}
