@@ -101,6 +101,11 @@ pub struct Job {
     /// check-ins) does not happen in it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
+    /// `TEAM-20`: who does it: `poiesis`, `persona:<id>` or `team:<slug>`. `None` is as before
+    /// the leaders existed: Poiesis, with nothing decided about the place. A leader that is gone
+    /// by the time the task runs is Poiesis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader: Option<String>,
 }
 
 /// One entry of a task's history: a completed run, or a run the condition skipped.
@@ -140,6 +145,7 @@ fn seed_nightly_job() -> Job {
         runs: Vec::new(),
         run_if: None,
         style: None,
+        leader: None,
     }
 }
 
@@ -732,6 +738,11 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
             let _ = db.set_conversation_style(&conversation_id, Some(&preset.slug));
         }
     }
+    // `TEAM-20`: who does it. A persona or a team that is gone since is Poiesis, as the task
+    // ran before leaders were.
+    if let Some(leader) = job.leader.as_deref().and_then(crate::agent::leader::Leader::parse) {
+        let _ = crate::agent::leader::set_leader(&db, &memory, &conversation_id, Some(&leader));
+    }
 
     // `TIER-4`: a scheduled run is on the local engine, so it is on that model's tier.
     let tier = crate::commands::agent::tier_of(&mgr, &db, &crate::commands::agent::ChatTarget::default()).await;
@@ -778,6 +789,9 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
     let run = fleet.open(&conversation_id, cancel, None, 0);
     let limits = crate::agent::fleet::RunLimits {
         deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(600)),
+        // `TEAM-20`: a team's scheduled task has the allowance of its team, as a task the person
+        // started has. There is no cost card: nobody is there to answer it.
+        allowance: crate::agent::team::start_task(&db, &memory, &conversation_id, answer_id.as_deref()),
         ..Default::default()
     };
     // A scheduled job runs on whatever the engine is: the local one unless the
@@ -817,7 +831,17 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
     )
     .await;
     fleet.close(&run.id);
-    let text = outcome.text;
+    let mut text = outcome.text;
+    // `TEAM-19`: a run that could not make a change or ask a question has left it for the person.
+    // It ends as waiting, and says so in its own answer.
+    let waits = db.list_waiting().unwrap_or_default().iter().filter(|p| p.session_id.as_deref() == Some(conversation_id.as_str())).count();
+    if waits > 0 {
+        let things = if waits == 1 { "1 thing waits".to_string() } else { format!("{waits} things wait") };
+        text = format!("{}\n\n{things} for you. Answer in Waiting for you, and I go on.", text.trim_end());
+    }
+    // `TEAM-20`: nobody watched this run, so its chat is unread until it is opened.
+    let _ = db.mark_away(&conversation_id);
+    crate::waiting::changed(&conversation_id);
     if let Some(answer_id) = &answer_id {
         // `HAB-1`: the lessons that spoke up at a tool call are part of what reached it.
         let mut refs = inputs.context_refs.clone();
@@ -924,6 +948,14 @@ pub struct JobInput {
     /// `WRK-18`: a preset slug or name; blank or absent means Ad hoc.
     #[serde(default)]
     pub style: Option<String>,
+    /// `TEAM-20`: who does it (a leader as the chats store it); blank or absent means Poiesis as before.
+    #[serde(default)]
+    pub leader: Option<String>,
+}
+
+/// A leader as a task stores it: only one that reads as a leader, else none.
+fn clean_leader(raw: Option<String>) -> Option<String> {
+    clean_condition(raw).and_then(|l| crate::agent::leader::Leader::parse(&l)).map(|l| l.text())
 }
 
 /// A condition as it is stored: trimmed, and `None` when it is blank.
@@ -954,6 +986,7 @@ pub fn create_scheduler_job_cmd(db: State<'_, Db>, input: JobInput) -> Result<Jo
         runs: Vec::new(),
         run_if: clean_condition(input.run_if),
         style: clean_condition(input.style),
+        leader: clean_leader(input.leader),
     };
     jobs.push(job.clone());
     save_jobs(&db, &jobs).map_err(PoiesisError::Message)?;
@@ -978,6 +1011,7 @@ pub fn update_scheduler_job_cmd(
     existing.enabled = input.enabled;
     existing.run_if = clean_condition(input.run_if);
     existing.style = clean_condition(input.style);
+    existing.leader = clean_leader(input.leader);
     if input.enabled && !was_enabled {
         existing.next_run_at = crate::db::now_ms();
     }
@@ -1043,6 +1077,26 @@ pub fn mark_digest_read_cmd(db: State<'_, Db>) -> Result<(), PoiesisError> {
 mod tests {
     use super::*;
 
+    /// `TEAM-20`: a task keeps who does it, only as a leader the chats could have, and a task
+    /// written before leaders existed reads back with none.
+    #[test]
+    fn a_task_keeps_its_leader_and_an_older_one_has_none() {
+        assert_eq!(clean_leader(Some(" team:shop-team ".into())).as_deref(), Some("team:shop-team"));
+        assert_eq!(clean_leader(Some("persona:p1".into())).as_deref(), Some("persona:p1"));
+        assert_eq!(clean_leader(Some("poiesis".into())).as_deref(), Some("poiesis"));
+        assert_eq!(clean_leader(Some("somebody".into())), None, "not a leader");
+        assert_eq!(clean_leader(Some("  ".into())), None);
+        assert_eq!(clean_leader(None), None);
+
+        let old = r#"{"id":"j","name":"n","prompt":"p","cadence":"daily","scope":null,"enabled":true,"next_run_at":0,"last_run_at":null,"last_result":null}"#;
+        let job: Job = serde_json::from_str(old).unwrap();
+        assert_eq!(job.leader, None);
+        let mut job = job;
+        job.leader = Some("team:shop-team".into());
+        let again: Job = serde_json::from_str(&serde_json::to_string(&job).unwrap()).unwrap();
+        assert_eq!(again.leader.as_deref(), Some("team:shop-team"));
+    }
+
     /// `CRD-1`: a headless run keeps its prompt and answer, and the answer keeps
     /// the record of what reached it, so the run can be read and credited.
     #[test]
@@ -1106,6 +1160,7 @@ mod tests {
             runs: Vec::new(),
             run_if: None,
             style: None,
+            leader: None,
         });
         save_jobs(&db, &again).unwrap();
         let reloaded = load_jobs(&db);
@@ -1143,6 +1198,7 @@ mod tests {
             runs: Vec::new(),
             run_if: Some("there is a new release".into()),
             style: None,
+            leader: None,
         }
     }
 

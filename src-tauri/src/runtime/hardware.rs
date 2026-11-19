@@ -151,12 +151,17 @@ fn vendor_from_name(name: &str) -> GpuVendor {
 /// Accurate NVIDIA probe via `nvidia-smi` (present with the driver). Returns the
 /// detected NVIDIA GPUs, or an empty vec if the tool is absent.
 fn detect_nvidia() -> Vec<GpuInfo> {
-    let out = Command::new("nvidia-smi")
-        .args([
-            "--query-gpu=name,memory.total,driver_version",
-            "--format=csv,noheader,nounits",
-        ])
-        .output();
+    let mut cmd = Command::new("nvidia-smi");
+    cmd.args([
+        "--query-gpu=name,memory.total,driver_version",
+        "--format=csv,noheader,nounits",
+    ]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd.output();
     let Ok(out) = out else { return Vec::new() };
     if !out.status.success() {
         return Vec::new();
@@ -185,8 +190,10 @@ fn detect_nvidia() -> Vec<GpuInfo> {
 fn detect_gpus_system(_ram_mb: u64) -> Vec<GpuInfo> {
     let script = "Get-CimInstance Win32_VideoController | \
         Select-Object Name, AdapterRAM, DriverVersion | ConvertTo-Json -Compress";
+    use std::os::windows::process::CommandExt;
     let out = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
         .output();
     let Ok(out) = out else { return Vec::new() };
     let text = String::from_utf8_lossy(&out.stdout);

@@ -101,7 +101,7 @@ describe("a task's way of working", () => {
     useAppStore.setState({ scheduledJobs: [job({ style: "lean" })] } as never);
     act(() => root.render(<Tasks />));
     click("Edit");
-    expect(container.querySelector(".select-value")?.textContent).toContain("Lean");
+    expect(container.querySelector('button[aria-label="How I work on it"] .select-value')?.textContent).toContain("Lean");
     await act(async () => click("Save changes"));
     expect(updateJob).toHaveBeenLastCalledWith("j1", expect.objectContaining({ style: "lean" }));
   });

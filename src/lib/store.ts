@@ -30,6 +30,7 @@ import type {
   SideAnswer,
 } from "./types";
 import { NEW_PROJECT_NAME } from "./types";
+import type { DocQuote } from "./mdQuote";
 import { mockConversations, mockModels } from "./mockData";
 import * as api from "./api";
 import {
@@ -48,6 +49,7 @@ import { KEEP_RECENT, KEEP_RECENT_WORKSPACE } from "./context";
 import { workspaceAvailable } from "./experiments";
 import type { VerifyEntry } from "./verify";
 import { emptyThought, type TurnThought } from "./thought";
+import { leaderOf } from "./leaders";
 import { getSpeechBridge } from "./voice/bridge";
 import {
   EMPTY_PREFS,
@@ -90,7 +92,7 @@ const INDEX_EXPLAINED_KEY = "index.explained";
  * and render inline where the ability itself is shown rather than as a toast
  * — left as they are rather than forced through a shared shell that doesn't
  * fit their context. */
-const FIRST_TIME_KEYS = ["recall", "retrieval", "digest", "proposal"] as const;
+const FIRST_TIME_KEYS = ["recall", "retrieval", "digest", "proposal", "koryphaios"] as const;
 /** How long a first-time explanation toast stays up before clearing itself —
  * independent of whether it's still mounted, so it can never get stuck behind
  * a memory-write or heal toast that outlives it. */
@@ -355,6 +357,18 @@ export interface AppState {
    * this agent with its settings open. */
   engineFocus: string | null;
   openEngines: (id?: string) => void;
+  /** `TEAM-4`: arriving from a link lands on this persona (or `poiesis`) in Personas & teams. */
+  personasFocus: string | null;
+  /** `TEAM-22`: a team made from a session's helpers, handed to the Teams tab as a New team. */
+  teamDraft: api.Team | null;
+  openTeamDraft: (team: api.Team) => void;
+  openPersonas: (id?: string) => void;
+  /** `TEAM-6`: the sidebar lists only the chats this leader leads (`poiesis` or `persona:<id>`);
+   * `null` lists them all. Not kept between sessions. */
+  leaderFilter: string | null;
+  setLeaderFilter: (leader: string | null) => void;
+  /** A persona's "Mira's chats" link: the same filter, with the sidebar open to show it. */
+  showChatsLedBy: (leader: string) => void;
   /** `EXP-1`: the backend's experiments with their state; `null` until read. */
   experiments: api.ExperimentInfo[] | null;
   /** `EXP-UI-1`: the filter Activity opens with, set by a card's Details link
@@ -434,6 +448,9 @@ export interface AppState {
    * Live children are folded in from the stream; finished ones are rehydrated
    * from `subagent_runs` when a conversation opens. */
   subRuns: Record<string, SubRun>;
+  /** `TEAM-15`: what passed between the people of a team, by the session the team leads, oldest first. */
+  posts: Record<string, api.TeamPost[]>;
+  loadPosts: (convId: string) => Promise<void>;
   /** Load the children a conversation started, so they survive a reload. */
   loadSubRuns: (convId: string) => Promise<void>;
   /** `SUB-UI-1`: say something to a child that is still working. */
@@ -449,6 +466,9 @@ export interface AppState {
   setToolsEnabled: (on: boolean) => void;
   /** Workspace mode: the chat view flips to the composed-interface layout —
    * the agent's UI is the interaction point, the message stream is a log. */
+  /** `/focus`: the message stream shows the messages and nothing around them. */
+  focusMode: boolean;
+  setFocusMode: (on: boolean) => void;
   workspaceMode: boolean;
   setWorkspaceMode: (on: boolean) => void;
   /** Mode and view are two things, as with voice: the mode is the chat's own
@@ -478,6 +498,12 @@ export interface AppState {
    * chip's label). The nonce makes a second identical request register. */
   composerRequest: { text: string; nonce: number } | null;
   requestComposer: (text: string) => void;
+  /** A passage picked out of a document, waiting for the composer to take it as a
+   * quote chip. The composer clears it once taken, so a remount never re-adds it. */
+  composerQuote: DocQuote | null;
+  /** Hand a passage to the composer to comment on, and go back to the chat it is in. */
+  quoteIntoComposer: (quote: DocQuote) => void;
+  clearComposerQuote: () => void;
   /** `REG-4`: commands that changed something, by conversation, oldest first. */
   commandNotes: Record<string, CommandNoteView[]>;
   recordCommand: (
@@ -625,6 +651,9 @@ export interface AppState {
   // personas (CHT-4 / CHT-7)
   personas: api.Persona[];
   refreshPersonas: () => Promise<void>;
+  /** `TEAM-8`: the teams, so they can lead chats like personas do. */
+  teams: api.Team[];
+  refreshTeams: () => Promise<void>;
   createPersona: (args: {
     name: string;
     systemPrompt: string;
@@ -637,12 +666,16 @@ export interface AppState {
     spawnable?: boolean;
     /** `CLI-UI-4`: the agent app it runs on; `null` = Poiesis. */
     engineId?: string | null;
+    /** `TEAM-4`: the glyph (JSON) and the line under the name. */
+    look?: string | null;
+    line?: string | null;
   }) => Promise<api.Persona | undefined>;
   updatePersona: (persona: api.Persona) => Promise<void>;
   deletePersona: (id: string) => Promise<void>;
   setDefaultPersona: (id: string) => Promise<void>;
-  /** Apply (or clear) a persona on the active conversation. */
-  applyPersona: (conversationId: string, personaId: string | null) => Promise<void>;
+  /** `TEAM-1`: hand a chat to `poiesis` or `persona:<id>`; `null` gives the choice back so
+   * where chats start decides. */
+  setConversationLeader: (conversationId: string, leader: string | null) => Promise<void>;
   /** Set a one-off per-conversation temperature override (CHT-7). */
   setConversationTemperature: (conversationId: string, temperature: number | null) => Promise<void>;
   /** What's shaping the current answer (WHY-1/4) — `undefined` when the panel
@@ -673,6 +706,18 @@ export interface AppState {
   refreshMemoryContext: () => Promise<void>;
   /** Self-changes the agent proposed and the user hasn't answered (SOUL-3). */
   changeProposals: api.ChangeProposal[];
+  /** `TEAM-19`: what runs nobody watched left for the person (`waiting-file`, `waiting-ask`). */
+  waiting: api.ChangeProposal[];
+  /** What the person has said to each session's entries so far, until the last one is answered. */
+  waitingNotes: Record<string, { note: string; yes: boolean }[]>;
+  waitingOpen: boolean;
+  setWaitingOpen: (open: boolean) => void;
+  refreshWaiting: () => Promise<void>;
+  /** Answer one entry. When it was the session's last, the session goes on with the answers. */
+  answerWaiting: (id: string, accept: boolean, text?: string) => Promise<void>;
+  /** `TEAM-20`: sessions a run changed while nobody watched, until opened. */
+  unreadIds: string[];
+  refreshUnread: () => Promise<void>;
   refreshChangeProposals: () => Promise<void>;
   resolveChangeProposal: (id: string, accept: boolean) => Promise<void>;
   /** `HAB-3`: make the lesson behind a "check before a tool" card a standing instruction. */
@@ -708,6 +753,9 @@ export interface AppState {
   maybeFirstTime: (key: string, message: string) => void;
   /** `SMP-7d`: forget every first-time flag, from Everything mode. */
   resetFirstTimeExplanations: () => Promise<void>;
+  /** `TEAM-4`: fold away an explanation that sits on a page (not a toast) for good, until
+   * "Show first-time explanations again". */
+  dismissExplanation: (key: (typeof FIRST_TIME_KEYS)[number]) => void;
   /** Whether the Memory toolset is on — gates both the tool and the injection. */
   memoryToolEnabled: boolean;
   refreshMemoryToolset: () => Promise<void>;
@@ -907,6 +955,8 @@ export interface AppState {
   /** `HRN-UI-5`: continue the last run instead of starting over, with its tool
    * results intact. */
   resumeLastRun: () => Promise<void>;
+  /** `TEAM-18`: a reply nobody asked for, from a member of the team that leads the chat. */
+  startUnaskedReply: (convId: string, role: string, nudge: string) => Promise<void>;
   /** `UCM-2`: show a branch `/fork` just made and make it the live chat. */
   openSessionFromFork: (conversation: api.DbConversation) => Promise<void>;
   /** `UCM-3`: summarise the older turns now, keeping `focus` in particular.
@@ -1391,6 +1441,21 @@ function persistPrefs(prefs: ModelPrefs) {
  */
 let inflightLoad: { id: string; promise: Promise<void> } | null = null;
 
+/** The helper runs read back from the database, hung off the turn that started them. Opening a chat
+ * reads its messages and its runs at the same time, and the runs can land first: then the messages
+ * that come after must pick them up, or the Fleet card and a team's Coordination view (which finds
+ * the task's posts through these runs) would be empty after a reload. */
+export function withSubRuns(messages: Message[], subRuns: Record<string, SubRun>): Message[] {
+  const byMessage: Record<string, string[]> = {};
+  for (const r of Object.values(subRuns)) if (r.parentMessageId) (byMessage[r.parentMessageId] ??= []).push(r.runId);
+  return messages.map((m) => {
+    const mine = byMessage[m.id];
+    if (!mine) return m;
+    const ids = [...new Set([...(m.subRunIds ?? []), ...mine])];
+    return ids.length === m.subRunIds?.length ? m : { ...m, subRunIds: ids };
+  });
+}
+
 /** `SEE-2`: a turn's quick decisions live in memory only, so a chat read again from the
  * database keeps the ones this session already had: switching away and back must not take
  * the receipt off an answer. */
@@ -1416,6 +1481,8 @@ function toMessage(m: api.DbMessage): Message {
     // about the answer's completeness, not about this session.
     stopReason: m.stop_reason && m.stop_reason !== "completed" ? m.stop_reason : undefined,
     spoken: m.spoken ? true : undefined,
+    author: m.author ?? undefined,
+    addressed: m.addressed ?? undefined,
     unspoken: api.parseUnspoken(m.steps_json),
     attachments: m.attachments?.length
       ? m.attachments.map((a) => ({
@@ -1478,6 +1545,7 @@ function toConversation(c: api.DbConversation): Conversation {
     projectId: c.project_id ?? null,
     enginesOff: c.engines_off ?? false,
     style: c.style ?? null,
+    leader: c.leader ?? null,
   };
 }
 
@@ -1537,6 +1605,27 @@ function deriveTitle(text: string): string {
 function ellipsizeClient(s: string, maxChars: number): string {
   const chars = Array.from(s);
   return chars.length <= maxChars ? s : `${chars.slice(0, maxChars).join("")}…`;
+}
+
+const FOCUS_MODE_KEY = "poiesis.focus";
+
+/** `/focus`: how the stream is read, kept across restarts. A per-install view
+ * choice, so it lives in `localStorage` like the media consent below. */
+function loadFocusMode(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(FOCUS_MODE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function saveFocusMode(on: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(FOCUS_MODE_KEY, on ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
 }
 
 const MEDIA_CONSENT_KEY = "poiesis.media.consent";
@@ -1963,6 +2052,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   enginesNewlyFound: false,
   engineFocus: null,
   openEngines: (id) => set({ engineFocus: id ?? null, view: "engines" }),
+  personasFocus: null,
+  teamDraft: null,
+  openTeamDraft: (teamDraft) => set({ teamDraft, personasFocus: "team:new", view: "personas" }),
+  openPersonas: (id) => set({ personasFocus: id ?? null, view: "personas" }),
+  leaderFilter: null,
+  setLeaderFilter: (leader) => set({ leaderFilter: leader }),
+  showChatsLedBy: (leader) => set({ leaderFilter: leader, railCollapsed: false }),
   experiments: null,
   activityFilter: null,
   setActivityFilter: (activityFilter) => set({ activityFilter }),
@@ -2025,6 +2121,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   busy: false,
   activeRun: null,
   subRuns: {},
+  posts: {},
   permissionAgents: {},
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   // Tools default ON: without them the model can't reach render_ui/present, yet
@@ -2032,6 +2129,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   // as prose (the raw-JSON leak) since plain-chat mode never parses fallbacks.
   toolsEnabled: true,
   setToolsEnabled: (toolsEnabled) => set({ toolsEnabled }),
+  focusMode: loadFocusMode(),
+  setFocusMode: (focusMode) => {
+    saveFocusMode(focusMode);
+    set({ focusMode });
+  },
   workspaceMode: false,
   setWorkspaceMode: (workspaceMode) => {
     // `EXP-3`: every way of turning it on comes through here, so this is the one
@@ -2121,6 +2223,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   composerRequest: null,
   requestComposer: (text) => set({ composerRequest: { text, nonce: Date.now() } }),
+  composerQuote: null,
+  quoteIntoComposer: (quote) => {
+    set({ composerQuote: quote });
+    // The document is a tab of its own; the composer is on the chat's.
+    get().showConversation();
+  },
+  clearComposerQuote: () => set({ composerQuote: null }),
   commandNotes: {},
   recordCommand: (conversationId, note) => {
     if (!conversationId) return;
@@ -2193,16 +2302,28 @@ export const useAppStore = create<AppState>((set, get) => ({
     const p = get().harnessProposals.find((x) => x.id === id);
     if (!p) return;
     set((s) => ({ harnessProposals: s.harnessProposals.filter((x) => x.id !== id) }));
-    const what = proposalWhat(p);
+    let note = `you said ${accept ? "yes" : "not now"} to ${proposalWhat(p)}`;
+    if (accept && p.payload.leader) {
+      // `TEAM-3`/`TEAM-7`: a yes hands the chat over from the next message, like `/lead`, and
+      // the line says so. A persona deleted since the card was asked is refused, and the
+      // line says that nothing changed.
+      const name = p.payload.name ?? "Someone";
+      try {
+        await get().setConversationLeader(p.convId, String(p.payload.mode));
+        note = `${name} leads this chat from here.`;
+      } catch {
+        note = `${name} is not here any more, so this chat stays as it was.`;
+      }
+    }
     get().recordCommand(p.convId, {
       name: p.name,
       args: p.payload.mode ?? p.payload.task ?? "",
       by: "user",
       outcome: accept ? "accepted" : "declined",
-      note: `you said ${accept ? "yes" : "not now"} to ${what}`,
+      note,
     });
     // The effect belongs to your session, so the frontend carries it out.
-    if (accept) await applyHarnessProposal(get, p);
+    if (accept && !p.payload.leader) await applyHarnessProposal(get, p);
   },
   planFirstDefault: false,
   setPlanFirstDefault: async (on) => {
@@ -2612,6 +2733,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       /* ignore */
     }
   },
+  teams: [],
+  refreshTeams: async () => {
+    if (!api.inTauri()) return;
+    try {
+      set({ teams: (await api.teamsList()).map((r) => r.team) });
+    } catch {
+      /* ignore */
+    }
+  },
   createPersona: async ({
     name,
     systemPrompt,
@@ -2622,11 +2752,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     description,
     spawnable,
     engineId,
+    look,
+    line,
   }) => {
     if (!api.inTauri()) return undefined;
     const paramsJson =
       typeof temperature === "number" ? JSON.stringify({ temperature }) : null;
-    const created = await api.createPersona({
+    let created = await api.createPersona({
       name,
       systemPrompt,
       modelId: modelId ?? null,
@@ -2637,6 +2769,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       spawnable: spawnable ?? false,
       engineId: engineId ?? null,
     });
+    // The glyph and the line are not part of making one; they are said once it exists.
+    if (created && (look || line)) {
+      created = { ...created, look: look ?? null, line: line ?? null };
+      await api.updatePersona(created);
+    }
     await get().refreshPersonas();
     return created;
   },
@@ -2651,8 +2788,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Detach locally from any conversation that pointed at it.
     set((s) => ({
       conversations: s.conversations.map((c) =>
-        c.personaId === id ? { ...c, personaId: null } : c
+        // A team it coordinated keeps its chats: Poiesis coordinates them now.
+        c.personaId === id || c.leader === `persona:${id}`
+          ? { ...c, personaId: null, leader: c.leader?.startsWith("team:") ? c.leader : null }
+          : c
       ),
+      leaderFilter: s.leaderFilter === `persona:${id}` ? null : s.leaderFilter,
     }));
     await get().refreshPersonas();
   },
@@ -2661,18 +2802,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     await api.setDefaultPersona(id);
     await get().refreshPersonas();
   },
-  applyPersona: async (conversationId, personaId) => {
+  setConversationLeader: async (conversationId, leader) => {
+    // The backend keeps `persona_id` in step with the leader, so the window does the same.
+    // It refuses a persona that is gone, and then nothing changes here.
+    if (api.inTauri()) await api.setConversationLeader(conversationId, leader);
+    // A team is led by its coordinator (none when Poiesis coordinates).
+    const team = leader?.startsWith("team:") ? get().teams.find((t) => `team:${t.slug}` === leader) : undefined;
+    const lead = team ? team.coordinator : leader;
+    const personaId = lead?.startsWith("persona:") ? lead.slice("persona:".length) : null;
     set((s) => ({
-      conversations: s.conversations.map((c) =>
-        c.id === conversationId ? { ...c, personaId } : c
-      ),
+      conversations: s.conversations.map((c) => (c.id === conversationId ? { ...c, leader, personaId } : c)),
     }));
-    if (api.inTauri()) {
-      const overridesJson = serializeOverrides(
-        get().conversations.find((c) => c.id === conversationId)?.overrides
-      );
-      await api.setConversationPersona(conversationId, personaId, overridesJson);
-    }
     // If the persona pins a model that's in the library/cloud, select it too.
     const persona = get().personas.find((p) => p.id === personaId);
     if (persona?.model_id && get().models.some((m) => m.id === persona.model_id)) {
@@ -2737,11 +2877,51 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   changeProposals: [],
+  waiting: [],
+  waitingNotes: {},
+  waitingOpen: false,
+  setWaitingOpen: (waitingOpen) => set({ waitingOpen }),
+  refreshWaiting: async () => {
+    if (!api.inTauri()) return;
+    try {
+      const waiting = await api.listWaiting();
+      set({ waiting, ...(waiting.length === 0 ? { waitingOpen: false } : {}) });
+    } catch {
+      /* non-fatal */
+    }
+  },
+  answerWaiting: async (id, accept, text) => {
+    const entry = get().waiting.find((p) => p.id === id);
+    const note = await api.resolveWaiting(id, accept, text);
+    const session = entry?.session_id ?? "";
+    const notes = [...(get().waitingNotes[session] ?? []), { note, yes: accept }];
+    await get().refreshWaiting();
+    if (session && get().waiting.some((p) => p.session_id === session)) {
+      set((s) => ({ waitingNotes: { ...s.waitingNotes, [session]: notes } }));
+      return;
+    }
+    set((s) => ({ waitingNotes: withoutKey(s.waitingNotes, session) }));
+    // Everything this session waited on is answered. When something was approved or answered, the
+    // session goes on, with the answers as the person's next message.
+    if (!session || !notes.some((n) => n.yes) || get().busy) return;
+    await get().openSession(session);
+    await get().sendMessage(waitingAnswersMessage(notes.map((n) => n.note)));
+  },
+  unreadIds: [],
+  refreshUnread: async () => {
+    if (!api.inTauri()) return;
+    try {
+      set({ unreadIds: await api.unreadSessions() });
+    } catch {
+      /* non-fatal */
+    }
+  },
   consolidationPending: false,
   refreshChangeProposals: async () => {
     if (!api.inTauri()) return;
     try {
-      const changeProposals = await api.listChangeProposals();
+      // What waits for the person is shown where they are (`TEAM-19`), not among my own proposals.
+      const changeProposals = (await api.listChangeProposals()).filter((p) => !p.target.startsWith("waiting-"));
       set({ changeProposals });
       if (changeProposals.length > 0) {
         get().maybeFirstTime(
@@ -2864,6 +3044,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     setTimeout(() => {
       if (get().explainToast === message) set({ explainToast: null });
     }, EXPLAIN_DWELL_MS);
+  },
+  dismissExplanation: (key) => {
+    set((st) => ({ firstTimeFlags: { ...st.firstTimeFlags, [key]: true } }));
+    if (api.inTauri()) api.setSetting(`onboarded.${key}`, "true").catch(() => {});
   },
   resetFirstTimeExplanations: async () => {
     // `firstTimeFlagsLoaded` stays true: these flags are now known-empty on
@@ -3548,6 +3732,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ modelsLoaded: true });
     });
     get().refreshPersonas();
+    get().refreshTeams();
     get().refreshContextBudget();
     get().refreshMemoryContext();
     get().refreshChangeProposals();
@@ -3555,6 +3740,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().refreshSelf();
     get().refreshToolHealth();
     get().refreshScheduler();
+    void get().refreshWaiting();
+    void get().refreshUnread();
     get().refreshMcpPrompts();
     get().refreshApps();
     void refreshAppsFromComposio(get);
@@ -3632,6 +3819,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       duplicatesError: null,
     });
     persistTabSet(get());
+    // `TEAM-20`: opening a session a run changed while nobody watched clears its dot.
+    if (get().unreadIds.includes(id)) {
+      set((st) => ({ unreadIds: st.unreadIds.filter((x) => x !== id) }));
+      if (api.inTauri()) void api.markSeen(id).catch(() => {});
+    }
     if (!api.inTauri()) return;
     get().refreshTree().catch(() => {});
     get().refreshTrash().catch(() => {});
@@ -3727,7 +3919,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     set((s) => ({
       conversations: s.conversations.map((c) =>
-        c.id === id ? { ...c, messages: keepThoughts(c.messages, messages) } : c
+        c.id === id ? { ...c, messages: withSubRuns(keepThoughts(c.messages, messages), s.subRuns) } : c
       ),
       commandNotes: {
         ...s.commandNotes,
@@ -3876,6 +4068,65 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
+  startUnaskedReply: async (convId, role, nudge) => {
+    // `TEAM-18`: the person wrote nothing, so there is no bubble of theirs: only the reply, streamed
+    // like a resumed run's. The backend saves its one row and says who gave it.
+    const state = get();
+    const model = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
+    if (!model || state.busy || !api.inTauri()) return;
+    const assistantId = `a-${Date.now()}`;
+    const assistantMsg: Message = {
+      id: assistantId,
+      role: "assistant",
+      model: { name: model.name, provenance: model.provenance },
+      steps: [],
+      text: "",
+      streaming: true,
+      createdAt: Date.now(),
+    };
+    set((s) => ({
+      busy: true,
+      presence: "active",
+      conversations: s.conversations.map((c) =>
+        c.id === convId ? { ...c, updatedAt: Date.now(), messages: [...c.messages, assistantMsg] } : c
+      ),
+    }));
+    const engineError = await ensureEngineForModel(get, model);
+    if (engineError) {
+      set((s) => ({
+        busy: false,
+        presence: s.reflectingIds.length ? "reflecting" : "idle",
+        conversations: s.conversations.map((c) =>
+          c.id === convId ? { ...c, messages: c.messages.filter((m) => m.id !== assistantId) } : c
+        ),
+      }));
+      return;
+    }
+    await streamAssistantTurn(set, get, {
+      convId,
+      assistantId,
+      model,
+      start: (onEvent) =>
+        api.runTurn(
+          {
+            conversationId: convId,
+            text: nudge,
+            attachments: [],
+            refs: [],
+            pendingActions: [],
+            spoken: false,
+            model: turnModelFor(model),
+            target: targetFor(model),
+            options: { addressed: role, unasked: true },
+            toolsEnabled: get().toolsEnabled,
+          },
+          onEvent
+        ),
+    });
+    // One unasked reply for each message of the person: the rule says so, and asking costs nothing then.
+    await chimeIn(get, convId);
+  },
+
   openSessionFromFork: async (conversation) => {
     set((s) => ({ conversations: [toConversation(conversation), ...s.conversations] }));
     await get().setActiveConversation(conversation.id);
@@ -3958,7 +4209,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const selected = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
     // A click in the interface needs an answer, not a picture: with an image or
     // video model picked, the last chat model takes the action turn.
-    const model =
+    let model =
       sendOpts?.action && selected?.modality && selected.modality !== "chat"
         ? (state.models.find((m) => m.id === state.lastChatModelId) ?? selected)
         : selected;
@@ -3977,6 +4228,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       // reached when there is no chat model to fall back to at all.
       if (!sendOpts?.action) await get().createMedia({ prompt: text, modelId: model.id });
       return;
+    }
+
+    // `TEAM-1`: a persona who leads this turn answers on the model it pins. Handing a chat
+    // over in the window picks that model already; these are the two ways a persona leads
+    // that the window does not pick: one message (`/lead mira <message>`), and a chat the
+    // place it started in gives a persona, which keeps that model from then on.
+    if (!sendOpts?.action) {
+      const pinned = await pinnedModel(state, convId);
+      if (pinned) {
+        model = pinned.model;
+        if (pinned.keep) get().selectModel(pinned.model.id);
+      }
     }
 
     // `CMP-6`: the chips are for this message and no other. Taken here, in the
@@ -4152,6 +4415,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       start: (onEvent) =>
         api.runTurn({ ...input, pendingActions: pending, toolsEnabled: get().toolsEnabled, saved }, onEvent),
     });
+    await markAwayIfElsewhere(get, convId);
+    // `TEAM-18`: in a session a team leads, one of the other personas may add something.
+    await chimeIn(get, convId);
   },
 
   sendBlockAction: async (blockId, humanText, payload) => {
@@ -4294,7 +4560,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     // its answer. This is the one place that decides that, so the composer never
     // has to know whether a question is open.
     const waiting = get().pendingQuestion;
-    if (waiting && waiting.convId === convId && waiting.runId === run.runId) {
+    // `TEAM-12`: not the cost card: Start and Not now are buttons, and words are no answer to it.
+    if (waiting && waiting.convId === convId && waiting.runId === run.runId && !waiting.title) {
       return get().answerQuestion({ choices: [], text: body });
     }
 
@@ -4397,8 +4664,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
+  loadPosts: async (convId) => {
+    if (!api.inTauri()) return;
+    const rows = await api.listPosts(convId).catch(() => []);
+    for (const post of rows) set((s) => withPost(s, post));
+  },
+
   loadSubRuns: async (convId) => {
     if (!api.inTauri()) return;
+    // `TEAM-15`: a team's board comes back with its runs.
+    get().loadPosts(convId).catch(() => {});
     const rows = await api.listSubagentRuns(convId).catch(() => []);
     if (!rows.length) return;
     set((s) => {
@@ -4411,7 +4686,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           runId: row.id,
           conversationId: row.child_conversation_id,
           parentConversationId: row.parent_conversation_id,
+          ...(row.parent_message_id ? { parentMessageId: row.parent_message_id } : {}),
           agent: row.agent,
+          ...(row.member ? { member: row.member, ...(row.item ? { item: row.item } : {}) } : {}),
           task: row.task,
           // Taken at face value: `SUB-12` settles every run a restart orphaned
           // at startup, so a row still unfinished here is a background child
@@ -5639,6 +5916,57 @@ export function applyAutoCheck(set: StoreSet, get: () => AppState, e: api.AutoCh
   });
 }
 
+/** `TEAM-15`: put a post on its session's board, once (an event and a reload can both bring it). */
+export function withPost(s: Pick<AppState, "posts">, post: api.TeamPost): Partial<AppState> {
+  const mine = s.posts[post.conversation_id] ?? [];
+  if (mine.some((p) => p.id === post.id)) return {};
+  const next = [...mine, post].sort((a, b) => a.created_at - b.created_at);
+  return { posts: { ...s.posts, [post.conversation_id]: next } };
+}
+
+/**
+ * `TEAM-20`: a team's run that ended while the person was in another chat or another window is
+ * unread until they open it. A chat they watched to the end, and every chat no team leads, never is.
+ */
+export async function markAwayIfElsewhere(get: () => AppState, convId: string): Promise<void> {
+  if (!api.inTauri()) return;
+  const s = get();
+  const conv = s.conversations.find((c) => c.id === convId);
+  if (!conv || !leaderOf(conv).startsWith("team:")) return;
+  const watching = s.activeConversationId === convId && s.view === "chat" && !document.hidden;
+  if (watching) return;
+  await api.markAway(convId).catch(() => {});
+  await get().refreshUnread();
+}
+
+/** What the session is told when the person has answered everything that waited. */
+export function waitingAnswersMessage(notes: string[]): string {
+  const lines = notes.map((n) => `- ${n}`).join("\n");
+  return `Here is what I decided about what was waiting for me:\n${lines}\nGo on from there.`;
+}
+
+/**
+ * `TEAM-18`: after a reply in a session a team leads, ask the backend whether one of the other
+ * personas would add something the person needs. Its rules run first, so a chat where nobody may chime
+ * in never spends a model call here. Not after a reply that was stopped, nor if the person has moved on:
+ * a new message of theirs is what the next voice answers.
+ */
+export async function chimeIn(get: () => AppState, convId: string): Promise<void> {
+  if (!api.inTauri()) return;
+  const s = get();
+  const conv = s.conversations.find((c) => c.id === convId);
+  if (!conv || !leaderOf(conv).startsWith("team:") || s.busy || s.activeConversationId !== convId) return;
+  const last = conv.messages[conv.messages.length - 1];
+  if (!last || last.role !== "assistant" || last.stopReason || !last.text.trim()) return;
+  const model = s.models.find((m) => m.id === s.selectedModelId) ?? s.models[0];
+  if (!model) return;
+  const next = await api.teamNextVoice(convId, targetFor(model)).catch(() => null);
+  if (!next) return;
+  // The person may have sent something while the choice was made.
+  if (get().busy || get().activeConversationId !== convId) return;
+  await get().startUnaskedReply(convId, next.role, next.nudge);
+}
+
 function patchSubRun(set: StoreSet, runId: string, patch: Partial<SubRun>) {
   set((s) =>
     s.subRuns[runId]
@@ -5686,6 +6014,8 @@ function dropQuestionsOf(s: AppState, runId: string): Partial<AppState> {
 
 export function applySubEvent(set: StoreSet, runId: string, event: api.AgentEvent) {
   set((s) => {
+    // `TEAM-15`: a member's post belongs to the board, not to the member's card.
+    if (event.type === "posted") return withPost(s, event.post);
     const run = s.subRuns[runId];
     if (!run) return {};
     const steps = run.steps;
@@ -5980,6 +6310,27 @@ function isRemoteModel(model: Model | undefined): model is Model {
   return model?.provenance === "cloud" || model?.provenance === "endpoint";
 }
 
+/** `TEAM-1`: the model a persona pins, when that persona leads the turn about to start
+ * without the window having picked its model: `/lead mira <message>` (this message only), or
+ * a chat nobody led yet that its place gives a persona (`keep`: the chat goes on with it). */
+async function pinnedModel(state: AppState, convId: string): Promise<{ model: Model; keep: boolean } | null> {
+  const conv = state.conversations.find((c) => c.id === convId);
+  let leader = state.turnModifiers.leader ?? null;
+  let keep = false;
+  if (!leader && conv && !conv.leader && !conv.personaId && state.personas.length && api.inTauri()) {
+    const placed = await api.conversationLeader(convId).catch(() => null);
+    if (placed?.source === "default") {
+      leader = placed.leader;
+      keep = true;
+    }
+  }
+  if (!leader?.startsWith("persona:")) return null;
+  const id = leader.slice("persona:".length);
+  const persona = state.personas.find((p) => p.id === id);
+  const model = persona?.model_id ? state.models.find((m) => m.id === persona.model_id) : undefined;
+  return model && (!model.modality || model.modality === "chat") ? { model, keep } : null;
+}
+
 function targetFor(model: Model): api.ChatTarget {
   if (model.provenance === "cloud") {
     return { provenance: "cloud", provider: model.provider, model: model.cloudModel };
@@ -6118,6 +6469,7 @@ function tendBriefly(set: StoreSet) {
 /** The words for a proposal in a note, in the first person's counterpart. */
 function proposalWhat(p: HarnessProposalView): string {
   if (p.name === "switch_mode") {
+    if (p.payload.leader) return `handing this chat to ${p.payload.name ?? "them"}`;
     if (p.payload.style) return `switching to ${styleLabel(String(p.payload.mode))}`;
     return p.payload.mode === "plan_first" ? "switching to Plan first" : "switching to Workspace";
   }
@@ -6142,6 +6494,8 @@ function styleLabel(slug: string): string {
  * shows after a reload read the same. */
 function proposalNote(p: Pick<HarnessProposalView, "name" | "reason" | "payload">): string {
   if (p.name === "switch_mode") {
+    // `TEAM-7`: as `commands::decide` words a handover.
+    if (p.payload.leader) return `I asked to hand this chat to ${p.payload.name ?? "them"}: ${p.reason}`;
     const label = p.payload.style
       ? styleLabel(String(p.payload.mode))
       : p.payload.mode === "plan_first"
@@ -6172,6 +6526,7 @@ async function switchLiveRun(set: StoreSet, get: () => AppState, convId: string,
 /** Carry out a proposal you said yes to. */
 async function applyHarnessProposal(get: () => AppState, p: HarnessProposalView): Promise<void> {
   const s = get();
+  // A handover (`TEAM-7`) is carried out in `resolveHarnessProposal`, which says how it went.
   if (p.name === "switch_mode" && p.payload.style) {
     // `WRK-13`: a way of working. The chat is set to it, and the run that offered it follows.
     await s.setConversationStyle(p.convId, String(p.payload.mode));
@@ -6218,6 +6573,10 @@ export function turnRunOptions(
   if (mods.noHandover) turn.noHandover = true;
   // `WRK-3`: `/style lean <message>`: this message only.
   if (mods.style) turn.style = mods.style;
+  // `TEAM-1`: `/lead mira <message>`: this message only.
+  if (mods.leader) turn.leader = mods.leader;
+  // `TEAM-17`: speak to a member of the team that leads the chat: this message only.
+  if (mods.addressed) turn.addressed = mods.addressed;
   // `WRK-12`: what done means, said up front.
   if (mods.criteria?.length) turn.criteria = mods.criteria;
   return Object.keys(turn).length ? turn : undefined;
@@ -6495,6 +6854,22 @@ async function streamAssistantTurn(
             // what the chip was waiting to say.
             patchRunSummary(set, convId, () => ({ style: { preset: e.preset, name: e.name }, switching: undefined }));
             break;
+          case "leader_set":
+            // `TEAM-3`: who answers this turn. The reply carries it, so a name line can show
+            // where the speaker changes. A leader the chat was given by where it starts, which
+            // this window never saw, is the chat's leader from now on; one message's lead is not.
+            // Only a persona is written to the chat: a place that says Poiesis writes nothing.
+            patchAssistant(set, convId, assistantId, { author: e.leader });
+            if (e.source === "default" && e.leader.startsWith("persona:")) {
+              set((s) => ({
+                conversations: s.conversations.map((c) =>
+                  c.id === convId
+                    ? { ...c, leader: e.leader, personaId: e.leader.startsWith("persona:") ? e.leader.slice(8) : null }
+                    : c
+                ),
+              }));
+            }
+            break;
           case "line_stopped":
             // `WRK-1`: a check failed. The board says so while the line is stopped,
             // and the run bar says it too.
@@ -6631,6 +7006,8 @@ async function streamAssistantTurn(
                 question: e.question,
                 options: e.options,
                 multi: e.multi,
+                title: e.title,
+                check: e.check,
               },
               presence: "listening" as const,
             }));
@@ -6656,12 +7033,22 @@ async function streamAssistantTurn(
                   text: "",
                   startedAt: Date.now(),
                   ...(e.engine ? { engine: e.engine } : {}),
+                  // `TEAM-14`: a member waits in the team's queue until `member_started`.
+                  ...(e.member ? { member: e.member, waiting: true, ...(e.item ? { item: e.item } : {}) } : {}),
                 },
               },
             }));
             patchAssistant(set, convId, assistantId, { subRunIds: [...subRunIds] });
             break;
           }
+          case "member_started":
+            // `TEAM-14`: the member left the team's queue.
+            patchSubRun(set, e.run_id, { waiting: false });
+            break;
+          case "posted":
+            // `TEAM-15`: the coordinator's own posts and the loop's records.
+            set((s) => withPost(s, e.post));
+            break;
           case "sub":
             applySubEvent(set, e.run_id, e.event);
             // `MCPS-2`: a memory an agent app suggested is met in the turn that
@@ -6682,6 +7069,7 @@ async function streamAssistantTurn(
               endedAt: Date.now(),
               ms: e.ms,
               steerPending: false,
+              waiting: false,
             });
             break;
           case "steps_parallel":
@@ -7161,6 +7549,15 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
   api.onAppEvent<api.MediaJobEvent>("poiesis-media-job", (e) => {
     get().applyMediaJobEvent(e);
   });
+  // `TEAM-19`, `TEAM-20`: a run nobody watched asked for a yes, or changed a session.
+  api.onAppEvent<string>("poiesis-away", () => {
+    void get().refreshWaiting();
+    void get().refreshUnread();
+  });
+  // `TEAM-21`: a click on the desktop notification opens the session it was about.
+  api.onAppEvent<string>("poiesis-open-session", (id) => {
+    void get().openSession(id);
+  });
   // `STR-4`: successive partials fill the placeholder in. Kept in their own
   // slice so a frame arriving every few hundred ms doesn't re-render the
   // whole transcript.
@@ -7175,6 +7572,16 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
   api.onAppEvent<api.AgentEvent>("poiesis-agent-sub", (e) => {
     if (e.type === "sub") {
       applySubEvent(set, e.run_id, e.event);
+      return;
+    }
+    // `TEAM-15`: what a member found, written when its run ended in the background.
+    if (e.type === "posted") {
+      set((s) => withPost(s, e.post));
+      return;
+    }
+    // `TEAM-14`: a team's hand-overs run in the background, so this is where a member leaves the queue.
+    if (e.type === "member_started") {
+      patchSubRun(set, e.run_id, { waiting: false });
       return;
     }
     if (e.type !== "sub_ended") return;

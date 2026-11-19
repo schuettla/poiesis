@@ -821,14 +821,65 @@
 .wb-tree > .wb-hint {
   padding: 8px 7px;
 }
-/* Artifact rows sit in their own section, so they don't need the tree's
-   indent machinery — just the kind chip and the Save action. */
+/* Artifact rows are the message stream's artifact card set as a list item: an
+   icon tile, the title over its kind, the actions at the end. The fills are the
+   other rows' own (`.wb-row`), so hover and "where you are" match the tree. */
 .wb-artifact {
-  min-height: 30px;
-  padding-left: 7px;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 6px 6px 8px;
 }
-.wb-artifact .wb-row-name {
-  font-style: italic;
+.wb-artifact-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius);
+  background: var(--fill-hover);
+  color: var(--ink-muted);
+}
+.wb-artifact:hover .wb-artifact-icon,
+.wb-artifact.active .wb-artifact-icon {
+  color: var(--ink);
+}
+.wb-artifact-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.wb-artifact-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  color: var(--ink);
+}
+.wb-artifact-meta {
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+}
+.wb-artifact-download {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.wb-artifact-download:hover,
+.wb-artifact-download:focus-visible {
+  background: var(--fill-press);
+  color: var(--ink);
 }
 .wb-hint {
   margin: 0;
@@ -913,19 +964,6 @@
   font-size: var(--fs-caption);
   color: var(--local);
   font-variant-numeric: tabular-nums;
-}
-
-.wb-kind {
-  flex-shrink: 0;
-  font-family: var(--font-sans);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--fs-micro);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--ink-faint);
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-  padding: 0 5px;
 }
 
 /* `Save →` promotes an artifact into the folder. Revealed on hover/focus so the
@@ -1295,13 +1333,53 @@
 .pc-warn .pc-level {
   color: var(--cloud);
 }
+/* A rendered document is the chat's text, not a second look: the element also
+   carries `.run-text` (Conversation.css), so the message font, the Text size
+   setting, headings, lists and tables all come from there. All that is left
+   here is the page: a centred column at the reading measure, so a wide pane
+   gets margins on both sides instead of an empty strip on the right. */
 .canvas-markdown {
-  padding: 18px 20px;
-  font-family: var(--font-serif);
-  font-size: var(--fs-reading);
-  line-height: var(--lh-reading);
-  color: var(--ink);
+  box-sizing: border-box;
   max-width: var(--measure);
+  margin: 0 auto;
+  padding: 28px 28px 56px;
+}
+/* "Comment on this", floating over a selection in a rendered document. The same
+   small raised button as the stream's "Continue where I stopped". */
+.quote-pick {
+  position: fixed;
+  z-index: 30;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+  animation: fade-in var(--dur-fast) var(--ease-out);
+}
+.quote-pick:hover {
+  background: color-mix(in srgb, var(--paper) 94%, var(--ink));
+  border-color: var(--ink-faint);
+}
+/* A page has a title, which a chat answer does not: headings step up a size. */
+.canvas-markdown.run-text h1 {
+  font-size: 1.7em;
+  margin-top: 0;
+}
+.canvas-markdown.run-text h2 {
+  font-size: 1.35em;
+}
+.canvas-markdown.run-text h3 {
+  font-size: 1.15em;
 }
 .canvas-markdown img,
 .canvas-markdown table {

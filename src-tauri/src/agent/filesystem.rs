@@ -910,18 +910,10 @@ pub async fn execute(
     let conversation_id = ctx.conversation_id;
 
     // SCH-3: an unattended job has no one to answer a permission prompt, and
-    // "stops and reports" beats "hangs forever waiting on a prompt nobody can
-    // see". Rather than route every impact level through `authorize` and hope
-    // it never reaches the interactive branch, refuse every write/edit/delete/
-    // move outright before touching the disk — reads are the only thing a
-    // headless run can do here.
-    if ctx.headless && impact(name) != Impact::Read {
-        return Err(
-            "Unattended runs can't change files — this would need to ask first, so the job \
-             stopped instead of prompting."
-                .to_string(),
-        );
-    }
+    // "hangs forever waiting on a prompt nobody can see" is the worse outcome.
+    // So a change is never made and never asked about in such a run: once it
+    // has passed the checks below it is parked for the person (`TEAM-19`,
+    // `park`), and the run goes on. Reads are what a headless run does itself.
 
     // `COD-11`: the run's own patch. Belongs to no path, so it is answered
     // before any path argument is looked for.
@@ -997,6 +989,17 @@ pub async fn execute(
         return Ok(result);
     }
 
+    // `TEAM-13`: a member of a team keeps to its own folder or its own places. Not asked, refused,
+    // before anything about the change is looked at.
+    if impact(name) != Impact::Read {
+        let to = str_arg("to").map(|t| resolve(t, folder_ref));
+        let mut paths = vec![path.as_path()];
+        paths.extend(to.as_deref());
+        if let Some(why) = super::team_folder::refusal(db, ctx.memory, conversation_id, folder_ref, &paths) {
+            return Err(why);
+        }
+    }
+
     // `COD-4`: a change to a file that exists must be made against a current
     // read of it. Checked before anything else about the edit, so the refusal
     // names the actual problem rather than a snippet that "isn't there".
@@ -1029,22 +1032,39 @@ pub async fn execute(
         _ => None,
     };
 
-    let clearance = authorize(
-        db,
-        ctx.perms,
-        ctx.sink,
-        conversation_id,
-        folder_ref,
-        trust,
-        &path,
-        name,
-        detail,
-        ctx.headless,
-    )
-    .await?;
+    // `TEAM-19`: a team member's own copy is its scratch space. Nothing written there reaches the
+    // person's folder until the loop brings it in, and in a run nobody watches that is what waits
+    // for the person (`team_folder::merge_done`), so the member works in its copy without asking.
+    let own_copy = ctx.headless && impact(name) != Impact::Read && super::team_folder::is_own_copy(ctx.data_dir, conversation_id, folder_ref) && {
+        let to = str_arg("to").map(|t| resolve(t, folder_ref));
+        folder_ref.is_some_and(|f| path_within_root(&path, f) && to.as_deref().is_none_or(|t| path_within_root(t, f)))
+    };
+
+    // `TEAM-19`: nobody is here to say yes, so the change waits in the inbox.
+    if ctx.headless && impact(name) != Impact::Read && !own_copy {
+        return park(ctx, name, args, &shown, detail.as_deref());
+    }
+
+    let clearance = if own_copy {
+        Clearance { in_folder: true }
+    } else {
+        authorize(
+            db,
+            ctx.perms,
+            ctx.sink,
+            conversation_id,
+            folder_ref,
+            trust,
+            &path,
+            name,
+            detail,
+            ctx.headless,
+        )
+        .await?
+    };
 
     // A move touches two places; the destination needs clearing too.
-    if name == "move_file" {
+    if name == "move_file" && !own_copy {
         let to = resolve(str_arg("to").ok_or("missing 'to' argument")?, folder_ref);
         authorize(
             db,
@@ -1087,76 +1107,11 @@ pub async fn execute(
             usize_arg("max_results").unwrap_or(40).min(MAX_SEARCH_RESULTS),
         )?,
 
-        "write_file" => {
-            let content = str_arg("content").unwrap_or("");
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("couldn't create {}: {e}", parent.display()))?;
-            }
-            let entry = trash::record(db, data_dir, conversation_id, "write", &path, None);
-            std::fs::write(&path, content)
-                .map_err(|e| format!("couldn't write {shown}: {e}"))?;
-            undo_token = entry.map(|e| e.id);
-            changed_path = Some(path.to_string_lossy().to_string());
-            format!("Wrote {} to {shown}", human_bytes(content.len() as u64))
-        }
-
-        "edit_file" => {
-            let (updated, count) = pending_edit.ok_or("edit was not prepared")?;
-            let entry = trash::record(db, data_dir, conversation_id, "edit", &path, None);
-            std::fs::write(&path, &updated)
-                .map_err(|e| format!("couldn't write {shown}: {e}"))?;
-            undo_token = entry.map(|e| e.id);
-            changed_path = Some(path.to_string_lossy().to_string());
-            let n = if count == 1 { "1 occurrence".to_string() } else { format!("{count} occurrences") };
-            format!("Edited {shown} ({n} replaced)")
-        }
-
-        "create_dir" => {
-            std::fs::create_dir_all(&path)
-                .map_err(|e| format!("couldn't create {shown}: {e}"))?;
-            let entry = trash::record(db, data_dir, conversation_id, "write", &path, None);
-            undo_token = entry.map(|e| e.id);
-            changed_path = Some(path.to_string_lossy().to_string());
-            format!("Created folder {shown}")
-        }
-
-        "move_file" => {
-            let to = resolve(str_arg("to").ok_or("missing 'to' argument")?, folder_ref);
-            if to.exists() && !bool_arg("overwrite") {
-                return Err(format!(
-                    "{} already exists. Set overwrite to replace it, or pick another name.",
-                    display(&to, folder_ref)
-                ));
-            }
-            if let Some(parent) = to.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
-            let entry = trash::record(db, data_dir, conversation_id, "move", &to, Some(&path));
-            std::fs::rename(&path, &to)
-                .map_err(|e| format!("couldn't move {shown}: {e}"))?;
-            undo_token = entry.map(|e| e.id);
-            changed_path = Some(to.to_string_lossy().to_string());
-            format!("Moved {shown} to {}", display(&to, folder_ref))
-        }
-
-        "delete_file" => {
-            let entry = trash::record(db, data_dir, conversation_id, "delete", &path, None);
-            if path.is_dir() {
-                if !bool_arg("recursive") {
-                    return Err(format!(
-                        "{shown} is a folder — set recursive to delete it and its contents."
-                    ));
-                }
-                std::fs::remove_dir_all(&path)
-                    .map_err(|e| format!("couldn't delete {shown}: {e}"))?;
-            } else {
-                std::fs::remove_file(&path)
-                    .map_err(|e| format!("couldn't delete {shown}: {e}"))?;
-            }
-            undo_token = entry.map(|e| e.id);
-            changed_path = Some(path.to_string_lossy().to_string());
-            format!("Deleted {shown}")
+        "write_file" | "edit_file" | "create_dir" | "move_file" | "delete_file" => {
+            let made = make_change(db, data_dir, conversation_id, name, args, &path, &shown, folder_ref, pending_edit)?;
+            undo_token = made.undo;
+            changed_path = made.changed;
+            made.text
         }
 
         other => return Err(format!("unknown file tool '{other}'")),
@@ -1188,9 +1143,327 @@ pub async fn execute(
     Ok(result)
 }
 
+/// What a change did: the words for the model, the undo token, and the path that moved.
+struct Made {
+    text: String,
+    undo: Option<String>,
+    changed: Option<String>,
+}
+
+/// Make one change to the disk: write, edit, create a folder, move or delete. Everything about
+/// whether it may happen was settled before this is called, by `authorize` for a run somebody
+/// watches or by the person's yes for one they were not (`apply_parked`).
+#[allow(clippy::too_many_arguments)]
+fn make_change(
+    db: &Db,
+    data_dir: &Path,
+    conversation_id: &str,
+    name: &str,
+    args: &serde_json::Value,
+    path: &Path,
+    shown: &str,
+    folder_ref: Option<&Path>,
+    pending_edit: Option<(String, usize)>,
+) -> Result<Made, String> {
+    let str_arg = |k: &str| args.get(k).and_then(|v| v.as_str());
+    let bool_arg = |k: &str| args.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+    let changed = |p: &Path| Some(p.to_string_lossy().to_string());
+    match name {
+        "write_file" => {
+            let content = str_arg("content").unwrap_or("");
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("couldn't create {}: {e}", parent.display()))?;
+            }
+            let entry = trash::record(db, data_dir, conversation_id, "write", path, None);
+            std::fs::write(path, content).map_err(|e| format!("couldn't write {shown}: {e}"))?;
+            Ok(Made {
+                text: format!("Wrote {} to {shown}", human_bytes(content.len() as u64)),
+                undo: entry.map(|e| e.id),
+                changed: changed(path),
+            })
+        }
+        "edit_file" => {
+            let (updated, count) = pending_edit.ok_or("edit was not prepared")?;
+            let entry = trash::record(db, data_dir, conversation_id, "edit", path, None);
+            std::fs::write(path, &updated).map_err(|e| format!("couldn't write {shown}: {e}"))?;
+            let n = if count == 1 { "1 occurrence".to_string() } else { format!("{count} occurrences") };
+            Ok(Made { text: format!("Edited {shown} ({n} replaced)"), undo: entry.map(|e| e.id), changed: changed(path) })
+        }
+        "create_dir" => {
+            std::fs::create_dir_all(path).map_err(|e| format!("couldn't create {shown}: {e}"))?;
+            let entry = trash::record(db, data_dir, conversation_id, "write", path, None);
+            Ok(Made { text: format!("Created folder {shown}"), undo: entry.map(|e| e.id), changed: changed(path) })
+        }
+        "move_file" => {
+            let to = resolve(str_arg("to").ok_or("missing 'to' argument")?, folder_ref);
+            if to.exists() && !bool_arg("overwrite") {
+                return Err(format!(
+                    "{} already exists. Set overwrite to replace it, or pick another name.",
+                    display(&to, folder_ref)
+                ));
+            }
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            let entry = trash::record(db, data_dir, conversation_id, "move", &to, Some(path));
+            std::fs::rename(path, &to).map_err(|e| format!("couldn't move {shown}: {e}"))?;
+            Ok(Made {
+                text: format!("Moved {shown} to {}", display(&to, folder_ref)),
+                undo: entry.map(|e| e.id),
+                changed: changed(&to),
+            })
+        }
+        "delete_file" => {
+            let entry = trash::record(db, data_dir, conversation_id, "delete", path, None);
+            if path.is_dir() {
+                if !bool_arg("recursive") {
+                    return Err(format!("{shown} is a folder \u{2014} set recursive to delete it and its contents."));
+                }
+                std::fs::remove_dir_all(path).map_err(|e| format!("couldn't delete {shown}: {e}"))?;
+            } else {
+                std::fs::remove_file(path).map_err(|e| format!("couldn't delete {shown}: {e}"))?;
+            }
+            Ok(Made { text: format!("Deleted {shown}"), undo: entry.map(|e| e.id), changed: changed(path) })
+        }
+        other => Err(format!("unknown file tool '{other}'")),
+    }
+}
+
+/// The most changes one session leaves waiting. A run nobody watches that asks for more than this
+/// is not given a longer list to answer.
+const MAX_WAITING_FILES: usize = 20;
+
+/// `TEAM-19`: a change in a run nobody watches. It is not made and not refused: it waits for the
+/// person in the inbox, and the run goes on with other work. Accepting it later makes exactly this
+/// change (`apply_parked`).
+fn park(ctx: &ToolContext<'_>, name: &str, args: &serde_json::Value, shown: &str, detail: Option<&str>) -> Result<String, String> {
+    let db = ctx.db;
+    let author = ctx
+        .delegation
+        .and_then(|d| db.get_subagent_run(&d.parent_run.id).ok().flatten())
+        .and_then(|r| r.member);
+    let told = leave_for_the_person(db, ctx.conversation_id, author.as_deref(), name, args, shown, detail)?;
+    super::toolsets::set_step_note(ctx, "\u{2014} left for you");
+    Ok(told)
+}
+
+/// Write the entry and say it to the model. Apart from `park` so it can be tried without a run.
+fn leave_for_the_person(
+    db: &Db,
+    conversation_id: &str,
+    author: Option<&str>,
+    name: &str,
+    args: &serde_json::Value,
+    shown: &str,
+    detail: Option<&str>,
+) -> Result<String, String> {
+    let session = db.session_of(conversation_id);
+    let waiting = db.list_waiting().unwrap_or_default().iter().filter(|p| p.session_id.as_deref() == Some(session.as_str())).count();
+    if waiting >= MAX_WAITING_FILES {
+        return Err(format!(
+            "{waiting} changes already wait for the person. Do not ask for more: say in your result what else you would change."
+        ));
+    }
+    let verb = match name {
+        "write_file" => "Write",
+        "edit_file" => "Edit",
+        "create_dir" => "Create folder",
+        "move_file" => "Move",
+        _ => "Delete",
+    };
+    let line = match detail {
+        Some(d) => format!("{verb} {shown} \u{2014} {d}"),
+        None => format!("{verb} {shown}"),
+    };
+    let payload = serde_json::json!({ "tool": name, "args": args, "shown": shown, "detail": detail });
+    let entry = db
+        .add_waiting("waiting-file", conversation_id, author, &payload.to_string(), &line)
+        .map_err(|e| e.to_string())?;
+    crate::waiting::announce(db, &entry);
+    let _ = db.log_activity(Some(conversation_id), "file", &format!("left for the person: {line}"));
+    Ok(format!(
+        "Not done yet: {line}. Nobody is here to say yes, so I left it for the person. It is made when they approve it. \
+         Go on with other work, and say in your result that this waits."
+    ))
+}
+
+/// The parked tool name of a team member's work brought into the main folder (`leave_bring_in`).
+const BRING_IN: &str = "bring_in";
+
+/// One file of a member's work, as it waits for the person: what the copy has (`None` deletes the
+/// file), and the hash the folder had when the copy was made (`None`: it did not have the file).
+#[derive(Debug, Clone)]
+pub struct BringIn {
+    pub rel: String,
+    pub bytes: Option<Vec<u8>>,
+    pub expect: Option<String>,
+}
+
+/// `TEAM-19`: a team member's work from its own copy, in a run nobody watches. It is not written into
+/// the session's folder: it waits for the person as one entry, with the files' contents, so it can be
+/// brought in after the copy is gone. The loop makes at most one of these per member and merge, so it
+/// is not held to [`MAX_WAITING_FILES`], which is there for what a model asks for.
+pub fn leave_bring_in(db: &Db, session: &str, role: &str, files: &[BringIn]) -> Result<(), String> {
+    use base64::Engine;
+    if files.is_empty() {
+        return Ok(());
+    }
+    let names: Vec<&str> = files.iter().map(|f| f.rel.as_str()).collect();
+    // Shown as "api would like to: Bring in its changes to ...", and in the notification under who waits.
+    let line = match names.as_slice() {
+        [one] => format!("Bring in its change to {one}"),
+        many if many.len() <= 4 => format!("Bring in its changes to {}", many.join(", ")),
+        many => format!("Bring in its changes to {} and {} more", many[..3].join(", "), many.len() - 3),
+    };
+    let payload = serde_json::json!({
+        "tool": BRING_IN,
+        "files": files.iter().map(|f| serde_json::json!({
+            "path": f.rel,
+            "content_b64": f.bytes.as_ref().map(|b| base64::engine::general_purpose::STANDARD.encode(b)),
+            "expect": f.expect,
+        })).collect::<Vec<_>>(),
+    });
+    let entry = db.add_waiting("waiting-file", session, Some(role), &payload.to_string(), &line).map_err(|e| e.to_string())?;
+    crate::waiting::announce(db, &entry);
+    let _ = db.log_activity(Some(session), "file", &format!("left for the person: {line}"));
+    Ok(())
+}
+
+/// The person said yes to a member's work: write each file whose folder copy is still what the member
+/// started from. A file the folder changed since is left out and named, never overwritten.
+fn bring_in(db: &Db, data_dir: &Path, conversation_id: &str, folder: &Path, files: &[serde_json::Value]) -> Result<String, String> {
+    use base64::Engine;
+    let mut done = 0;
+    let mut changed_since = Vec::new();
+    for f in files {
+        let rel = f["path"].as_str().ok_or("That request names a file without a path.")?;
+        // A path the loop wrote, relative and inside the folder. Anything else is not ours.
+        if Path::new(rel).is_absolute() || Path::new(rel).components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            return Err(format!("{rel} is not a place inside the folder."));
+        }
+        let to = folder.join(rel);
+        let now = super::branch::hash_of(&to);
+        let bytes = match f["content_b64"].as_str() {
+            Some(b) => Some(base64::engine::general_purpose::STANDARD.decode(b).map_err(|_| format!("{rel} could not be read back."))?),
+            None => None,
+        };
+        let wanted = bytes.as_ref().map(|b| {
+            use sha2::{Digest, Sha256};
+            format!("{:x}", Sha256::digest(b))
+        });
+        if now == wanted {
+            continue; // Already so.
+        }
+        if now.as_deref() != f["expect"].as_str() {
+            changed_since.push(rel.to_string());
+            continue;
+        }
+        match bytes {
+            Some(b) => {
+                trash::record(db, data_dir, conversation_id, if now.is_some() { "edit" } else { "write" }, &to, None);
+                if let Some(parent) = to.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| format!("couldn't create {}: {e}", parent.display()))?;
+                }
+                std::fs::write(&to, b).map_err(|e| format!("couldn't write {rel}: {e}"))?;
+            }
+            None => {
+                trash::record(db, data_dir, conversation_id, "delete", &to, None);
+                std::fs::remove_file(&to).map_err(|e| format!("couldn't delete {rel}: {e}"))?;
+            }
+        }
+        done += 1;
+    }
+    let mut out = format!("Brought in {done} file{}", if done == 1 { "" } else { "s" });
+    if !changed_since.is_empty() {
+        out.push_str(&format!(
+            "; {} changed in the folder since, so {} left as {}",
+            changed_since.join(", "),
+            if changed_since.len() == 1 { "it was" } else { "they were" },
+            if changed_since.len() == 1 { "it is" } else { "they are" }
+        ));
+    }
+    let _ = db.log_activity(Some(conversation_id), "file", &format!("{out} (approved from the inbox)"));
+    Ok(out)
+}
+
+/// `TEAM-19`: make the change the person said yes to. The same change the run asked for, made
+/// against the same folder, and the file may have changed since: an edit that no longer fits says so.
+pub fn apply_parked(db: &Db, data_dir: &Path, conversation_id: &str, payload: &str) -> Result<String, String> {
+    let v: serde_json::Value = serde_json::from_str(payload).map_err(|_| "That request could not be read back.".to_string())?;
+    let name = v["tool"].as_str().ok_or("That request names no tool.")?;
+    if name == BRING_IN {
+        let (folder, _) = db.conversation_folder(conversation_id).map_err(|e| e.to_string())?;
+        let folder = folder.map(|f| canonicalize_lenient(Path::new(&f))).ok_or("This chat has no folder any more.")?;
+        return bring_in(db, data_dir, conversation_id, &folder, v["files"].as_array().map(Vec::as_slice).unwrap_or_default());
+    }
+    if !matches!(name, "write_file" | "edit_file" | "create_dir" | "move_file" | "delete_file") {
+        return Err(format!("{name} is not a change I can make from the inbox."));
+    }
+    let args = &v["args"];
+    let (folder_raw, _) = db.conversation_folder(conversation_id).map_err(|e| e.to_string())?;
+    let folder = folder_raw.as_ref().map(|f| canonicalize_lenient(Path::new(f)));
+    let folder_ref = folder.as_deref();
+    let str_arg = |k: &str| args.get(k).and_then(|v| v.as_str());
+    let raw_path = str_arg("path").or_else(|| str_arg("from")).ok_or("missing 'path' argument")?;
+    check_anchored(raw_path, folder_ref)?;
+    if let Some(to) = str_arg("to") {
+        check_anchored(to, folder_ref)?;
+    }
+    let path = resolve(raw_path, folder_ref);
+    let shown = display(&path, folder_ref);
+    let pending_edit = if name == "edit_file" {
+        let old = str_arg("old_string").ok_or("missing 'old_string'")?;
+        let new = str_arg("new_string").ok_or("missing 'new_string'")?;
+        let original = std::fs::read_to_string(&path).map_err(|e| format!("couldn't read {shown}: {e}"))?;
+        let all = args.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
+        Some(apply_edit_lenient(&original, old, new, all).map_err(|e| format!("{shown} has changed since, so this edit no longer fits: {e}"))?)
+    } else {
+        None
+    };
+    let made = make_change(db, data_dir, conversation_id, name, args, &path, &shown, folder_ref, pending_edit)?;
+    let (verb, _) = describe(name, args);
+    let _ = db.log_activity(Some(conversation_id), "file", &format!("{verb} {} (approved from the inbox)", path.display()));
+    Ok(made.text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `TEAM-19-T`: a change nobody can approve is not made and not refused. It waits, with who is
+    /// waiting, and the model is told it is not done.
+    #[test]
+    fn a_delete_nobody_can_approve_is_parked_not_made() {
+        let db = Db::open_in_memory().unwrap();
+        let session = db.create_conversation("Morning run", None, false).unwrap().id;
+        let member = db.create_conversation("api", None, false).unwrap().id;
+        db.set_conversation_parent(&member, &session).unwrap();
+        let args = serde_json::json!({ "path": "old.txt" });
+        let told = leave_for_the_person(&db, &member, Some("api"), "delete_file", &args, "old.txt", Some("permanently delete")).unwrap();
+        assert!(told.starts_with("Not done yet: Delete old.txt"), "{told}");
+        let waiting = db.list_waiting().unwrap();
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].target, "waiting-file");
+        assert_eq!(waiting[0].conversation_id.as_deref(), Some(member.as_str()), "the chat that was working");
+        assert_eq!(waiting[0].session_id.as_deref(), Some(session.as_str()), "the session the person finds it under");
+        assert_eq!(waiting[0].author.as_deref(), Some("api"));
+        assert_eq!(db.unread_conversations().unwrap(), vec![session], "the session shows a dot");
+    }
+
+    /// `TEAM-19-T`: a run that keeps asking is not given an endless list.
+    #[test]
+    fn a_session_waits_for_a_limited_number_of_changes() {
+        let db = Db::open_in_memory().unwrap();
+        let session = db.create_conversation("Morning run", None, false).unwrap().id;
+        let args = serde_json::json!({ "path": "a.txt", "content": "x" });
+        for _ in 0..MAX_WAITING_FILES {
+            leave_for_the_person(&db, &session, None, "write_file", &args, "a.txt", None).unwrap();
+        }
+        let why = leave_for_the_person(&db, &session, None, "write_file", &args, "a.txt", None).unwrap_err();
+        assert!(why.contains("already wait"), "{why}");
+        assert_eq!(db.list_waiting().unwrap().len(), MAX_WAITING_FILES);
+    }
 
     #[test]
     fn relative_paths_resolve_inside_the_working_folder() {

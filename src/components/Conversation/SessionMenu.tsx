@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import * as api from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import { workspaceAvailable } from "../../lib/experiments";
 import ConfirmDialog from "../Confirm/ConfirmDialog";
@@ -22,6 +23,22 @@ export default function SessionMenu() {
   const anyEngine = useAppStore((s) => s.engines.some((e) => e.enabled && e.delegate_ready));
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // `TEAM-22`: after a session that used two or more helpers, they can be kept as a team. Asked of
+  // the backend when the menu opens, never offered unasked.
+  const openTeamDraft = useAppStore((s) => s.openTeamDraft);
+  const [keepable, setKeepable] = useState<api.Team | null>(null);
+  const conversationId = conversation?.id;
+  useEffect(() => {
+    if (!open || !conversationId || !api.inTauri()) return;
+    let cancelled = false;
+    api
+      .teamFromSession(conversationId)
+      .then((t) => !cancelled && setKeepable(t))
+      .catch(() => !cancelled && setKeepable(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [open, conversationId]);
 
   if (!conversation) return null;
 
@@ -73,6 +90,18 @@ export default function SessionMenu() {
               Schedule this…
             </button>
             <ProjectMenuItems conversationId={conversation.id} onDone={() => setOpen(false)} />
+            {keepable && (
+              <button
+                className="row-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  openTeamDraft(keepable);
+                }}
+              >
+                Keep these helpers as a team
+              </button>
+            )}
             {/* `RTE-5`: only offered once an agent app is on, so the menu of a
                 person who never set one up does not grow a line they cannot use. */}
             {anyEngine && (

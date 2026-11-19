@@ -126,12 +126,68 @@ pub fn is_style_mode(mode: &str) -> bool {
     STYLE_MODES.iter().any(|(slug, _)| *slug == mode)
 }
 
+/// Is this `switch_mode` value someone to hand the chat to (`persona:<id>`)?
+pub fn is_leader_mode(mode: &str) -> bool {
+    mode.starts_with("persona:")
+}
+
+/// `TEAM-7`: someone `switch_mode` may offer to hand a chat to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaderChoice {
+    /// What the column holds: `persona:<id>`.
+    pub leader: String,
+    pub name: String,
+    /// What they do, in the person's own words (empty when none was written).
+    pub line: String,
+}
+
+/// `TEAM-7`: who `switch_mode` may offer to hand this chat to. Nobody once the person has
+/// chosen who leads it (the chat has a leader, whether picked in the menu, by `/lead`, or by
+/// where chats start), nor in a helper's chat, nor after one offer: once per session,
+/// whatever the answer was. Teams are not made yet, so these are the personas.
+pub fn leaders_offered(db: &Db, conversation_id: &str) -> Vec<LeaderChoice> {
+    let Some(conv) = db.get_conversation(conversation_id).ok().flatten() else {
+        return Vec::new();
+    };
+    if conv.leader.is_some() || conv.persona_id.is_some() || conv.parent_conversation_id.is_some() {
+        return Vec::new();
+    }
+    let offered_already = super::log::commands(db, conversation_id)
+        .iter()
+        .any(|r| r.trace.name == "switch_mode" && is_leader_mode(&r.trace.args));
+    if offered_already {
+        return Vec::new();
+    }
+    db.list_personas()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| LeaderChoice {
+            leader: format!("persona:{}", p.id),
+            name: p.name,
+            line: p.line.map(|l| l.trim().to_string()).unwrap_or_default(),
+        })
+        .collect()
+}
+
 /// `AGC-1`: the `harness` spec for the names this run offers. `None` when there
 /// are none: a tool that cannot do anything is not offered. `modes` is what
-/// `switch_mode` may name (`modes_offered`).
-pub fn harness_spec(names: &[&str], modes: &[&str]) -> Option<serde_json::Value> {
+/// `switch_mode` may name (`modes_offered`), `leaders` who it may hand the chat to.
+pub fn harness_spec(names: &[&str], modes: &[&str], leaders: &[LeaderChoice]) -> Option<serde_json::Value> {
     if names.is_empty() {
         return None;
+    }
+    let mut choices: Vec<&str> = modes.to_vec();
+    choices.extend(leaders.iter().map(|l| l.leader.as_str()));
+    let mut mode_help = "switch_mode".to_string();
+    if !leaders.is_empty() {
+        let who: Vec<String> = leaders
+            .iter()
+            .map(|l| if l.line.is_empty() { format!("{} is {}", l.leader, l.name) } else { format!("{} is {}: {}", l.leader, l.name, l.line) })
+            .collect();
+        mode_help = format!(
+            "switch_mode: a way of working, or hand this chat to someone the user made ({}). Offer one of them only when the job clearly fits what they do, once, with a reason that begins \"This looks like a job for <name>:\".",
+            who.join("; ")
+        );
     }
     Some(serde_json::json!({
         "type": "function",
@@ -144,7 +200,7 @@ pub fn harness_spec(names: &[&str], modes: &[&str]) -> Option<serde_json::Value>
                     "name": { "type": "string", "enum": names },
                     "reason": { "type": "string", "description": "One sentence the user will read, in first person." },
                     "command": { "type": "string", "description": "suggest: the slash command, e.g. /skillify" },
-                    "mode": { "type": "string", "enum": modes, "description": "switch_mode" },
+                    "mode": { "type": "string", "enum": choices, "description": mode_help },
                     "when": { "type": "string", "description": "schedule: e.g. 'every weekday at 9'" },
                     "task": { "type": "string", "description": "schedule: what to do" }
                 },
@@ -322,7 +378,23 @@ pub fn decide(
                         reply: asked,
                     });
                 }
-                _ => return Err("mode must be \"workspace\", \"plan_first\" or one of the styles.".to_string()),
+                // `TEAM-7`: handing the chat to someone the person made. Always a question: who
+                // leads is theirs to say. Refused when it is not on offer any more (the person
+                // chose in the meantime, or one offer was made already).
+                Some(who) if is_leader_mode(who) => {
+                    let Some(choice) = leaders_offered(db, conversation_id).into_iter().find(|l| l.leader == who) else {
+                        return Err("Handing this chat over is not on offer: the person chose who leads it, or you already offered once. Do not offer it again.".to_string());
+                    };
+                    return Ok(Act::Propose {
+                        name: "switch_mode".into(),
+                        args: choice.leader.clone(),
+                        note: format!("I asked to hand this chat to {}: {reason}", choice.name),
+                        reason,
+                        payload: serde_json::json!({ "mode": choice.leader, "leader": true, "name": choice.name, "auto": false }),
+                        reply: asked,
+                    });
+                }
+                _ => return Err("mode must be \"workspace\", \"plan_first\", one of the styles, or someone I may hand this chat to.".to_string()),
             };
             let auto = rung == Rung::Auto;
             Ok(Act::Propose {
@@ -371,6 +443,7 @@ pub fn describe_harness(args: &serde_json::Value) -> (String, String) {
         }
         "switch_mode" => {
             let mode = match call.mode.as_deref() {
+                Some(who) if is_leader_mode(who) => return ("asked to hand this chat over".into(), String::new()),
                 Some("plan_first") => "Plan first",
                 Some(style) if is_style_mode(style) => {
                     STYLE_MODES.iter().find(|(s, _)| *s == style).map(|(_, n)| *n).unwrap_or("another way")
@@ -436,13 +509,13 @@ mod tests {
         db.set_setting("autonomy.modes", "off").unwrap();
         db.set_setting("autonomy.schedule", "off").unwrap();
         assert!(agent_callable(&db, false).is_empty());
-        assert!(harness_spec(&agent_callable(&db, false), &modes_offered(&db)).is_none());
+        assert!(harness_spec(&agent_callable(&db, false), &modes_offered(&db), &[]).is_none());
     }
 
     /// `AGC-T1`: the enum in the spec is exactly the names offered.
     #[test]
     fn the_spec_lists_only_the_names_on_offer() {
-        let spec = harness_spec(&["compact", "schedule"], &["plan_first"]).unwrap();
+        let spec = harness_spec(&["compact", "schedule"], &["plan_first"], &[]).unwrap();
         assert_eq!(
             spec.pointer("/function/parameters/properties/name/enum").unwrap(),
             &serde_json::json!(["compact", "schedule"])
@@ -458,7 +531,7 @@ mod tests {
     fn the_switch_mode_spec_offers_workspace_only_when_the_experiment_is_on() {
         let db = Db::open_in_memory().unwrap();
         let modes_in = |db: &Db| {
-            let spec = harness_spec(&["switch_mode"], &modes_offered(db)).unwrap();
+            let spec = harness_spec(&["switch_mode"], &modes_offered(db), &[]).unwrap();
             spec.pointer("/function/parameters/properties/mode/enum").unwrap().clone()
         };
         let styles = ["lean", "command-and-control", "mission-command", "swarm"];
@@ -488,6 +561,140 @@ mod tests {
         switch.mode = Some("ad-hoc".into());
         assert!(decide(&db, "c1", &["switch_mode"], &switch).is_err());
         assert!(is_style_mode("swarm") && !is_style_mode("plan_first"));
+    }
+
+    fn persona(db: &Db, name: &str, line: Option<&str>) -> String {
+        let mut p = db
+            .create_persona(&crate::db::NewPersona {
+                name: name.into(),
+                system_prompt: format!("You are {name}."),
+                model_id: None,
+                params_json: None,
+                tools_json: None,
+                skills_json: None,
+                description: None,
+                spawnable: false,
+            })
+            .unwrap();
+        p.line = line.map(str::to_string);
+        db.update_persona(&p).unwrap();
+        p.id
+    }
+
+    fn record_switch(db: &Db, conv: &str, args: &str, by: &str, outcome: &str) {
+        super::super::log::record_command(
+            db,
+            conv,
+            None,
+            &super::super::log::CommandTrace {
+                name: "switch_mode".into(),
+                args: args.into(),
+                by: by.into(),
+                outcome: outcome.into(),
+                note: None,
+                message_id: None,
+            },
+        );
+    }
+
+    /// `TEAM-7`: the model is told who it may hand the chat to, with their lines, next to the
+    /// styles; with nobody made, the spec is what it always was.
+    #[test]
+    fn the_switch_mode_spec_lists_the_leaders_with_their_lines() {
+        let db = Db::open_in_memory().unwrap();
+        let conv = db.create_conversation("A chat", None, false).unwrap().id;
+        assert!(leaders_offered(&db, &conv).is_empty(), "no persona, nobody to offer");
+
+        let mira = persona(&db, "Mira", Some("Writes and edits, warm but direct"));
+        let kai = persona(&db, "Kai", None);
+        let leaders = leaders_offered(&db, &conv);
+        assert_eq!(
+            leaders.iter().map(|l| (l.leader.clone(), l.name.clone(), l.line.clone())).collect::<Vec<_>>(),
+            // In the order the personas list keeps (by name).
+            vec![
+                (format!("persona:{kai}"), "Kai".to_string(), String::new()),
+                (format!("persona:{mira}"), "Mira".to_string(), "Writes and edits, warm but direct".to_string()),
+            ]
+        );
+        let spec = harness_spec(&["switch_mode"], &["plan_first", "lean"], &leaders).unwrap();
+        assert_eq!(
+            spec.pointer("/function/parameters/properties/mode/enum").unwrap(),
+            &serde_json::json!(["plan_first", "lean", format!("persona:{kai}"), format!("persona:{mira}")])
+        );
+        let help = spec.pointer("/function/parameters/properties/mode/description").and_then(|d| d.as_str()).unwrap();
+        assert!(help.contains("Mira: Writes and edits, warm but direct") && help.contains("This looks like a job for"), "{help}");
+        let plain = harness_spec(&["switch_mode"], &["plan_first"], &[]).unwrap();
+        assert_eq!(plain.pointer("/function/parameters/properties/mode/description").unwrap(), "switch_mode");
+    }
+
+    /// `TEAM-7`: handing the chat over is a question, never done by itself, and says whom.
+    #[test]
+    fn handing_a_chat_to_someone_is_always_a_question() {
+        let db = Db::open_in_memory().unwrap();
+        db.set_setting("autonomy.modes", "auto").ok();
+        let conv = db.create_conversation("A chat", None, false).unwrap().id;
+        let mira = persona(&db, "Mira", None);
+        let mut switch = call("switch_mode");
+        switch.mode = Some(format!("persona:{mira}"));
+        switch.reason = "This looks like a job for Mira: it is writing.".into();
+        match decide(&db, &conv, &ALL, &switch).unwrap() {
+            Act::Propose { name, args, payload, note, reply, .. } => {
+                assert_eq!(name, "switch_mode");
+                assert_eq!(args, format!("persona:{mira}"));
+                assert_eq!(payload["leader"], true);
+                assert_eq!(payload["name"], "Mira");
+                assert_eq!(payload["auto"], false);
+                assert_eq!(note, "I asked to hand this chat to Mira: This looks like a job for Mira: it is writing.");
+                assert!(reply.contains("without waiting"), "{reply}");
+            }
+            other => panic!("{other:?}"),
+        }
+        switch.mode = Some("persona:nobody".into());
+        assert!(decide(&db, &conv, &ALL, &switch).is_err(), "not someone who exists");
+        assert_eq!(describe_harness(&serde_json::json!({ "name": "switch_mode", "mode": format!("persona:{mira}") })).0, "asked to hand this chat over");
+    }
+
+    /// `TEAM-7`: not once the person chose who leads it, not in a helper's chat, and one offer
+    /// per session whatever the answer was.
+    #[test]
+    fn a_handover_is_offered_once_and_never_after_the_person_chose() {
+        let db = Db::open_in_memory().unwrap();
+        let mira = persona(&db, "Mira", None);
+        let who = format!("persona:{mira}");
+        let mut switch = call("switch_mode");
+        switch.mode = Some(who.clone());
+
+        // The person led it themselves, by the menu, `/lead` or where chats start: it has a leader.
+        for chosen in ["poiesis", who.as_str()] {
+            let conv = db.create_conversation("Chosen", None, false).unwrap().id;
+            db.set_conversation_leader(&conv, Some(chosen), chosen.strip_prefix("persona:")).unwrap();
+            assert!(leaders_offered(&db, &conv).is_empty(), "{chosen} was chosen");
+            assert!(decide(&db, &conv, &ALL, &switch).is_err());
+        }
+        // An older chat that has only a persona counts too.
+        let old = db.create_conversation("Old", None, false).unwrap().id;
+        db.set_conversation_leader(&old, None, Some(&mira)).unwrap();
+        assert!(leaders_offered(&db, &old).is_empty());
+
+        // A helper's chat never has a leader of its own.
+        let parent = db.create_conversation("Parent", None, false).unwrap().id;
+        let helper = db.create_conversation("Helper", None, false).unwrap().id;
+        db.set_conversation_parent(&helper, &parent).unwrap();
+        assert!(leaders_offered(&db, &helper).is_empty());
+
+        // Nobody chose: offered, and once the offer is in the log (asked, accepted or declined) never again.
+        assert_eq!(leaders_offered(&db, &parent).len(), 1);
+        assert!(decide(&db, &parent, &ALL, &switch).is_ok());
+        record_switch(&db, &parent, &who, "agent", "proposed");
+        assert!(leaders_offered(&db, &parent).is_empty(), "asked once");
+        assert!(decide(&db, &parent, &ALL, &switch).is_err());
+        let other = db.create_conversation("Other", None, false).unwrap().id;
+        record_switch(&db, &other, &who, "user", "declined");
+        assert!(leaders_offered(&db, &other).is_empty(), "a no is an answer");
+        // A way of working offered before does not use it up.
+        let styled = db.create_conversation("Styled", None, false).unwrap().id;
+        record_switch(&db, &styled, "lean", "agent", "proposed");
+        assert_eq!(leaders_offered(&db, &styled).len(), 1);
     }
 
     /// A model copying an old call, or a setting turned off mid-run, is refused.

@@ -82,6 +82,12 @@ describe("typing while a question is open", () => {
     ).toEqual([]);
   });
 
+  it("does not answer the cost card (`TEAM-12`): Start and Not now are its buttons", async () => {
+    useAppStore.setState({ pendingQuestion: { ...question, title: "Shop team is about to start", check: "Don't ask for this team" } });
+    await useAppStore.getState().steerActiveRun("hello there");
+    expect(answerQuestion).not.toHaveBeenCalled();
+  });
+
   it("is an ordinary steer when the question belongs to another chat", async () => {
     useAppStore.setState({ pendingQuestion: { ...question, convId: "other" } });
     await useAppStore.getState().steerActiveRun("look at the tests too");

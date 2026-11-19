@@ -2,7 +2,7 @@
 //! person can go back to a day, and so the Self view can show the organization growing.
 //!
 //! ```text
-//! memory/.snapshots/ways/<ms>/    the rule files, defaults.md and the presets as they were
+//! memory/.snapshots/ways/<ms>/    the rule files, defaults.md, the presets and the teams as they were
 //!    label.txt                    "Added: When I am about to call an item done, I get a second look."
 //! ```
 //!
@@ -14,6 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::teams::parse_team;
 use super::{parse_preset, MemoryStore, Preset};
 
 /// How many copies are kept. Older ones are let go.
@@ -52,7 +53,7 @@ impl MemoryStore {
             ms += 1;
         }
         let dest = root.join(ms.to_string());
-        if std::fs::create_dir_all(dest.join("presets")).is_err() {
+        if std::fs::create_dir_all(dest.join("presets")).is_err() || std::fs::create_dir_all(dest.join("teams")).is_err() {
             return;
         }
         for f in md_files(&self.ways_dir()) {
@@ -63,6 +64,11 @@ impl MemoryStore {
         for f in md_files(&self.presets_dir()) {
             if let Some(name) = f.file_name() {
                 let _ = std::fs::copy(&f, dest.join("presets").join(name));
+            }
+        }
+        for f in md_files(&self.teams_dir()) {
+            if let Some(name) = f.file_name() {
+                let _ = std::fs::copy(&f, dest.join("teams").join(name));
             }
         }
         let _ = std::fs::write(dest.join("label.txt"), label.replace(['\r', '\n'], " "));
@@ -138,6 +144,19 @@ impl MemoryStore {
                 self.log_preset(&p, "you", if p.locked { "locked" } else { "unlocked" }, "");
             }
         }
+        // Teams the same way: their work goes back as a new version, and the lock as its own entry.
+        // One that did not exist then stays, and a deleted one stays in the trash.
+        for file in md_files(&src.join("teams")) {
+            let Some(slug) = file.file_stem().map(|s| s.to_string_lossy().to_string()) else { continue };
+            let Some((then, _)) = std::fs::read_to_string(&file).ok().and_then(|t| parse_team(&slug, &t)) else { continue };
+            let Some(now) = self.team(&slug) else { continue };
+            let _guard = self.lock.lock().unwrap();
+            let target = now.with_content_of(&then);
+            let now = if target != now { self.commit_team_quiet(&now, target, "you", "back", &why)? } else { now };
+            if now.locked != then.locked {
+                self.set_team_locked(&now, then.locked)?;
+            }
+        }
         self.note_change(&format!("Went back to how I worked on {date}"));
         Ok(())
     }
@@ -195,6 +214,43 @@ mod tests {
         assert_eq!(s.defaults(), vec![("global".to_string(), "lean".to_string())]);
         assert!(!s.preset("lean").unwrap().rules.contains(&split));
         assert!(s.go_back_to("../x", "Nov 7").is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn going_back_puts_a_teams_work_and_lock_back_as_new_versions_and_leaves_later_teams() {
+        use super::super::teams::{shape_lines, Folder, Limits, Member, Report, Shape, Team};
+        let (s, dir) = store();
+        let members = vec![Member { role: "api".into(), persona: "helper".into(), job: String::new(), owns: Vec::new() }];
+        let draft = |name: &str| Team {
+            slug: String::new(),
+            name: name.into(),
+            line: String::new(),
+            coordinator: "poiesis".into(),
+            style: String::new(),
+            member_style: String::new(),
+            shape: Shape::Hub,
+            report: Report::EachItem,
+            limits: Limits::default(),
+            folder: Folder::Copies,
+            locked: false,
+            version: 0,
+            lines: shape_lines(Shape::Hub, &members),
+            members: members.clone(),
+        };
+        let shop = s.save_team(draft("Shop"), "you", "").unwrap();
+        let then = s.moments()[0].id.clone();
+        s.save_team(Team { report: Report::End, locked: false, ..shop.clone() }, "you", "").unwrap();
+        let later = s.save_team(draft("Later"), "you", "").unwrap();
+        assert!(!s.team("shop").unwrap().locked && s.team("shop").unwrap().report == Report::End);
+
+        s.go_back_to(&then, "Nov 7").unwrap();
+        let back = s.team("shop").unwrap();
+        assert_eq!((back.report, back.locked), (Report::EachItem, true), "its work and its lock are back");
+        assert_eq!(back.version, 3, "the work went back as a version, so the history still says what happened");
+        let kinds: Vec<_> = s.team_history("shop").iter().map(|e| e.what.clone()).collect();
+        assert_eq!(kinds, vec!["locked", "back", "unlocked", "version", "original"]);
+        assert!(s.team(&later.slug).is_some(), "what was made later stays");
         let _ = std::fs::remove_dir_all(dir);
     }
 

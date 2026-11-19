@@ -35,6 +35,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::agent::fleet::{Fleet, RunLimits, StopReason};
 use crate::agent::run::{run_agent, AgentEventSink, RunContext};
+use crate::agent::team::{Seat, Slots};
 use crate::agent::toolsets::Toolset;
 use crate::agent::AgentEvent;
 use crate::cloud::ChatEndpoint;
@@ -100,6 +101,10 @@ pub struct Spawn {
     pub timeout_secs: u64,
     /// `CLI-4`: set when an agent app does this child's work instead of the loop.
     pub engine: Option<EngineSpawn>,
+    /// `TEAM-10`: set for a team member. It waits for a place in its team's queue (at most
+    /// `limits.at_once` at a time) instead of one of the pool's, and announces when it starts
+    /// and ends.
+    pub seat: Option<Seat>,
 }
 
 /// What an agent-app child needs that cannot be borrowed.
@@ -115,6 +120,34 @@ pub struct EngineSpawn {
 struct Pool {
     running: usize,
     queue: VecDeque<Spawn>,
+    /// `TEAM-10`: member runs going, per team session.
+    slots: Slots,
+}
+
+impl Pool {
+    /// The next child that may start, if any: the first in the queue whose turn it is. A
+    /// team member waits for a place in its own team (`at_once`), whatever the rest of the
+    /// pool is doing; everyone else for a place in the pool. Queue order is kept within each.
+    fn next(&mut self, limit: usize) -> Option<Spawn> {
+        let at = self.queue.iter().position(|s| match &s.seat {
+            Some(seat) => self.slots.has_room(seat),
+            None => self.running < limit,
+        })?;
+        let spawn = self.queue.remove(at)?;
+        match &spawn.seat {
+            Some(seat) => self.slots.take(seat),
+            None => self.running += 1,
+        }
+        Some(spawn)
+    }
+
+    /// A child that `next` handed out has ended.
+    fn ended(&mut self, seat: Option<&Seat>) {
+        match seat {
+            Some(seat) => self.slots.free(seat),
+            None => self.running = self.running.saturating_sub(1),
+        }
+    }
 }
 
 static POOL: OnceLock<Mutex<Pool>> = OnceLock::new();
@@ -158,15 +191,13 @@ fn pump() {
     let Some(app) = APP.get() else { return };
     let limit = concurrency_limit(&app.state::<Db>());
     loop {
-        let next = match pool().lock() {
-            Ok(mut p) if p.running < limit => p.queue.pop_front().inspect(|_| p.running += 1),
-            _ => None,
-        };
+        let next = pool().lock().ok().and_then(|mut p| p.next(limit));
         let Some(spawn) = next else { break };
+        let seat = spawn.seat.clone();
         tauri::async_runtime::spawn(async move {
             run_one(spawn).await;
             if let Ok(mut p) = pool().lock() {
-                p.running = p.running.saturating_sub(1);
+                p.ended(seat.as_ref());
             }
             pump();
         });
@@ -206,11 +237,15 @@ async fn run_one(spawn: Spawn) {
         announce_end(app, &db, &spawn.run_id);
         return;
     };
+    // `TEAM-12`: a member runs under its task's allowance. When that ran out while it queued,
+    // that is why it never started.
+    let allowance = spawn.seat.as_ref().and_then(|s| crate::agent::team::allowance_of(&s.session));
     if run.cancel.is_cancelled() {
+        let why = if allowance.as_ref().is_some_and(|a| a.spent_out().is_some()) { StopReason::Budget } else { StopReason::Aborted };
         let _ = db.finish_subagent_run(
             &spawn.run_id,
             "stopped",
-            StopReason::Aborted.as_str(),
+            why.as_str(),
             "It was stopped before it started.",
             0,
         );
@@ -230,6 +265,9 @@ async fn run_one(spawn: Spawn) {
 
     let channel = event_channel(app.clone());
     let parent_sink = AgentEventSink::new(channel);
+    if let Some(seat) = &spawn.seat {
+        parent_sink.emit(AgentEvent::MemberStarted { run_id: spawn.run_id.clone(), member: seat.role.clone(), item: seat.item });
+    }
     // Wrapped as `Sub { run_id, .. }` exactly like a foreground child's, so the
     // frontend needs no idea whether this run has a webview attached.
     let sink = parent_sink.child(&spawn.run_id);
@@ -240,6 +278,9 @@ async fn run_one(spawn: Spawn) {
         // Never. See the module doc.
         max_depth: 0,
         plan_ceiling: None,
+        // `TEAM-12`: a member runs under its task's allowance, so what it costs counts and
+        // the limit stops it.
+        allowance: allowance.clone(),
     };
     let rc = RunContext {
         run: &run,
@@ -306,7 +347,7 @@ async fn run_one(spawn: Spawn) {
     let text = if text.is_empty() { "(it produced no text)" } else { text };
     let status = match outcome.stop_reason {
         StopReason::Completed => "done",
-        StopReason::Aborted => "stopped",
+        StopReason::Aborted | StopReason::Budget => "stopped",
         StopReason::Error => "error",
         _ => "done",
     };
@@ -317,6 +358,8 @@ async fn run_one(spawn: Spawn) {
         text,
         outcome.steps,
     );
+    // `TEAM-15`: what a member found goes to the coordinator as a post, on the app bus like the rest.
+    crate::agent::team::record_end(&db, &fleet, &parent_sink, &spawn.run_id);
     // The lead's own turn is usually over by now, so this goes on the app bus.
     parent_sink.emit(AgentEvent::SubEnded {
         run_id: spawn.run_id.clone(),
@@ -327,6 +370,9 @@ async fn run_one(spawn: Spawn) {
         ms: run.elapsed_ms(),
     });
     fleet.close(&spawn.run_id);
+    if let Some(seat) = &spawn.seat {
+        parent_sink.emit(AgentEvent::MemberEnded { run_id: spawn.run_id.clone(), member: seat.role.clone(), item: seat.item });
+    }
     let _ = db.log_activity(
         Some(&spawn.child_conversation_id),
         "subagent",
@@ -369,6 +415,50 @@ mod tests {
         assert_eq!(concurrency_limit(&db), 1);
         db.set_setting("subagents.max_background", "nonsense").unwrap();
         assert_eq!(concurrency_limit(&db), DEFAULT_CONCURRENT);
+    }
+
+    fn spawn(run_id: &str, seat: Option<Seat>) -> Spawn {
+        Spawn {
+            run_id: run_id.into(),
+            child_conversation_id: "c".into(),
+            agent: "a".into(),
+            messages: Vec::new(),
+            endpoint: ChatEndpoint::OpenAi { base_url: String::new(), api_key: None, model: None },
+            local_endpoint: None,
+            model_name: String::new(),
+            temperature: 0.0,
+            toolsets: Vec::new(),
+            provenance: String::new(),
+            context_window: None,
+            read_only: false,
+            max_steps: 1,
+            timeout_secs: 1,
+            engine: None,
+            seat,
+        }
+    }
+
+    fn seat(session: &str, role: &str, at_once: usize) -> Seat {
+        Seat { session: session.into(), at_once, role: role.into(), item: None }
+    }
+
+    /// `TEAM-10`: a team starts at most `at_once` members, the rest wait in order and start as
+    /// one ends. Other helpers keep to the pool's own limit and are not held up by the team.
+    #[test]
+    fn a_team_runs_at_most_at_once_members_and_the_rest_wait_in_order() {
+        let mut pool = Pool::default();
+        for (id, role) in [("r1", "api"), ("r2", "ui"), ("r3", "docs"), ("r4", "qa")] {
+            pool.queue.push_back(spawn(id, Some(seat("s1", role, 2))));
+        }
+        pool.queue.push_back(spawn("h1", None));
+        let started: Vec<String> = std::iter::from_fn(|| pool.next(1)).map(|s| s.run_id).collect();
+        // Two members (the first two), and the plain helper, which has its own place in the pool.
+        assert_eq!(started, vec!["r1", "r2", "h1"]);
+        assert_eq!(pool.queue.iter().map(|s| s.run_id.as_str()).collect::<Vec<_>>(), vec!["r3", "r4"]);
+
+        pool.ended(Some(&seat("s1", "api", 2)));
+        assert_eq!(pool.next(1).map(|s| s.run_id), Some("r3".to_string()), "the next in line, not r4");
+        assert!(pool.next(1).is_none(), "two are going again");
     }
 
     /// With no app there is nothing to spawn into, and saying so is what lets

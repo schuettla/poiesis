@@ -871,6 +871,7 @@ mod tests {
                 source_conversation: None,
                 body: "Always metric.".into(),
                 project: None,
+                persona: None,
                 scope: None,
                 recurrence: None,
                 last_seen: None,

@@ -267,6 +267,14 @@ function TaskCard({
   const setActiveConversation = useAppStore((s) => s.setActiveConversation);
   const setView = useAppStore((s) => s.setView);
   const [showRuns, setShowRuns] = useState(false);
+  // `TEAM-20`: who does it, when it is not Poiesis.
+  const doerName = useAppStore((s) =>
+    job.leader?.startsWith("persona:")
+      ? s.personas.find((p) => `persona:${p.id}` === job.leader)?.name
+      : job.leader?.startsWith("team:")
+        ? s.teams.find((t) => `team:${t.slug}` === job.leader)?.name
+        : undefined
+  );
 
   function openRun(conversationId: string) {
     setActiveConversation(conversationId);
@@ -283,6 +291,7 @@ function TaskCard({
       <p className="task-prompt">{job.prompt}</p>
       {job.scope && <p className="task-meta">Reads {job.scope}</p>}
       {job.run_if && <p className="task-meta">Only runs if {job.run_if}</p>}
+      {doerName && <p className="task-meta">Done by {doerName}</p>}
       <p className="task-meta">
         {running
           ? "Running now…"
@@ -367,6 +376,17 @@ function TaskEditor({
   // check-ins) does not happen; the quiet moves (one thing at a time, a second look) do.
   const presets = useAppStore((s) => s.presets);
   const [style, setStyle] = useState(job?.style ?? "ad-hoc");
+  // `TEAM-20`: who does it. Poiesis (nobody chosen) unless a persona or a team is picked; one that is
+  // gone since reads as Poiesis, as the task will run.
+  const personas = useAppStore((s) => s.personas);
+  const teams = useAppStore((s) => s.teams);
+  const doers = [
+    { value: "", label: "Poiesis" },
+    ...personas.map((p) => ({ value: `persona:${p.id}`, label: p.name })),
+    ...teams.map((t) => ({ value: `team:${t.slug}`, label: t.name })),
+  ];
+  const [doer, setDoer] = useState(job?.leader && job.leader !== "poiesis" ? job.leader : "");
+  const doerNow = doers.some((d) => d.value === doer) ? doer : "";
   const [enabled, setEnabled] = useState(job?.enabled ?? true);
   const [saving, setSaving] = useState(false);
 
@@ -392,6 +412,7 @@ function TaskEditor({
         source_conversation_id: job ? job.source_conversation_id : (draft?.conversationId ?? null),
         run_if: runIf.trim() || null,
         style: style === "ad-hoc" ? null : style,
+        leader: doerNow || null,
       });
     } finally {
       setSaving(false);
@@ -468,6 +489,15 @@ function TaskEditor({
           Experiments; without it the task always runs.
         </p>
       )}
+      <div className="self-field">
+        <span>Who does it</span>
+        <Select label="Who does it" value={doerNow} options={doers} onChange={setDoer} />
+        {doerNow.startsWith("team:") && (
+          <p className="self-line self-note">
+            The team works under its own limits. When it needs a yes, it leaves the question in Waiting for you and goes on with what it can.
+          </p>
+        )}
+      </div>
       <div className="self-field">
         <span>How I work on it</span>
         <Select

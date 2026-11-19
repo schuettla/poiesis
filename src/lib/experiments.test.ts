@@ -33,10 +33,9 @@ describe("the new-experiment dot (EXP-UI-1)", () => {
 });
 
 describe("the hub section (EXP-UI-1)", () => {
-  it("sits between Usage and Working dir, and is a hub view", () => {
-    const order = HUB_SECTIONS.map((s) => s.view);
-    expect(order.indexOf("experiments")).toBe(order.indexOf("usage") + 1);
-    expect(order.indexOf("workingdir")).toBe(order.indexOf("experiments") + 1);
+  it("sits last in the Poiesis group, and is a hub view", () => {
+    const poiesis = HUB_SECTIONS.filter((s) => s.group === "poiesis").map((s) => s.view);
+    expect(poiesis[poiesis.length - 1]).toBe("experiments");
     expect(ALL_VIEWS).toContain("experiments");
     expect(isHubView("experiments")).toBe(true);
   });

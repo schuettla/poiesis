@@ -91,6 +91,7 @@ export default function SelfPanel() {
 function LessonsTab() {
   const lessons = useAppStore((s) => s.lessons);
   const forget = useAppStore((s) => s.forgetLesson);
+  const personas = useAppStore((s) => s.personas);
   const setActiveConversation = useAppStore((s) => s.setActiveConversation);
   const setView = useAppStore((s) => s.setView);
   const proposals = useAppStore((s) => s.changeProposals);
@@ -203,6 +204,8 @@ function LessonsTab() {
           <div className="memory-card-head">
             <span className="memory-name">{l.name}</span>
             <span className="memory-created">{l.created}</span>
+            {/* `TEAM-5`: a lesson one persona drew says whose it is. */}
+            {l.persona && <span className="memory-created">{personas.find((p) => p.id === l.persona)?.name ?? "Someone gone"} only</span>}
             {/* RPT-2: plain words, no badge or colour — a lesson learned
                 again is a sign it isn't sticking, not an achievement. */}
             {!!l.recurrence && l.recurrence > 1 && (

@@ -133,6 +133,14 @@
   color: var(--ink-faint);
   white-space: nowrap;
 }
+/* `TEAM-14`: the members at work, as their faces (the helper's ring in a team's session). */
+.org-members {
+  display: inline-flex;
+  gap: 3px;
+}
+.org-member {
+  display: inline-flex;
+}
 @media (prefers-reduced-motion: no-preference) {
   /* Done: the strip settles into the answer, a short contraction. */
   .org-strip.settled {

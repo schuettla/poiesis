@@ -31,6 +31,7 @@ pub mod runtime;
 pub mod scheduler;
 pub mod skills;
 pub mod subagents;
+pub mod teams;
 pub mod improve;
 pub mod tidy;
 pub mod updater;
@@ -40,6 +41,7 @@ pub mod ways;
 pub mod ways_self;
 #[cfg(feature = "voice")]
 pub mod voice;
+pub mod waiting;
 
 /// Returns the running application version. Smoke-test of the IPC bridge and a
 /// real datum for Settings/About. Read from `tauri.conf.json` rather than

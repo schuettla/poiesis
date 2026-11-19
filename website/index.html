@@ -74,6 +74,7 @@
         <a href="#memory">Memory</a>
         <a href="#control">Control</a>
         <a href="#agents">Agents</a>
+        <a href="#teams">Teams</a>
         <a href="#apps">Apps</a>
         <a href="#private">Privacy</a>
         <a href="#faq">FAQ</a>
@@ -446,8 +447,57 @@
         </div>
       </section>
 
+      <!-- ================= TEAMS ================= -->
+      <section class="band canvas" id="teams" aria-labelledby="teams-h">
+        <div class="wrap">
+          <div class="split">
+            <div class="panel demo" data-reveal aria-label="A team at work">
+              <div class="sec">
+                <div class="cap">Shop team &middot; coordinator Mira &middot; Lean</div>
+                <div class="said">Now: verifier is looking at item 3 from api.<small>api &rarr; verifier &middot; review &middot; item 3 &middot; &ldquo;Apple Pay button and the order route&rdquo;</small></div>
+              </div>
+              <div class="sec">
+                <div class="cap">Shop team is about to start</div>
+                <div class="said">4 personas. A task like this has cost about $0.40 to $1.20.<small>It stops at $2.00 or after 90 minutes.</small></div>
+                <div class="cta" style="margin: 10px 0 0; gap: 8px">
+                  <button class="btn btn-primary btn-sm" type="button">Start</button>
+                  <button class="btn btn-secondary btn-sm" type="button">Not now</button>
+                </div>
+              </div>
+              <div class="sec">
+                <div class="cap">Waiting for you &middot; 1</div>
+                <div class="said">Atlas would like to: Bring in its changes to src/api/pay.ts<small>From this morning&rsquo;s task, while you were away</small></div>
+                <div class="cta" style="margin: 10px 0 0; gap: 8px">
+                  <button class="btn btn-primary btn-sm" type="button">Do it</button>
+                  <button class="btn-text" type="button">Not now</button>
+                </div>
+              </div>
+            </div>
+            <div data-reveal>
+              <span class="eyebrow">Personas and teams</span>
+              <h2 class="h2" id="teams-h">Give the job to someone with a name, or to a team you drew.</h2>
+              <p class="prose">
+                Every chat has one leader: Poiesis, a persona of yours, or a team. A persona has its
+                own instructions, model and memory, so Mira remembers what came up in the chats
+                Mira led. A team is a few personas with a coordinator and lines you draw on a chart:
+                who hands work to whom, who checks whom, who may ask whom. A line you did not draw is
+                refused.
+              </p>
+              <ul class="points">
+                <li><span><strong>Checked before it counts.</strong> A member&rsquo;s work goes to its reviewer first. Sent back, it goes back with the reason. If two keep disagreeing, the coordinator decides.</span></li>
+                <li><span><strong>Each in its own copy.</strong> Members work in copies of your folder. Finished work is brought in with Undo, and two changes to one file are never overwritten.</span></li>
+                <li><span><strong>The cost before it starts.</strong> A card says what a task like this has cost, and every task stops at the team&rsquo;s budget and time limit.</span></li>
+                <li><span><strong>Watch it, or talk to it.</strong> The chart shows who is working and what passes between them, with a replay. Draw a line from you to a member and speak to it directly.</span></li>
+                <li><span><strong>Work while you are away.</strong> A scheduled task can have a leader. What needs your yes waits in one list, and the work goes on; a notice tells you who is waiting.</span></li>
+                <li><span><strong>Teams that get better.</strong> Poiesis proposes changes from what it saw, such as taking out a member who never gets work. You say yes or no, and you can go back.</span></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- ================= PARTNERS ================= -->
-      <section class="band canvas" id="partners" aria-labelledby="partners-h">
+      <section class="band" id="partners" aria-labelledby="partners-h">
         <div class="wrap">
           <div class="split">
             <div data-reveal>
@@ -484,7 +534,7 @@
       </section>
 
       <!-- ================= APPS ================= -->
-      <section class="band" id="apps" aria-labelledby="apps-h">
+      <section class="band canvas" id="apps" aria-labelledby="apps-h">
         <div class="wrap">
           <div class="split">
             <div class="panel demo" data-reveal aria-label="A connected app asks before it sends">
@@ -520,7 +570,7 @@
       </section>
 
       <!-- ================= QUICK ================= -->
-      <section class="band canvas" id="quick" aria-labelledby="quick-h">
+      <section class="band" id="quick" aria-labelledby="quick-h">
         <div class="wrap">
           <div data-reveal>
             <span class="eyebrow">Experiments</span>
@@ -564,7 +614,7 @@
       </section>
 
       <!-- ================= PRIVATE ================= -->
-      <section class="band" id="private" aria-labelledby="private-h">
+      <section class="band canvas" id="private" aria-labelledby="private-h">
         <div class="wrap">
           <div class="split">
             <div data-reveal>
@@ -628,7 +678,7 @@
       </section>
 
       <!-- ================= REACH ================= -->
-      <section class="band canvas" id="reach" aria-labelledby="reach-h">
+      <section class="band" id="reach" aria-labelledby="reach-h">
         <div class="wrap">
           <div class="feature flip">
             <div data-reveal>
@@ -730,7 +780,7 @@ until you say so.</pre>
       </section>
 
       <!-- ================= CODE ================= -->
-      <section class="band" id="code" aria-labelledby="code-h">
+      <section class="band canvas" id="code" aria-labelledby="code-h">
         <div class="wrap">
           <div class="split">
             <div data-reveal>
@@ -765,7 +815,7 @@ until you say so.</pre>
       </section>
 
       <!-- ================= START ================= -->
-      <section class="band canvas" id="start" aria-labelledby="download-h">
+      <section class="band" id="start" aria-labelledby="download-h">
         <div class="wrap">
           <!-- Each button points at the releases page until script.js finds the
                file in the latest published release. -->
@@ -853,7 +903,7 @@ until you say so.</pre>
       </section>
 
       <!-- ================= FAQ ================= -->
-      <section class="band" id="faq" aria-labelledby="faq-h">
+      <section class="band canvas" id="faq" aria-labelledby="faq-h">
         <div class="wrap">
           <div data-reveal>
             <span class="eyebrow">Questions</span>
@@ -885,6 +935,14 @@ until you say so.</pre>
               <div class="ans">Yes, if you have them installed. Claude Code, Codex and OpenCode can each take a job from Poiesis, which keeps the conversation and the final word. You set when it may hand work over, and their questions come to Poiesis&rsquo;s own permission panel. They run on your own plan or key, and Poiesis shows who pays.</div>
             </details>
             <details>
+              <summary>What is a persona, and what is a team?</summary>
+              <div class="ans">A persona is someone Poiesis speaks as, with its own instructions, model, tools and memory. It can lead a chat or work in a team. A team is a few personas, or plain helpers, with a coordinator and lines you draw: who hands work to whom, who reviews whom, who may ask whom and whom you can talk to. The coordinator leads the chat; the members work in their own chats, which you can open.</div>
+            </details>
+            <details>
+              <summary>Can it work while I am away?</summary>
+              <div class="ans">Yes, as a scheduled task, led by Poiesis, a persona or a team. Nothing it wants to change in your files is changed on its own: each change waits in one list, Waiting for you, and the run goes on with other work. When you have answered, it carries on from there. If the window is in the background, a desktop notice says who is waiting.</div>
+            </details>
+            <details>
               <summary>Which apps can it connect to?</summary>
               <div class="ans">Hundreds, through your own Composio account: calendars, Slack, Notion, Linear, Sheets and more. You paste your own key and sign in to each app. Reads run, changes ask, and sends ask every time. You can also add any MCP server yourself.</div>
             </details>
@@ -909,7 +967,7 @@ until you say so.</pre>
       </section>
 
       <!-- ================= CLOSING ================= -->
-      <section class="band canvas closing" aria-labelledby="close-h">
+      <section class="band closing" aria-labelledby="close-h">
         <div class="wrap">
           <div data-reveal>
             <h2 id="close-h">Meet an agent that keeps its own house.</h2>

@@ -18,6 +18,9 @@ import {
   SettingsIcon,
 } from "../Icons/Icons";
 import { updateIsWaiting } from "../../lib/updates";
+import { leaderOf } from "../../lib/leaders";
+import PersonaGlyph, { PoiesisGlyph, TeamGlyph } from "../Personas/PersonaGlyph";
+import WaitingDialog from "../Waiting/WaitingDialog";
 import "./Rail.css";
 
 /** The ⋯ and its menu, shared by chat and project rows. It sits in the row's
@@ -214,13 +217,22 @@ function ChatRow({ c, active, now }: { c: Conversation; active: boolean; now: nu
   const digested = useAppStore((s) => s.digestedIds.includes(c.id));
   const deleteConversation = useAppStore((s) => s.deleteConversation);
   const scheduleConversation = useAppStore((s) => s.scheduleConversation);
+  const leaderId = leaderOf(c);
+  const leader = useAppStore((s) =>
+    leaderId.startsWith("persona:") ? s.personas.find((p) => `persona:${p.id}` === leaderId) : undefined
+  );
+  const team = useAppStore((s) => (leaderId.startsWith("team:") ? s.teams.find((t) => `team:${t.slug}` === leaderId) : undefined));
+  const coordinator = useAppStore((s) => (team ? s.personas.find((p) => `persona:${p.id}` === team.coordinator) : undefined));
+  // `TEAM-19`/`TEAM-20`: something waits for the person here, or a run changed this chat while they were away.
+  const waiting = useAppStore((s) => s.waiting.some((p) => p.session_id === c.id));
+  const unread = useAppStore((s) => s.unreadIds.includes(c.id));
   // Removing a chat takes two steps: the menu, then a confirmation.
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
   return (
     <li
-      className={`chat-row ${active ? "active" : ""}`}
+      className={`chat-row ${active ? "active" : ""} ${waiting ? "waiting" : ""}`}
       title={c.title}
       tabIndex={0}
       aria-current={active ? "page" : undefined}
@@ -233,12 +245,32 @@ function ChatRow({ c, active, now }: { c: Conversation; active: boolean; now: nu
         if (e.key === "Enter" && e.target === e.currentTarget) openSession(c.id);
       }}
     >
+      {/* `TEAM-6`: a chat a persona leads wears its face; Poiesis-led chats have no
+          marker, so the list looks as it always did until personas are used. */}
+      {leader && (
+        <span className="chat-leader" role="img" aria-label={`Led by ${leader.name}`} title={`Led by ${leader.name}`}>
+          <PersonaGlyph name={leader.name} look={leader.look} size={14} />
+        </span>
+      )}
+      {team && (
+        <span className="chat-leader" role="img" aria-label={`Led by ${team.name}`} title={`Led by ${team.name}`}>
+          <TeamGlyph coordinator={coordinator} size={14} />
+        </span>
+      )}
+      <span className="chat-title">{c.title}</span>
+      {waiting && (
+        <span className="chat-waiting" role="img" aria-label="Waiting for you" title="Waiting for you">
+          ◌
+        </span>
+      )}
+      {unread && !waiting && (
+        <span className="chat-unread" role="img" aria-label="Changed while you were away" title="Changed while you were away" />
+      )}
       {c.workspace && (
         <span className="chat-workspace" role="img" aria-label="Workspace session" title="Workspace session">
           <LayoutIcon size={12} />
         </span>
       )}
-      <span className="chat-title">{c.title}</span>
       {reflecting ? (
         <span className="chat-digest reflecting" role="status" aria-label="I'm reflecting on this conversation">
           ◆
@@ -326,15 +358,141 @@ function useMinuteTick(): void {
   }, []);
 }
 
+/** `TEAM-6`: the sidebar's ⋯ and, when a filter is on, the one line that says so and takes it
+ * off. Only there once there is a persona to filter by, so the sidebar stays as it was for
+ * anyone who has none. */
+function LeaderFilter({
+  filter,
+  filterName,
+  counts,
+}: {
+  filter: string | null;
+  filterName: string | null;
+  counts: Map<string, number>;
+}) {
+  const personas = useAppStore((s) => s.personas);
+  const teams = useAppStore((s) => s.teams);
+  const setLeaderFilter = useAppStore((s) => s.setLeaderFilter);
+  const [open, setOpen] = useState(false);
+  const [listed, setListed] = useState(false);
+  const leaders = [
+    { id: "poiesis", name: "Poiesis", glyph: <PoiesisGlyph size={14} /> },
+    ...personas.map((p) => ({ id: `persona:${p.id}`, name: p.name, glyph: <PersonaGlyph name={p.name} look={p.look} size={14} /> })),
+    ...teams.map((t) => ({
+      id: `team:${t.slug}`,
+      name: t.name,
+      glyph: <TeamGlyph coordinator={personas.find((p) => `persona:${p.id}` === t.coordinator)} size={14} />,
+    })),
+  ];
+  const close = () => {
+    setOpen(false);
+    setListed(false);
+  };
+  return (
+    <div className="rail-filter">
+      {filter && (
+        <button
+          className="rail-filter-chip"
+          title="Show every chat"
+          aria-label={`Led by ${filterName}. Show every chat`}
+          onClick={() => setLeaderFilter(null)}
+        >
+          <span className="row-menu-label">Led by {filterName}</span>
+          <span aria-hidden="true">×</span>
+        </button>
+      )}
+      <div className="rail-filter-menu">
+        <button
+          className="chat-more rail-more"
+          aria-label="More chat options"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          title="More"
+          onClick={() => (open ? close() : setOpen(true))}
+        >
+          <KebabIcon size={14} />
+        </button>
+        {open && (
+          <>
+            <div className="row-menu-backdrop" onClick={close} onContextMenu={(e) => { e.preventDefault(); close(); }} />
+            <div className="row-menu" role="menu">
+              <button
+                className="row-menu-item row-menu-parent"
+                role="menuitem"
+                aria-haspopup="true"
+                aria-expanded={listed}
+                onClick={() => setListed((o) => !o)}
+              >
+                <span className="row-menu-label">Show chats led by…</span>
+                <ChevronIcon dir="right" size={12} className={`row-menu-caret ${listed ? "open" : ""}`} />
+              </button>
+              {listed && (
+                <div className="row-menu-sub" role="group" aria-label="Leaders">
+                  {leaders.map((l) => (
+                    <button
+                      key={l.id}
+                      className={`row-menu-item rail-leader-item ${filter === l.id ? "active" : ""}`}
+                      role="menuitemradio"
+                      aria-checked={filter === l.id}
+                      disabled={!counts.get(l.id)}
+                      onClick={() => {
+                        close();
+                        setLeaderFilter(l.id);
+                      }}
+                    >
+                      {l.glyph}
+                      <span className="row-menu-label">{l.name}</span>
+                      <span className="row-stamp">{counts.get(l.id) ?? 0}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {filter && (
+                <button
+                  className="row-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    close();
+                    setLeaderFilter(null);
+                  }}
+                >
+                  <span className="row-menu-label">Show every chat</span>
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Rail() {
   // `SUB-3`: a delegated child belongs to the turn that started it — the Fleet
   // card and the Agents tab are where it is opened from.
   const allConversations = useAppStore((s) => s.conversations);
   // Filtered outside the selector: a selector that builds a new array every
   // call never compares equal, and zustand re-renders forever.
-  const conversations = useMemo(
+  const topLevel = useMemo(
     () => allConversations.filter((c) => !c.parentConversationId),
     [allConversations]
+  );
+  // `TEAM-6`: the filter "Show chats led by…", off when it names someone who is gone.
+  const personas = useAppStore((s) => s.personas);
+  const leaderFilter = useAppStore((s) => s.leaderFilter);
+  const teams = useAppStore((s) => s.teams);
+  const filterPersona = leaderFilter?.startsWith("persona:") ? personas.find((p) => `persona:${p.id}` === leaderFilter) : undefined;
+  const filterTeam = leaderFilter?.startsWith("team:") ? teams.find((t) => `team:${t.slug}` === leaderFilter) : undefined;
+  const filter = leaderFilter === "poiesis" || filterPersona || filterTeam ? leaderFilter : null;
+  const filterName = filter === "poiesis" ? "Poiesis" : (filterPersona?.name ?? filterTeam?.name ?? null);
+  const ledCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const c of topLevel) counts.set(leaderOf(c), (counts.get(leaderOf(c)) ?? 0) + 1);
+    return counts;
+  }, [topLevel]);
+  const conversations = useMemo(
+    () => (filter ? topLevel.filter((c) => leaderOf(c) === filter) : topLevel),
+    [topLevel, filter]
   );
   // `PRJ-UI-1`: sessions in a project are listed under it, so the date groups
   // below hold only the loose chats.
@@ -354,6 +512,8 @@ export default function Rail() {
     }
     return byProject;
   }, [conversations]);
+  // With a filter on, a project with none of the chats it matches is left out.
+  const shownProjects = filter ? projects.filter((p) => sessionsByProject.has(p.id)) : projects;
   const activeId = useAppStore((s) => s.activeConversationId);
   const activeProjectId = useAppStore((s) => s.activeProjectId);
   const view = useAppStore((s) => s.view);
@@ -372,6 +532,10 @@ export default function Rail() {
   // SCH-UI-4: a scheduled job runs unattended, but the user must always be
   // able to see that it's happening, and end it.
   const runningJob = useAppStore((s) => s.runningJob);
+  // `TEAM-19`: what runs nobody watched left for the person.
+  const waitingCount = useAppStore((s) => s.waiting.length);
+  const waitingOpen = useAppStore((s) => s.waitingOpen);
+  const setWaitingOpen = useAppStore((s) => s.setWaitingOpen);
   const stopScheduledJob = useAppStore((s) => s.stopScheduledJob);
   // `UPD-UI-3`: one badge covers whatever is waiting in any of Settings'
   // sections — a proposal to review, or a newer version of me to install.
@@ -385,6 +549,7 @@ export default function Rail() {
     "apps",
     "skills",
     "self",
+    "personas",
     "tasks",
     "activity",
     "settings",
@@ -494,6 +659,15 @@ export default function Rail() {
       {/* `SHL-16` is withdrawn: this column lists conversations and projects,
           whatever route is focused. */}
       <div className="rail-scroll">
+        {waitingCount > 0 && (
+          <button className="rail-waiting-row" onClick={() => setWaitingOpen(true)}>
+            <span className="rail-waiting-mark" aria-hidden="true">
+              ◌
+            </span>
+            <span className="rail-waiting-label">Waiting for you · {waitingCount}</span>
+          </button>
+        )}
+        {waitingOpen && <WaitingDialog />}
         {runningJob && (
           <div className="rail-job-row" role="status">
             <span className="rail-job-dot" aria-hidden="true" />
@@ -509,13 +683,16 @@ export default function Rail() {
           </div>
         )}
 
+        {(personas.length > 0 || filter) && <LeaderFilter filter={filter} filterName={filterName} counts={ledCounts} />}
+        {filter && conversations.length === 0 && <p className="rail-filter-empty">No chats led by {filterName}.</p>}
+
         {/* `PRJ-UI-1`: a group above the date-grouped chats. Absent entirely
             with no projects, so a user who never made one sees only chats. */}
-        {projects.length > 0 && (
+        {shownProjects.length > 0 && (
           <div className="rail-group">
             <p className="rail-label">Projects</p>
             <ul className="chat-list project-list">
-              {projects.map((p) => (
+              {shownProjects.map((p) => (
                 <ProjectRow
                   key={p.id}
                   project={p}

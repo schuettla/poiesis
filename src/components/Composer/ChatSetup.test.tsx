@@ -2,8 +2,11 @@
  * @vitest-environment jsdom
  *
  * `WRK-3`, `WHY-4`, `CMP-7`: the "this chat" button under the composer. It draws
- * how I work as its glyph, Ad hoc too, and opens one menu with how I work, what
- * I'm working from, and the standing modes Workspace and Persona.
+ * how I work as its glyph, Ad hoc too, and opens one menu with who leads, how I
+ * work, what I'm working from, and the standing mode Workspace.
+ *
+ * `TEAM-2`: when a persona leads, the button draws its letter with the way of
+ * working as a small badge, and says who leads in its tooltip.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -98,7 +101,7 @@ describe("the this-chat menu", () => {
     put(null);
     act(() => root.render(<ChatSetup />));
     open();
-    const how = items()[0];
+    const how = items()[1];
     expect(how.textContent).toContain("How I work");
     expect(how.textContent).toContain("Just answer");
     expect(how.title, "nobody chose it, and it does not say they did").toContain("unless you say otherwise");
@@ -111,14 +114,14 @@ describe("the this-chat menu", () => {
     put("lean");
     act(() => root.render(<ChatSetup />));
     open();
-    expect(items()[0].title).toContain("Your choice for this chat");
+    expect(items()[1].title).toContain("Your choice for this chat");
   });
 
   it("opens what I'm working from on the live view", () => {
     put(null);
     act(() => root.render(<ChatSetup />));
     open();
-    act(() => items()[1].click());
+    act(() => items()[2].click());
     expect(openContextPanel).toHaveBeenCalledWith({ conversationId: "c1" });
   });
 
@@ -136,6 +139,7 @@ describe("the this-chat menu", () => {
     expect(Array.from(container.querySelectorAll(".mode-chip-label")).map((b) => b.textContent)).toEqual(["Tools off"]);
     open();
     expect(items().map((b) => b.textContent)).toEqual([
+      expect.stringContaining("Who leads"),
       expect.stringContaining("How I work"),
       expect.stringContaining("What I'm working from"),
       expect.stringContaining("Workspace"),
@@ -152,6 +156,76 @@ describe("the this-chat menu", () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     });
     expect(container.querySelector(".chat-setup-menu")).toBeNull();
+  });
+});
+
+const MIRA = { id: "p1", name: "Mira" };
+
+describe("who leads (TEAM-2)", () => {
+  it("is quiet when Poiesis leads: the style glyph, no 'Led by' line", () => {
+    put("lean", { personas: [MIRA] });
+    act(() => root.render(<ChatSetup />));
+    expect(trigger()?.querySelector("svg.glyph-lean")).not.toBeNull();
+    expect(trigger()?.querySelector(".persona-glyph")).toBeNull();
+    expect(trigger()?.title).not.toContain("Led by");
+    open();
+    expect(items()[0].textContent).toContain("Who leads");
+    expect(items()[0].textContent).toContain("Poiesis");
+  });
+
+  it("draws the persona's letter with the way of working as a badge, and says it in the tooltip", () => {
+    put("lean", { personas: [MIRA], conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [], style: "lean", leader: "persona:p1", personaId: "p1" }] });
+    act(() => root.render(<ChatSetup />));
+    const glyph = trigger()!.querySelector(".persona-glyph")!;
+    expect(glyph.textContent).toContain("M");
+    expect(glyph.querySelector(".persona-glyph-badge svg.glyph-lean")).not.toBeNull();
+    expect(trigger()?.className).toContain("lit");
+    expect(trigger()?.title.split("\n")[0]).toBe("Led by Mira");
+    expect(trigger()?.title).toContain("How I work: Lean");
+    expect(trigger()?.getAttribute("aria-label")).toContain("Led by Mira");
+  });
+
+  it("draws a team in its coordinator's hue and names the coordinator in the tooltip (II.2)", () => {
+    const shop = {
+      slug: "shop",
+      name: "Shop team",
+      coordinator: "persona:p1",
+      members: [
+        { role: "api", persona: "persona:p1", job: "", owns: [] },
+        { role: "docs", persona: "helper", job: "", owns: [] },
+      ],
+    };
+    put("lean", {
+      personas: [MIRA],
+      teams: [shop],
+      conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [], style: "lean", leader: "team:shop", personaId: "p1" }],
+    });
+    act(() => root.render(<ChatSetup />));
+    expect(trigger()!.querySelector(".team-glyph .persona-glyph-badge svg.glyph-lean")).not.toBeNull();
+    expect(trigger()?.title.split("\n")[0]).toBe("Led by Shop team · coordinator Mira, 1 persona");
+    open();
+    expect(items()[0].textContent).toContain("Shop team");
+  });
+
+  it("reads a chat that only has a persona (from before leaders) as led by it", () => {
+    put(null, { personas: [MIRA], conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [], style: null, personaId: "p1" }] });
+    act(() => root.render(<ChatSetup />));
+    expect(trigger()?.title).toContain("Led by Mira");
+  });
+
+  it("treats a persona that is gone as nobody: Poiesis leads", () => {
+    put(null, { personas: [], conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [], style: null, leader: "persona:gone", personaId: "gone" }] });
+    act(() => root.render(<ChatSetup />));
+    expect(trigger()?.title).not.toContain("Led by");
+  });
+
+  it("opens /lead from the first row, and no longer lists Persona under 'On in this chat'", () => {
+    put(null, { personas: [MIRA], workspaceMode: true, conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [], style: null, leader: "persona:p1", personaId: "p1" }] });
+    act(() => root.render(<ChatSetup />));
+    open();
+    expect(items().map((b) => b.textContent)).not.toContainEqual(expect.stringMatching(/^Persona/));
+    act(() => items()[0].click());
+    expect(requestComposer).toHaveBeenCalledWith("/lead ");
   });
 });
 

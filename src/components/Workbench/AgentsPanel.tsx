@@ -7,7 +7,9 @@ import RunText from "../Conversation/RunText";
 import { ContinueThere, EngineChips, UndoHandover } from "../Conversation/EngineChips";
 import Orb from "../Orb/Orb";
 import { orbForSubRun } from "../Orb/orbState";
+import { useLedTeam } from "../../lib/useLedTeam";
 import OrgDiagram from "./OrgDiagram";
+import TeamCoordination from "./TeamCoordination";
 
 /**
  * `SUB-UI-2`, split by `SHL-22`: the Agents sub-view is the run list, an
@@ -69,9 +71,20 @@ export default function AgentsPanel({ conversationId }: { conversationId: string
     .filter((r) => r.parentConversationId === conversationId)
     .sort((a, b) => a.startedAt - b.startedAt);
 
+  // `TEAM-14`: a session a team leads has the team's own Coordination view, whose Members tab is
+  // this list grouped by member. A team whose file is gone is drawn as any session is.
+  const { slug: teamSlug, team } = useLedTeam(conversationId);
+  if (teamSlug && team) {
+    return (
+      <div className="agents-panel">
+        <TeamCoordination conversationId={conversationId} team={team} />
+      </div>
+    );
+  }
+
   return (
     <div className="agents-panel">
-      <OrgDiagram conversationId={conversationId} />
+      {teamSlug && team === undefined ? <div className="team-coord-wait" aria-hidden="true" /> : <OrgDiagram conversationId={conversationId} />}
       {runs.length === 0 && (
         <div className="wb-empty">
           <p className="wb-empty-title">No agents yet</p>

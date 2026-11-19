@@ -82,3 +82,13 @@
   flex: 1;
   min-width: 0;
 }
+
+/* `TEAM-12`: the cost card's box ("Don't ask for this team"), quiet like the rest. */
+.question-card-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+  cursor: pointer;
+}

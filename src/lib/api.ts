@@ -56,6 +56,8 @@ export interface DbConversation {
   engines_off?: boolean;
   /** `WRK-3`: how this chat works, as a preset's slug. Null is Ad hoc. */
   style?: string | null;
+  /** `TEAM-1`: who leads this chat: `poiesis`, `persona:<id>` or `team:<slug>`. Null: nobody chose. */
+  leader?: string | null;
 }
 
 /** `PRJ-1`: a working directory and the sessions that happened in it. */
@@ -107,6 +109,10 @@ export interface DbMessage {
   plan_json: string | null;
   /** `VTN-7`: this turn was spoken. */
   spoken?: boolean;
+  /** `TEAM-3`: who spoke this reply (`poiesis`, `persona:<id>`). Null before v47. */
+  author?: string | null;
+  /** `TEAM-17`: the member of a team the person spoke to with this message (its role). */
+  addressed?: string | null;
   created_at: number;
   attachments?: DbAttachment[];
 }
@@ -443,7 +449,8 @@ export const stopChat = () => invoke<void>("stop_chat_cmd");
  * what the run had in hand, not what it set out to say. */
 /** `interrupted` (`VTN-6`) is a spoken reply the user cut off: what was saved is
  * only what they heard. */
-export type StopReason = "completed" | "aborted" | "timeout" | "max_steps" | "stuck" | "error" | "interrupted";
+/** `budget` (`TEAM-12`): the team task spent its money or its minutes, so every member stopped. */
+export type StopReason = "completed" | "aborted" | "timeout" | "max_steps" | "stuck" | "error" | "interrupted" | "budget";
 
 /** What a run cost, when the provider reported it (`OBS-1`). */
 export interface TurnUsage {
@@ -550,6 +557,7 @@ export type AgentEvent =
    * `message` (a `/style` for this message alone), or `switch` when it changed in the middle
    * of the run (`WRK-13`). */
   | { type: "style_set"; run_id: string; preset: string; name: string; source: "chat" | "message" | "switch" }
+  | { type: "leader_set"; leader: string; source: "chat" | "default" | "message" | "none" }
   /** `WRK-2`: an item began. The plan event carries the same fact; this is for
    * what wants the moment itself. */
   | { type: "item_started"; run_id: string; item: number; text: string; done_when: string | null }
@@ -599,7 +607,7 @@ export type AgentEvent =
       id: string;
       name: "switch_mode" | "schedule" | "compact";
       reason: string;
-      payload: { mode?: string; style?: boolean; auto?: boolean; when?: string; task?: string };
+      payload: { mode?: string; style?: boolean; leader?: boolean; name?: string; auto?: boolean; when?: string; task?: string };
     }
   /** `AGC-2`: one of your slash commands would clearly help. */
   | { type: "suggestion"; run_id: string; command: string; reason: string }
@@ -611,6 +619,9 @@ export type AgentEvent =
       question: string;
       options: { label: string; detail?: string }[];
       multi: boolean;
+      /** `TEAM-12`: the cost card has its own heading and a checkbox beside the buttons. */
+      title?: string;
+      check?: string;
     }
   | {
       type: "sub_spawned";
@@ -621,6 +632,9 @@ export type AgentEvent =
       index: number;
       /** `CLI-UI-2`: set when an agent app does this child's work. */
       engine?: EngineBadge;
+      /** `TEAM-14`: set when the run is a team member: its role, and the plan item (from 1) it has. */
+      member?: string;
+      item?: number;
     }
   /** A question on the panel is no longer wanted (the agent hung up, or Stop). */
   | { type: "permission_gone"; id: string }
@@ -637,6 +651,11 @@ export type AgentEvent =
       steps: number;
       ms: number;
     }
+  /** `TEAM-10`: a team member's run began / ended. `item` is the plan item it has, when it has one. */
+  | { type: "member_started"; run_id: string; member: string; item?: number }
+  | { type: "member_ended"; run_id: string; member: string; item?: number }
+  /** `TEAM-15`: something passed between the people of a team (a post on the Board). */
+  | { type: "posted"; post: TeamPost }
   /** `HRW-1`: the rows a turn saved. First event of a turn. `user_message_id` is
    * null for a resume, which has no user row. */
   | { type: "turn_saved"; user_message_id: string | null; assistant_message_id: string }
@@ -889,6 +908,13 @@ export interface TurnRunOptions {
   noHandover?: boolean;
   /** `WRK-3`: a preset for this message alone (`/style lean <message>`). */
   style?: string;
+  /** `TEAM-1`: who leads this message alone (`/lead mira <message>`): `poiesis` or `persona:<id>`. */
+  leader?: string;
+  /** `TEAM-17`: the member of the team that leads the chat to speak to with this message (its role). */
+  addressed?: string;
+  /** `TEAM-18`: with `addressed`, a reply nobody asked for: no user row is saved and `text` is only what
+   * the persona is told. Set by the window after a reply, never from the composer. */
+  unasked?: boolean;
   /** `WRK-12`: what done means, said up front (`/goal ... until ...`): agreed, so not asked. */
   criteria?: string[];
 }
@@ -1198,6 +1224,10 @@ export interface SubagentRun {
   /** The rule it cited (`U2`), or `asked`. */
   because: string | null;
   paid_by: EnginePaidBy | null;
+  /** `TEAM-10`: the role of a team it was done as (`api`), else null. */
+  member: string | null;
+  /** `TEAM-11`: the plan item (from 1) it was for, when the coordinator said. */
+  item?: number | null;
   /** The agent's own session id, for **Continue there**. */
   engine_session: string | null;
 }
@@ -1209,6 +1239,38 @@ export interface AgentType {
   persona_id: string | null;
   engine_id?: string;
 }
+
+/**
+ * `TEAM-15`: one thing that passed between the people of a team in a session. Never a chat message:
+ * the Coordination view's Board lists them and the chart's lines widen with them.
+ */
+export interface TeamPost {
+  id: string;
+  conversation_id: string;
+  /** The run that wrote it, when a run did. */
+  run_id: string | null;
+  /** A role, `coordinator` or `you`. */
+  from_member: string;
+  /** A role, `coordinator`, `you` or `all`. */
+  to_member: string;
+  kind: "hand-over" | "result" | "review" | "sent-back" | "ask" | "answer" | "report" | "note";
+  /** The plan item (from 1), when there is one. */
+  item: number | null;
+  reply_to: string | null;
+  text: string;
+  created_at: number;
+  delivered_at: number | null;
+}
+
+/**
+ * `TEAM-18`: after a reply in a session a team leads, who (if anyone) would add something the person
+ * needs, and what to tell them. `null` is nobody, and is also any failure. The rules run first, so a chat
+ * where nobody may chime in costs no model call.
+ */
+export const teamNextVoice = (conversationId: string, target: ChatTarget) =>
+  invoke<{ role: string; nudge: string } | null>("team_next_voice_cmd", { conversationId, target });
+
+export const listPosts = (conversationId: string) => invoke<TeamPost[]>("list_posts_cmd", { conversationId });
 
 export const listSubagentRuns = (conversationId: string) =>
   invoke<SubagentRun[]>("list_subagent_runs_cmd", { conversationId });
@@ -1381,6 +1443,8 @@ export interface Fact {
   valid_from?: string | null;
   /** `HAB-1`: set on a lesson that fires at one tool instead of living in the index. */
   fires?: LessonFires | null;
+  /** `TEAM-5`: the persona this was learned under (its id). `null` means everyone knows it. */
+  persona?: string | null;
 }
 
 /** What gets prepended to every conversation (MEM-3). */
@@ -1422,6 +1486,11 @@ export interface ChangeProposal {
   group_id?: string | null;
   rehearsal_json?: string | null;
   live_outcome?: string | null;
+  /** `TEAM-19`: for an entry that waits for the person (`waiting-file`, `waiting-ask`): the chat
+   *  that was working, the session it is found under, and who is waiting. */
+  conversation_id?: string | null;
+  session_id?: string | null;
+  author?: string | null;
 }
 
 /** `IMP-5`: a rule of thumb about which kind of fix holds up. */
@@ -1552,6 +1621,10 @@ export const updateMemoryFact = (name: string, body: string, description?: strin
 export const setFactScope = (name: string, scope: "global" | "topical") =>
   invoke<void>("set_fact_scope_cmd", { name, scope });
 
+/** `TEAM-5`: what a persona learned becomes something everyone knows. */
+export const shareMemory = (collection: "facts" | "lessons", name: string) =>
+  invoke<void>("share_memory_cmd", { collection, name });
+
 /** Moves the fact to trash and returns the trash filename, for undo. */
 export const forgetMemoryFact = (name: string) =>
   invoke<string>("forget_memory_fact_cmd", { name });
@@ -1661,6 +1734,17 @@ export const openMemoryDir = () => invoke<void>("open_memory_dir_cmd");
 export const exportMemoryZip = () => invoke<string>("export_memory_zip_cmd");
 
 export const listChangeProposals = () => invoke<ChangeProposal[]>("list_change_proposals_cmd");
+
+/** `TEAM-19`: what runs nobody watched left for the person. */
+export const listWaiting = () => invoke<ChangeProposal[]>("list_waiting_cmd");
+/** Answer one entry. `accept` is yes to a change, or "I will answer" with `text`. Returns the
+ *  sentence the session is told. */
+export const resolveWaiting = (id: string, accept: boolean, text?: string) =>
+  invoke<string>("resolve_waiting_cmd", { id, accept, text });
+/** `TEAM-20`: sessions a run changed while nobody watched, not opened since. */
+export const unreadSessions = () => invoke<string[]>("unread_sessions_cmd");
+export const markSeen = (conversationId: string) => invoke<void>("mark_seen_cmd", { conversationId });
+export const markAway = (conversationId: string) => invoke<void>("mark_away_cmd", { conversationId });
 
 /** `target` routes `GLD-2`'s before/after check the same way a chat turn is
  * routed, so a cloud-only setup is still guarded. */
@@ -2681,6 +2765,12 @@ export interface Persona {
   spawnable: boolean;
   /** `CLI-UI-4`: the agent app this persona runs on, or `null` for Poiesis. */
   engine_id?: string | null;
+  /** `TEAM-4`: the glyph, JSON `{"letter":"M","hue":3}`; `null` means it is made from the name. */
+  look?: string | null;
+  /** `TEAM-4`: one line under the name. */
+  line?: string | null;
+  /** `TEAM-5`: does it remember across chats. Missing reads as yes. */
+  remembers?: boolean;
 }
 
 export const listPersonas = () => invoke<Persona[]>("list_personas_cmd");
@@ -2711,6 +2801,19 @@ export const updatePersona = (persona: Persona) =>
 export const deletePersona = (id: string) => invoke<void>("delete_persona_cmd", { id });
 export const setDefaultPersona = (id: string) =>
   invoke<void>("set_default_persona_cmd", { id });
+/** `TEAM-1`: who leads a chat and how that came to be. `chat`: somebody chose it for
+ * this chat. `default`: where chats start says so. `none`: Poiesis, nothing says otherwise. */
+export interface Led {
+  leader: string;
+  source: "chat" | "default" | "none";
+}
+export const conversationLeader = (id: string) => invoke<Led | null>("conversation_leader_cmd", { id });
+/** Hand a chat to `poiesis` or `persona:<id>`. `null` gives the choice back: where chats start decides. */
+export const setConversationLeader = (id: string, leader: string | null) =>
+  invoke<void>("set_conversation_leader_cmd", { id, leader });
+/** Who leads the chats that start at a place: `global`, `project:<id>`, `kind:<kind>`. `null` takes it away. */
+export const setLeaderDefault = (scope: string, leader: string | null) =>
+  invoke<void>("leader_default_set_cmd", { scope, leader });
 export const setConversationPersona = (
   conversationId: string,
   personaId: string | null,
@@ -3167,6 +3270,15 @@ export interface WayDefaultView {
   preset: string;
   preset_name: string;
 }
+/** `TEAM-5b`: one place that says who leads and in which style a new chat starts. */
+export interface StartView {
+  scope: string;
+  label: string;
+  /** A style's slug. */
+  style: string | null;
+  /** `poiesis`, `persona:<id>` or `team:<slug>`. */
+  leader: string | null;
+}
 export interface WaysView {
   narrative: string;
   ways: WayView[];
@@ -3177,6 +3289,8 @@ export interface WaysView {
   /** What new chats start with everywhere unless a place says otherwise. */
   global_default: string;
   defaults: WayDefaultView[];
+  /** Where chats start, place by place: who leads and in which style. */
+  starts: StartView[];
   deleted: { file: string; name: string; at: number }[];
   proposals: WayProposal[];
   moments: WayMoment[];
@@ -3238,6 +3352,95 @@ export const restorePreset = (file: string) => invoke<string>("preset_restore_cm
 export const presetHistory = (slug: string) => invoke<PresetHistoryEntry[]>("preset_history_cmd", { slug });
 /** Go back to the original (`to` absent) or to the version at that place in the history. */
 export const presetBack = (slug: string, to?: number | null) => invoke<void>("preset_back_cmd", { slug, to: to ?? null });
+/** `TEAM-8`: a team, as `memory/ways/teams/<slug>.md` says. */
+export type TeamShape = "hub" | "pipeline" | "review" | "open";
+export type TeamReport = "each-item" | "end" | "problems";
+export type TeamFolder = "copies" | "owners";
+export type TeamLineKind = "hands-over" | "reviews" | "asks" | "reports" | "talks";
+export interface TeamMember {
+  /** Unique in the team: small letters, digits, `-` and `_`. Not `coordinator`, `you` or `all`. */
+  role: string;
+  /** `persona:<id>` or `helper`. */
+  persona: string;
+  job: string;
+  /** Only used when the folder is `owners`. */
+  owns: string[];
+}
+/** `from kind to`; each end is a role, `coordinator` or `you`. */
+export interface TeamLine {
+  kind: TeamLineKind;
+  from: string;
+  to: string;
+}
+export interface TeamLimits {
+  /** 1 to 5. */
+  at_once: number;
+  /** Euros. */
+  budget: number;
+  minutes: number;
+  rounds: number;
+  ask_cost: boolean;
+}
+export interface Team {
+  /** Empty for a team that is not saved yet. */
+  slug: string;
+  name: string;
+  line: string;
+  /** `poiesis` or `persona:<id>`. */
+  coordinator: string;
+  /** A style slug; empty: the usual order decides. */
+  style: string;
+  member_style: string;
+  shape: TeamShape;
+  report: TeamReport;
+  limits: TeamLimits;
+  folder: TeamFolder;
+  locked: boolean;
+  version: number;
+  members: TeamMember[];
+  /** Always includes `coordinator reports you` and `you talks coordinator`. */
+  lines: TeamLine[];
+}
+/** A team read from its file, and what the reader had to skip (plain sentences). */
+export interface TeamRead {
+  team: Team;
+  problems: string[];
+}
+export interface TeamHistoryEntry {
+  seq: number;
+  at: number;
+  by: string;
+  what: "original" | "version" | "back" | "locked" | "unlocked" | string;
+  why: string;
+  version: number;
+  /** In the words of the file: `docs: helper`, `verifier reviews api`, `shape: hub`. */
+  added: string[];
+  removed: string[];
+  team: Team;
+  current: boolean;
+}
+/** A team that is not made yet: a Hub with the usual limits. The one place those are said. */
+export const teamBlank = () => invoke<Team>("team_blank_cmd");
+/** `TEAM-22`: the New team "Keep these helpers as a team" starts from; null when the session used
+ *  fewer than two helpers or a team already leads it. */
+export const teamFromSession = (conversationId: string) =>
+  invoke<Team | null>("team_from_session_cmd", { conversationId });
+/** `TEAM-23`: the person tried to speak to a member they have no line to. Said once for each chat and
+ *  member, so that after three chats Poiesis can offer to draw the line. Never throws: it must not get
+ *  in the way of the message. Resolves to whether it was remembered. */
+export const teamAsked = (conversationId: string, role: string) =>
+  invoke<boolean>("team_asked_cmd", { conversationId, role }).catch(() => false);
+export const teamsList = () => invoke<TeamRead[]>("teams_list_cmd");
+export const teamGet = (slug: string) => invoke<TeamRead | null>("team_get_cmd", { slug });
+/** Without a slug it is a new team (it starts locked). Resolves to the team as saved. */
+export const teamSave = (team: Team) => invoke<Team>("team_save_cmd", { team });
+export const teamDelete = (slug: string) => invoke<void>("team_delete_cmd", { slug });
+export const teamHistory = (slug: string) => invoke<TeamHistoryEntry[]>("team_history_cmd", { slug });
+/** Go back to the original (`to` absent) or to the version at that place in the history. */
+export const teamBack = (slug: string, to?: number | null) => invoke<Team>("team_back_cmd", { slug, to: to ?? null });
+/** The lines a team has when it starts from `shape` for `members` (the fixed two last). */
+export const teamShapeLines = (shape: TeamShape, members: TeamMember[]) =>
+  invoke<TeamLine[]>("team_shape_lines_cmd", { shape, members });
 /** "Bring back into Lean": resolves to the parent's slug. */
 export const presetMerge = (slug: string) => invoke<string>("preset_merge_cmd", { slug });
 /** `answer` is what the card offered: `try`, `always`, `yes`, `keep`, `retire`, `keep-trying` or `no`. */
@@ -3818,6 +4021,8 @@ export interface ScheduledJob {
   run_if?: string | null;
   /** `WRK-18`: the preset (a slug) the task runs under. Absent is Ad hoc. */
   style?: string | null;
+  /** `TEAM-20`: who does it (`poiesis`, `persona:<id>` or `team:<slug>`). Absent is Poiesis. */
+  leader?: string | null;
 }
 
 /** One entry of a task's history. A completed run is a real conversation in the
@@ -3841,6 +4046,7 @@ export interface ScheduledJobInput {
   source_conversation_id?: string | null;
   run_if?: string | null;
   style?: string | null;
+  leader?: string | null;
 }
 
 /** What the Rail shows while a job runs (SCH-UI-4). */

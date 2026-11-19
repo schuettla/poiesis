@@ -1,5 +1,5 @@
 import { useAppStore } from "../lib/store";
-import { HUB_SECTIONS } from "../lib/types";
+import { HUB_GROUPS, HUB_SECTIONS } from "../lib/types";
 import type { View } from "../lib/types";
 import PoiesisMark from "../components/Mark/PoiesisMark";
 import { SectionIcon } from "../components/Icons/Icons";
@@ -11,6 +11,7 @@ import Runtime from "./Runtime";
 import Apps from "./Apps";
 import Skills from "./Skills";
 import Self from "./Self";
+import Personas from "./Personas";
 import Tasks from "./Tasks";
 import Activity from "./Activity";
 import Settings from "./Settings";
@@ -22,6 +23,7 @@ import Experiments from "./Experiments";
 import About from "./About";
 import { updateIsWaiting } from "../lib/updates";
 import { hasNewExperiment } from "../lib/experiments";
+import { TEAM_TARGET } from "../lib/teamProposals";
 import "./SettingsHub.css";
 
 /** The hub's own sections, and whether a view is one of them. Both now live in
@@ -48,10 +50,13 @@ export default function SettingsHub() {
     target === "skill" || target === "skill-revision" || target === "recipe";
   // `RTE-6`: a suggested change to an agent app's rules badges External agents,
   // where accepting it writes. It is not a change to me, so Self stays quiet.
+  // `TEAM-23`: a change Poiesis would like to make to a team badges Personas & teams, where it is
+  // answered and where it writes, not Self.
   const selfPending = useAppStore((s) =>
-    s.changeProposals.some((p) => p.target !== "soul" && p.target !== "engine-rule" && !isSkill(p.target))
+    s.changeProposals.some((p) => p.target !== "soul" && p.target !== "engine-rule" && p.target !== TEAM_TARGET && !isSkill(p.target))
   );
   const enginePending = useAppStore((s) => s.changeProposals.some((p) => p.target === "engine-rule"));
+  const teamPending = useAppStore((s) => s.changeProposals.some((p) => p.target === TEAM_TARGET));
   const skillPending = useAppStore((s) => s.changeProposals.some((p) => isSkill(p.target)));
   const consolidationPending = useAppStore((s) => s.consolidationPending);
   // `UPD-UI-3`: a newer version of me is waiting (or already staged).
@@ -66,6 +71,7 @@ export default function SettingsHub() {
     (v === "settings" && soulPending) ||
     (v === "self" && (selfPending || consolidationPending)) ||
     (v === "skills" && skillPending) ||
+    (v === "personas" && teamPending) ||
     (v === "apps" && appsNeedAttention) ||
     (v === "engines" && (enginesNewlyFound || enginePending)) ||
     (v === "experiments" && experimentsNew) ||
@@ -75,6 +81,8 @@ export default function SettingsHub() {
       ? "An update is waiting"
       : v === "experiments"
         ? "A new experiment"
+      : v === "personas"
+        ? "A change to a team is waiting for you"
       : v === "apps"
         ? "A sign-in has expired"
         : v === "engines"
@@ -82,6 +90,29 @@ export default function SettingsHub() {
             ? "A change to the rules is waiting for you"
             : "I found an agent app"
           : "Changes waiting for review";
+
+  const firstSteps = HUB_TABS.find((t) => t.view === "firststeps");
+  const about = HUB_TABS.find((t) => t.view === "about");
+  const tab = (t: (typeof HUB_TABS)[number]) => (
+    <button
+      key={t.view}
+      className={`settings-hub-tab ${view === t.view ? "active" : ""}`}
+      onClick={() => setView(t.view)}
+    >
+      <span className="sht-icon" aria-hidden="true">
+        {t.view === "self" ? <PoiesisMark size={15} /> : <SectionIcon view={t.view} size={16} />}
+      </span>
+      <span className="sht-label">{t.label}</span>
+      {badgeFor(t.view) && (
+        <span
+          className="sht-badge"
+          role="img"
+          aria-label={badgeText(t.view)}
+          title={badgeText(t.view)}
+        />
+      )}
+    </button>
+  );
 
   // `SHL-16` is withdrawn: the hub owns its own section navigation, always,
   // whatever the Rail is doing. Moving it into the Rail made the sections read
@@ -91,26 +122,27 @@ export default function SettingsHub() {
   return (
     <div className="settings-hub">
       <nav className="settings-hub-nav" aria-label="Settings sections">
-        {HUB_TABS.map((t) => (
-          <button
-            key={t.view}
-            className={`settings-hub-tab ${view === t.view ? "active" : ""}`}
-            onClick={() => setView(t.view)}
+        {HUB_GROUPS.map((g) => (
+          <div
+            className="settings-hub-group"
+            role="group"
+            aria-labelledby={g.label ? `shg-${g.id}` : undefined}
+            key={g.id}
           >
-            <span className="sht-icon" aria-hidden="true">
-              {t.view === "self" ? <PoiesisMark size={15} /> : <SectionIcon view={t.view} size={16} />}
-            </span>
-            <span className="sht-label">{t.label}</span>
-            {badgeFor(t.view) && (
-              <span
-                className="sht-badge"
-                role="img"
-                aria-label={badgeText(t.view)}
-                title={badgeText(t.view)}
-              />
+            {g.label && (
+              <div className="settings-hub-group-label" id={`shg-${g.id}`}>
+                {g.label}
+              </div>
             )}
-          </button>
+            {HUB_TABS.filter((t) => t.group === g.id).map(tab)}
+          </div>
         ))}
+        {about && <div className="settings-hub-group">{tab(about)}</div>}
+        {firstSteps && (
+          <div className="settings-hub-first">
+            {tab(firstSteps)}
+          </div>
+        )}
       </nav>
       <div className="settings-hub-content">
         {view === "firststeps" && <FirstSteps />}
@@ -125,6 +157,7 @@ export default function SettingsHub() {
         {view === "apps" && <Apps />}
         {view === "skills" && <Skills />}
         {view === "self" && <Self />}
+        {view === "personas" && <Personas />}
         {view === "tasks" && <Tasks />}
         {view === "activity" && <Activity />}
         {view === "usage" && <Usage />}

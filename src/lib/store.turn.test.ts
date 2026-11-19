@@ -14,10 +14,12 @@ const appended: { role: string; content: string }[] = [];
 const setHeard = vi.fn();
 const finalized: { id: string; content: string }[] = [];
 let runFails: Error | null = null;
+const conversationLeader = vi.fn();
 
 vi.mock("./api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api")>()),
   inTauri: () => true,
+  conversationLeader: (...a: unknown[]) => conversationLeader(...a),
   renameConversation: () => Promise.resolve(),
   recordCommandTrace: () => Promise.resolve(),
   appendMessage: (m: { role: string; content: string }) => {
@@ -51,6 +53,7 @@ beforeEach(() => {
   appended.length = 0;
   finalized.length = 0;
   runFails = null;
+  conversationLeader.mockReset().mockResolvedValue(null);
   setHeard.mockReset().mockResolvedValue(true);
   setSpeechBridge(null);
   const model = useAppStore.getState().models[0];
@@ -318,5 +321,44 @@ describe("resuming", () => {
     });
     await useAppStore.getState().resumeLastRun();
     expect(transcript().map((m) => [m.id, m.text])).toEqual([["m-reply", said]]);
+  });
+});
+
+describe("the model a persona pins (TEAM-1)", () => {
+  const cloud = (id: string) => ({ id, name: id.toUpperCase(), provenance: "cloud", provider: "openrouter", cloudModel: `${id}-model` });
+  beforeEach(() => {
+    useAppStore.setState({
+      models: [cloud("a"), cloud("b")],
+      selectedModelId: "a",
+      personas: [{ id: "p1", name: "Mira", model_id: "b" }],
+    } as never);
+  });
+
+  it("answers one message led by Mira on her model, and leaves the chat's own pick alone", async () => {
+    useAppStore.setState({ turnModifiers: { leader: "persona:p1" } } as never);
+    await useAppStore.getState().sendMessage("draft the intro");
+    expect(sent!.target).toMatchObject({ model: "b-model" });
+    expect(sent!.options?.leader).toBe("persona:p1");
+    expect(useAppStore.getState().selectedModelId).toBe("a");
+  });
+
+  it("answers on Mira's model when the chat's place gives it to her, and keeps it", async () => {
+    conversationLeader.mockResolvedValue({ leader: "persona:p1", source: "default" });
+    await useAppStore.getState().sendMessage("hi");
+    expect(conversationLeader).toHaveBeenCalledWith("c1");
+    expect(sent!.target).toMatchObject({ model: "b-model" });
+    expect(useAppStore.getState().selectedModelId).toBe("b");
+  });
+
+  it("keeps the model picked in a chat Mira already leads, and in one Poiesis leads", async () => {
+    useAppStore.setState({ conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [], leader: "persona:p1", personaId: "p1" }] } as never);
+    await useAppStore.getState().sendMessage("hi");
+    expect(sent!.target).toMatchObject({ model: "a-model" });
+    expect(conversationLeader).not.toHaveBeenCalled();
+
+    useAppStore.setState({ conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [] }], busy: false } as never);
+    conversationLeader.mockResolvedValue({ leader: "poiesis", source: "none" });
+    await useAppStore.getState().sendMessage("hi");
+    expect(sent!.target).toMatchObject({ model: "a-model" });
   });
 });

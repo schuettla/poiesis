@@ -399,9 +399,28 @@ impl ToolRegistry {
             .unwrap_or_default()
     }
 
+    /// Is a tool of the loop's own, added to the table for this run, offered?
+    fn has_tool(&self, name: &str) -> bool {
+        self.specs.iter().any(|s| s.pointer("/function/name").and_then(|n| n.as_str()) == Some(name))
+    }
+
     /// The enabled built-in toolset that owns `name`, if any.
     fn builtin_for(&self, name: &str) -> Option<Toolset> {
         self.toolsets.iter().copied().find(|s| s.handles(name))
+    }
+
+    fn offers_delegate(&self) -> bool {
+        self.tool_names().iter().any(|n| n == "delegate")
+    }
+
+    /// `TEAM-10`: only what a team's coordinator needs to hand work over and read it back. A call
+    /// to anything else finds no toolset and is refused (`dispatch_tool`'s last branch).
+    fn coordinate_only(&mut self) {
+        const KEEP: [&str; 4] = ["delegate", "check_agents", "collect_agents", "post"];
+        self.specs.retain(|s| s.pointer("/function/name").and_then(|n| n.as_str()).is_some_and(|n| KEEP.contains(&n)));
+        self.toolsets.retain(|t| *t == Toolset::Subagents);
+        self.mcp.clear();
+        self.skills.clear();
     }
 
     /// Every advertised tool name — used by the early-flush guard (LOOP-4) to
@@ -1537,6 +1556,19 @@ pub struct RunOptions {
     /// <message>`, for this message alone. The chat's own setting is untouched.
     #[serde(default)]
     pub style: Option<String>,
+    /// `TEAM-1`: who leads this message alone (`/lead mira <message>`): `poiesis` or
+    /// `persona:<id>`. The chat's own leader is untouched (`agent::leader::lend`).
+    #[serde(default)]
+    pub leader: Option<String>,
+    /// `TEAM-17`: the member of the team that leads this chat the person spoke to directly
+    /// with this message (`/ask kai ...`, or Kai picked in the row above the composer), by role.
+    /// Kai answers this message alone, as Kai; the team keeps leading the chat.
+    #[serde(default)]
+    pub addressed: Option<String>,
+    /// `TEAM-18`: with `addressed`, this reply was not asked for: the person wrote nothing, so no user
+    /// row is saved and the text sent is only what the persona is told. Never from the composer.
+    #[serde(default)]
+    pub unasked: bool,
     /// `WRK-12`: what the person said done means, when they said it up front (`/goal
     /// … until …`). The run starts with these agreed, so it asks nothing about them.
     #[serde(default)]
@@ -2296,6 +2328,8 @@ async fn run_agent_inner(
         db,
         &crate::engines::rules::RouteCtx { conversation_id, headless, delegate_to: rc.options.delegate_to.as_deref() },
     );
+    // `TEAM-10`: a team's coordinator hands work only to the members its lines reach.
+    super::team::specialise(&mut registry.specs, db, memory, run, conversation_id);
     // `SEE-3`: "Turn on for this message". The setting is untouched; this run's table has
     // the tools, and the next message is back to what the setting says. Only the lead, and
     // only where the user is there to have asked.
@@ -2317,6 +2351,24 @@ async fn run_agent_inner(
             messages.push(serde_json::json!({ "role": "system", "content": note }));
         }
         narrow_menu(db, &registry, conversation_id, rc, &messages, sink, early.keep_agents).await;
+    }
+    // `TEAM-10`: a team's coordinator coordinates. Told so in words, a model still did every
+    // part itself with its own tools, so its table keeps only the hand-over tools; the loop's
+    // `plan` and `ask_user` come below as for any run. The members' ceiling is what this run had
+    // before, so they keep every tool. The note goes right after the system prompt, on the
+    // transcript (the golden gate does not move).
+    let member_toolsets = registry.toolsets.clone();
+    if run.parent.is_none() && tools_enabled {
+        if let Some(team) = super::team::of_session(db, memory, conversation_id) {
+            let can_hand_over = registry.offers_delegate() && !super::team::roster(&team).is_empty();
+            if can_hand_over {
+                registry.coordinate_only();
+            }
+            if let Some(note) = super::team::coordinator_note(db, &team, can_hand_over, plan_first) {
+                let at = usize::from(messages.first().is_some_and(|m| m["role"] == "system"));
+                messages.insert(at, serde_json::json!({ "role": "system", "content": note }));
+            }
+        }
     }
     let mut tool_names = registry.tool_names();
     let mut invocable = registry.invocable_names();
@@ -2386,7 +2438,7 @@ async fn run_agent_inner(
             endpoint,
             model_name,
             temperature,
-            toolsets: registry.toolsets.clone(),
+            toolsets: member_toolsets,
             parent_run: run,
             max_depth: limits.max_depth,
             provenance: rc.provenance,
@@ -2429,7 +2481,13 @@ async fn run_agent_inner(
         compact_asked: Default::default(),
         waiting_on_person: Default::default(),
         request: super::decide::tools::last_exchange(&messages).0,
-        firing: super::habit::firing(memory.list_in(crate::memory::LESSONS)),
+        // `TEAM-5`: a lesson that fires at a tool is still some persona's own.
+        firing: super::habit::firing({
+            let persona = super::leader::memory_persona(db, conversation_id);
+            let mut lessons = memory.list_in(crate::memory::LESSONS);
+            lessons.retain(|l| l.shown_to(persona.as_deref()));
+            lessons
+        }),
     };
 
     // `SEE-1`: a top-level answer in a chat checks itself as it streams, against what the
@@ -2499,6 +2557,9 @@ async fn run_agent_inner(
         // measurement we do not have; it is not evidence that a run did not
         // occur, and the panel can say which of the two it is looking at.
         let usage = run.usage();
+        if let Some(allowance) = &rc.limits.allowance {
+            allowance.charge(&run.id, run_cost(rc.provenance, model_name, usage).unwrap_or(0.0));
+        }
         let _ = db.record_run_usage(
             &run.id,
             conversation_id,
@@ -2554,6 +2615,14 @@ async fn run_agent_inner(
         if !plan.is_empty() {
             sink.plan(&run.id, &plan);
         }
+    }
+
+    // `TEAM-12`: a team's cost card, before anything is asked of the model.
+    if !cx.cost_gate().await {
+        let note = super::team::NOT_STARTED.to_string();
+        cx.sink.token(&note);
+        cx.sink.done();
+        return end(note, StopReason::Completed);
     }
 
     // `SKC-2`: the user named a skill with `/name`. Load it now, through the very
@@ -2658,7 +2727,11 @@ fn open_turn(
         let stalled = (working && limits.plan_ceiling.is_some() && idle >= NO_PROGRESS_STEPS)
             .then(|| format!("{idle} steps went by without an item of the plan getting done"));
         let stuck = st.stuck.clone().or(stalled);
-        let spent = if limits.out_of_time() {
+        let spent = if let Some(what) = limits.spent() {
+            // `TEAM-12`: the task's money or time ran out. The members were stopped when it did;
+            // the coordinator reads what is done and what is not and says so.
+            Some((StopReason::Budget, super::team::spent_prompt(what)))
+        } else if limits.out_of_time() {
             Some((StopReason::Timeout, WRAP_UP_PROMPT.to_string()))
         } else if let Some(why) = stuck {
             Some((
@@ -2812,6 +2885,16 @@ fn apply_switch(&self, slug: &str) {
         }
     }
 
+    /// Why a cancelled run stopped: the task's limit (`TEAM-12`) when that is what cancelled the
+    /// members, else the person's Stop.
+    fn cancelled_as(&self) -> StopReason {
+        if self.rc.limits.spent().is_some() {
+            StopReason::Budget
+        } else {
+            StopReason::Aborted
+        }
+    }
+
     /// **prepare_turn** — drain the inbox, apply the limits, and decide whether
     /// this is the last turn. `Some` means the run is over before it started.
     fn prepare_turn(&self, st: &mut RunState, obs: &dyn RunObserver) -> Option<StopReason> {
@@ -2821,9 +2904,15 @@ fn apply_switch(&self, slug: &str) {
         // results, a nudge — reaches the log before this one can end the run.
         flush_log(obs, &st.messages, &mut st.logged);
 
+        // `TEAM-12`: what this run has cost so far goes to the task's allowance. When that
+        // makes the limit, every member is cancelled here and the coordinator wraps up below.
+        if let Some(allowance) = &limits.allowance {
+            allowance.charge(&run.id, run_cost(self.rc.provenance, self.model_name, run.usage()).unwrap_or(0.0));
+        }
+
         if self.cancel.is_cancelled() {
             self.sink.cancelled();
-            return Some(StopReason::Aborted);
+            return Some(self.cancelled_as());
         }
 
         // Everything this preamble does to the transcript happens in one place,
@@ -2946,7 +3035,14 @@ fn apply_switch(&self, slug: &str) {
         }
         let plans = self.plan_mode.offers_tool();
         // `AGC-1`/`AGC-3`: the loop's own two tools, for the whole run.
-        let own: Vec<serde_json::Value> = super::commands::harness_spec(&self.harness_names, &super::commands::modes_offered(self.db))
+        // `TEAM-7`: and, while it is still on offer, who this chat could be handed to.
+        let leaders = if self.harness_names.contains(&"switch_mode") {
+            super::commands::leaders_offered(self.db, self.conversation_id)
+        } else {
+            Vec::new()
+        };
+        let own: Vec<serde_json::Value> =
+            super::commands::harness_spec(&self.harness_names, &super::commands::modes_offered(self.db), &leaders)
             .into_iter()
             .chain(self.ask_offered.then(super::commands::ask_user_spec))
             .collect();
@@ -3216,7 +3312,7 @@ fn apply_switch(&self, slug: &str) {
             }
             Ok(TurnOutcome::Cancelled) => {
                 self.sink.cancelled();
-                Next::Stop(StopReason::Aborted)
+                Next::Stop(self.cancelled_as())
             }
             Ok(TurnOutcome::ToolCalls { calls, .. }) => Next::Calls(calls),
             Err(e) => {
@@ -3276,7 +3372,7 @@ fn apply_switch(&self, slug: &str) {
             Ok(TurnOutcome::Final { .. }) | Ok(TurnOutcome::ToolCalls { .. }) => String::new(),
             Ok(TurnOutcome::Cancelled) => {
                 self.sink.cancelled();
-                return StopReason::Aborted;
+                return self.cancelled_as();
             }
             Err(e) => {
                 self.sink.error(&format!("The model run failed: {e}"));
@@ -3755,6 +3851,7 @@ fn tool_context<'a>(&'a self, call_id: &'a str, rpc: Option<&'a super::toolrpc::
     ToolContext {
         client: self.client,
         local_endpoint: self.local_endpoint,
+        endpoint: self.endpoint,
         db: self.db,
         mgr: self.mgr,
         embed_mgr: self.embed_mgr,
@@ -3839,6 +3936,8 @@ async fn try_two_ways(&self, st: &mut RunState, item: usize, what: &str) {
         // The judge compares the two copies; a second look inside either would only
         // cost a call the comparison makes anyway.
         style: Some(crate::memory::ways::AD_HOC.to_string()),
+        item: None,
+        by_loop: false,
     };
     let tasks = vec![
         task("the most direct fix you can see, as small a change as possible."),
@@ -4392,7 +4491,14 @@ async fn dispatch(
                 told.extend(self.show(begun));
                 (plan.items[n].text.clone(), plan.items[n].done_when.clone())
             };
-            let look = self.look_at(&text, done_when.as_deref()).await;
+            // `TEAM-11`: the member on a `reviews` line already looked at what a member did for
+            // this item, so the side call does not look again.
+            let kept = super::team::of_session(self.db, self.memory, self.conversation_id)
+                .and_then(|t| super::team::kept(self.db, &t, self.conversation_id, self.assistant_message_id, n + 1));
+            let look = match kept {
+                Some(reason) => Some(super::aside::Look::Checked(reason)),
+                None => self.look_at(&text, done_when.as_deref()).await,
+            };
             let mut plan = self.plan.lock().unwrap();
             let (reactions, said) = self.work.looked(&mut plan, n, look);
             told.extend(self.show(reactions));
@@ -4459,6 +4565,14 @@ async fn dispatch(
     if name == "ask_user" && self.ask_offered {
         return self.ask_user(call_id, args).await;
     }
+    // `TEAM-15`: the board's one tool belongs to the run and to the team it is in, not to a toolset:
+    // the table only has it when the team's lines let this run post to someone.
+    if name == "post" && registry.has_tool("post") {
+        let ctx = self.tool_context(call_id, rpc);
+        // Boxed, like the loop's other deep calls: its state would otherwise swell every call of this fn.
+        let said = Box::pin(super::team::post_tool(&ctx, args)).await?;
+        return Ok((said, None));
+    }
     // `WRK-14`: helpers handed plan items: the board says who has each.
     if name == "delegate" && self.work.hands_out() {
         self.assign_items(args);
@@ -4509,7 +4623,19 @@ async fn dispatch(
                 None => text,
             });
         }
-        let output = result?;
+        let mut output = result?;
+        // `TEAM-11`: a member that did not finish, or two that could not agree, may be the person's to hear.
+        if matches!(name, "delegate" | "collect_agents") {
+            if let Some(said) = self.team_problems(call_id).await {
+                output.push_str("\n\n");
+                output.push_str(&said);
+            }
+            // `TEAM-13`: work that could not be brought into the folder without overwriting someone's.
+            if let Some(said) = self.team_conflicts() {
+                output.push_str("\n\n");
+                output.push_str(&said);
+            }
+        }
         // A toolset that said what its step line should read (RET-UI-2) wins over
         // the generic summary; everything else still gets `summarize`.
         Ok((output, ctx.step_note.into_inner().unwrap_or(None)))
@@ -4599,6 +4725,14 @@ async fn dispatch(
                 .map(|out| (out, None))
             }
         }
+    } else if let Some(team) =
+        Some(()).filter(|_| self.rc.run.parent.is_none()).and_then(|_| super::team::of_session(self.db, self.memory, self.conversation_id))
+    {
+        // `TEAM-10`: the coordinator's own work tools are off (`coordinate_only`).
+        Err(format!(
+            "You coordinate {} and do not have {name}. Hand this part to the member whose job it is with delegate.",
+            team.name
+        ))
     } else {
         Err(format!("No toolset or connector provides the tool '{name}'."))
     }
@@ -4688,9 +4822,13 @@ impl TurnCtx<'_> {
         use super::commands::Act;
         let call: super::commands::HarnessCall = serde_json::from_value(args.clone())
             .map_err(|e| format!("That is not a valid harness call: {e}"))?;
-        // `WRK-13`: a switch to another way of working is offered once per run.
+        // `WRK-13`: a switch to another way of working is offered once per run, and so is a
+        // handover to someone (`TEAM-7`): one nudge about how this chat goes, not two.
         if call.name == "switch_mode"
-            && call.mode.as_deref().is_some_and(super::commands::is_style_mode)
+            && call
+                .mode
+                .as_deref()
+                .is_some_and(|m| super::commands::is_style_mode(m) || super::commands::is_leader_mode(m))
             && !self.work.offer_switch()
         {
             return Err("You already offered a switch in this run. Do not offer it again.".to_string());
@@ -4772,6 +4910,19 @@ impl TurnCtx<'_> {
         options: Vec<super::QuestionOption>,
         multi: bool,
     ) -> Result<super::fleet::Answer, String> {
+        self.card(call_id, question, options, multi, None, None).await
+    }
+
+    /// `AGC-3`, with the card's own heading and checkbox (`TEAM-12`) when it has them.
+    async fn card(
+        &self,
+        call_id: &str,
+        question: String,
+        options: Vec<super::QuestionOption>,
+        multi: bool,
+        title: Option<String>,
+        check: Option<String>,
+    ) -> Result<super::fleet::Answer, String> {
         let run = self.rc.run;
         let waiting = run.ask(call_id);
         self.sink.emit(AgentEvent::Question {
@@ -4780,6 +4931,8 @@ impl TurnCtx<'_> {
             question,
             options,
             multi,
+            title,
+            check,
         });
         match crate::runtime::proxy::until_cancelled(&self.cancel, waiting).await {
             Some(Ok(answer)) => Ok(answer),
@@ -4789,6 +4942,77 @@ impl TurnCtx<'_> {
                 Err("The user stopped the run before answering.".to_string())
             }
         }
+    }
+
+    /// `TEAM-12`: before the first task of a session a team leads, and after a hand-over to a
+    /// team, the person is told who will work, what a task like this costs and where it stops,
+    /// and may start it or not. `true` when the task goes ahead (also when nobody is asked).
+    async fn cost_gate(&self) -> bool {
+        let run = self.rc.run;
+        if run.parent.is_some() || self.headless || !self.tools_enabled || self.rc.plan.is_some() {
+            return true;
+        }
+        let Some(team) = super::team::of_session(self.db, self.memory, self.conversation_id) else { return true };
+        if !team.limits.ask_cost || super::team::cost_asked(self.db, self.conversation_id, &team.slug) {
+            return true;
+        }
+        let card = super::team::cost_card(self.db, &team, self.model_name, self.rc.provenance);
+        let option = |label: &str| super::QuestionOption { label: label.to_string(), detail: None };
+        let options = vec![option(super::team::COST_START), option(super::team::COST_NOT_NOW)];
+        let asked = self
+            .card(
+                "team-cost",
+                card.text,
+                options,
+                false,
+                Some(card.title),
+                Some(super::team::COST_DONT_ASK.to_string()),
+            )
+            .await;
+        match asked {
+            Ok(answer) if answer.choices.iter().any(|c| c == super::team::COST_START) => {
+                let stop_asking = answer.choices.iter().any(|c| c == super::team::COST_DONT_ASK);
+                super::team::cost_answered(self.db, self.memory, self.conversation_id, &team, stop_asking);
+                true
+            }
+            // Not now, or the run was stopped while the card waited: the task does not start.
+            _ => false,
+        }
+    }
+
+    /// `TEAM-13`: members of a team that both changed a file. Nothing was overwritten; each is an
+    /// item for the coordinator, in the plan when it has one, and the words go in its report.
+    fn team_conflicts(&self) -> Option<String> {
+        let found = super::team_folder::take_conflicts(self.conversation_id);
+        if found.is_empty() {
+            return None;
+        }
+        let in_plan = !self.plan.lock().unwrap().items.is_empty();
+        if in_plan && found.iter().any(|c| c.on_plan) {
+            let items: Vec<String> = found.iter().filter(|c| c.on_plan).map(|c| c.item.clone()).collect();
+            let _ = super::plan::execute(&self.plan, &serde_json::json!({ "add": items }));
+            let plan = self.plan.lock().unwrap();
+            self.sink.plan(&self.rc.run.id, &plan);
+            super::log::record_plan(self.db, self.conversation_id, &self.rc.run.id, &plan);
+        }
+        let tail = |c: &super::team_folder::Conflict| if in_plan && c.on_plan { " It is on the plan as an item for you." } else { "" };
+        Some(found.iter().map(|c| format!("{}{}", c.text, tail(c))).collect::<Vec<_>>().join("\n\n"))
+    }
+
+    /// `TEAM-11`: what went wrong in the team since the last call, put to the person with the
+    /// check-in card when the way of working or the team's `report` says to. The coordinator has
+    /// already read the same words in the report; this is what the person answered.
+    async fn team_problems(&self, call_id: &str) -> Option<String> {
+        use super::work::{CHECK_CHANGE, CHECK_CONTINUE, CHECK_TAKE};
+        let mut said = Vec::new();
+        for (i, problem) in super::team::take_problems(self.conversation_id).into_iter().enumerate() {
+            let Some(due) = self.work.problem(&problem.text) else { continue };
+            let option = |label: &str| super::QuestionOption { label: label.to_string(), detail: None };
+            let options = vec![option(CHECK_CONTINUE), option(CHECK_CHANGE), option(CHECK_TAKE)];
+            let Ok(answer) = self.question(&format!("{call_id}-team-{i}"), due.question, options, false).await else { break };
+            said.push(self.work.problem_answered(&answer.choices, answer.text.as_deref()));
+        }
+        (!said.is_empty()).then(|| said.join("\n"))
     }
 
     /// `WRK-10`: after an item, check in with the person when the way of working
@@ -5183,6 +5407,11 @@ fn describe(name: &str, args: &serde_json::Value, registry: &ToolRegistry) -> (S
         super::commands::describe_ask(args)
     } else if super::decide::tools::handles(name) {
         ("asked for".to_string(), super::decide::tools::requested(args).join(", "))
+    } else if name == "post" && registry.has_tool("post") {
+        // `TEAM-15`: a message along a line of the team.
+        let to = args.get("to").and_then(|t| t.as_str()).unwrap_or("someone");
+        let asks = matches!(args.get("wait"), Some(serde_json::Value::Bool(true)));
+        (if asks { "asked" } else { "posted to" }.to_string(), to.to_string())
     } else if let Some(toolset) = registry.builtin_for(name) {
         toolset.describe(name, args)
     } else if let Some(binding) = registry.mcp.get(name) {
@@ -6408,6 +6637,25 @@ mod tests {
     /// `SUB-T7`: a deadline that has passed does the same thing as a spent step
     /// budget, and says so as a timeout. A delegated child has a clock precisely
     /// because nobody is watching it, so it is the run most likely to reach this.
+    /// `TEAM-12`: a coordinator whose task spent its allowance gets its closing turn, and the
+    /// reason is `budget`; the prompt says what to report.
+    #[test]
+    fn a_coordinator_whose_task_ran_out_gets_its_closing_turn_with_the_budget_reason() {
+        let fleet = Fleet::new();
+        let run = fleet.open("conv", CancelFlag::default(), None, 0);
+        let allowance = std::sync::Arc::new(super::super::fleet::Allowance::new(0.50, 90));
+        let limits = RunLimits { allowance: Some(allowance.clone()), ..RunLimits::default() };
+        let mut st = state(vec![user("add Apple Pay")]);
+        open_turn(&run, &limits, true, &mut st, &());
+        assert_eq!(st.wrap_up, None, "within its allowance it goes on");
+
+        allowance.charge("a member", 0.60);
+        open_turn(&run, &limits, true, &mut st, &());
+        assert_eq!(st.wrap_up, Some(StopReason::Budget));
+        let said = st.messages.last().unwrap()["content"].as_str().unwrap().to_string();
+        assert!(said.contains("Say which items are done and which are not"), "{said}");
+    }
+
     #[test]
     fn a_run_that_is_out_of_time_also_gets_its_closing_turn() {
         let fleet = Fleet::new();
@@ -6417,6 +6665,7 @@ mod tests {
             deadline: Some(std::time::Instant::now() - std::time::Duration::from_secs(1)),
             max_depth: 0,
             plan_ceiling: None,
+            allowance: None,
         };
         let mut st = state(vec![user("find it")]);
 

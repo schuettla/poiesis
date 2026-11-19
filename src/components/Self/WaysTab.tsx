@@ -7,6 +7,7 @@ import StyleGlyph from "../Mark/StyleGlyph";
 import Select from "../Select/Select";
 import Toggle from "../Toggle/Toggle";
 import PresetHistory from "./PresetHistory";
+import WhereChatsStart from "./WhereChatsStart";
 import { ordinal, shortDate } from "./waysFormat";
 import "./Ways.css";
 
@@ -37,6 +38,8 @@ export default function WaysTab() {
   const loadPresets = useAppStore((s) => s.loadPresets);
   const openPresetDialog = useAppStore((s) => s.openPresetDialog);
   const setActiveConversation = useAppStore((s) => s.setActiveConversation);
+  const openPersonas = useAppStore((s) => s.openPersonas);
+  const request = useAppStore((s) => s.selfTabRequest);
 
   const [view, setView] = useState<api.WaysView | null>(null);
   const [shown, setShown] = useState<string | null>(null);
@@ -61,6 +64,20 @@ export default function WaysTab() {
   useEffect(() => {
     void load(shown);
   }, [load, shown, presetsInStore]);
+
+  /** `TEAM-5b`: "Where chats start" is folded under More settings until a link asks for it. */
+  const [startsOpen, setStartsOpen] = useState(false);
+  // A link from Personas & teams lands on a style, or on where chats start.
+  useEffect(() => {
+    if (request?.tab !== "ways" || !request.focus) return;
+    if (request.focus === "starts") {
+      setStartsOpen(true);
+      setTimeout(() => document.getElementById("ways-starts")?.scrollIntoView?.({ block: "start" }), 0);
+    } else {
+      setShown(request.focus);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request?.nonce]);
 
   // A different style shown closes what was open for the last one.
   useEffect(() => {
@@ -90,6 +107,8 @@ export default function WaysTab() {
   const retired = view.ways.filter((w) => w.status === "retired");
   const parent = preset?.parent ? view.presets.find((p) => p.slug === preset.parent) : undefined;
   const undoable = view.recent.filter((r) => r.undoable);
+  /** The places (besides everywhere) where chats start in the style shown. */
+  const startsHere = preset ? view.starts.filter((st) => st.scope !== "global" && st.style === preset.slug) : [];
 
   const triggers = view.triggers.map((t) => ({ value: t.value, label: t.label }));
   const moves = view.moves.map((m) => ({ value: m.value, label: m.label }));
@@ -280,6 +299,24 @@ export default function WaysTab() {
             )}
           </div>
 
+          {startsHere.length > 0 && (
+            <p className="ways-note">
+              Chats start in it for:{" "}
+              {startsHere.map((st, i) => (
+                <span key={st.scope}>
+                  {i > 0 && ", "}
+                  {st.scope.startsWith("persona:") ? (
+                    <button className="why-link" onClick={() => openPersonas(st.scope.slice(8))}>
+                      {st.label.replace(/^Persona: /, "")}
+                    </button>
+                  ) : (
+                    st.label
+                  )}
+                </span>
+              ))}
+            </p>
+          )}
+
           {!isAdHoc && (
             <p className="ways-version">
               {preset.name}, {ordinal(preset.version)} version
@@ -401,9 +438,9 @@ export default function WaysTab() {
         )}
       </Section>
 
-      <details className="ways-fold ways-advanced">
+      <details className="ways-fold ways-advanced" open={startsOpen} onToggle={(e) => setStartsOpen(e.currentTarget.open)}>
         <summary>More settings</summary>
-        <Defaults view={view} act={act} />
+        <WhereChatsStart view={view} act={act} />
         {view.deleted.length > 0 && (
           <Section title="Deleted styles">
             {view.deleted.map((d) => (
@@ -466,7 +503,7 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
   );
 }
 
-function MenuItem({ onClick, danger, children }: { onClick: () => void; danger?: boolean; children: React.ReactNode }) {
+export function MenuItem({ onClick, danger, children }: { onClick: () => void; danger?: boolean; children: React.ReactNode }) {
   return (
     <button className={`row-menu-item${danger ? " danger" : ""}`} role="menuitem" onClick={onClick}>
       {children}
@@ -475,7 +512,7 @@ function MenuItem({ onClick, danger, children }: { onClick: () => void; danger?:
 }
 
 /** The ⋯ button and the small menu it opens; the shared row-menu look. */
-function RowMenu({ label, children }: { label: string; children: (close: () => void) => React.ReactNode }) {
+export function RowMenu({ label, children }: { label: string; children: (close: () => void) => React.ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
     <span className="ways-menu">
@@ -626,48 +663,6 @@ function AddRow({
         </button>
       </span>
     </div>
-  );
-}
-
-/** `WRK-17`: which style a project, a persona or a kind of work starts in. Everywhere
- * else is the "New chats start in this style" switch on a style. */
-function Defaults({ view, act }: { view: api.WaysView; act: Act }) {
-  const places = view.scopes.filter((s) => s.value !== "everywhere");
-  const [scope, setScope] = useState(places[0]?.value ?? "");
-  const [slug, setSlug] = useState(view.presets.find((p) => p.slug === "lean")?.slug ?? view.presets[0]?.slug ?? "");
-  const others = view.defaults.filter((d) => d.scope !== "global");
-  if (places.length === 0 && others.length === 0) return null;
-  return (
-    <Section title="A different style for one place" hint="A project, a persona or a kind of work can start in its own style.">
-      {others.map((d) => (
-        <div className="ways-row" key={d.scope}>
-          <div className="ways-text">
-            {d.label}: {d.preset_name}
-          </div>
-          <button className="why-link" onClick={() => act(() => api.setStyleDefault(d.scope, null))}>
-            Remove
-          </button>
-        </div>
-      ))}
-      {places.length > 0 && (
-        <div className="ways-addrow">
-          <span className="ways-word">For</span>
-          <Select label="For" value={scope} options={places} onChange={setScope} />
-          <span className="ways-word">start in</span>
-          <Select
-            label="Start in"
-            value={slug}
-            options={view.presets.map((p) => ({ value: p.slug, label: p.name }))}
-            onChange={setSlug}
-          />
-          <span className="ways-addrow-actions">
-            <button className="btn-secondary" onClick={() => act(() => api.setStyleDefault(scope, slug))}>
-              Set
-            </button>
-          </span>
-        </div>
-      )}
-    </Section>
   );
 }
 

@@ -142,6 +142,17 @@
   text-overflow: ellipsis;
   color: var(--ink);
 }
+/* A quoted passage: its words, then where in the document they are from. */
+.attachment-chip.quote-chip {
+  max-width: 420px;
+}
+.attachment-where {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-faint);
+}
 .attachment-remove,
 .modifier-chip-x,
 .mode-chip-x {

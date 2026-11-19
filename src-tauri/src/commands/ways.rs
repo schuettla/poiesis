@@ -143,5 +143,10 @@ pub fn set_conversation_style_cmd(
         ),
     };
     db.set_conversation_style(&id, slug.as_deref()).map_err(|e| PoiesisError::Message(e.to_string()))?;
+    // `TEAM-23`: the person chose this way of working in a chat a team leads. Only this command is the
+    // person's choice: a scheduled task puts its own style on every run's chat.
+    if let Some(slug) = slug.as_deref() {
+        crate::agent::team::note_style_chosen(&db, &mem, &id, slug);
+    }
     Ok(slug)
 }

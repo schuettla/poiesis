@@ -13,10 +13,13 @@ import {
   type CodeRun,
 } from "../../lib/api";
 import { languageForPath, languageForTitle, tokenize, useTokens, type ThemedToken } from "../../lib/highlight";
-import { PlayIcon } from "../Icons/Icons";
+import { MessageIcon, PlayIcon } from "../Icons/Icons";
+import { quoteFromSelection, remarkSourceLines, type DocQuote } from "../../lib/mdQuote";
 import CodeEditor from "./CodeEditor";
 import TokenLine from "./TokenLine";
 import DiagnosticsList from "../Conversation/Diagnostics";
+// The rendered document wears the chat's `.run-text` look, so it has to be loaded here too.
+import "../Conversation/Conversation.css";
 import {
   ConsolePanel,
   fixPrompt,
@@ -85,11 +88,7 @@ export function ArtifactView({
     return <VideoView path={content} />;
   }
   if (kind === "markdown") {
-    return (
-      <div className="canvas-markdown">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-      </div>
-    );
+    return <MarkdownView content={content} name={title ?? (path ? path.split(/[\\/]/).pop()! : "Document")} />;
   }
   if (artifactId) {
     return <CodeArtifactView content={content} artifactId={artifactId} title={title} />;
@@ -98,6 +97,75 @@ export function ArtifactView({
     <pre className="canvas-code">
       <Highlighted content={content} path={path} title={title} />
     </pre>
+  );
+}
+
+const MD_PLUGINS = [remarkGfm, remarkSourceLines];
+
+/** A rendered document you can pick a passage out of. Selecting text offers
+ * "Comment on this", which hands the passage, the document's name and its line
+ * numbers to the composer as a quote to comment on. */
+function MarkdownView({ content, name }: { content: string; name: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pick, setPick] = useState<{ quote: DocQuote; x: number; y: number } | null>(null);
+  const quoteIntoComposer = useAppStore((s) => s.quoteIntoComposer);
+
+  // Whatever hides the selection hides the button: a click elsewhere, a scroll,
+  // a new document. It follows the selection, never outlives it.
+  useEffect(() => {
+    const drop = () => setPick(null);
+    const onChange = () => {
+      if (window.getSelection()?.isCollapsed) drop();
+    };
+    document.addEventListener("selectionchange", onChange);
+    window.addEventListener("scroll", drop, true);
+    return () => {
+      document.removeEventListener("selectionchange", onChange);
+      window.removeEventListener("scroll", drop, true);
+    };
+  }, []);
+  useEffect(() => setPick(null), [content]);
+
+  const read = () => {
+    const root = ref.current;
+    if (!root) return;
+    const sel = window.getSelection();
+    const quote = quoteFromSelection(sel, root, content, name);
+    if (!quote || !sel) return setPick(null);
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    const above = rect.top - 40 >= 8;
+    setPick({
+      quote,
+      x: Math.min(Math.max(rect.left + rect.width / 2, 80), window.innerWidth - 80),
+      y: above ? rect.top - 40 : rect.bottom + 8,
+    });
+  };
+
+  return (
+    <>
+      {/* The app turns text selection off everywhere (global.css); the message stream
+          opts back in with this attribute, and so does a document you read. */}
+      <div ref={ref} className="canvas-markdown run-text" data-selectable="true" onMouseUp={read} onKeyUp={read}>
+        <ReactMarkdown remarkPlugins={MD_PLUGINS}>{content}</ReactMarkdown>
+      </div>
+      {/* Outside the text, so selecting everything never selects the button. */}
+      {pick && (
+        <button
+          className="quote-pick"
+          style={{ left: pick.x, top: pick.y }}
+          // Pressing the button must not clear the selection it is about.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            quoteIntoComposer(pick.quote);
+            window.getSelection()?.removeAllRanges();
+            setPick(null);
+          }}
+        >
+          <MessageIcon size={13} />
+          Comment on this
+        </button>
+      )}
+    </>
   );
 }
 

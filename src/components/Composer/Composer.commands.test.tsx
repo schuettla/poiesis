@@ -148,7 +148,7 @@ describe("the menu", () => {
   it("typing the slash yourself opens the plain list of every command, not the groups", async () => {
     type("/");
     expect(groups()).toEqual([]);
-    expect(rowNames()).toEqual(expect.arrayContaining(["effort", "tools", "persona", "weekly-report"]));
+    expect(rowNames()).toEqual(expect.arrayContaining(["effort", "tools", "lead", "weekly-report"]));
     expect(
       Array.from(container.querySelectorAll(".command-menu-header")).map((h) => h.textContent)
     ).toContain("How I work");
@@ -182,7 +182,7 @@ describe("the menu", () => {
   it("opens a group in place, and the way back returns to the groups", async () => {
     openDialog();
     openGroup("modes");
-    expect(rowNames()).toEqual(["workspace", "tools", "style", "persona", "model"]);
+    expect(rowNames()).toEqual(["workspace", "tools", "style", "lead", "ask", "model"]);
     expect(groups()).toEqual([]);
     act(() => container.querySelector<HTMLButtonElement>(".command-menu-back")!.click());
     expect(rowNames()).toEqual([]);

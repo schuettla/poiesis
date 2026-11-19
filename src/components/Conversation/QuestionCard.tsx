@@ -19,6 +19,8 @@ export default function QuestionCard({ q }: { q: PendingQuestion }) {
   // A question with no options is a free answer: the box is already open.
   const [other, setOther] = useState(q.options.length === 0);
   const [text, setText] = useState("");
+  // `TEAM-12`: the cost card. A checkbox beside its buttons; the choice and the box go back together.
+  const [ticked, setTicked] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   // A question is the thing to answer now. Focus the card, but never take the
@@ -30,7 +32,7 @@ export default function QuestionCard({ q }: { q: PendingQuestion }) {
 
   function choose(label: string) {
     if (!q.multi) {
-      void answer({ choices: [label] });
+      void answer({ choices: q.check && ticked ? [label, q.check] : [label] });
       return;
     }
     setPicked((p) => (p.includes(label) ? p.filter((x) => x !== label) : [...p, label]));
@@ -57,7 +59,7 @@ export default function QuestionCard({ q }: { q: PendingQuestion }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q.id, q.multi, q.options]);
+  }, [q.id, q.multi, q.options, q.check, ticked]);
 
   return (
     <div
@@ -65,9 +67,9 @@ export default function QuestionCard({ q }: { q: PendingQuestion }) {
       ref={ref}
       tabIndex={-1}
       role="group"
-      aria-label={q.agent ? `${q.agent} asks you` : "I need you to decide"}
+      aria-label={q.title ?? (q.agent ? `${q.agent} asks you` : "I need you to decide")}
     >
-      <p className="question-card-head">{q.agent ? `${q.agent} asks you` : "I need you to decide"}</p>
+      <p className="question-card-head">{q.title ?? (q.agent ? `${q.agent} asks you` : "I need you to decide")}</p>
       <div className="question-card-text">
         <RunText text={q.question} />
       </div>
@@ -91,7 +93,14 @@ export default function QuestionCard({ q }: { q: PendingQuestion }) {
         })}
       </div>
       <div className="question-card-foot">
-        {other ? (
+        {q.title !== undefined ? (
+          q.check && (
+            <label className="question-card-check">
+              <input type="checkbox" checked={ticked} onChange={(e) => setTicked(e.target.checked)} />
+              {q.check}
+            </label>
+          )
+        ) : other ? (
           <input
             className="field-input question-card-input"
             autoFocus

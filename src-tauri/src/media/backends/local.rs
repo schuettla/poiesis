@@ -278,12 +278,15 @@ async fn run_cli(
         cli_args.push(neg.to_string());
     }
 
-    let child = Command::new(binary)
-        .args(&cli_args)
+    let mut gen = Command::new(binary);
+    gen.args(&cli_args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    gen.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let child = gen
         .spawn()
         .map_err(|e| format!("couldn't start the image generator: {e}"))?;
 

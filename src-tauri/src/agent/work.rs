@@ -34,7 +34,7 @@ use crate::agent::ledger::CheckResult;
 use crate::agent::plan::{Change, Discipline, MoveNote, Plan, PlanStatus, Review, ReviewState};
 use crate::agent::AgentEvent;
 use crate::db::Db;
-use crate::memory::ways::{Move, Rule, ScopeCtx, Trigger, AD_HOC};
+use crate::memory::ways::{Move, Report, Rule, ScopeCtx, Trigger, AD_HOC};
 use crate::memory::MemoryStore;
 
 /// Files changed inside one item before "I've changed many files" holds.
@@ -196,6 +196,9 @@ pub struct Work {
     /// `WRK-6`: whether this run can start helpers in copies of its folder: a lead
     /// run that may delegate and works in a folder.
     pub can_branch: bool,
+    /// `TEAM-11`: when a team leads this run, when it tells the person how it goes. Then the
+    /// check-in after an item follows this, and not the way of working's own rule.
+    pub report: Option<Report>,
     state: Mutex<State>,
 }
 
@@ -227,6 +230,7 @@ impl Work {
             moves: Mutex::new(Vec::new()),
             can_plan: true,
             can_branch: false,
+            report: None,
             state: Mutex::new(State::default()),
         }
     }
@@ -235,7 +239,7 @@ impl Work {
     ///
     /// `message_style` is a `/style` for this message alone; otherwise the chat's
     /// own setting, and failing that where the chat starts (`MemoryStore::default_for`:
-    /// kind of task, persona, project, everywhere). Only a lead run somebody watches
+    /// kind of task, project, the persona who leads, everywhere). Only a lead run somebody watches
     /// is told by the person or by those defaults. A delegated child or an unattended
     /// task has the preset its own conversation was given (`WRK-18`: the lead's choice,
     /// Lean otherwise; the task's), and works under the base rules without one. What
@@ -264,7 +268,9 @@ impl Work {
                             return None;
                         }
                         let ctx = Work::scope_of(db, conversation_id);
-                        memory.default_for(&ctx.as_ctx()).map(|p| p.slug)
+                        // `TEAM-10`: a team leads this chat, so its coordinator works the team's way.
+                        let team_style = conv.as_ref().and_then(|c| crate::agent::team::led_by(memory, c)).map(|t| t.style);
+                        memory.default_for_led(&ctx.as_ctx(), team_style.as_deref()).map(|p| p.slug)
                     });
                     (started, "chat")
                 }
@@ -278,7 +284,12 @@ impl Work {
             None => (AD_HOC.to_string(), "Ad hoc".to_string(), "chat"),
         };
         let rules = Work::rules_in_scope(db, memory, conversation_id, &slug);
-        Work::new(run_id, &slug, &name, source, rules, lead_and_watched)
+        let mut work = Work::new(run_id, &slug, &name, source, rules, lead_and_watched);
+        // `TEAM-11`: the team that leads a chat somebody watches says when it reports.
+        if lead_and_watched {
+            work.report = conv.as_ref().and_then(|c| crate::agent::team::led_by(memory, c)).map(|t| t.report);
+        }
+        work
     }
 
     /// What a preset holds in this conversation: the Always rules, what was learned
@@ -1117,15 +1128,31 @@ impl Work {
         let Some(next) = plan.items.iter().skip(n + 1).find(|i| matches!(i.status, PlanStatus::Todo | PlanStatus::Doing)) else {
             return (None, Vec::new());
         };
-        if self.rule(Trigger::AfterItem, Move::CheckIn).is_none() || !self.state.lock().unwrap().checked_in.insert(n) {
+        // `TEAM-11`: with a team leading, the team's `report` says when: after each item a member did,
+        // or not between items at all. Without one, the way of working's rule does.
+        let wanted = match self.report {
+            Some(report) => report == Report::EachItem && plan.items[n].by.is_some(),
+            None => self.rule(Trigger::AfterItem, Move::CheckIn).is_some(),
+        };
+        if !wanted || !self.state.lock().unwrap().checked_in.insert(n) {
             return (None, Vec::new());
         }
-        let (rule, mut out) = self.due(Trigger::AfterItem, Move::CheckIn, Some(n));
-        let Some(rule) = rule else { return (None, out) };
+        let mut out = Vec::new();
+        let mut rule = None;
+        if self.rule(Trigger::AfterItem, Move::CheckIn).is_some() {
+            let (due, skipped) = self.due(Trigger::AfterItem, Move::CheckIn, Some(n));
+            out = skipped;
+            match due {
+                Some(r) => rule = Some(r),
+                None => return (None, out),
+            }
+        }
         let item = &plan.items[n];
         let checked = matches!(&item.review, Some(Review { state: ReviewState::Checked, .. }));
-        out.push(self.moved(&rule, Some(n)));
-        out.push(self.signal(&rule, "after an item", Some(n)));
+        if let Some(rule) = &rule {
+            out.push(self.moved(rule, Some(n)));
+            out.push(self.signal(rule, "after an item", Some(n)));
+        }
         let question = format!(
             "\"{}\" is done{}. Next: {}.",
             item.text,
@@ -1133,6 +1160,24 @@ impl Work {
             next.text
         );
         (Some(CheckIn { question }), out)
+    }
+
+    /// `TEAM-11`: a member did not finish, or two members could not agree. Put to the person
+    /// through the same card when the team reports on problems or after each item, or the way of
+    /// working checks in after items. `None` when nobody can be asked or nothing says to.
+    pub fn problem(&self, what: &str) -> Option<CheckIn> {
+        let wanted = matches!(self.report, Some(Report::EachItem | Report::Problems))
+            || self.rule(Trigger::AfterItem, Move::CheckIn).is_some();
+        (self.can_ask && wanted).then(|| CheckIn { question: what.to_string() })
+    }
+
+    /// What the person said to that card. "Continue" means the coordinator decides.
+    pub fn problem_answered(&self, choices: &[String], text: Option<&str>) -> String {
+        let said = text.map(str::trim).is_some_and(|t| !t.is_empty());
+        if !said && choices.iter().all(|c| c == CHECK_CONTINUE) {
+            return "The person said to go on. Decide yourself what to do about it, and say in your answer what you decided.".to_string();
+        }
+        self.checked_in(choices, text)
     }
 
     /// What the person said to a check-in, as the model is told it.
@@ -1915,6 +1960,55 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// `TEAM-1`/`TEAM-5b`: the leader's own style comes after the place the chat is in (its
+    /// kind of work, its project) and before everywhere; a chat the place gave a leader works
+    /// the way that leader does unless the place says otherwise.
+    #[test]
+    fn a_chat_works_the_way_its_leader_does_unless_its_place_says_otherwise() {
+        let db = Db::open_in_memory().unwrap();
+        let (mem, dir) = memory();
+        let mira = db
+            .create_persona(&crate::db::NewPersona {
+                name: "Mira".into(),
+                system_prompt: "You are Mira.".into(),
+                model_id: None,
+                params_json: None,
+                tools_json: None,
+                skills_json: None,
+                description: None,
+                spawnable: false,
+            })
+            .unwrap()
+            .id;
+        mem.set_default("global", Some("lean")).unwrap();
+        mem.set_default(&format!("persona:{mira}"), Some("mission-command")).unwrap();
+        mem.set_default_leader("global", Some(&format!("persona:{mira}"))).unwrap();
+
+        let c = db.create_conversation("t", None, false).unwrap();
+        assert_eq!(resolved(&db, &mem, &c.id, true).preset(), "lean", "nobody led yet: everywhere's style");
+        crate::agent::leader::start_of_turn(&db, &mem, &c.id);
+        assert_eq!(resolved(&db, &mem, &c.id, true).preset(), "mission-command", "Mira leads now: Mira's style");
+
+        db.set_conversation_style(&c.id, Some("swarm")).unwrap();
+        assert_eq!(resolved(&db, &mem, &c.id, true).preset(), "swarm", "the chat's own style still wins");
+
+        // Poiesis chosen on purpose for a chat leaves Mira's style out of it.
+        let other = db.create_conversation("o", None, false).unwrap();
+        crate::agent::leader::set_leader(&db, &mem, &other.id, Some(&crate::agent::leader::Leader::Poiesis)).unwrap();
+        crate::agent::leader::start_of_turn(&db, &mem, &other.id);
+        assert_eq!(resolved(&db, &mem, &other.id, true).preset(), "lean");
+
+        // "Shop · Mira · Swarm": a Shop chat Mira leads works Swarm, not Mira's own way.
+        let shop = db.create_project("Shop", None).unwrap();
+        mem.set_default(&format!("project:{}", shop.id), Some("swarm")).unwrap();
+        let in_shop = db.create_conversation("s", None, false).unwrap();
+        db.set_conversation_project(&in_shop.id, Some(&shop.id)).unwrap();
+        crate::agent::leader::start_of_turn(&db, &mem, &in_shop.id);
+        assert_eq!(db.get_conversation(&in_shop.id).unwrap().unwrap().persona_id.as_deref(), Some(mira.as_str()));
+        assert_eq!(resolved(&db, &mem, &in_shop.id, true).preset(), "swarm", "the project comes before Mira's habit");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn a_default_names_a_preset_that_is_gone_and_the_run_still_runs_ad_hoc() {
         let db = Db::open_in_memory().unwrap();
@@ -2070,6 +2164,53 @@ mod tests {
         assert!(w.check_in(&p, 1).0.is_none());
         assert!(work("lean", true).check_in(&p, 0).0.is_none());
         assert!(work("command-and-control", false).check_in(&p, 0).0.is_none());
+    }
+
+    /// `TEAM-T11`: with a team leading, its `report` decides when the check-in card comes, and
+    /// it is the same card.
+    #[test]
+    fn a_teams_report_times_decide_the_check_in_after_an_item_and_a_problem() {
+        let plan = plan_of(&["export", "button"]);
+        let mut p = plan.lock().unwrap();
+        p.items[0].status = PlanStatus::Done;
+
+        // Each item: after an item a member did, even where the way of working has no check-in rule.
+        let mut each = work("lean", true);
+        each.report = Some(Report::EachItem);
+        assert!(each.check_in(&p, 0).0.is_none(), "an item nobody else did is not reported");
+        p.items[0].by = Some("api".into());
+        let (ci, _) = each.check_in(&p, 0);
+        assert_eq!(ci.unwrap().question, "\"export\" is done. Next: button.");
+        assert!(each.check_in(&p, 0).0.is_none(), "once per item");
+
+        // At the end or on problems only: not between items, though the way of working would.
+        for report in [Report::End, Report::Problems] {
+            let mut w = work("command-and-control", true);
+            w.report = Some(report);
+            assert!(w.check_in(&p, 0).0.is_none(), "{report:?}");
+        }
+        // Nobody to ask: nothing is asked.
+        let mut away = work("lean", false);
+        away.report = Some(Report::EachItem);
+        assert!(away.check_in(&p, 0).0.is_none());
+
+        // A problem (a member that did not finish, two that could not agree) is put to the person
+        // on `problems` and `each-item`, or where the way of working checks in; not on `end`.
+        let ask = |style: &str, report: Option<Report>, can_ask: bool| {
+            let mut w = work(style, can_ask);
+            w.report = report;
+            w.problem("api and verifier did not agree on item 3: no test").map(|c| c.question)
+        };
+        assert_eq!(ask("lean", Some(Report::Problems), true).as_deref(), Some("api and verifier did not agree on item 3: no test"));
+        assert!(ask("lean", Some(Report::EachItem), true).is_some());
+        assert!(ask("lean", Some(Report::End), true).is_none());
+        assert!(ask("command-and-control", Some(Report::End), true).is_some(), "a way of working that checks in asks, whatever the team reports");
+        assert!(ask("command-and-control", None, true).is_some());
+        assert!(ask("lean", Some(Report::Problems), false).is_none());
+
+        let w = work("lean", true);
+        assert!(w.problem_answered(&["Continue".into()], None).contains("Decide yourself"));
+        assert!(w.problem_answered(&[], Some("accept it")).contains("accept it"));
     }
 
     #[test]

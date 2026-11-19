@@ -106,6 +106,8 @@ mod tests {
             stop_reason: None,
             plan_json: None,
             spoken: false,
+            author: None,
+            addressed: None,
             created_at: 0,
             attachments: Vec::new(),
         }

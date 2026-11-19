@@ -183,6 +183,17 @@
     "who": "user",
     "needs": ["conv"]
   },
+  {
+    "name": "focus",
+    "title": "Focus",
+    "aliases": [],
+    "section": "conversation",
+    "kind": "action",
+    "args": { "type": "choice", "source": "onoff", "hint": "on|off", "required": false },
+    "summary": "Show only the messages in the chat, nothing around them",
+    "who": "user",
+    "needs": []
+  },
 
   {
     "name": "remember",
@@ -375,13 +386,25 @@
     "needs": ["conv"]
   },
   {
-    "name": "persona",
-    "title": "Persona",
+    "name": "lead",
+    "title": "Who leads",
+    "aliases": ["persona"],
+    "section": "modes",
+    "kind": "action",
+    "args": { "type": "choice", "source": "leaders", "hint": "who, then a message for this one alone (optional)", "required": false },
+    "summary": "Who leads this chat, or one message",
+    "who": "user",
+    "needs": ["conv"],
+    "trace": true
+  },
+  {
+    "name": "ask",
+    "title": "Ask a member",
     "aliases": [],
     "section": "modes",
     "kind": "action",
-    "args": { "type": "choice", "source": "personas", "hint": "name (optional)", "required": false },
-    "summary": "Who I am in this chat",
+    "args": { "type": "choice", "source": "members", "hint": "who, then a message for them (optional)", "required": true },
+    "summary": "Speak to one member of the team that leads this chat",
     "who": "user",
     "needs": ["conv"],
     "trace": true

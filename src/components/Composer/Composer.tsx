@@ -12,6 +12,8 @@ import MentionMenu from "./MentionMenu";
 import { useMentionInput } from "./useMentionInput";
 import { libraryAdd } from "../../lib/mentions";
 import ModifierChips from "./ModifierChips";
+import MemberRow from "./MemberRow";
+import { useAddressing } from "../../lib/members";
 import ComposerHintLine from "./ComposerHintLine";
 import { useComposerHint } from "./useComposerHint";
 import LastTimeLine from "./LastTimeLine";
@@ -24,7 +26,8 @@ import SuggestionChip from "./SuggestionChip";
 import BtwCard from "./BtwCard";
 import { useCommandInput } from "./useCommandInput";
 import VoiceControl from "../Voice/VoiceControl";
-import { ChevronIcon, CloseIcon, FileIcon, ImageIcon, MessageIcon, PlayIcon, SlashIcon } from "../Icons/Icons";
+import { ChevronIcon, CloseIcon, FileIcon, ImageIcon, MessageIcon, PlayIcon, QuoteIcon, SlashIcon } from "../Icons/Icons";
+import { quoteBlock, quoteLabel, quoteWhere, type DocQuote } from "../../lib/mdQuote";
 import { joinSpoken } from "../../lib/voice/dictation";
 import "./Composer.css";
 
@@ -198,12 +201,28 @@ export default function Composer({
     setRefs((list) => (list.some((x) => x.id === r.id) ? list : [...list, r]));
   }
 
+  // A passage picked out of a document (`quoteIntoComposer`): taken once, shown as
+  // a chip, and written in front of the next message as a block quote.
+  const [quote, setQuote] = useState<DocQuote | null>(null);
+  const composerQuote = useAppStore((s) => s.composerQuote);
+  const clearComposerQuote = useAppStore((s) => s.clearComposerQuote);
+  useEffect(() => {
+    if (!composerQuote) return;
+    setQuote(composerQuote);
+    clearComposerQuote();
+    inputRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composerQuote]);
+
   function sendWithExtras(text: string, opts?: SendOptions) {
     // The files still mentioned in the words that go out, after the chips.
     const all = [...refs, ...mention.refsFor(text)];
     const extras: SendOptions = { ...opts, refs: all.length ? all : undefined };
-    onSend(text, attachments, extras.skill || extras.refs ? extras : undefined);
+    // A skill command is read by its first word, so a quote never goes in front of one.
+    const body = quote && !opts?.skill ? (text ? `${quoteBlock(quote)}\n\n${text}` : quoteBlock(quote)) : text;
+    onSend(body, attachments, extras.skill || extras.refs ? extras : undefined);
     setValue("");
+    setQuote(null);
     setAttachments([]);
     setRefs([]);
     mention.clear();
@@ -304,7 +323,7 @@ export default function Composer({
       return;
     }
 
-    if (!text && attachments.length === 0 && refs.length === 0) return;
+    if (!text && attachments.length === 0 && refs.length === 0 && !quote) return;
     sendWithExtras(text);
   }
 
@@ -501,12 +520,16 @@ export default function Composer({
         ? { text: modelNotice, dismiss: dismissModelNotice }
         : null;
 
+  // `TEAM-17`: speaking to a member of the team that leads this chat.
+  const { selected: addressing } = useAddressing();
   const placeholder = asking
     ? "Answer my question, in your own words or from the choices above"
     : planRevising
     ? "What should change in the plan?"
     : canSteer
     ? "Tell me something while I work"
+    : addressing
+    ? `Ask ${addressing.name}…`
     : showImplicitRef
     ? "Describe the change…"
     : mediaTarget === "video"
@@ -722,6 +745,18 @@ export default function Composer({
               </button>
             </span>
           ))}
+          {quote && (
+            <span className="attachment-chip quote-chip" title={`${quoteLabel(quote)}\n${quoteWhere(quote)}`}>
+              <span className="attachment-kind" aria-hidden="true">
+                <QuoteIcon size={13} />
+              </span>
+              <span className="attachment-name">{quoteLabel(quote)}</span>
+              <span className="attachment-where">{quoteWhere(quote)}</span>
+              <button className="attachment-remove" aria-label="Remove the quote" onClick={() => setQuote(null)}>
+                <CloseIcon size={10} strokeWidth={1.6} />
+              </button>
+            </span>
+          )}
           {showImplicitRef && lastMediaArtifact && (
             <span className="attachment-chip implicit-ref-chip">
               <ImageByPath path={lastMediaArtifact.path} className="implicit-ref-thumb" alt="Refining this image" />
@@ -752,6 +787,8 @@ export default function Composer({
         {/* The box holds only what is being written and the button that
             sends it; everything that adds to, does something with, or decides
             how to answer it sits on the row underneath. */}
+        {/* `TEAM-17`: who the next message goes to, when the person may speak to a member. */}
+        <MemberRow />
         <div className="composer">
           <div className="composer-input-wrap">
             {cmd.model.popover && <div className="composer-menu-backdrop" onClick={cmd.closePopover} />}
@@ -900,7 +937,7 @@ export default function Composer({
               <ChatSetup />
             </div>
             {/* What takes something away from me stays readable without a click. */}
-            <ModeChips only={["tools", "tier", "external"]} />
+            <ModeChips only={["focus", "tools", "tier", "external"]} />
           </div>
           <div className="cf-right">
             <ModelControl

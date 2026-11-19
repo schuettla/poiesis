@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useAppStore } from "../../lib/store";
 import type { Artifact } from "../../lib/api";
-import { extFor, slugify } from "./artifactFiles";
+import { DownloadIcon } from "../Icons/Icons";
+import { artifactKind, downloadArtifact, extFor, slugify } from "./artifactFiles";
 
 /**
  * Things the agent made in this chat.
@@ -28,6 +29,7 @@ function Row({ artifact, canSave }: { artifact: Artifact; canSave: boolean }) {
   const [name, setName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const isActive = selected?.kind === "artifact" && selected.id === artifact.id;
+  const { Icon, meta } = artifactKind(artifact);
 
   const commit = async (value: string) => {
     setError(null);
@@ -49,8 +51,13 @@ function Row({ artifact, canSave }: { artifact: Artifact; canSave: boolean }) {
         onKeyDown={(e) => e.key === "Enter" && selectNode({ kind: "artifact", id: artifact.id })}
         title={artifact.title}
       >
-        <span className="wb-row-name">{artifact.title}</span>
-        <span className="wb-kind">{artifact.kind}</span>
+        <span className="wb-artifact-icon">
+          <Icon size={16} />
+        </span>
+        <span className="wb-artifact-text">
+          <span className="wb-artifact-title">{artifact.title}</span>
+          <span className="wb-artifact-meta">{meta}</span>
+        </span>
         {canSave && (
           <button
             className="wb-save"
@@ -63,6 +70,17 @@ function Row({ artifact, canSave }: { artifact: Artifact; canSave: boolean }) {
             Save
           </button>
         )}
+        <button
+          className="wb-artifact-download"
+          title="Download"
+          aria-label={`Download “${artifact.title}”`}
+          onClick={(e) => {
+            e.stopPropagation();
+            void downloadArtifact(artifact);
+          }}
+        >
+          <DownloadIcon size={15} />
+        </button>
       </div>
       {name !== null && (
         <div className="wb-save-row" onClick={(e) => e.stopPropagation()}>

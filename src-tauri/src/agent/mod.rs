@@ -34,6 +34,7 @@ pub mod golden;
 pub mod habit;
 pub mod imagegen;
 pub mod index;
+pub mod leader;
 pub mod ledger;
 pub mod log;
 pub mod mail;
@@ -56,6 +57,9 @@ pub mod sandbox;
 pub mod screen;
 pub mod skillpack;
 pub mod subagents;
+pub mod team;
+pub mod team_folder;
+pub mod team_voices;
 pub mod symbols;
 pub mod tier;
 pub mod timeline;
@@ -309,6 +313,12 @@ pub enum AgentEvent {
         /// `CLI-UI-2`: set when an agent app does this child's work.
         #[serde(skip_serializing_if = "Option::is_none")]
         engine: Option<EngineBadge>,
+        /// `TEAM-14`: the role of the team member this run is, so the Coordination view can tie
+        /// the run to a place on the chart; `item` is the plan item it was handed (from 1).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        member: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        item: Option<usize>,
     },
     /// A question put on the permission panel is no longer wanted: the agent
     /// app hung up, or the run was stopped. The panel drops it.
@@ -328,6 +338,26 @@ pub enum AgentEvent {
         steps: usize,
         ms: u64,
     },
+    /// `TEAM-10`: a team member's run began (it left the queue). `member` is its role in the
+    /// team and `item` the plan item it was handed, when it was handed one.
+    MemberStarted {
+        /// The member's run, so a view can tell which of a role's runs it is.
+        run_id: String,
+        member: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        item: Option<usize>,
+    },
+    /// `TEAM-10`: a team member's run ended, however it ended.
+    MemberEnded {
+        /// The member's run, so a view can tell which of a role's runs it is.
+        run_id: String,
+        member: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        item: Option<usize>,
+    },
+    /// `TEAM-15`: something passed between the people of a team (the Board's rows, the chart's
+    /// line widths). Sent as it is written, from the coordinator's turn and from member runs.
+    Posted { post: crate::db::Post },
     /// The loop has a run id (`HRN-1`). Emitted once, before the first model
     /// call, so the UI can steer this run (`steer_run_cmd`) and size its meter.
     RunStarted {
@@ -396,6 +426,11 @@ pub enum AgentEvent {
     /// choice came from: `chat` (what the chat is set to) or `message` (a
     /// `/style` for this message alone). Sent once, before the first request.
     StyleSet { run_id: String, preset: String, name: String, source: String },
+    /// `TEAM-3`: who answers this turn (`poiesis`, `persona:<id>`) and where that came
+    /// from: `chat` (chosen for it), `default` (where chats start says so), `message`
+    /// (`/lead x <message>`, this turn alone) or `none` (Poiesis, nothing says otherwise).
+    /// The window learns a default it never saw, and stamps the reply with its author.
+    LeaderSet { leader: String, source: String },
     /// `WRK-2`: the loop began an item. `item` is its place in the plan, 0-based.
     ItemStarted { run_id: String, item: usize, text: String, done_when: Option<String> },
     /// `WRK-2`: an item is over. `outcome` is `done` or `dropped`. The timeline
@@ -474,6 +509,12 @@ pub enum AgentEvent {
         question: String,
         options: Vec<QuestionOption>,
         multi: bool,
+        /// `TEAM-12`: a card with its own heading ("Shop team is about to start") and a
+        /// checkbox beside the buttons. The cost question is the one that has them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        check: Option<String>,
     },
     /// `MCPS-2`: a question an agent app put to the person is no longer wanted
     /// (it hung up, was stopped, or nobody answered), so its card comes off.

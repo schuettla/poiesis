@@ -1,17 +1,35 @@
 //! Built-in Web Search toolset (TOOL-4). Privacy-first: the query is issued
 //! directly from the user's machine to a **no-key** search endpoint (DuckDuckGo's
-//! HTML site) — there is no Poiesis server in the middle and no provider account.
-//! The top results (title, URL, snippet) plus the lead result's readable page
-//! text are fed back to the model, with source attribution.
+//! HTML site, with Bing's public results page as the fallback when DuckDuckGo
+//! answers with its bot check) — there is no Poiesis server in the middle and no
+//! provider account. The top results (title, URL, snippet) plus the lead
+//! result's readable page text are fed back to the model, with source
+//! attribution.
 //!
 //! Searching the web inherently means one network call leaves the device; the
 //! toolset defaults off and the UI discloses this (§6.3 privacy posture).
 
 use super::toolsets::{mark_untrusted, ToolContext};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 const ENDPOINT: &str = "https://html.duckduckgo.com/html/";
+const BING_ENDPOINT: &str = "https://www.bing.com/search";
 const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Poiesis/0.1";
+/// What the search endpoints see. DuckDuckGo challenges clients that don't look
+/// like a browser (a "select the ducks" page, served as HTTP 202).
+const BROWSER_UA: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+/// Neither a search nor a page read may hang a turn.
+const SEARCH_TIMEOUT: Duration = Duration::from_secs(15);
+const PAGE_TIMEOUT: Duration = Duration::from_secs(15);
+/// Least time between two search requests. The model fires several searches in
+/// a row (they are dispatched in parallel); DuckDuckGo challenged the second.
+const MIN_SEARCH_GAP: Duration = Duration::from_millis(1500);
+/// After DuckDuckGo challenges us, go straight to Bing for this long rather than
+/// hammering a door that is shut (more requests only extend the block).
+const DDG_COOLDOWN: Duration = Duration::from_secs(300);
 /// How many search hits to summarize back to the model.
 const MAX_RESULTS: usize = 6;
 /// Cap on the lead page's extracted text, so a huge page can't blow the context.
@@ -106,7 +124,7 @@ pub async fn execute(
         .db
         .log_activity(Some(ctx.conversation_id), "web", &format!("searched: {query}"));
 
-    let hits = search(ctx.client, query).await?;
+    let hits = search(query).await?;
     // Reached only when the endpoint *did* return a result list that happened to
     // be empty — a real, if rare, answer about the world. Every other way this
     // can go wrong is an `Err` above, so the model can tell the two apart.
@@ -181,7 +199,56 @@ fn domain_of(url: &str) -> String {
 /// challenge page, an error page, or markup that has moved on without us.
 const RESULT_MARKER: &str = "result__a";
 
-/// Query DuckDuckGo's no-key HTML endpoint and parse the result list.
+/// The client every search request goes through: a browser's User-Agent and
+/// headers and one cookie jar for the whole run. DuckDuckGo's bot check looks at
+/// exactly this, and a bare client was challenged on its second request.
+fn search_client() -> &'static reqwest::Client {
+    use reqwest::header::*;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        let mut h = HeaderMap::new();
+        h.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"));
+        h.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
+        h.insert("sec-fetch-dest", HeaderValue::from_static("document"));
+        h.insert("sec-fetch-mode", HeaderValue::from_static("navigate"));
+        h.insert(UPGRADE_INSECURE_REQUESTS, HeaderValue::from_static("1"));
+        reqwest::Client::builder()
+            .user_agent(BROWSER_UA)
+            .default_headers(h)
+            .cookie_store(true)
+            .timeout(SEARCH_TIMEOUT)
+            .build()
+            .expect("failed to build the search HTTP client")
+    })
+}
+
+/// Keep [`MIN_SEARCH_GAP`] between search requests. Holding the lock while
+/// sleeping is the point: parallel searches queue up behind one another.
+async fn pace() {
+    static LAST: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
+    let mut last = LAST.lock().await;
+    if let Some(at) = *last {
+        let wait = MIN_SEARCH_GAP.saturating_sub(at.elapsed());
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
+        }
+    }
+    *last = Some(Instant::now());
+}
+
+/// When DuckDuckGo last challenged us, if recently.
+static DDG_BLOCKED_AT: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
+fn ddg_on_cooldown() -> bool {
+    DDG_BLOCKED_AT
+        .lock()
+        .map(|at| at.is_some_and(|t| t.elapsed() < DDG_COOLDOWN))
+        .unwrap_or(false)
+}
+
+/// Search the web with no key: DuckDuckGo first, Bing when DuckDuckGo answers
+/// with its bot check (or has just done so), so a challenge page costs the
+/// model nothing.
 ///
 /// The distinction this function exists to preserve: **"the web has nothing on
 /// this" and "the search didn't happen" are different answers**, and only the
@@ -191,28 +258,94 @@ const RESULT_MARKER: &str = "result__a";
 /// topic is unsearchable and writes from memory — which is how an analysis ends
 /// up citing ten references nobody fetched.
 ///
-/// In practice this endpoint almost never returns a genuinely empty result set;
-/// a query of pure gibberish still comes back with ten hits. So an empty parse
-/// is overwhelmingly likely to be a failure, and is now reported as one.
-pub(crate) async fn search(client: &reqwest::Client, query: &str) -> Result<Vec<SearchHit>, String> {
-    let resp = client
+/// In practice these endpoints almost never return a genuinely empty result
+/// set; a query of pure gibberish still comes back with ten hits. So an empty
+/// parse is overwhelmingly likely to be a failure; it is only reported as
+/// "nothing found" when the page really was a result list.
+pub(crate) async fn search(query: &str) -> Result<Vec<SearchHit>, String> {
+    let ddg_error = if ddg_on_cooldown() {
+        "DuckDuckGo is skipped for a few minutes after its bot check".to_string()
+    } else {
+        match search_ddg(query).await {
+            Ok(hits) if !hits.is_empty() => return Ok(hits),
+            Ok(_) => String::new(), // a real, empty result list: ask Bing too
+            Err(e) => e,
+        }
+    };
+    match search_bing(query).await {
+        Ok(hits) if !hits.is_empty() => Ok(hits),
+        Ok(_) if ddg_error.is_empty() => Ok(Vec::new()),
+        Ok(_) => Err(format!("{ddg_error}; Bing's results page held no results either.")),
+        Err(bing_error) if ddg_error.is_empty() => Err(bing_error),
+        Err(bing_error) => Err(format!("{ddg_error}; and Bing, the fallback: {bing_error}")),
+    }
+}
+
+async fn search_ddg(query: &str) -> Result<Vec<SearchHit>, String> {
+    pace().await;
+    let resp = search_client()
         .post(ENDPOINT)
-        .header(reqwest::header::USER_AGENT, USER_AGENT)
-        .form(&[("q", query)])
+        .header(reqwest::header::REFERER, "https://html.duckduckgo.com/")
+        .header(reqwest::header::ORIGIN, "https://html.duckduckgo.com")
+        .form(&[("q", query), ("b", "")])
         .send()
         .await
-        .map_err(|e| format!("the search request failed: {e}"))?;
+        .map_err(|e| format!("the DuckDuckGo request failed: {e}"))?;
     let status = resp.status();
     let body = resp
         .text()
         .await
-        .map_err(|e| format!("couldn't read the search response: {e}"))?;
-    interpret(status, &body)
+        .map_err(|e| format!("couldn't read the DuckDuckGo response: {e}"))?;
+    let result = interpret(status, &body);
+    if result.is_err() {
+        if let Ok(mut at) = DDG_BLOCKED_AT.lock() {
+            *at = Some(Instant::now());
+        }
+    }
+    result
 }
 
-/// Decide what a search response actually was. Split out from [`search`] so the
-/// three cases can be tested without a network.
+async fn search_bing(query: &str) -> Result<Vec<SearchHit>, String> {
+    pace().await;
+    let resp = search_client()
+        .get(BING_ENDPOINT)
+        // Without a market Bing guesses from the IP and ranks accordingly
+        // (a village called Rust for "rust tauri updater").
+        .query(&[("q", query), ("setlang", "en-US"), ("mkt", "en-US"), ("cc", "US")])
+        .send()
+        .await
+        .map_err(|e| format!("the Bing request failed: {e}"))?;
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("couldn't read the Bing response: {e}"))?;
+    interpret_bing(status, &body)
+}
+
+/// Decide what a Bing response actually was (see [`interpret`]).
+fn interpret_bing(status: reqwest::StatusCode, body: &str) -> Result<Vec<SearchHit>, String> {
+    if !status.is_success() {
+        return Err(format!("Bing answered {status}"));
+    }
+    if !body.contains(BING_RESULT_MARKER) {
+        return Err("Bing returned a page with no result list".to_string());
+    }
+    Ok(parse_bing(body))
+}
+
+/// Decide what a DuckDuckGo response actually was. Split out from [`search`] so
+/// the cases can be tested without a network.
 fn interpret(status: reqwest::StatusCode, body: &str) -> Result<Vec<SearchHit>, String> {
+    // The bot check ("select all squares containing a duck") arrives as HTTP
+    // 202 — a *success* status — so the status alone can't be trusted.
+    if status == reqwest::StatusCode::ACCEPTED || body.contains("anomaly-modal") {
+        return Err(
+            "DuckDuckGo answered with its bot check instead of results (the search didn't go \
+             through)"
+                .to_string(),
+        );
+    }
     if !status.is_success() {
         return Err(format!(
             "the search endpoint answered {status} — it is most likely rate-limiting this device. \
@@ -263,6 +396,55 @@ fn parse_results(html: &str) -> Vec<SearchHit> {
     hits
 }
 
+/// Every Bing results page marks each hit with this list-item class.
+const BING_RESULT_MARKER: &str = "b_algo";
+
+/// Extract result rows from Bing's results page: one `<li class="b_algo">` per
+/// hit, with the title link in its `<h2>` and the snippet in `b_caption`.
+fn parse_bing(html: &str) -> Vec<SearchHit> {
+    let mut hits = Vec::new();
+    for item in html.split("<li class=\"b_algo\"").skip(1) {
+        let Some(h2) = item.find("<h2") else { continue };
+        let heading = &item[h2..];
+        let Some(href_raw) = attr_value(heading, "href=\"") else { continue };
+        let url = bing_target(&decode_entities(&href_raw));
+        if !url.starts_with("http") {
+            continue;
+        }
+        let Some(title) = inner_text_after(heading) else { continue };
+        let snippet = item
+            .find("b_caption")
+            .and_then(|c| item[c..].find("<p").map(|p| &item[c + p..]))
+            .and_then(|p| {
+                let gt = p.find('>')? + 1;
+                let end = p.find("</p>").unwrap_or(p.len().min(600));
+                let text = decode_entities(&strip_tags(&p[gt..end.max(gt)]));
+                Some(text.trim().to_string())
+            })
+            .unwrap_or_default();
+        hits.push(SearchHit { title, url, snippet });
+        if hits.len() >= MAX_RESULTS {
+            break;
+        }
+    }
+    hits
+}
+
+/// Bing wraps result links as `https://www.bing.com/ck/a?...&u=a1<base64url>`;
+/// the destination is that value after its two-character `a1` prefix.
+fn bing_target(href: &str) -> String {
+    use base64::Engine;
+    if !href.contains("bing.com/ck/a") {
+        return href.to_string();
+    }
+    let decoded = href
+        .split(['?', '&'])
+        .find_map(|kv| kv.strip_prefix("u=a1"))
+        .and_then(|b64| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(b64.trim_end_matches('=')).ok())
+        .and_then(|bytes| String::from_utf8(bytes).ok());
+    decoded.unwrap_or_else(|| href.to_string())
+}
+
 /// Read the value of an attribute like `href="..."` appearing soon after the
 /// start of `chunk` (the marker we split on sits inside the same tag).
 fn attr_value(chunk: &str, attr: &str) -> Option<String> {
@@ -309,9 +491,15 @@ pub(crate) async fn fetch_readable(client: &reqwest::Client, url: &str, cap: usi
     let resp = client
         .get(url)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .timeout(PAGE_TIMEOUT)
         .send()
         .await
         .map_err(|e| e.to_string())?;
+    // An error page is not the page that was asked for; reading it as content
+    // would hand the model a 403 notice as if it were the article.
+    if !resp.status().is_success() {
+        return Err(format!("the page answered {}", resp.status()));
+    }
     let body = resp.text().await.map_err(|e| e.to_string())?;
     Ok(html_to_text(&body, cap))
 }
@@ -324,6 +512,7 @@ pub(crate) async fn fetch_page(client: &reqwest::Client, url: &str, cap: usize) 
     let resp = client
         .get(url)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .timeout(PAGE_TIMEOUT)
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -573,6 +762,63 @@ mod tests {
         let challenge = "<html><body><p>Please try again later.</p></body></html>";
         let err = interpret(reqwest::StatusCode::OK, challenge).expect_err("must not read as empty");
         assert!(err.contains("didn't go through"), "the model is told what happened: {err}");
+    }
+
+    /// What DuckDuckGo actually sent the app on the second search in a row: HTTP
+    /// 202 (a success status) and the "select all squares containing a duck"
+    /// page. It must read as a failure so the Bing fallback takes over.
+    #[test]
+    fn duckduckgos_bot_check_is_a_failure_even_though_202_is_a_success_status() {
+        let page = r#"<div class="anomaly-modal__box">Select all squares containing a duck:</div>"#;
+        let err = interpret(reqwest::StatusCode::ACCEPTED, page).expect_err("a bot check is not a result set");
+        assert!(err.contains("bot check") && err.contains("didn't go through"), "{err}");
+        // Even if the status were 200, the page itself gives it away.
+        assert!(interpret(reqwest::StatusCode::OK, page).is_err());
+    }
+
+    /// Markup as Bing serves it: a wrapped link (`u=a1` + base64url of the real
+    /// address), a title with `<strong>` in it, and the snippet under `b_caption`.
+    const BING_PAGE: &str = r#"<ol id="b_results"><li class="b_algo" data-id iid=SERP.1><div class="b_tpcn"><a class="tilk" href="https://www.bing.com/ck/a?!&amp;&amp;p=95fb&amp;u=a1aHR0cHM6Ly9ydXN0LWxhbmcub3JnLw&amp;ntb=1"><cite>https://rust-lang.org</cite></a></div><h2><a target="_blank" href="https://www.bing.com/ck/a?!&amp;&amp;p=95fb&amp;ptn=3&amp;u=a1aHR0cHM6Ly9ydXN0LWxhbmcub3JnLw&amp;ntb=1" h="ID=SERP,5143.2"><strong>Rust</strong> Programming Language</a></h2><div class="b_caption"><p class="b_lineclamp2">Rust is blazingly <strong>fast</strong> &amp; memory-efficient.</p></div></li><li class="b_algo" data-id iid=SERP.2><h2><a href="https://example.com/direct">Direct link</a></h2><div class="b_caption"><p>Second snippet.</p></div></li></ol>"#;
+
+    #[test]
+    fn parses_bing_results_and_unwraps_the_tracking_links() {
+        let hits = interpret_bing(reqwest::StatusCode::OK, BING_PAGE).expect("a result page is not an error");
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].url, "https://rust-lang.org/");
+        assert_eq!(hits[0].title, "Rust Programming Language");
+        assert_eq!(hits[0].snippet, "Rust is blazingly fast & memory-efficient.");
+        // A link that isn't wrapped passes through as it is.
+        assert_eq!(hits[1].url, "https://example.com/direct");
+        assert_eq!(hits[1].snippet, "Second snippet.");
+    }
+
+    #[test]
+    fn a_bing_page_without_a_result_list_is_a_failure() {
+        assert!(interpret_bing(reqwest::StatusCode::OK, "<html>captcha</html>").is_err());
+        assert!(interpret_bing(reqwest::StatusCode::TOO_MANY_REQUESTS, BING_PAGE).is_err());
+    }
+
+    /// Live check, off by default (`cargo test websearch_live -- --ignored --nocapture`):
+    /// six searches at once, the burst that DuckDuckGo used to answer with its bot
+    /// check. Every one must come back with real hits, from whichever engine.
+    #[tokio::test]
+    #[ignore = "needs the network"]
+    async fn websearch_live_burst_of_parallel_searches_all_return_hits() {
+        let queries = ["rust tauri updater", "ai marketing trends", "axum routing", "sqlite wal mode", "vite base path", "reqwest cookies"];
+        let results = futures_util::future::join_all(queries.iter().map(|q| search(q))).await;
+        for (q, r) in queries.iter().zip(&results) {
+            match r {
+                Ok(hits) => println!("{q}: {} hits, first: {}", hits.len(), hits.first().map(|h| h.url.as_str()).unwrap_or("-")),
+                Err(e) => println!("{q}: ERROR {e}"),
+            }
+        }
+        assert!(results.iter().all(|r| r.as_ref().is_ok_and(|h| !h.is_empty())), "a search came back empty or failed");
+    }
+
+    #[test]
+    fn a_tracking_link_that_cannot_be_unwrapped_is_kept_as_it_is() {
+        let href = "https://www.bing.com/ck/a?!&&p=1&u=a1%%%";
+        assert_eq!(bing_target(href), href);
     }
 
     #[test]

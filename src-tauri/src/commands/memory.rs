@@ -104,8 +104,9 @@ async fn backfill_scope(mgr: &RuntimeManager, db: &Db, mem: &MemoryStore) {
 /// `recall_for(None)` rather than `index_markdown()` so the "last surfaced"
 /// mark covers exactly the facts that fit inside the character cap — a fact
 /// the cap dropped never reached the prompt and must not claim it did.
-fn wholesale(db: &Db, mem: &MemoryStore, project: Option<&str>) -> RecallResult {
-    let set = mem.recall_for_project(db, None, project);
+fn wholesale(db: &Db, mem: &MemoryStore, project: Option<&str>, persona: Option<&str>) -> RecallResult {
+    let cues = crate::memory::Cues { persona: persona.map(str::to_string), ..Default::default() };
+    let set = mem.recall_with_cues(db, None, project, &cues);
     let _ = db.touch_memory_usage(FACTS, &set.injected_facts);
     let _ = db.touch_memory_usage(LESSONS, &set.injected_lessons);
     RecallResult { index: set.index, matches: Vec::new(), injected_facts: set.injected_facts }
@@ -133,7 +134,9 @@ pub async fn recall_for(
     // it must not use up a reminder, and it gets no line about my own work.
     attended: bool,
 ) -> RecallResult {
-    let mut result = recalled(mgr, embed_mgr, db, mem, query, project, conversation_id).await;
+    // `TEAM-5`: besides what is shared, the persona leading the chat sees its own.
+    let persona = conversation_id.and_then(|id| crate::agent::leader::memory_persona(db, id));
+    let mut result = recalled(mgr, embed_mgr, db, mem, query, project, persona.as_deref(), conversation_id).await;
     turn_extras(db, mem, &mut result, query, project, conversation_id, attended);
     result
 }
@@ -207,12 +210,13 @@ async fn recalled(
     mem: &MemoryStore,
     query: &str,
     project: Option<&str>,
+    persona: Option<&str>,
     conversation_id: Option<&str>,
 ) -> RecallResult {
     backfill_scope(mgr, db, mem).await;
 
     let Ok(Some(model)) = db.default_model_by_role("embed") else {
-        return wholesale(db, mem, project);
+        return wholesale(db, mem, project, persona);
     };
     let query = query.to_string();
 
@@ -222,7 +226,7 @@ async fn recalled(
 
     let Some((vectors, model_name, dim)) = embed_texts_or_none(mgr, embed_mgr, db, &texts).await
     else {
-        return wholesale(db, mem, project);
+        return wholesale(db, mem, project, persona);
     };
 
     if !missing.is_empty() {
@@ -249,6 +253,7 @@ async fn recalled(
         .map(|state| crate::agent::episode::state_entities(&state))
         .unwrap_or_default();
     let mut cues = crate::memory::Cues::from_turn(&query, session_names);
+    cues.persona = persona.map(str::to_string);
     // `PRJ-S1`: what helped in this project's finished chats ranks higher in it.
     if let Some(p) = project {
         cues.proven = crate::agent::projectsetup::proven_lessons(db, p);
@@ -437,10 +442,18 @@ fn live_manifest(db: &Db, mem: &MemoryStore, conversation_id: &str) -> Vec<Conte
     // `PRJ-8`: the manifest has to describe the prompt that will actually be
     // built, so it is scoped exactly as recall is.
     let project = conv.as_ref().and_then(|c| c.project_id.clone());
-    let set = mem.recall_for_project(db, None, project.as_deref());
+    // `TEAM-5`: and so is whose memory it is.
+    let persona = crate::agent::leader::memory_persona(db, conversation_id);
+    let cues = crate::memory::Cues { persona: persona.clone(), ..Default::default() };
+    let set = mem.recall_with_cues(db, None, project.as_deref(), &cues);
     let none = std::collections::BTreeMap::new();
     let [notes, when_relevant] = fact_layers(mem, &set.injected_facts, &none);
-    let lessons = mem.list_in(LESSONS).into_iter().map(|f| f.name).collect::<Vec<_>>();
+    let lessons = mem
+        .list_in(LESSONS)
+        .into_iter()
+        .filter(|f| f.shown_to(persona.as_deref()))
+        .map(|f| f.name)
+        .collect::<Vec<_>>();
     vec![
         ContextLayer {
             label: "Soul (standing instructions)".into(),
@@ -775,6 +788,14 @@ pub fn set_fact_scope_cmd(
 ) -> Cmd<()> {
     mem.set_fact_scope(&db, &name, &scope).map_err(PoiesisError::Message)?;
     let _ = db.log_activity(None, "memory", &format!("set {name}'s scope to {scope}"));
+    Ok(())
+}
+
+/// `TEAM-5`, "Share with everyone": what a persona learned becomes known to all.
+#[tauri::command]
+pub fn share_memory_cmd(mem: State<'_, MemoryStore>, db: State<'_, Db>, collection: String, name: String) -> Cmd<()> {
+    mem.share_with_everyone(&db, &collection, &name).map_err(PoiesisError::Message)?;
+    let _ = db.log_activity(None, "memory", &format!("shared {name} with everyone"));
     Ok(())
 }
 
@@ -1366,8 +1387,13 @@ pub async fn resolve_change_proposal_cmd(
                     trigger: None,
                     // A lesson the user accepted from the review queue is not
                     // fenced to a project: they were shown it out of context
-                    // and said yes to it as a standing lesson.
+                    // and said yes to it as a standing lesson. A persona's lesson stays
+                    // that persona's (`TEAM-5`), unless it is gone since.
                     project: None,
+                    persona: proposal
+                        .persona_id
+                        .clone()
+                        .filter(|id| db.get_persona(id).ok().flatten().is_some()),
                 },
             )
             .map_err(PoiesisError::Message)?;
@@ -1509,6 +1535,9 @@ pub struct ConsolidationPromote {
     pub evidence: Vec<String>,
     #[serde(default)]
     pub into: Option<String>,
+    /// `TEAM-5`: the persona it was learned under; `None` is shared.
+    #[serde(default)]
+    pub persona: Option<String>,
     /// `(conversation id, candidate name)` of each candidate folded in, so the
     /// episode rows can say where they got to.
     #[serde(default)]
@@ -1610,9 +1639,15 @@ pub(crate) fn apply_proposal(db: &Db, mem: &MemoryStore, proposal: &Consolidatio
             continue;
         }
         let _ = db.log_activity(None, "memory", &format!("merged into {}", merge.keep));
+        let keep_owner = mem.read_in(collection, &merge.keep).and_then(|k| k.persona);
         for name in &merge.drop {
             if name == &merge.keep {
                 continue; // never trash the entry we just merged into
+            }
+            // `TEAM-5`: what one persona knows is not folded into another's, or into
+            // what everyone knows, however the model saw it.
+            if mem.read_in(collection, name).is_some_and(|d| d.persona != keep_owner) {
+                continue;
             }
             // The sources of what is folded in stay with what remains.
             if let Some(dropped) = mem.read_in(collection, name) {
@@ -1662,6 +1697,7 @@ pub(crate) fn apply_proposal(db: &Db, mem: &MemoryStore, proposal: &Consolidatio
                     body: p.body.clone(),
                     cue: p.cue.clone().filter(|c| !c.is_empty()),
                     evidence: p.evidence.clone(),
+                    persona: p.persona.clone(),
                     ..Default::default()
                 };
                 if mem.save_lesson(db, &lesson).is_ok() {
@@ -1715,7 +1751,11 @@ async fn model_proposal(
     }
     let listing = entries
         .iter()
-        .map(|f| format!("- {} ({}): {}", f.name, f.kind, f.body))
+        .map(|f| match &f.persona {
+            // `TEAM-5`: what only one persona knows is never merged into anything else.
+            Some(p) => format!("- {} ({}, only for persona {p}): {}", f.name, f.kind, f.body),
+            None => format!("- {} ({}): {}", f.name, f.kind, f.body),
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -1725,7 +1765,8 @@ async fn model_proposal(
          \"merges\":[{{\"keep\":\"name\",\"drop\":[\"name\"],\"text\":\"merged body\"}}],\
          \"contests\":[[\"name\",\"name\"]]}}\n\
          Merge duplicates, drop facts superseded by newer ones, tighten wording. \
-         List in contests every set of notes that cannot both be true.\n\
+         List in contests every set of notes that cannot both be true. \
+         Never merge notes marked for different personas, or one that is marked into one that is not.\n\
          Propose nothing you are unsure about.\nFacts:\n{listing}"
     );
     let msgs = vec![
@@ -2055,6 +2096,7 @@ mod tests {
             fires: None,
             trigger: None,
             project: None,
+            persona: None,
         }
     }
 
@@ -2225,7 +2267,7 @@ mod tests {
         let (mem, db, _tmp) = store();
         mem.save_lesson(&db, &fact("check-header", "lesson")).unwrap();
         assert!(db.memory_usage_map(LESSONS).unwrap().is_empty());
-        let set = wholesale(&db, &mem, None);
+        let set = wholesale(&db, &mem, None, None);
         assert!(set.index.contains("check-header"));
         assert!(db.memory_usage_map(LESSONS).unwrap().contains_key("check-header"));
     }

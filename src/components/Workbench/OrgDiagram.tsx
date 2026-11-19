@@ -3,6 +3,7 @@ import * as api from "../../lib/api";
 import { itemDot, orgWords } from "../../lib/orgState";
 import { useAppStore } from "../../lib/store";
 import StyleGlyph from "../Mark/StyleGlyph";
+import TeamDiagram, { asButton, type TeamChartProps } from "./TeamDiagram";
 import "./OrgDiagram.css";
 
 /**
@@ -90,7 +91,7 @@ const short = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…
 
 /** The plan the chat's last run left on its message: what is known about how it
  * was worked once the live summary is gone, after a restart. */
-function useLastPlan(conversationId: string | null) {
+export function useLastPlan(conversationId: string | null) {
   return useAppStore((s) => {
     const conv = conversationId ? s.conversations.find((c) => c.id === conversationId) : undefined;
     if (!conv) return undefined;
@@ -116,7 +117,17 @@ export function useCoordinationStyle(conversationId: string | null): string | nu
   return slug && slug !== "ad-hoc" ? slug : null;
 }
 
-export default function OrgDiagram({ conversationId }: { conversationId: string }) {
+/**
+ * One diagram for how work is organised. With a `conversationId` it is this chat's style, drawn
+ * from the run's events (below). With a `team` it is that team's chart (`TEAM-9`), which the
+ * Teams tab edits and the live Coordination view will show.
+ */
+export default function OrgDiagram(props: { conversationId: string; team?: undefined } | { team: TeamChartProps; conversationId?: undefined }) {
+  if (props.team) return <TeamDiagram {...props.team} />;
+  return <StyleDiagram conversationId={props.conversationId} />;
+}
+
+function StyleDiagram({ conversationId }: { conversationId: string }) {
   const summary = useAppStore((s) => s.runSummaries[conversationId]);
   const lastPlan = useLastPlan(conversationId);
   const presets = useAppStore((s) => s.presets);
@@ -356,19 +367,7 @@ export default function OrgDiagram({ conversationId }: { conversationId: string 
         ))}
         {nodes.map((nd) => {
           const act = nd.onClick;
-          const props = act
-            ? {
-                role: "button" as const,
-                tabIndex: 0,
-                onClick: act,
-                onKeyDown: (e: React.KeyboardEvent) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    act();
-                  }
-                },
-              }
-            : {};
+          const props = act ? asButton(act) : {};
           return (
             <g
               key={nd.key}

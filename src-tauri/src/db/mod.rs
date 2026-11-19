@@ -30,7 +30,7 @@ pub mod episodes;
 mod episodes_tools;
 
 const SCHEMA: &str = include_str!("schema.sql");
-pub const SCHEMA_VERSION: i64 = 45;
+pub const SCHEMA_VERSION: i64 = 54;
 
 /// The rationale a skill-revision proposal is written with (`OUT-2`). Only
 /// display text — the proposal is *identified* by its `skill-revision` target,
@@ -108,6 +108,12 @@ pub struct Conversation {
     /// means nobody chose, and the chat starts where its place says.
     #[serde(default)]
     pub style: Option<String>,
+    /// `TEAM-1`: who leads this chat: `poiesis`, `persona:<id>` or `team:<slug>`.
+    /// `None` means nobody chose, and the chat starts where its place says
+    /// (`agent::leader`). Chosen Poiesis is kept as `poiesis`, so a default
+    /// cannot override it.
+    #[serde(default)]
+    pub leader: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -188,6 +194,21 @@ pub struct Persona {
     /// Poiesis's. `NULL` = Poiesis (it chooses a model).
     #[serde(default)]
     pub engine_id: Option<String>,
+    /// `TEAM-4`: the glyph, JSON `{"letter":"M","hue":3}`. `NULL` means it is made from
+    /// the name, as it always was before it could be chosen.
+    #[serde(default)]
+    pub look: Option<String>,
+    /// `TEAM-4`: one line under the name ("Writes and edits, warm but direct").
+    #[serde(default)]
+    pub line: Option<String>,
+    /// `TEAM-5`: does it remember across chats. On by default; off, it writes nothing
+    /// tagged to itself and sees only what is shared.
+    #[serde(default = "yes")]
+    pub remembers: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// One delegated child run (`SUB-3`). The child's work is a conversation of its
@@ -216,9 +237,52 @@ pub struct SubagentRun {
     pub because: Option<String>,
     /// `plan` | `api-key` | `own`, once the app said.
     pub paid_by: Option<String>,
+    /// `TEAM-10`: the role this run was done as in a team (`api`), else `None`. Runs of one
+    /// role in one task share a chat (`child_conversation_id`).
+    pub member: Option<String>,
+    /// `TEAM-11`: the plan item (from 1) a member run was for, when the coordinator said.
+    pub item: Option<usize>,
     /// The app's own session id, so the user can pick the work up in a terminal
     /// (`CLI-UI-5`). Read from the child's conversation.
     pub engine_session: Option<String>,
+}
+
+/// `TEAM-15`: one thing that passed between the people of a team in a session (Part I.6).
+/// Never a chat message: the Coordination view's Board shows them and the chart draws them.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Post {
+    pub id: String,
+    pub conversation_id: String,
+    /// The run that wrote it, when a run did.
+    pub run_id: Option<String>,
+    /// A role, `coordinator` or `you`.
+    pub from_member: String,
+    /// A role, `coordinator`, `you` or `all`.
+    pub to_member: String,
+    /// `hand-over` | `result` | `review` | `sent-back` | `ask` | `answer` | `report` | `note`.
+    pub kind: String,
+    /// The plan item (from 1), when there is one.
+    pub item: Option<usize>,
+    /// The post this one answers.
+    pub reply_to: Option<String>,
+    pub text: String,
+    pub created_at: i64,
+    /// When the one it is for got it. `None` while it waits.
+    pub delivered_at: Option<i64>,
+}
+
+/// What a caller says about a post; the id and the time are made here.
+#[derive(Debug, Clone, Default)]
+pub struct NewPost<'a> {
+    pub run_id: Option<&'a str>,
+    pub from: &'a str,
+    pub to: &'a str,
+    pub kind: &'a str,
+    pub item: Option<usize>,
+    pub reply_to: Option<&'a str>,
+    pub text: &'a str,
+    /// Already got by the one it is for (a hand-over the loop made itself).
+    pub delivered: bool,
 }
 
 /// One row of the session log (`CTX-2`). The payload is kept as text rather
@@ -342,6 +406,14 @@ pub struct Message {
     /// that was read out). False for anything typed or written before v30.
     #[serde(default)]
     pub spoken: bool,
+    /// `TEAM-3`: who spoke this reply, as a leader string (`poiesis`, `persona:<id>`).
+    /// `None` on a user turn and on anything written before v47.
+    #[serde(default)]
+    pub author: Option<String>,
+    /// `TEAM-17`: the member of a team the person spoke to directly with this message (its
+    /// role), when they did. `None` on every other turn and on anything written before v53.
+    #[serde(default)]
+    pub addressed: Option<String>,
     pub created_at: i64,
     /// Attachments on this turn (CHT-5). Populated by `list_messages`.
     #[serde(default)]
@@ -718,10 +790,23 @@ pub struct ChangeProposal {
     pub rehearsal_json: Option<String>,
     #[serde(default)]
     pub live_outcome: Option<String>,
+    /// `TEAM-5`: whose it is, for a lesson a persona's session taught. Kept if applied, so
+    /// the lesson stays that persona's after the person said yes.
+    #[serde(default)]
+    pub persona_id: Option<String>,
+    /// `TEAM-19`: for an entry that waits for the person (`waiting-file`, `waiting-ask`): the
+    /// chat that was working (a member's own chat, when a member was), the session the person
+    /// sees it under, and who is waiting. All `None` for every other proposal.
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
 }
 
 const PROPOSAL_COLS: &str = "id, target, slug, proposed_text, rationale, description, status, created_at,
-     problem_cue, form, group_id, rehearsal_json, live_outcome";
+     problem_cue, form, group_id, rehearsal_json, live_outcome, persona_id, conversation_id, session_id, author";
 
 fn proposal_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChangeProposal> {
     Ok(ChangeProposal {
@@ -738,6 +823,10 @@ fn proposal_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChangeProposal> {
         group_id: r.get(10)?,
         rehearsal_json: r.get(11)?,
         live_outcome: r.get(12)?,
+        persona_id: r.get(13)?,
+        conversation_id: r.get(14)?,
+        session_id: r.get(15)?,
+        author: r.get(16)?,
     })
 }
 
@@ -1366,6 +1455,48 @@ impl Db {
             // v45 (`WRK-3`): how a chat works, as the slug of a preset. NULL is Ad hoc.
             Self::add_column(&conn, "conversations", "style", "TEXT")?;
         }
+        if current < 46 {
+            // v46 (`TEAM-1`): who leads a chat. NULL means nobody chose.
+            Self::add_column(&conn, "conversations", "leader", "TEXT")?;
+        }
+        if current < 47 {
+            // v47 (`TEAM-3`): who spoke a reply. NULL is the leader of the time, as it was.
+            Self::add_column(&conn, "messages", "author", "TEXT")?;
+        }
+        if current < 48 {
+            // v48 (`TEAM-4`): a persona's glyph and the line under its name.
+            Self::add_column(&conn, "personas", "look", "TEXT")?;
+            Self::add_column(&conn, "personas", "line", "TEXT")?;
+        }
+        if current < 49 {
+            // v49 (`TEAM-5`): whether a persona remembers across chats. On for all that exist.
+            Self::add_column(&conn, "personas", "remembers", "INTEGER NOT NULL DEFAULT 1")?;
+        }
+        if current < 50 {
+            // v50 (`TEAM-10`): the role a team member held in a run. NULL for a helper that is
+            // not a team member, as before.
+            Self::add_column(&conn, "subagent_runs", "member", "TEXT")?;
+        }
+        if current < 51 {
+            // v51 (`TEAM-11`): the plan item (from 1) a member run was for, so a review and its
+            // rounds know which item they are about.
+            Self::add_column(&conn, "subagent_runs", "item", "INTEGER")?;
+        }
+        // v52 (`TEAM-15`): `posts` is created by SCHEMA above, a new table with no ALTER.
+        if current < 53 {
+            // v53 (`TEAM-17`): the member of a team a message was spoken to. NULL, as before.
+            Self::add_column(&conn, "messages", "addressed", "TEXT")?;
+        }
+        if current < 54 {
+            // v54 (`TEAM-19`, `TEAM-20`): what waits for the person says which chat worked, which
+            // session it belongs to and who is waiting; a session says when a run nobody
+            // watched changed it and when the person last opened it.
+            for column in ["conversation_id", "session_id", "author"] {
+                Self::add_column(&conn, "change_proposals", column, "TEXT")?;
+            }
+            Self::add_column(&conn, "conversations", "away_at", "INTEGER")?;
+            Self::add_column(&conn, "conversations", "seen_at", "INTEGER")?;
+        }
         //
         // v24 (`OBS-2`): `run_usage` is created by SCHEMA above and has no
         // columns to add to an existing table, so there is nothing to do here
@@ -1452,6 +1583,7 @@ impl Db {
             project_id: None,
             engines_off: false,
             style: None,
+            leader: None,
             created_at: ts,
             updated_at: ts,
         })
@@ -1539,6 +1671,16 @@ impl Db {
             "UPDATE conversations SET folder_path = ?2, project_id = ?3 WHERE id = ?1",
             params![id, path, project_id],
         )?;
+        Ok(())
+    }
+
+    /// `TEAM-13`: the working copy a team member works in is that chat's own folder and nothing
+    /// else. It is not a project: a project is the person's folder, shared by every chat in it, and
+    /// moving one chat to a copy must not move the others (or add a project for a folder that is
+    /// deleted when the task ends).
+    pub fn set_conversation_copy(&self, id: &str, path: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE conversations SET folder_path = ?2, project_id = NULL WHERE id = ?1", params![id, path])?;
         Ok(())
     }
 
@@ -1853,7 +1995,7 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT id, title, model_id, persona_id, overrides_json, workspace, created_at, updated_at,
                     summary, summary_upto_message_id, reflected_at, folder_path, folder_trust,
-                    parent_conversation_id, project_id, engines_off, style
+                    parent_conversation_id, project_id, engines_off, style, leader
              FROM conversations ORDER BY updated_at DESC",
         )?;
         let rows = stmt
@@ -1939,6 +2081,8 @@ impl Db {
             // `finalize_message`, once the run has one.
             plan_json: None,
             spoken: false,
+            author: None,
+            addressed: None,
             created_at: ts,
             attachments: saved,
         })
@@ -1949,6 +2093,21 @@ impl Db {
     pub fn mark_spoken(&self, id: &str) -> Result<(), DbError> {
         let conn = self.conn.lock().unwrap();
         conn.execute("UPDATE messages SET spoken = 1 WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// `TEAM-3`: who spoke this reply. A separate call, like `mark_spoken`, because the
+    /// leader is only known once the turn has started.
+    pub fn set_message_author(&self, id: &str, author: Option<&str>) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE messages SET author = ?2 WHERE id = ?1", params![id, author])?;
+        Ok(())
+    }
+
+    /// `TEAM-17`: the person spoke to this member of the team directly with this message.
+    pub fn set_message_addressed(&self, id: &str, role: Option<&str>) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE messages SET addressed = ?2 WHERE id = ?1", params![id, role])?;
         Ok(())
     }
 
@@ -2054,7 +2213,7 @@ impl Db {
             .query_row(
                 "SELECT id, title, model_id, persona_id, overrides_json, workspace, created_at, updated_at,
                         summary, summary_upto_message_id, reflected_at, folder_path, folder_trust,
-                        parent_conversation_id, project_id, engines_off, style
+                        parent_conversation_id, project_id, engines_off, style, leader
                  FROM conversations WHERE id = ?1",
                 [id],
                 Self::map_conversation,
@@ -2068,7 +2227,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let row = conn
             .query_row(
-                "SELECT id, name, system_prompt, model_id, params_json, is_default, created_at, updated_at, tools_json, skills_json, description, spawnable, engine_id
+                "SELECT id, name, system_prompt, model_id, params_json, is_default, created_at, updated_at, tools_json, skills_json, description, spawnable, engine_id, look, line, remembers
                  FROM personas WHERE id = ?1",
                 [id],
                 Self::map_persona,
@@ -2080,7 +2239,7 @@ impl Db {
     pub fn list_messages(&self, conversation_id: &str) -> Result<Vec<Message>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json, spoken
+            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json, spoken, author, addressed
              FROM messages WHERE conversation_id = ?1 ORDER BY created_at ASC",
         )?;
         let mut rows = stmt
@@ -2120,7 +2279,7 @@ impl Db {
     pub fn list_messages_until(&self, conversation_id: &str, upto_id: &str) -> Result<Vec<Message>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json, spoken
+            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json, spoken, author, addressed
              FROM messages
              WHERE conversation_id = ?1
                AND rowid <= (SELECT rowid FROM messages WHERE id = ?2)
@@ -2270,6 +2429,8 @@ impl Db {
             engine_id: None,
             because: None,
             paid_by: None,
+            member: None,
+            item: None,
             engine_session: None,
         })
     }
@@ -2280,6 +2441,16 @@ impl Db {
         conn.execute(
             "UPDATE subagent_runs SET engine_id = ?2, because = ?3 WHERE id = ?1",
             params![id, engine_id, because],
+        )?;
+        Ok(())
+    }
+
+    /// `TEAM-10`: say which role of a team this run was done as, and (`TEAM-11`) for which item.
+    pub fn set_subagent_member(&self, id: &str, member: &str, item: Option<usize>) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE subagent_runs SET member = ?2, item = ?3 WHERE id = ?1",
+            params![id, member, item.map(|n| n as i64)],
         )?;
         Ok(())
     }
@@ -2309,6 +2480,19 @@ impl Db {
     pub fn set_conversation_style(&self, id: &str, style: Option<&str>) -> Result<(), DbError> {
         let conn = self.conn.lock().unwrap();
         conn.execute("UPDATE conversations SET style = ?2 WHERE id = ?1", params![id, style])?;
+        Ok(())
+    }
+
+    /// `TEAM-1`: who leads this chat, and the persona whose instructions, model and
+    /// tools the turn code uses for it (`persona_id`, which stays as it was: the
+    /// turn code does not know about leaders). Both are written together so they
+    /// cannot disagree. One-off overrides are left alone.
+    pub fn set_conversation_leader(&self, id: &str, leader: Option<&str>, persona_id: Option<&str>) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE conversations SET leader = ?2, persona_id = ?3 WHERE id = ?1",
+            params![id, leader, persona_id],
+        )?;
         Ok(())
     }
 
@@ -2387,7 +2571,7 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT id, parent_conversation_id, parent_message_id, child_conversation_id,
                     agent, task, status, stop_reason, result, steps, started_at, ended_at,
-                    engine_id, because, paid_by,
+                    engine_id, because, paid_by, member, item,
                     (SELECT engine_session FROM conversations c WHERE c.id = child_conversation_id)
              FROM subagent_runs WHERE parent_conversation_id = ?1
              ORDER BY started_at ASC, rowid ASC",
@@ -2404,7 +2588,7 @@ impl Db {
             .query_row(
                 "SELECT id, parent_conversation_id, parent_message_id, child_conversation_id,
                         agent, task, status, stop_reason, result, steps, started_at, ended_at,
-                        engine_id, because, paid_by,
+                        engine_id, because, paid_by, member, item,
                         (SELECT engine_session FROM conversations c WHERE c.id = child_conversation_id)
                  FROM subagent_runs WHERE id = ?1",
                 [id],
@@ -2412,6 +2596,101 @@ impl Db {
             )
             .ok();
         Ok(row)
+    }
+
+    // ---- `TEAM-15`: the board ----
+
+    pub fn add_post(&self, conversation_id: &str, p: &NewPost<'_>) -> Result<Post, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let ts = now_ms();
+        let id = format!("post_{}", uuid::Uuid::new_v4().simple());
+        let delivered = p.delivered.then_some(ts);
+        conn.execute(
+            "INSERT INTO posts(id, conversation_id, run_id, from_member, to_member, kind, item,
+                               reply_to, text, created_at, delivered_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![id, conversation_id, p.run_id, p.from, p.to, p.kind, p.item.map(|n| n as i64), p.reply_to, p.text, ts, delivered],
+        )?;
+        Ok(Post {
+            id,
+            conversation_id: conversation_id.to_string(),
+            run_id: p.run_id.map(str::to_string),
+            from_member: p.from.to_string(),
+            to_member: p.to.to_string(),
+            kind: p.kind.to_string(),
+            item: p.item,
+            reply_to: p.reply_to.map(str::to_string),
+            text: p.text.to_string(),
+            created_at: ts,
+            delivered_at: delivered,
+        })
+    }
+
+    fn map_post(row: &rusqlite::Row) -> rusqlite::Result<Post> {
+        Ok(Post {
+            id: row.get(0)?,
+            conversation_id: row.get(1)?,
+            run_id: row.get(2)?,
+            from_member: row.get(3)?,
+            to_member: row.get(4)?,
+            kind: row.get(5)?,
+            item: row.get::<_, Option<i64>>(6)?.map(|n| n as usize),
+            reply_to: row.get(7)?,
+            text: row.get(8)?,
+            created_at: row.get(9)?,
+            delivered_at: row.get(10)?,
+        })
+    }
+
+    const POST_COLUMNS: &'static str =
+        "id, conversation_id, run_id, from_member, to_member, kind, item, reply_to, text, created_at, delivered_at";
+
+    /// Every post of a session, oldest first (the Board and the replay read them in this order).
+    pub fn list_posts(&self, conversation_id: &str) -> Result<Vec<Post>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM posts WHERE conversation_id = ?1 ORDER BY created_at ASC, rowid ASC",
+            Self::POST_COLUMNS
+        ))?;
+        let rows = stmt.query_map([conversation_id], Self::map_post)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_post(&self, id: &str) -> Result<Option<Post>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row(&format!("SELECT {} FROM posts WHERE id = ?1", Self::POST_COLUMNS), [id], Self::map_post)
+            .ok())
+    }
+
+    /// What waits for `to` in this session: posts nobody has handed over yet, oldest first.
+    pub fn waiting_posts(&self, conversation_id: &str, to: &str) -> Result<Vec<Post>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM posts WHERE conversation_id = ?1 AND to_member = ?2 AND delivered_at IS NULL
+             ORDER BY created_at ASC, rowid ASC",
+            Self::POST_COLUMNS
+        ))?;
+        let rows = stmt.query_map(params![conversation_id, to], Self::map_post)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Every post nobody has handed over yet in this session, for whoever it is addressed to.
+    pub fn waiting_posts_all(&self, conversation_id: &str) -> Result<Vec<Post>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM posts WHERE conversation_id = ?1 AND delivered_at IS NULL
+             ORDER BY created_at ASC, rowid ASC",
+            Self::POST_COLUMNS
+        ))?;
+        let rows = stmt.query_map([conversation_id], Self::map_post)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn mark_post_delivered(&self, id: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE posts SET delivered_at = ?2 WHERE id = ?1 AND delivered_at IS NULL", params![id, now_ms()])?;
+        Ok(())
     }
 
     fn map_subagent_run(row: &rusqlite::Row) -> rusqlite::Result<SubagentRun> {
@@ -2431,7 +2710,9 @@ impl Db {
             engine_id: row.get(12)?,
             because: row.get(13)?,
             paid_by: row.get(14)?,
-            engine_session: row.get(15)?,
+            member: row.get(15)?,
+            item: row.get::<_, Option<i64>>(16)?.map(|n| n as usize),
+            engine_session: row.get(17)?,
         })
     }
 
@@ -2513,6 +2794,30 @@ impl Db {
             ],
         )?;
         Ok(())
+    }
+
+    /// `TEAM-12`: what the runs written under one conversation reported, for pricing a team's
+    /// past tasks. `(run id, model, provenance, prompt tokens, output tokens, written at)`.
+    pub fn run_usage_of(&self, conversation_id: &str) -> Result<Vec<(String, String, String, u64, u64, i64)>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT run_id, model_name, provenance, prompt_tokens, output_tokens, created_at
+             FROM run_usage WHERE conversation_id = ?1",
+        )?;
+        let rows = stmt
+            .query_map([conversation_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)?.max(0) as u64, r.get::<_, i64>(4)?.max(0) as u64, r.get(5)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// `TEAM-12`: the chats a leader (`team:<slug>`) leads.
+    pub fn conversations_led_by(&self, leader: &str) -> Result<Vec<String>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id FROM conversations WHERE leader = ?1 AND parent_conversation_id IS NULL")?;
+        let rows = stmt.query_map([leader], |r| r.get(0))?.collect::<Result<Vec<String>, _>>()?;
+        Ok(rows)
     }
 
     /// Usage since `since` (epoch ms), grouped three ways. One pass over the
@@ -2729,8 +3034,8 @@ impl Db {
         };
         conn.execute(
             "INSERT INTO conversations(id, title, model_id, persona_id, overrides_json, workspace,
-                                      folder_path, folder_trust, project_id, engines_off, style, created_at, updated_at)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+                                      folder_path, folder_trust, project_id, engines_off, style, leader, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
             params![
                 new_conv_id,
                 title,
@@ -2747,23 +3052,25 @@ impl Db {
                 source.engines_off as i64,
                 // How a chat works is a choice about the work, so a branch keeps it.
                 source.style,
+                // Who leads is a choice about the work too (`persona_id` above is its mirror).
+                source.leader,
                 ts
             ],
         )?;
 
         // Everything before the turn being redone, oldest first.
         let mut stmt = conn.prepare(
-            "SELECT id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json, spoken
+            "SELECT id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json, spoken, author
              FROM messages WHERE conversation_id = ?1 AND (created_at < ?2 OR (?3 AND created_at = ?2))
              ORDER BY created_at",
         )?;
         // `PLN-T4`: `plan_json` travels with the turn, so a branch shows the
         // plan the run it copied was working to rather than a blank card.
-        type Row = (String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, i64, Option<String>, i64);
+        type Row = (String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, i64, Option<String>, i64, Option<String>);
         let mut rows: Vec<Row> = stmt
             .query_map(params![conversation_id, cutoff, inclusive], |r| {
                 Ok((
-                    r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?,
+                    r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -2787,9 +3094,9 @@ impl Db {
             }
             conn.execute(
                 "INSERT INTO messages(id, conversation_id, role, content, model_name, model_provenance,
-                                      steps_json, stop_reason, created_at, plan_json, spoken)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                params![new_msg_id, new_conv_id, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9],
+                                      steps_json, stop_reason, created_at, plan_json, spoken, author)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![new_msg_id, new_conv_id, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9, row.10],
             )?;
             conn.execute(
                 "INSERT INTO attachments(id, message_id, kind, name, path, artifact_id)
@@ -2838,6 +3145,7 @@ impl Db {
                 project_id: source.project_id,
                 engines_off: source.engines_off,
                 style: source.style,
+                leader: source.leader,
                 created_at: ts,
                 updated_at: ts,
             },
@@ -3081,7 +3389,82 @@ impl Db {
             group_id: None,
             rehearsal_json: None,
             live_outcome: None,
+            persona_id: None,
+            conversation_id: None,
+            session_id: None,
+            author: None,
         })
+    }
+
+    /// `TEAM-19`: something a run nobody watches could not do without a yes. It waits as a
+    /// pending proposal with the chat that was working, the session the person finds it under,
+    /// and who is waiting.
+    pub fn add_waiting(
+        &self,
+        target: &str,
+        conversation_id: &str,
+        author: Option<&str>,
+        proposed_text: &str,
+        rationale: &str,
+    ) -> Result<ChangeProposal, DbError> {
+        let session = self.session_of(conversation_id);
+        let proposal = self.add_change_proposal(target, None, proposed_text, rationale, None)?;
+        {
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE change_proposals SET conversation_id = ?2, session_id = ?3, author = ?4 WHERE id = ?1",
+                params![proposal.id, conversation_id, session, author],
+            )?;
+        }
+        // The session was changed by a run nobody watched.
+        self.mark_away(&session)?;
+        Ok(self.get_change_proposal(&proposal.id)?.expect("just inserted"))
+    }
+
+    /// `TEAM-19`: the session a chat belongs to: its parent when it is a helper's or a member's
+    /// chat, itself otherwise.
+    pub fn session_of(&self, conversation_id: &str) -> String {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT parent_conversation_id FROM conversations WHERE id = ?1",
+            [conversation_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| conversation_id.to_string())
+    }
+
+    /// `TEAM-19`: the entries that wait for the person, newest first.
+    pub fn list_waiting(&self) -> Result<Vec<ChangeProposal>, DbError> {
+        Ok(self.list_change_proposals()?.into_iter().filter(|p| p.target.starts_with("waiting-")).collect())
+    }
+
+    /// `TEAM-20`: a run nobody watched made or changed this session. It shows a dot until the
+    /// person opens it.
+    pub fn mark_away(&self, session: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE conversations SET away_at = ?2 WHERE id = ?1", params![session, now_ms()])?;
+        Ok(())
+    }
+
+    /// `TEAM-20`: the person opened this session.
+    pub fn mark_seen(&self, session: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE conversations SET seen_at = ?2 WHERE id = ?1 AND away_at IS NOT NULL", params![session, now_ms()])?;
+        Ok(())
+    }
+
+    /// `TEAM-20`: the sessions a run changed while nobody watched and the person has not opened
+    /// since. A chat the person started never shows here: nothing sets `away_at` on it.
+    pub fn unread_conversations(&self) -> Result<Vec<String>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id FROM conversations
+             WHERE away_at IS NOT NULL AND parent_conversation_id IS NULL AND (seen_at IS NULL OR seen_at < away_at)",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// `IMP-2`: file one improvement. Same row as any proposal, plus what makes it a
@@ -3121,6 +3504,13 @@ impl Db {
         ))?;
         let rows = stmt.query_map([], proposal_row)?.collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// `TEAM-5`: say whose lesson a proposal is.
+    pub fn set_change_proposal_persona(&self, id: &str, persona_id: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE change_proposals SET persona_id = ?2 WHERE id = ?1", params![id, persona_id])?;
+        Ok(())
     }
 
     /// `IMP-5`: write how an applied improvement held up.
@@ -3354,7 +3744,7 @@ impl Db {
     pub fn list_messages_window(&self, conversation_id: &str, max: usize) -> Result<Vec<Message>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json, spoken
+            "SELECT id, conversation_id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json, spoken, author, addressed
              FROM messages WHERE conversation_id = ?1
              ORDER BY rowid DESC LIMIT ?2",
         )?;
@@ -5116,13 +5506,16 @@ impl Db {
             description: p.description.clone(),
             spawnable: p.spawnable,
             engine_id: None,
+            look: None,
+            line: None,
+            remembers: true,
         })
     }
 
     pub fn list_personas(&self) -> Result<Vec<Persona>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, system_prompt, model_id, params_json, is_default, created_at, updated_at, tools_json, skills_json, description, spawnable, engine_id
+            "SELECT id, name, system_prompt, model_id, params_json, is_default, created_at, updated_at, tools_json, skills_json, description, spawnable, engine_id, look, line, remembers
              FROM personas ORDER BY is_default DESC, name ASC",
         )?;
         let rows = stmt
@@ -5136,9 +5529,10 @@ impl Db {
         conn.execute(
             "UPDATE personas SET name = ?2, system_prompt = ?3, model_id = ?4, params_json = ?5,
                                  tools_json = ?6, skills_json = ?7, description = ?8,
-                                 spawnable = ?9, updated_at = ?10, engine_id = ?11
+                                 spawnable = ?9, updated_at = ?10, engine_id = ?11,
+                                 look = ?12, line = ?13, remembers = ?14
              WHERE id = ?1",
-            params![p.id, p.name, p.system_prompt, p.model_id, p.params_json, p.tools_json, p.skills_json, p.description, p.spawnable as i64, now_ms(), p.engine_id],
+            params![p.id, p.name, p.system_prompt, p.model_id, p.params_json, p.tools_json, p.skills_json, p.description, p.spawnable as i64, now_ms(), p.engine_id, p.look, p.line, p.remembers as i64],
         )?;
         Ok(())
     }
@@ -5155,8 +5549,20 @@ impl Db {
         // Detach any conversations pointing at this persona so they fall back to
         // the global system prompt rather than a dangling reference.
         conn.execute("UPDATE conversations SET persona_id = NULL WHERE persona_id = ?1", [id])?;
+        // `TEAM-1`: and the chats it led go back to Poiesis.
+        conn.execute("UPDATE conversations SET leader = NULL WHERE leader = ?1", [format!("persona:{id}")])?;
         conn.execute("DELETE FROM personas WHERE id = ?1", [id])?;
         conn.execute("DELETE FROM persona_app_grants WHERE persona_id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// `TEAM-8`: a team is gone, so the chats it led go back to Poiesis.
+    pub fn release_team_chats(&self, slug: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE conversations SET leader = NULL, persona_id = NULL WHERE leader = ?1",
+            [format!("team:{slug}")],
+        )?;
         Ok(())
     }
 
@@ -5199,6 +5605,9 @@ impl Db {
             description: row.get(10)?,
             spawnable: row.get::<_, i64>(11)? != 0,
             engine_id: row.get(12)?,
+            look: row.get(13)?,
+            line: row.get(14)?,
+            remembers: row.get::<_, i64>(15)? != 0,
         })
     }
 
@@ -5247,6 +5656,7 @@ impl Db {
             project_id: row.get(14)?,
             engines_off: row.get::<_, i64>(15)? != 0,
             style: row.get(16)?,
+            leader: row.get(17)?,
         })
     }
 
@@ -5295,6 +5705,8 @@ impl Db {
             created_at: row.get(8)?,
             plan_json: row.get(9)?,
             spoken: row.get::<_, i64>(10)? != 0,
+            author: row.get(11)?,
+            addressed: row.get(12)?,
             attachments: Vec::new(),
         })
     }
@@ -5507,6 +5919,17 @@ mod tests {
 
         db.mark_skill_runs_corrected("conv-1").unwrap();
         assert!(db.recent_skill_runs("weekly-report", 5).unwrap()[0].corrected);
+    }
+
+    /// `TEAM-5`: a lesson proposal remembers whose it is, until the person answers it.
+    #[test]
+    fn a_lesson_proposal_keeps_the_persona_it_was_learned_under() {
+        let db = Db::open_in_memory().unwrap();
+        let p = db.add_change_proposal("lesson", Some("warm-opener"), "Open warmly.", "why", Some("d")).unwrap();
+        assert_eq!(db.get_change_proposal(&p.id).unwrap().unwrap().persona_id, None);
+        db.set_change_proposal_persona(&p.id, "mira").unwrap();
+        assert_eq!(db.get_change_proposal(&p.id).unwrap().unwrap().persona_id.as_deref(), Some("mira"));
+        assert_eq!(db.list_change_proposals().unwrap()[0].persona_id.as_deref(), Some("mira"));
     }
 
     /// `OUT-2`: a revision is proposed at most once ever per skill — the same

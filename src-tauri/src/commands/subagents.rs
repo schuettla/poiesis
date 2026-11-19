@@ -9,7 +9,7 @@ use tauri::State;
 
 use crate::agent::fleet::{Fleet, Steer, SteerSource};
 use crate::agent::subagents::{agent_types, AgentType};
-use crate::db::{Db, SubagentRun};
+use crate::db::{Db, Post, SubagentRun};
 use crate::PoiesisError;
 
 #[tauri::command]
@@ -19,6 +19,13 @@ pub fn list_subagent_runs_cmd(
 ) -> Result<Vec<SubagentRun>, PoiesisError> {
     db.list_subagent_runs(&conversation_id)
         .map_err(|e| PoiesisError::Message(e.to_string()))
+}
+
+/// `TEAM-15`: what passed between the people of the team that leads this session, oldest first: the
+/// Coordination view's Board and the line widths on its chart read this.
+#[tauri::command]
+pub fn list_posts_cmd(db: State<'_, Db>, conversation_id: String) -> Result<Vec<Post>, PoiesisError> {
+    db.list_posts(&conversation_id).map_err(|e| PoiesisError::Message(e.to_string()))
 }
 
 #[tauri::command]
@@ -66,4 +73,32 @@ pub fn list_agent_types_cmd(db: State<'_, Db>) -> Vec<AgentType> {
 #[tauri::command]
 pub fn list_delegate_targets_cmd(db: State<'_, Db>, conversation_id: Option<String>) -> Vec<crate::agent::subagents::Target> {
     crate::agent::subagents::delegate_targets(&db, conversation_id.as_deref())
+}
+
+/// `TEAM-18`: after a reply in a session a team leads, would one of the other personas add something the
+/// person needs? The rules come first (lines, the turn rule), so a chat where nobody may chime in, or one
+/// that has had its one unasked reply, never spends a call. `None` is nobody, and is also what any
+/// failure is: this fails closed. The window then starts the reply as a turn with `addressed` and
+/// `unasked` (no user row), the text being `nudge`.
+#[derive(serde::Serialize)]
+pub struct NextVoice {
+    pub role: String,
+    pub nudge: String,
+}
+
+#[tauri::command]
+pub async fn team_next_voice_cmd(
+    mgr: State<'_, crate::runtime::RuntimeManager>,
+    db: State<'_, Db>,
+    memory: State<'_, crate::memory::MemoryStore>,
+    conversation_id: String,
+    target: crate::commands::agent::ChatTarget,
+) -> Result<Option<NextVoice>, PoiesisError> {
+    let asked = crate::agent::team_voices::next_voice(&db, &memory, &conversation_id, |messages| async {
+        let setup = crate::commands::agent::resolve_turn(&mgr, &db, &target).await.ok()?;
+        let cancel = crate::runtime::proxy::CancelFlag::new();
+        crate::agent::aside::ask(&mgr.client, &setup.endpoint, &cancel, messages).await.ok().map(|(text, _)| text)
+    })
+    .await;
+    Ok(asked.map(|(who, nudge)| NextVoice { role: who.role, nudge: nudge.to_string() }))
 }

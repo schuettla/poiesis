@@ -439,6 +439,7 @@ mod tests {
             fires: None,
             trigger: None,
             project: None,
+            persona: None,
         }
     }
 

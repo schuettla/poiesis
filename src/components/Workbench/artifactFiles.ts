@@ -1,5 +1,7 @@
 import { inTauri, saveArtifactFile, type Artifact } from "../../lib/api";
 import { save } from "@tauri-apps/plugin-dialog";
+import type { ComponentType } from "react";
+import { CodeIcon, DocumentIcon, FileIcon, GlobeIcon, ImageIcon, VideoIcon, type IconProps } from "../Icons/Icons";
 
 /** Best-guess file extension for an artifact, by kind. */
 export function extFor(artifact: Artifact): string {
@@ -17,6 +19,22 @@ export function extFor(artifact: Artifact): string {
     default:
       return "txt";
   }
+}
+
+/** What an artifact is, in words and as a drawing: the message stream's card and
+ * the Workbench's list both say "Document", not the raw kind string. */
+const KINDS: Record<string, { label: string; Icon: ComponentType<IconProps> }> = {
+  markdown: { label: "Document", Icon: DocumentIcon },
+  html: { label: "Web page", Icon: GlobeIcon },
+  svg: { label: "Drawing", Icon: ImageIcon },
+  image: { label: "Image", Icon: ImageIcon },
+  video: { label: "Video", Icon: VideoIcon },
+  code: { label: "Code", Icon: CodeIcon },
+};
+
+export function artifactKind(artifact: Artifact): { label: string; Icon: ComponentType<IconProps>; meta: string } {
+  const { label, Icon } = KINDS[artifact.kind] ?? { label: artifact.kind, Icon: FileIcon };
+  return { label, Icon, meta: artifact.kind === "code" ? label : `${label} · ${extFor(artifact).toUpperCase()}` };
 }
 
 export function slugify(title: string): string {

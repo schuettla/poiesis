@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import type { SubRun } from "../../lib/types";
 import { stillWorking } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
+import { runLabel } from "../../lib/teamLive";
+import { useLedTeam } from "../../lib/useLedTeam";
 import { usePersonaAppsLine } from "../Apps/personaAppsLine";
 import BlockRenderer from "../Blocks/BlockRenderer";
-import { SettingsIcon } from "../Icons/Icons";
+import { ChevronIcon, SettingsIcon } from "../Icons/Icons";
 import { ContinueThere, EngineChips, UndoHandover } from "./EngineChips";
 import Orb from "../Orb/Orb";
 import { orbForSubRun } from "../Orb/orbState";
@@ -36,10 +38,11 @@ function clock(ms: number): string {
 
 /** What a running child is doing right now: its newest step, else the last
  * line of prose it produced. A row that never changes reads as a hang. */
-function nowDoing(run: SubRun): string {
+export function nowDoing(run: SubRun): string {
   // `SUB-12`: a queued child has taken no step and written no prose. Falling
   // through to "getting started" would claim it had begun.
-  if (run.status === "queued") return "waiting its turn";
+  // `TEAM-14`: a team member waits in the team's queue the same way.
+  if (run.status === "queued" || run.waiting) return "waiting its turn";
   const step =
     [...run.steps].reverse().find((s) => s.status === "running") ??
     run.steps[run.steps.length - 1];
@@ -51,7 +54,7 @@ function nowDoing(run: SubRun): string {
 
 /** How a finished child's row reads (PRES-0: first person, and honest about a
  * partial result rather than quietly showing a stump). */
-function endedLine(run: SubRun): string {
+export function endedLine(run: SubRun): string {
   const took = run.ms ? ` · ${clock(run.ms)}` : "";
   const steps = `${run.steps.length || ""}`.trim();
   const stepPart = steps ? ` · ${steps} steps` : "";
@@ -62,6 +65,8 @@ function endedLine(run: SubRun): string {
       return `ran out of time, this is what it had${stepPart}${took}`;
     case "max_steps":
       return `hit its step limit, this is what it had${stepPart}${took}`;
+    case "budget":
+      return `stopped at the team's limit, this is what it had${stepPart}${took}`;
     case "stuck":
       return `was not getting anywhere, this is what it had${stepPart}${took}`;
     case "error":
@@ -71,7 +76,7 @@ function endedLine(run: SubRun): string {
   }
 }
 
-function FleetRow({ run }: { run: SubRun }) {
+function FleetRow({ run, label }: { run: SubRun; label: string }) {
   const openItem = useAppStore((s) => s.openItem);
   const steerSubRun = useAppStore((s) => s.steerSubRun);
   const stopSubRun = useAppStore((s) => s.stopSubRun);
@@ -115,7 +120,7 @@ function FleetRow({ run }: { run: SubRun }) {
       <span className="fleet-who">
         <span className="fleet-agent" title={appsLine ? `${run.task}
 ${appsLine}` : run.task}>
-          {run.agent}
+          {label}
         </span>
         <EngineChips run={run} />
       </span>
@@ -144,7 +149,9 @@ ${appsLine}` : run.task}>
             onClick={() => setOpen((v) => !v)}
             aria-expanded={open}
           >
-            Report {open ? "⌃" : "⌄"}
+            Report
+            <ChevronIcon dir={open ? "up" : "down"} size={10} strokeWidth={1.8} />
+
           </button>
         )}
         {run.engine && (
@@ -210,12 +217,15 @@ ${appsLine}` : run.task}>
 export default function FleetCard({ runIds }: { runIds: string[] }) {
   const subRuns = useAppStore((s) => s.subRuns);
   const runs = runIds.map((id) => subRuns[id]).filter(Boolean);
+  // `TEAM-14`: in a team's session a member is "api · Atlas", its role and its persona.
+  const { team } = useLedTeam(runs.some((r) => r.member) ? runs[0].parentConversationId : null);
+  const personas = useAppStore((s) => s.personas);
   if (runs.length === 0) return null;
   return (
     <div className="fleet-card">
       <div className="fleet-header">Agents I started</div>
       {runs.map((run) => (
-        <FleetRow key={run.runId} run={run} />
+        <FleetRow key={run.runId} run={run} label={runLabel(run, team, personas)} />
       ))}
     </div>
   );

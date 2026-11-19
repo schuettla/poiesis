@@ -55,14 +55,27 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  mounted = false;
 });
 
-function open(p: Persona, engines: unknown[]) {
-  useAppStore.setState({ personas: [p], engines, models: [], toolsets: [], skills: [], view: "settings", engineFocus: null } as never);
-  act(() => root.render(<PersonaEditor />));
+let mounted = false;
+const press = (match: (b: HTMLButtonElement) => boolean) =>
   act(() => {
-    Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.textContent === "Edit")!.click();
+    Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(match)!.click();
   });
+
+/** Picks the persona's card and opens the sections with its model and with handing it work. */
+function open(p: Persona, engines: unknown[]) {
+  if (mounted) {
+    act(() => root.unmount());
+    root = createRoot(container);
+  }
+  mounted = true;
+  useAppStore.setState({ personas: [p], engines, models: [], toolsets: [], skills: [], view: "personas", engineFocus: null, personasFocus: null } as never);
+  act(() => root.render(<PersonaEditor />));
+  press((b) => b.querySelector(".ways-style-name")?.textContent === p.name);
+  press((b) => b.classList.contains("persona-fold-head") && b.textContent === "Model and style");
+  press((b) => b.classList.contains("persona-fold-head") && b.textContent === `Handing ${p.name} work`);
 }
 
 const select = () => container.querySelector<HTMLSelectElement>("#persona-runs-on");
@@ -86,8 +99,6 @@ describe("Runs on", () => {
   it("is not there for a persona that cannot be handed work, or when no agent app is set up", () => {
     open(persona({ spawnable: false }), [engine("claude-code", "Claude Code")]);
     expect(select()).toBeNull();
-    act(() => root.unmount());
-    root = createRoot(container);
     open(persona(), []);
     expect(select()).toBeNull();
   });

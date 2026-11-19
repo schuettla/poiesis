@@ -26,12 +26,14 @@ const MODULE = "/src/components/Icons/Icons.tsx";
 /** None of these is an icon, and none belongs in an icon set. `StyleGlyph` draws the
  * shape of a way of working in the mark's own family (`ORG_LOOP_PLAN` IX.1): it is
  * identity, like the mark it comes from. `OrgDiagram` draws how a run is organised
- * (`ORG_LOOP_PLAN` IX.4): a diagram of data, like the growth rings. */
+ * (`ORG_LOOP_PLAN` IX.4): a diagram of data, like the growth rings. `TeamDiagram` is its
+ * half for a team (`TEAM-9`): the same diagram, drawn from a team's members and lines. */
 const NOT_ICONS = [
   "/src/components/Mark/PoiesisMark.tsx",
   "/src/components/Mark/StyleGlyph.tsx",
   "/src/components/Self/GrowthRings.tsx",
   "/src/components/Workbench/OrgDiagram.tsx",
+  "/src/components/Workbench/TeamDiagram.tsx",
 ];
 
 /** A real element opens `<svg` then whitespace before its attributes, which is

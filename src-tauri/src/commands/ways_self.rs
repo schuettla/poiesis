@@ -120,6 +120,18 @@ pub struct DefaultView {
     pub preset_name: String,
 }
 
+/// `TEAM-5b`: one place that says how or by whom a new chat starts. Either may be absent;
+/// "Everywhere" is always there.
+#[derive(Debug, Clone, Serialize)]
+pub struct StartView {
+    pub scope: String,
+    pub label: String,
+    /// A style's slug.
+    pub style: Option<String>,
+    /// `poiesis`, `persona:<id>` or `team:<slug>`.
+    pub leader: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DeletedView {
     pub file: String,
@@ -138,6 +150,8 @@ pub struct WaysView {
     /// The preset new chats start with everywhere, unless a place says otherwise.
     pub global_default: String,
     pub defaults: Vec<DefaultView>,
+    /// Where chats start: who leads and in which style, place by place (`TEAM-5b`).
+    pub starts: Vec<StartView>,
     pub deleted: Vec<DeletedView>,
     pub proposals: Vec<WayProposalView>,
     /// Every point there is a copy of how I worked to go back to, newest first.
@@ -250,6 +264,23 @@ pub fn ways_view_cmd(db: State<'_, Db>, mem: State<'_, MemoryStore>, preset: Opt
             Some(DefaultView { scope, label, preset: slug, preset_name })
         })
         .collect();
+    let mut starts: Vec<StartView> = mem
+        .starts()
+        .into_iter()
+        // A style that is gone is no style: the row keeps its leader, if it has one.
+        .map(|(scope, style, leader)| StartView {
+            label: if scope == "global" { "Everywhere".to_string() } else { scope_label(&scope, &scopes) },
+            style: style.filter(|s| presets.iter().any(|p| p.slug == *s)),
+            scope,
+            leader,
+        })
+        // A place that is gone (a deleted project) is not listed.
+        .filter(|s| s.scope == "global" || scopes.iter().any(|c| c.value == s.scope))
+        .filter(|s| s.style.is_some() || s.leader.is_some() || s.scope == "global")
+        .collect();
+    if !starts.iter().any(|s| s.scope == "global") {
+        starts.insert(0, StartView { scope: "global".into(), label: "Everywhere".into(), style: None, leader: None });
+    }
     WaysView {
         narrative: narrative(&mem, &db, now),
         ways: mem.ways().into_iter().map(|w| way_view(w, &db, &scopes, &facts, now)).collect(),
@@ -258,6 +289,7 @@ pub fn ways_view_cmd(db: State<'_, Db>, mem: State<'_, MemoryStore>, preset: Opt
         rules,
         global_default: global,
         defaults,
+        starts,
         proposals: way_proposals(&db),
         moments: mem.moments().into_iter().map(moment_view).collect(),
         recent: evolve::recent(&db, now)
@@ -470,7 +502,12 @@ pub fn conversation_default_style_cmd(db: State<'_, Db>, mem: State<'_, MemorySt
     }
     let project = db.conversation_project(&id).ok().flatten().map(|p| p.id);
     let kind = crate::agent::selfmodel::kind_now(&db, &id);
-    let ctx = ScopeCtx { project: project.as_deref(), persona: conv.persona_id.as_deref(), kind };
+    // `TEAM-1`: the persona that will lead, whether it was chosen or a place says so.
+    let persona = match crate::agent::leader::Leader::parse(&crate::agent::leader::effective(&db, &mem, &conv).leader) {
+        Some(crate::agent::leader::Leader::Persona(p)) => Some(p),
+        _ => None,
+    };
+    let ctx = ScopeCtx { project: project.as_deref(), persona: persona.as_deref(), kind };
     mem.default_for(&ctx).map(|p| p.slug).filter(|s| s != AD_HOC)
 }
 
@@ -604,8 +641,8 @@ async fn apply_guarded(
     done.ok_or_else(|| "Nothing was changed.".to_string())
 }
 
-/// Answer one of the proposals in the tab. `answer` is `no`, or what the card offered:
-/// `try`, `always`, `yes`, `keep`, `retire`, `keep-trying`.
+/// Answer one of the proposals in the tab, or (`TEAM-23`) on a team's page in Personas & teams.
+/// `answer` is `no`, or what the card offered: `try`, `always`, `yes`, `keep`, `retire`, `keep-trying`.
 #[tauri::command]
 pub async fn way_proposal_answer_cmd(app: tauri::AppHandle, id: String, answer: String) -> Cmd<()> {
     use tauri::Manager;
@@ -613,7 +650,7 @@ pub async fn way_proposal_answer_cmd(app: tauri::AppHandle, id: String, answer: 
     let proposal = db
         .get_change_proposal(&id)
         .map_err(|e| err(e.to_string()))?
-        .filter(|p| p.target == evolve::TARGET)
+        .filter(|p| evolve::is_target(&p.target))
         .ok_or_else(|| err("That proposal no longer exists.".into()))?;
     if proposal.status != "pending" {
         return Err(err("That proposal was already answered.".into()));

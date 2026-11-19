@@ -333,6 +333,9 @@ with its own fresh context, and it writes the final answer itself.
   ends; the conversation stays usable and a toast points back when one finishes.
   More than three at a time queue. Personas marked *spawnable* become agent
   types the lead can pick by description.
+- **For work that repeats, make it a team.** A team fixes who does what, who
+  checks whom and what it may cost — see
+  [Personas and teams](#personas-and-teams-settings--personas--teams).
 
 ### Going back, and carrying on
 Every run is written to an append-only session log — the model's own view of the
@@ -486,7 +489,8 @@ has, and the agent can use a few of them on itself, inside the autonomy ladder.
 | The turn | `/effort`, `/steps`, `/stop`, `/continue`, `/retry`, `/plan` (read-only until you approve), `/btw` (a side question that stays out of the conversation), `/goal` (keep working until a stated condition is met) |
 | The conversation | `/new`, `/rename`, `/fork`, `/export`, `/rewind` (conversation and files), `/compact`, `/context`, `/why` |
 | Memory and self | `/remember`, `/forget`, `/always`, `/reflect`, `/checkup`, `/skillify`, `/tidy`, `/self`, `/autonomy` |
-| Reach | `/tools`, `/apps`, `/connect`, `/external`, `/delegate`, `/agents`, `/schedule`, `/image`, `/video`, `/persona`, `/model` |
+| Reach | `/tools`, `/apps`, `/connect`, `/external`, `/delegate`, `/agents`, `/schedule`, `/image`, `/video`, `/model` |
+| Who leads | `/lead` (alias `/persona`: Poiesis, a persona or a team, for the chat or one message), `/ask` (speak to one member of the team that leads the chat), `/style` |
 | Code | `/init`, `/review`, `/verify`, `/changes`, `/undo`, `/keep` |
 | Information | `/permissions`, `/usage`, `/activity`, `/help` |
 
@@ -533,11 +537,14 @@ Work the agent does on its own schedule, hourly through weekly:
 - A built-in, off-by-default **nightly reflection** reads back over the day's
   conversations and leaves a short digest in the morning.
 - A running task always shows in the left rail with a **Stop**.
-- Unattended runs are deliberately narrow: they can **read** a folder you point
-  them at, but never write, move or delete, and they never block on a permission
-  prompt nobody is there to answer — they stop and report instead. They run a
-  project task only when that project itself is set to *Allow*; the default from
-  Settings does not count.
+- **Who does it:** Poiesis, a persona or a team ("Every Monday 8:00, Mira: sum
+  up last week's mail."). The run's chat is led by it.
+- Unattended runs are deliberately narrow: they **read** a folder you point them
+  at, and every write, move or delete **waits for your yes** in
+  [Waiting for you](#waiting-for-you) instead of being made. They never block on
+  a permission prompt nobody is there to answer. They run a project task only
+  when that project itself is set to *Allow*; the default from Settings does not
+  count.
 
 ### Tools (what the agent can do)
 Toggle the **⚒ tools** button in a chat to let the assistant act. Each group is
@@ -556,7 +563,7 @@ that leaves your device or runs code defaults **off**:
 | **Delegation** | on | Splits a job across several agents at once, each with its own fresh context. A child never gets more reach than the chat it came from. Also the door to [agent apps](#handing-work-to-agent-apps-you-already-have) such as Claude Code |
 | **Sort many items** | on, but needs Fast & slow thinking and a decision model | One closed question asked about up to 500 items (files, tickets, photos), answered as a table with a confidence per row. See [Quick decisions](#quick-decisions-behind-experiments) |
 | **Image generation** | off | The on-device diffusion path as a chat tool. Asking for a picture in conversation doesn't depend on this toggle |
-| **Web search** | off | No-key DuckDuckGo query issued from your machine (your query leaves the device) |
+| **Web search** | off | No-key DuckDuckGo query issued from your machine, with Bing as the fallback when DuckDuckGo answers with its bot check (your query leaves the device, to one of those two) |
 | **Code execution** | off | Runs Python / Node in a confined, time- and memory-limited sandbox — also the data-analysis path over an attached folder |
 | **Run project tasks** | off | Runs a project's declared build, check, test and lint tasks in its folder, with a time limit, memory and process caps, and secret-looking environment variables left out. Not a full sandbox: a task can reach the network and write where your account can. See [Working on code](#working-on-code) |
 | **Scripts calling tools** | off | Lets a snippet the agent wrote call the same tools it has, so a job over many items is one script instead of one model turn each. Every call it makes appears in the timeline, indented under the script, and still asks whatever it would normally ask |
@@ -599,10 +606,80 @@ so a skill written for another agent works here unchanged.
 - The agent can **propose** a skill after a multi-step task it thinks you'll
   repeat. Keeping it asks first.
 
-### Personas (Settings → Personas)
-Saved profiles bundling a **system prompt** + optional **pinned model** +
-**temperature** + **tool set**. Pick one per chat from the composer dropdown; a
-one-off temperature override is also supported per conversation.
+### Personas and teams (Settings → Personas & teams)
+Every chat has **one leader**: Poiesis, one of your **personas**, or one of your
+**teams**. You pick it under **Who leads** in the chat setup menu, or with
+`/lead mira` (`/lead mira <message>` hands Mira just that one message). There is
+still only one way into the app: a persona or a team leads a chat, it doesn't
+get a separate inbox.
+
+**A persona** is someone Poiesis speaks as: a name, a letter glyph in one of 8
+hues, one line about it, its own instructions, model, tools, apps and default
+way of working.
+- **It remembers.** What Mira learns in chats Mira leads is Mira's. Facts about
+  *you* stay shared with everyone. "What Mira knows" lists Mira's entries, with
+  **Share with everyone** and **Forget**, and "Remember across chats" can be
+  switched off. Self → Memory can filter by whose an entry is.
+- **Poiesis is the first persona.** "Who Poiesis is" is the global system
+  prompt; it can't be deleted or renamed.
+- **Hand over at any point.** Change the leader mid-chat and one plain line says
+  so ("Mira leads this chat from here."). Poiesis may also suggest a leader,
+  once per chat.
+- **Where chats start** (Self → How I work) sets who leads and how, per project,
+  per kind of work, or everywhere. The most particular row wins.
+- The sidebar marks each chat with its leader and can **show only chats led by**
+  one of them.
+
+**A team** is a few personas (or plain helpers with a job line) with a
+**coordinator** and **lines** that say who works with whom: who hands work to
+whom, who reviews whom, who may ask whom, who reports to you, and whom you may
+talk to directly. You draw it as a chart: start from Hub, Pipeline, Review or
+Open, then click two places to add a line. **A line that isn't drawn is
+refused.** Rules from How I work still say *when and what*; lines say *who*.
+
+- **The coordinator runs the chat** and hands parts to the members it has lines
+  to. Each member works in its own chat for the task, with its persona's
+  instructions and memory, and you can open it. Several work at once, up to the
+  team's limit.
+- **Reviews happen by themselves.** A member's work goes to its reviewer before
+  it counts as done. Sent back, it goes back to the member with the reason.
+  After 3 rounds (you can change that) the coordinator decides.
+- **Each in its own copy.** By default every member works in its own copy of the
+  folder. Finished, reviewed work is brought into your folder, with Undo. When
+  two members changed the same file, nothing is overwritten: it becomes an item
+  for the coordinator. Or let members own parts of the folder (`src/ui/` is
+  ui's).
+- **Cost before it starts.** Before a team's first task a card says what a task
+  like this has cost (or roughly what it may cost) and where it stops: a budget
+  and a time limit per task. At the limit every member stops and the coordinator
+  says what's done and what isn't.
+- **Watch it work.** The Coordination view draws the team live: who is working,
+  lines getting thicker as messages pass along them, and "Now: verifier is
+  looking at item 3 from api." The **Board** lists every message between
+  members; **Replay** plays them back in order.
+- **Talk to a member.** With a line from you to Kai, a row above the composer
+  lets you address Kai (or type `/ask kai ...`). Kai answers in the chat, with
+  Kai's name above the reply. Another persona with a line may add one thing
+  afterwards; never more than one unasked reply per message of yours.
+- **Teams get better.** For a team you've unlocked, Poiesis proposes changes
+  from what it saw: take out a member who never gets work, let a member ask its
+  reviewer first, decide sooner when two members keep disagreeing, draw a line
+  you keep wishing for, or make the style you keep picking the team's own. Each
+  is a card on the team's page; yes makes a new version you can go back from.
+  Teams you make start locked ("I may improve it" in History opens them).
+- **Keep these helpers as a team** in a chat's ⋯ menu turns the helpers a chat
+  used into a new team to edit.
+
+### Waiting for you
+A scheduled task or a team working while you're away doesn't stop at the first
+thing that needs your yes, and doesn't get it refused either. **File changes and
+questions wait for you** in a **Waiting for you · N** row at the top of the
+sidebar, and the run goes on with other work. Open it to approve a change (it is
+made exactly as asked, unless the file changed since), answer a question, or say
+not now. When you've answered everything for a chat, the work carries on from
+there. A chat a run changed while you were away gets a dot until you open it,
+and if the window isn't in front, a desktop notification says who is waiting
+("Mira is waiting for you"). Turn that off under Interface.
 
 ### Making images and video
 **There is no image mode.** You ask for a picture in the conversation the way
@@ -712,7 +789,8 @@ Three sections answer three questions:
   (the whole tree ends on Stop) with a memory cap but no process cap. That is not network or filesystem isolation, and the
   settings say so. The agent never commits, pushes or installs globally on its
   own, and free-form commands never run through a shell.
-- **Scheduled tasks are read-only** and never prompt — see Tasks, above.
+- **Scheduled tasks never change a file on their own** and never prompt: each
+  change waits for your yes in Waiting for you — see Tasks, above.
 - Telemetry is **off by default**, content-free, and stays on your PC.
 
 ---
@@ -977,6 +1055,19 @@ Some behaviour can only be checked by hand against real models — see **Status*
   the `ck_` key from Composio (For You → Settings → Sessions & API Key), the app
   must be connected, and the persona must not be limited to other apps. A call
   to an app with two accounts needs to name one.
+- **A team says "There is no line from ... ".** Lines that aren't drawn are
+  refused on purpose. Draw the line in Settings → Personas & teams → Teams
+  (click the two places), or let the coordinator pass the work on.
+- **`/ask kai` says I have no line to Kai.** Draw a "can talk with" line from
+  You to Kai on the team's chart. A plain helper has no voice of its own and
+  can't be spoken to.
+- **No notification when something waits.** It only shows when the window is
+  not in front, and only when "Tell me when someone is waiting for me" is on
+  (Settings → General → Interface). On Windows, notifications work for the
+  installed app; a development build shows them under PowerShell's name.
+- **No proposals for my team.** A team you made starts locked: switch on "I may
+  improve it" in the team's History section. Proposals come at most once a day,
+  after enough finished tasks.
 - **A connected-app action waits for me.** A change or a send asks. In a
   scheduled task or a background agent nobody is there to ask, so it is left in
   your inbox instead of being sent.

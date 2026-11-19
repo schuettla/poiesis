@@ -40,8 +40,12 @@ pub struct ToolContext<'a> {
     /// endpoint: a call the user did not ask for must not be billed to their
     /// cloud provider or shipped off the machine just because the turn happens
     /// to be running there. `None` when no local model is loaded, in which case
-    /// the toolset does without rather than falling back to the cloud.
+    /// the toolset does without, except for a memory's scope (`endpoint` below).
     pub local_endpoint: Option<&'a crate::cloud::ChatEndpoint>,
+    /// The model this turn runs on, which the person chose, cloud or not. Only for side calls
+    /// that are part of what the person asked: working out what a saved memory is about, so
+    /// it is kept for the right persona (`TEAM-5`), when no local model is there to ask.
+    pub endpoint: &'a crate::cloud::ChatEndpoint,
     pub db: &'a Db,
     /// The engine registry + shared HTTP client, and the local embedding
     /// engine — `RET`'s `search_folder` needs both to embed a query the same
@@ -724,6 +728,8 @@ pub(crate) fn classify_mutation(tool: &str) -> Option<bool> {
         "list_mail", "search_mail", "read_mail", "read_artifact", "check_preview", "browse",
         "browser_read", "browser_scroll", "browser_screenshot", "screenshot", "skill", "delegate",
         "check_agents", "collect_agents", "classify",
+        // `TEAM-15`: a message along a team's line changes no file and sends nothing outside the app.
+        "post",
     ];
     if MUTATING.contains(&tool) {
         Some(true)

@@ -4,6 +4,7 @@ import type { Message } from "../../lib/types";
 import ImageByPath from "./ImageByPath";
 import { FileIcon } from "../Icons/Icons";
 import { SpokenGlyph } from "./SpokenMark";
+import { splitQuote } from "../../lib/mdQuote";
 
 /** Split off a trailing ```poiesis-action …``` fence (Generative UI, Phase B) so
  * the transcript shows the human sentence plus a compact chip, never raw JSON. */
@@ -21,8 +22,10 @@ const STEER_TAG: Record<SteerKind, string> = {
   question: "read as a question",
 };
 
-export default function UserTurn({ message }: { message: Message }) {
+export default function UserTurn({ message, focus = false }: { message: Message; focus?: boolean }) {
   const { human, isAction } = splitAction(message.text);
+  // A passage quoted from a document leads the message: shown as a quote, not as `>` lines.
+  const { quote, rest } = splitQuote(human);
   const viewArtifactByPath = useAppStore((s) => s.viewArtifactByPath);
   const answerSteerStop = useAppStore((s) => s.answerSteerStop);
   const steer = message.steer;
@@ -35,7 +38,7 @@ export default function UserTurn({ message }: { message: Message }) {
           and made the top padding visibly deeper than the bottom.
           `USE-UI-2`: a held message has not been sent at all, so it says so. */}
       {/* One quiet line: where it went, then what it was read as. */}
-      {(message.midRun || steer) && (
+      {!focus && (message.midRun || steer) && (
         <div className="role">
           <span className={`mid-run-mark ${message.midRun ?? ""}`}>
             {message.midRun &&
@@ -55,7 +58,7 @@ export default function UserTurn({ message }: { message: Message }) {
       {/* `SKC-2`: a skill command went out as `/name`, with that skill's
           instructions loaded before I answered. Say so, and let the user see
           exactly what they asked for rather than a message they never wrote. */}
-      {message.command && (
+      {message.command && !focus && (
         <details className="command-chip">
           <summary>
             <span className="command-chip-name">/{message.command.name}</span>
@@ -70,9 +73,17 @@ export default function UserTurn({ message }: { message: Message }) {
       )}
       {/* The chip already shows the words after the name, so the body would
           only say them twice. */}
-      {human && !message.command && <div className="body">{human}</div>}
+      {quote && (!message.command || focus) && (
+        <blockquote className="user-quote">
+          <p className="user-quote-text">{quote.text}</p>
+          <footer className="user-quote-where">{quote.where}</footer>
+        </blockquote>
+      )}
+      {/* Focus hides the chip, so the words it stood for are the message. */}
+      {rest && (!message.command || focus) && <div className="body">{rest}</div>}
       {/* `USE-UI-2`: a sure stop is not sent to the run. It asks first, and both
           answers are labels for the decision that asked. */}
+      {/* A decision, not decoration, so focus keeps it. */}
       {message.midRun === "held" && steer && (
         <div className="steer-stop" role="group" aria-label="Stop the run?">
           <span className="steer-stop-q">Stop the run?</span>
@@ -85,13 +96,13 @@ export default function UserTurn({ message }: { message: Message }) {
         </div>
       )}
       {/* The same reading the Rail puts at the end of a chat row: when. */}
-      {message.createdAt > 0 && (
+      {!focus && message.createdAt > 0 && (
         <span className="turn-stamp" aria-hidden="true">
           {message.spoken && <SpokenGlyph />}
           {new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
         </span>
       )}
-      {isAction && (
+      {isAction && !focus && (
         <span className="block-action-chip" aria-label="block action">
           ⌁ block action
         </span>

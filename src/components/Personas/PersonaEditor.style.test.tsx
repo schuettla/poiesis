@@ -56,8 +56,9 @@ beforeEach(() => {
     models: [],
     toolsets: [],
     skills: [],
-    view: "settings",
+    view: "personas",
     engineFocus: null,
+    personasFocus: null,
     loadPresets,
     updatePersona: api.updatePersona,
     presets: [
@@ -74,11 +75,14 @@ afterEach(() => {
 });
 
 const style = () => container.querySelector<HTMLSelectElement>("#persona-style")!;
+const press = (match: (b: HTMLButtonElement) => boolean) =>
+  act(async () => {
+    Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(match)!.click();
+  });
 const edit = async () => {
   act(() => root.render(<PersonaEditor />));
-  await act(async () => {
-    Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.textContent === "Edit")!.click();
-  });
+  await press((b) => b.querySelector(".ways-style-name")?.textContent === "Refactorer");
+  await press((b) => b.classList.contains("persona-fold-head") && b.textContent === "Model and style");
   await act(async () => {});
 };
 const save = () =>
@@ -93,11 +97,19 @@ describe("How this persona works", () => {
     expect(style().value).toBe("lean");
   });
 
-  it("writes nothing when it was not touched", async () => {
+  it("offers nothing to save, and writes nothing, when it was not touched", async () => {
     await edit();
-    await save();
-    expect(api.updatePersona).toHaveBeenCalled();
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
+    expect(buttons.find((b) => b.textContent === "Save changes")).toBeUndefined();
+    expect(api.updatePersona).not.toHaveBeenCalled();
     expect(api.setStyleDefault).not.toHaveBeenCalled();
+  });
+
+  it("saves the persona itself together with the style", async () => {
+    await edit();
+    pick("swarm");
+    await save();
+    expect(api.updatePersona).toHaveBeenCalledWith(expect.objectContaining({ id: "p1", name: "Refactorer" }));
   });
 
   const pick = (value: string) => {

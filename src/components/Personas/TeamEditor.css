@@ -1,0 +1,265 @@
+/* `TEAM-9`: the Teams tab. The cards and the sections are the Personas tab's (PersonaEditor.css);
+   what is here is who is in a team, the chart's surroundings, and the Add a member dialog. Everything in a dialog that can change what it shows has a box of its own size, so
+   nothing jumps. */
+
+.team-glyph {
+  display: inline-flex;
+  flex: none;
+  color: var(--ink);
+}
+
+.team-startfrom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.team-startfrom-label {
+  margin-right: 6px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.team-chip {
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  background: none;
+  border: 1px solid var(--paper-edge);
+  border-radius: var(--radius-lg);
+  padding: 3px 11px;
+  cursor: pointer;
+}
+.team-chip:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.team-chip[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--ink-muted);
+  font-weight: 600;
+}
+.team-shape-hint {
+  margin: 0;
+  min-height: 1.4em;
+}
+
+/* One part of the team's card: who is in it, how they work together. */
+.team-part {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--paper-edge);
+}
+.team-coordinator {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 260px);
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+}
+.team-coordinator-label {
+  color: var(--ink-muted);
+}
+.team-roster {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+.team-roster-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+}
+.team-roster-row:last-child {
+  border-bottom: none;
+}
+.team-roster-row.on {
+  background: var(--fill-hover);
+}
+.team-roster-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.team-roster-row-who {
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  font-weight: 600;
+}
+.team-roster-row-role {
+  font-weight: 400;
+  color: var(--ink-muted);
+}
+.team-roster-row-job {
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+
+/* Add a line: from, what it is, to, as the sentence reads. */
+.team-addline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.team-addline-verb {
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+  text-align: center;
+}
+@media (max-width: 640px) {
+  .team-addline {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.team-words {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+}
+.team-words li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+.team-words li.on {
+  background: var(--fill-hover);
+}
+.team-words .btn-text {
+  padding: 2px;
+}
+.team-strip-fixed {
+  flex: none;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+
+.team-problems {
+  padding: 8px 12px;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.team-problems p {
+  margin: 0 0 4px;
+}
+.team-problems ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.team-limits {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  align-items: center;
+  gap: 6px 14px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+}
+.team-num {
+  width: 100%;
+}
+
+/* Add a member. The shared confirm card, with its fields, a place for the note about a persona
+   that does not fit, and a place for what is wrong: the dialog is the same size throughout. */
+.team-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+}
+.team-dialog .field-label {
+  margin-top: 6px;
+}
+.team-dialog-note,
+.team-dialog-problem {
+  box-sizing: border-box;
+  margin: 6px 0 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  line-height: 1.35;
+  overflow: hidden;
+}
+.team-dialog-note {
+  height: 3.9em;
+  color: var(--ink-muted);
+}
+.team-dialog-problem {
+  height: 1.4em;
+  color: var(--ink);
+  font-weight: 600;
+}
+.team-dialog-aside {
+  font-weight: 400;
+  color: var(--ink-faint);
+}
+
+/* `TEAM-23`: what Poiesis would like to change about the team shown, and the dot on the list. */
+.team-proposals {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--paper-edge);
+  border-radius: var(--radius-lg);
+  padding: 2px 14px;
+}
+.team-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.team-proposal:last-child {
+  border-bottom: none;
+}
+.team-proposal-lead,
+.team-proposal-quote {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.5;
+  color: var(--ink);
+}
+.team-proposal-lead {
+  color: var(--ink-muted);
+}
+.team-proposal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.team-waiting-dot {
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--ink);
+  flex: none;
+}

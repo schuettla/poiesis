@@ -24,7 +24,7 @@ thiserror = "2"
 
 # Async runtime + HTTP (runtime download, engine proxy, cloud providers)
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
+reqwest = { version = "0.12", features = ["json", "stream", "multipart", "cookies"] }
 futures-util = "0.3"
 # `dyn MediaBackend` trait objects (Phase 13) need async fns in a trait, which
 # isn't dyn-object-safe on stable without this.
@@ -137,10 +137,20 @@ webview2-com = "0.39"
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# `TEAM-21`: tell the person when something waits for them. 2.8.1 reports a click on desktop.
+tauri-plugin-notification = "2"
 
 [features]
 default = ["voice"]
 voice = ["dep:sherpa-onnx", "dep:bzip2"]
+
+# Keep target/ small: full debug info made debug builds ~35 GB (pdb + rlib + incremental).
+# Line tables are enough for backtraces; dependencies get no debug info at all.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 panic = "abort"

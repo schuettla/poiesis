@@ -1,8 +1,8 @@
 /**
  * @vitest-environment jsdom
  *
- * `CA-UI-6`: a persona narrowed to some apps says which, in the tooltip of its
- * chip under the composer and of its row on the Fleet card.
+ * `CA-UI-6`: a persona narrowed to some apps says which, in the tooltip of who leads
+ * the chat (in the composer's this-chat menu) and of its row on the Fleet card.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -17,7 +17,7 @@ vi.mock("../../lib/api", async (importOriginal) => ({
 }));
 
 import { appsLine, forgetPersonaApps } from "./personaAppsLine";
-import ModeChips from "../Composer/ModeChips";
+import ChatSetup from "../Composer/ChatSetup";
 import FleetCard from "../Conversation/FleetCard";
 import { useAppStore } from "../../lib/store";
 
@@ -61,26 +61,32 @@ describe("the apps a persona may use", () => {
     expect(appsLine([grant("")], name)).toBe("Apps: none");
   });
 
-  it("is said in the persona chip's tooltip", async () => {
-    getPersonaAppGrants.mockResolvedValue([grant("notion"), grant("linear")]);
-    act(() => root.render(<ModeChips />));
+  /** `TEAM-2`: the persona's chip is the "Who leads" row of the this-chat menu now. */
+  const whoLeads = async () => {
+    act(() => root.render(<ChatSetup />));
     await flush();
-    const label = container.querySelector<HTMLButtonElement>(".mode-chip-label")!;
-    expect(label.textContent).toBe("Researcher");
-    expect(label.title).toBe("Apps: Notion, Linear · Change this");
+    act(() => container.querySelector<HTMLButtonElement>(".chat-setup-btn")!.click());
+    return container.querySelector<HTMLButtonElement>(".chat-setup-menu [role=menuitem]")!;
+  };
+
+  it("is said in the tooltip of who leads", async () => {
+    getPersonaAppGrants.mockResolvedValue([grant("notion"), grant("linear")]);
+    const row = await whoLeads();
+    expect(row.textContent).toContain("Researcher");
+    expect(row.title).toBe("Your choice for this chat · Apps: Notion, Linear");
     expect(getPersonaAppGrants).toHaveBeenCalledWith("p1");
   });
 
   it("says nothing extra for a persona that may use every app, and reads again after a save", async () => {
     getPersonaAppGrants.mockResolvedValue([]);
-    act(() => root.render(<ModeChips />));
-    await flush();
-    expect(container.querySelector<HTMLButtonElement>(".mode-chip-label")!.title).toBe("Change this");
+    expect((await whoLeads()).title).toBe("Your choice for this chat");
 
     getPersonaAppGrants.mockResolvedValue([grant("linear")]);
     act(() => forgetPersonaApps("p1"));
     await flush();
-    expect(container.querySelector<HTMLButtonElement>(".mode-chip-label")!.title).toBe("Apps: Linear · Change this");
+    expect(container.querySelector<HTMLButtonElement>(".chat-setup-menu [role=menuitem]")!.title).toBe(
+      "Your choice for this chat · Apps: Linear"
+    );
   });
 
   it("is said on the Fleet row of an agent backed by that persona", async () => {

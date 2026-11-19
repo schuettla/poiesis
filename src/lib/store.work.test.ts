@@ -201,6 +201,39 @@ describe("how this run works (WRK-3)", () => {
   });
 });
 
+describe("who answers (TEAM-3)", () => {
+  const answered = async (leader: string, source: "chat" | "default" | "message" | "none") => {
+    script = (emit) => {
+      emit(started);
+      emit({ type: "leader_set", leader, source });
+    };
+    await useAppStore.getState().resumeLastRun();
+    const c = useAppStore.getState().conversations[0];
+    return { author: c.messages[c.messages.length - 1]?.author, leader: c.leader, personaId: c.personaId };
+  };
+
+  it("stamps the reply with who gave it", async () => {
+    expect((await answered("poiesis", "none")).author).toBe("poiesis");
+  });
+
+  it("makes a leader the chat was given by where it starts the chat's leader", async () => {
+    const got = await answered("persona:p1", "default");
+    expect(got).toEqual({ author: "persona:p1", leader: "persona:p1", personaId: "p1" });
+  });
+
+  it("writes nothing to the chat when its place says Poiesis: nobody chose it for this chat", async () => {
+    const got = await answered("poiesis", "default");
+    expect(got.author).toBe("poiesis");
+    expect(got.leader ?? null).toBeNull();
+  });
+
+  it("leaves the chat's own leader alone when one message was led by someone else", async () => {
+    useAppStore.setState({ conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [], leader: "persona:p1", personaId: "p1" }] } as never);
+    const got = await answered("persona:p2", "message");
+    expect(got).toEqual({ author: "persona:p2", leader: "persona:p1", personaId: "p1" });
+  });
+});
+
 describe("choosing how a chat works", () => {
   it("keeps what the backend kept, and nothing gives the choice back to the defaults", async () => {
     await useAppStore.getState().setConversationStyle("c1", "lean");

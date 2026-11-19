@@ -1,7 +1,8 @@
 # The agent harness
 
-*How Poiesis turns a message into work. Current as of 2026-10-27 (the working
-tree after commit `6b1e851`, schema v42).*
+*How Poiesis turns a message into work. Current as of 2026-11-19 (the working
+tree after commit `ed4a17a`, schema v54). Leaders, personas and teams
+(`TEAMS_PLAN.md`) are §20.*
 
 This describes the code as it stands, not a plan. The plans in
 [plans/](../plans/) and [plans/done/](../plans/done/) state intent and carry
@@ -11,7 +12,8 @@ reasoning. Where a plan and this document disagree, this document describes
 what runs. Three things the plans describe are **not built**, and are marked
 where they would belong: the v4 "quiet stream" redesign of the quick-decision
 surfaces (§15), resuming an agent app's own session (§13), and the cognition
-plan (`COGNITION_PLAN.md`).
+plan (`COGNITION_PLAN.md`). Everything in §20 is built and tested but has
+never run on a real model.
 
 ---
 
@@ -48,6 +50,10 @@ renders those events. Rows, prompt, history and the saved timeline are Rust's
 │                         the coding machinery                             │
 │  agent/decide/          the decision seam: fast answers that only add    │
 │                         caution (§15)                                    │
+│  agent/leader.rs        who leads a session: Poiesis, a persona, a team  │
+│  agent/team*.rs         team runs, the board, the shared folder,         │
+│                         unasked replies (§20)                            │
+│  waiting.rs             what waits for the person, desktop notices       │
 │  agent/connector_gate   read / change / send for every MCP + Composio    │
 │  engines/               agent apps (Claude Code, Codex, ACP) as          │
 │                         delegation targets (§13)                         │
@@ -72,8 +78,10 @@ opening message array and which limits apply.
 |---|---|---|---|
 | `run_turn_cmd` (a typed message, a block action) | Rust: `agent::turn::run_turn` (`context::gather` + `compose_system_prompt` + history + briefs) | `RunLimits::top`: `agent.max_steps` (default 12, clamped 1..50), no clock | no |
 | `resume_run_cmd` ("Continue where I stopped") | `turn::resume_turn`: `log::replay` of the last logged run + `RESUME_PROMPT` | as above; the last plan is handed back | no |
-| `scheduler::run_job` (Tasks) | Rust: `context::gather` + `compose_system_prompt` + briefs | 12 steps, 600 s clock | yes |
+| `run_turn_cmd` with `addressed` or `unasked` (a team member speaks in the session, §20.6) | `run_turn`, with the member's persona lent for this one turn and a note of the board | as `run_turn` | no |
+| `scheduler::run_job` (Tasks) | Rust: `context::gather` + `compose_system_prompt` + briefs, under the task's leader (`Job.leader`) | 12 steps, 600 s clock; a team's task also under its allowance | yes |
 | `delegate` (foreground child) | `subagents.rs`: the task only, plus the agent type's prompt | `RunLimits::subagent`: 8 steps, 300 s, depth 0 | inherits |
+| `delegate` to a **team member** (§20.4) | `subagents.rs`: the task, the member contract, the member's persona | as a background child, under the task's allowance; at most `limits.at_once` at a time | always |
 | `delegate { background: true }` | `background.rs`, same as above | same | always |
 | `delegate` to an **agent app** (Claude Code, Codex, OpenCode) | `engines::run::run_external`: the task fenced as data, the agent app's own system append | the app's timeout (`engines/run.rs::timeout`), at most `max_parallel` at once | follows the parent |
 | `/delegate [agent] <task>` | the same path, with the rules (not the guards) skipped | as above | no |
@@ -141,7 +149,7 @@ warm:
 
 | Order | Block | Source | Condition |
 |---|---|---|---|
-| 1 | Base prompt | persona `system_prompt`, else the `system_prompt` setting, else the default | always |
+| 1 | Base prompt | the chat's persona `system_prompt` (the leader's; for a team, its coordinator's), else the `system_prompt` setting (edited as "Who Poiesis is"), else the default | always |
 | 2 | *About you* | `PROFILE.md`, the agent's own synthesis | non-empty |
 | 3 | *Standing instructions* | `SOUL.md`, user-owned | non-empty |
 | 4 | *Project: name* | project instructions (`PRJ-7`), capped at 4000 chars | chat in a project with instructions |
@@ -477,6 +485,10 @@ tool failure.
   stops a run and everything below it, never a sibling tree.
 - A child's permission prompt names who is asking and queues behind others.
 
+In a session a **team** leads, `delegate` is the coordinator's hand-over to its
+members, limited to the lines the team drew; the members' runs, reviews, posts
+and shared folder are §20.4 to §20.5.
+
 A delegation target can also be an **agent app**: the `delegate` branch in
 `subagents.rs` (`prepare_engine`) starts a child process instead of a
 `run_agent` call, with the same fleet handle, conversation, Fleet card, Stop
@@ -691,6 +703,9 @@ rebuilds the FTS index from disk, quarantines unreadable files, prunes trash and
   fencing** (`PRJ-8`): an entry tagged with a different project is not
   eligible; untagged memory is shared. Without an embedding engine recall falls
   back to keyword search and says so.
+- **Persona fencing** (`TEAM-5`, the same mechanism): an entry learned in a chat
+  a persona led carries that persona (`Fact.persona`) and is seen only in chats
+  that persona leads, unless it is about the person, which stays shared (§20.2).
 - **Reflection** (`commands/reflect.rs`) draws at most one lesson when a chat
   ends; `reflected_at` is stamped first, output must parse as JSON, a critic
   call checks the draft, and a failed lesson becomes a proposal.
@@ -808,11 +823,14 @@ after a reload.
 ticker drives jobs stored as JSON in `settings`; one runs at a time. Each run
 gets a new conversation (with the job's folder, if any), a prompt assembled in
 Rust (§3.1) plus briefs, a fleet handle, 12 steps and a 600 s clock, and
-`headless: true`. File changes are refused, renders skipped, the browser
-refused, and project tasks run only where the project's own policy is `allow`.
-Autonomy applies as usual (`Ask` leaves a proposal). Tasks run only while the
-app is open. One test asserts that an unattended run refuses rather than
-blocks, under a timeout.
+`headless: true`. A task can name who does it (`Job.leader`: Poiesis, a
+persona or a team), and the run's chat is led by it before the prompt is built.
+File changes are not made and not refused: each one waits for the person in
+**Waiting for you** and the run goes on (§20.7). Renders are skipped, the
+browser refused, and project tasks run only where the project's own policy is
+`allow`. Autonomy applies as usual (`Ask` leaves a proposal). The run's chat
+gets an unread dot. Tasks run only while the app is open. One test asserts that
+an unattended run never blocks on a prompt, under a timeout.
 
 ---
 
@@ -1147,7 +1165,9 @@ row `interrupted`. Models are fetched on demand from Settings → Runtime → Vo
 | `Permission` / `PermissionGone` | the consent panel (file, domain, screen, app, task, command, engine, handover, risk); a withdrawn question comes off it (a stop, an agent hanging up) |
 | `MemoryWrite` / `Proposal` | toast with undo / a card to accept or decline (self-changes, and engine-rule edits) |
 | `HarnessCommand` / `HarnessProposal` / `Suggestion` | what the agent did to its own session, a mode or schedule it asks the user to allow (the run does not wait), one `/` command it offers |
-| `Question` / `QuestionGone` | a fork the run is waiting on (`ask_user`), or one an agent app put to the person; the card comes off when it is no longer wanted |
+| `Question` / `QuestionGone` | a fork the run is waiting on (`ask_user`), or one an agent app put to the person; the card comes off when it is no longer wanted. With a `title` and a `check` it is a team's cost card |
+| `LeaderSet` | who leads the chat now, and why (`message`, `default`, a handover); the handover line and the composer glyph |
+| `MemberStarted` / `MemberEnded` / `Review` / `Posted` | a team member at work (role and item), a review checking, kept or sent back, a post on the board; the Coordination view's chart, Board and Replay |
 | `ToolsHeld` / `ToolsBack` | the run-bar chip for tool groups a quick decision left off the menu, and their return (by the model or by the user) |
 | `Thought` | the first-thought strip and its receipt (`SEE-2`) |
 | `Browser` | the live browser panel (replaced wholesale) |
@@ -1157,8 +1177,11 @@ row `interrupted`. Models are fetched on demand from Settings → Runtime → Vo
 
 Some things outlive a run, so they travel on the **app bus** instead of the run's
 channel: background agents re-emit their events there, media jobs deliver their
-result to the right turn after a reload, and the automatic answer check sends
-`poiesis-autocheck` (`progress`, `claim`, `done`).
+result to the right turn after a reload, the automatic answer check sends
+`poiesis-autocheck` (`progress`, `claim`, `done`), something left in Waiting for
+you sends `poiesis-away` (the window reloads what waits and what is unread), and
+a click on a desktop notification sends `poiesis-open-session`. A team's member
+events reach the window on both the turn's channel and the app bus.
 
 **The trust rule on the frontend.** An event may move the right sidebar
 (`setDockView`) but never open or focus a tab: a tab can take the chat the user
@@ -1173,14 +1196,16 @@ All local.
 
 | Table | Written by | Read by |
 |---|---|---|
-| `session_events` | the session log | resume, fork, rewind, plan restore, compaction history |
+| `session_events` | the session log; kind `team` for a `/ask` with no line and a style chosen in a team's chat | resume, fork, rewind, plan restore, compaction history, team evolution |
 | `run_usage` | every run exit | Settings → Usage |
-| `subagent_runs` | delegation | Fleet card, Agents view |
+| `subagent_runs` (`member`, `item` for team runs) | delegation | Fleet card, Agents view, a team's reviews, estimates and evolution |
+| `posts` | the loop and the `post` tool in team runs | the Board, Replay, delivery to members |
+| `conversations.leader`, `away_at`, `seen_at`; `messages.author`, `addressed` | `set_leader`, unattended runs, `run_turn` | the sidebar marker and dot, name lines, team evolution |
 | `tool_stats` | every dispatched call (content-free) | reliability captions, tool cautions |
 | `tool_fixes` | fail-then-fix pairs | reflection (pruned at 30 days) |
 | `skill_runs` | per run, backfilled with failures | skill outcome reporting |
 | `activity_log` | file ops, tasks, MCP calls, untrusted intake, memory events, decisions of note | the Activity list |
-| `change_proposals` | anything gated to `ask` (including `engine-rule` edits) | proposal cards |
+| `change_proposals` | anything gated to `ask` (including `engine-rule` edits, and `team` proposals); `waiting-file` and `waiting-ask` from runs nobody watches | proposal cards, a team's page, Waiting for you |
 | `file_trash` | every destructive file op | undo, Recent changes, the Changes view |
 | `engines`, `engine_rules`, `engine_signals` | Settings → External agents, `delegate`, the handover card | rule hit and override counts, rule proposals, outcome labels |
 | `connector_policy`, `app_send_log`, `app_call_log` | the connector gate and every connector call | Settings → Apps, the daily cap, Usage, outcome labels |
@@ -1257,9 +1282,256 @@ what it records, requirements, graduation line) and a report in
 `app_calls::plan` for how a Composio batch is read, and a test built from a
 recorded reply (`fixtures/composio/`).
 
+**A new leader kind:** `Leader` in `agent/leader.rs` (`parse`, `text`), then
+everything that lists leaders: the store, `/lead` (`commands.ts` `leaders` /
+`matchLeader`), `leaderState.ts`, the Rail marker and filter, and Where chats
+start. A session led by Poiesis must stay byte-identical (the golden gate).
+
+**A new line kind:** `LineKind` in `memory/ways/teams.rs` (parse and write),
+what it allows in `team::may_post` and `team_voices::may_chime`, its words in
+`lib/teamChart.ts`, and a shape that draws it in `shape_lines` if any should.
+
 ---
 
-## 20. Known limits
+## 20. Leaders, personas and teams
+
+[`agent/leader.rs`](../src-tauri/src/agent/leader.rs),
+[`agent/team.rs`](../src-tauri/src/agent/team.rs),
+[`team_folder.rs`](../src-tauri/src/agent/team_folder.rs),
+[`team_voices.rs`](../src-tauri/src/agent/team_voices.rs),
+[`memory/ways/teams.rs`](../src-tauri/src/memory/ways/teams.rs),
+[`waiting.rs`](../src-tauri/src/waiting.rs). Plan: `plans/TEAMS_PLAN.md`
+(`TEAM-1` to `TEAM-23`). The org loop gave the harness a *how* (styles made of
+rules, `agent/work.rs`); this adds the *who*. **Rules say when and what; lines
+say who.** Built and tested, never run on a real model.
+
+### 20.1 The leader
+
+A session has exactly one leader, in `conversations.leader`:
+
+| Value | Meaning |
+|---|---|
+| `NULL` | nobody chose: the place's default applies (`defaults.md`), else Poiesis |
+| `poiesis` | Poiesis, chosen on purpose, so no default overrides it |
+| `persona:<id>` | that persona leads |
+| `team:<slug>` | that team leads; its coordinator answers |
+
+- `leader::set_leader` writes the leader and keeps `conversations.persona_id` in
+  step (a team sets the coordinator's persona, or none for Poiesis), so the
+  turn code that reads `persona_id` for prompt, model, temperature and tools did
+  not change. `leader::start_of_turn` re-syncs a team chat whose coordinator was
+  changed in the team editor. A child or member chat never has a leader.
+- **Defaults** are lines in `defaults.md` with an optional leader next to the
+  style (`scope -> style leader=who`); most particular wins. The old
+  `personas.is_default` was moved once into the Everywhere row
+  (`migrate_default_persona`) and is not read any more.
+- **Style order** (`Work::resolve`, `MemoryStore::default_for_led`): the chat's
+  style, the place's (kind of work, then project), the leader's own default, the
+  Everywhere style, Ad hoc.
+- **Handing over mid-session** writes one chat line ("Mira leads this chat from
+  here.") and `LeaderSet { leader, source }`. `/lead mira <message>` lends the
+  chat to Mira for that message only (`leader::lend` / `give_back`). `harness
+  switch_mode` can offer the person's leaders next to the styles, once per
+  session, only when the person has not chosen one in it.
+- **Who said what:** `run_turn` stamps every reply with `messages.author`
+  (`team:<slug>` when the team's coordinator answers, `persona:<id>` for a lent
+  turn or a member). The window draws a name line only where the speaker changes.
+
+### 20.2 Persona memory
+
+`Fact.persona` narrows recall the way `Fact.project` does (`shown_to`): a chat
+sees shared entries plus its leading persona's own. What a persona saves is
+tagged with it (`leader::keep`), except a `fact` or `preference` that is not
+topical, which is about the person and stays shared. `personas.remembers = 0`
+("Remember across chats" off) keeps nothing of its own. Deleting a persona moves
+its entries to `.trash/` (`forget_persona`) and turns its team places into
+helpers. Self → Memory has a "Whose" filter.
+
+### 20.3 Teams as files
+
+A team is `memory/ways/teams/<slug>.md`, written through the style history code
+(versions under `history/team-<slug>/`, lock, rings). A team the person makes
+starts **locked**. The file holds: name and line, `coordinator` (a persona or
+`poiesis`), `style` (the coordinator's), `member_style` (one for all members),
+`shape` (Hub, Pipeline, Review, Open: starting line sets), `report` (`each-item`,
+`end`, `problems`), `limits` (`at_once`, `budget` in dollars, `minutes`,
+`rounds`, `ask_cost`), `folder` (`copies` or `owners`), the **members** (role,
+persona or `helper`, a job line, `owns:` paths) and the **lines**:
+
+| Line | Allows |
+|---|---|
+| `A hands-over B` | A gives B work; the result comes back |
+| `A reviews B` | A looks at B's item before it counts as done |
+| `A asks B` | A may ask B and wait for the answer |
+| `A reports B` | A tells B how it goes (`reports you` is the check-in) |
+| `you talks A` | the person may speak to A in the session |
+
+`coordinator reports you` and `you talks coordinator` are fixed. A line that does
+not parse is skipped and reported, never widened. Commands: `teams_list_cmd`,
+`team_get_cmd`, `team_save_cmd`, `team_delete_cmd`, `team_history_cmd`,
+`team_back_cmd`, `team_shape_lines_cmd`, `team_blank_cmd`,
+`team_from_session_cmd`.
+
+### 20.4 A team run
+
+- **The coordinator** is the session's own run, under the team's style. Every
+  turn it reads a system note on its own transcript (`team::coordinator_note`,
+  pushed like the plan-first note, so the golden gate does not move). The note
+  says the members do the work, not the coordinator, and lists the members
+  with their jobs and who reviews whom. It sits right after the system prompt.
+  A model told this in words still did every part itself, so the coordinator's
+  table is cut down to `delegate`, `check_agents`, `collect_agents` and `post`
+  (`ToolRegistry::coordinate_only`), plus the loop's `plan` and `ask_user`. A
+  call to any other tool is refused: "You coordinate X and do not have
+  web_search. Hand this part to ...". The members' ceiling is the table from
+  before the cut, so members keep every tool. With no `delegate` (Delegation
+  off, a Basic model) nothing is cut, and the note says to do the work and to
+  say that the members did not take part.
+  `team::specialise` turns its `delegate` into a hand-over whose `agent` enum is
+  the roles it has a `hands-over` line to; anything else is refused ("There is
+  no line from coordinator to docs in this team."). Hand-overs always run in the
+  background, and `collect_agents { until: "any" }` returns on the first member
+  that finishes or the first post for the coordinator; what was read is not
+  returned again.
+- **A member** runs in its own chat for the task (`subagent_runs.member`,
+  `.item`): a later hand-over to the same role continues that chat from its
+  session log. It works with its persona's instructions, memory and tools, under
+  `member_style`, with the member contract in place of the helper one, and the
+  Always rules hold. At most `limits.at_once` members run per session
+  (`team::Slots`), the rest wait in order. Members run on the coordinator's
+  model.
+- **Reviews are the loop's, not the model's.** When a member with a reviewer
+  finishes, `team::settle` hands the item to the reviewer ("Review item 3 by
+  api: ..." with the member's report and its changes), reads the answer with
+  `aside::parse_look`, and either keeps it or sends it back as a new task in the
+  member's chat. At `limits.rounds` reviews the coordinator reads "api and
+  verifier did not agree on item 3: ...". The standing of every item (owed,
+  kept, back, stuck, gone) is read from the run rows; nothing else is stored.
+- **Reports:** after each item, at the end, or only on problems, through the
+  check-in card the org loop already has (`team::raise`, `take_problems`).
+- **Limits:** one `fleet::Allowance` per task, shared by the coordinator and
+  every member, fed by each run's cost (`run_usage` prices; local models are
+  free). At `limits.budget` or `limits.minutes` every member is cancelled, no
+  hand-over starts, and the coordinator gets a closing turn to say what is done
+  (stop reason `budget`). Before the first task, when `ask_cost` is on, the
+  cost card (a `Question` with a title and a "Don't ask for this team" box)
+  gives an estimate from the team's last five finished tasks, or "roughly" from
+  the model's price before there are three.
+- **The folder.** `copies`: each member works in its own copy
+  (`team_folder::make_copy`, with a hash of every file as it was). When its item
+  counts as done the loop writes its changes into the main folder
+  (`merge_done`, snapshotted, so Undo works); a file the folder changed too is
+  never overwritten and becomes an item for the coordinator ("api and ui both
+  changed `src/app.ts`"). The next task brings in what is left and deletes the
+  copies (`sweep`). `owners`: members work in the main folder and the file
+  tools refuse a write outside a member's `owns:` places ("src/ui/ belongs to ui
+  in this team.").
+- **Keep these helpers as a team** (`team::keep_as_team`, the session ⋯ menu):
+  a New team drafted from the helpers a session used, never offered unasked.
+
+### 20.5 The board
+
+Every hand-over, result, review, verdict, question, answer and report is a row
+in `posts` (from, to, kind, item, reply_to, `delivered_at`). The loop writes its
+own (`team::record`); a persona writes with the **`post`** tool, offered only to
+the coordinator and members of a team run (`post_spec_for`) and refused where no
+line allows it ("There is no line from api to ui in this team. Ask the
+coordinator instead."). Delivery: to a working member as a `Steer`; to the
+coordinator with its next `collect_agents`; to a member that is not working,
+`team::wake` hands it over as a task of its own; to the person, the check-in
+card. `wait: true` holds the asker on `RunHandle::ask` for at most five minutes;
+a woken run that finishes without answering answers with its final message
+(`record_end`). Posts are never chat messages: they appear on the Board and as
+line widths on the chart (`Posted`, `list_posts_cmd`).
+
+### 20.6 Talking to members
+
+- **Asked:** a message with `RunOptions.addressed` (the member row above the
+  composer, or `/ask kai ...`) goes to a member the person has a `you talks`
+  line to (`team::addressable`). For that turn the chat is lent to the member's
+  persona (`leader::lend_member`), it is told who it is and the last ten posts
+  that involve it (`board_note`), and the message is posted from `you`. A `/ask`
+  with no line is refused in the window and recorded for evolution.
+- **Unasked** (`team_voices.rs`): after a reply in a team-led chat the window
+  calls `team_next_voice_cmd`. The rules run first, so a chat where nobody may
+  speak up never spends a call: at most one unasked reply after each answer to
+  the person, never the coordinator, only a persona with a line that lets it
+  talk with the one who spoke (`you talks` to both, or an `asks` line between
+  them). Then one short side call on the chat's own model (`aside::ask`) answers
+  `SPEAKER: <role>` or `SPEAKER: nobody`; anything else is nobody. The chosen
+  member answers through `run_turn` with `unasked`, which saves only the reply.
+
+### 20.7 Waiting for you, and runs nobody watches
+
+- **Parked, not refused.** In a headless run a write, edit, create folder, move
+  or delete passes the usual checks and is then stored as a pending
+  `change_proposals` row with target `waiting-file` (`filesystem::park`); the
+  model is told it waits and goes on. At most 20 such entries per session. A
+  member's post to `you` is parked as `waiting-ask`. Columns
+  `conversation_id`, `session_id` and `author` say which chat did it, where the
+  person finds it and who waits.
+- **A member in its own copy** writes there freely even unattended, since
+  nothing there reaches the person's folder. The merge is what waits: one
+  "Bring in its changes to ..." entry per member that carries the files'
+  contents (4 MB a file, 16 MB in all), so it still works after the copy is
+  gone.
+- **Answering** (`resolve_waiting_cmd`): yes makes exactly the stored change
+  (`apply_parked`); an edit whose file changed since stays waiting, and a
+  bring-in skips and names each file the folder changed since. An answer to a
+  question becomes a post from `you` to whoever asked. When the last entry of a
+  session is answered and something was approved, the window sends the
+  decisions as the person's next message, and the work goes on.
+- **Unread:** `conversations.away_at` (a run nobody watched changed it) and
+  `seen_at` (the person opened it). Scheduled runs, parked entries and a
+  team-led chat that finished while the person looked elsewhere set it.
+- **Notification** (`tauri-plugin-notification` 2.8.1): one per entry, only when
+  "Tell me when someone is waiting for me" is on (`notify.waiting`) and the
+  window is not focused. It names the persona that waits ("Atlas is waiting for
+  you"). A click brings the window forward and opens the session
+  (`poiesis-open-session`).
+
+### 20.8 Teams evolve
+
+`agent/evolve.rs` reads each **unlocked** team's finished tasks
+(`team::task_facts`, from the run rows) and two kinds of `session_events` of
+kind `team` (a `/ask` with no line, a style the person chose in a team's chat),
+and proposes, at most once per subject:
+
+| Signal | Proposal |
+|---|---|
+| a member had no run in the team's last 5 tasks | take it out, with its lines |
+| a reviewer sent back more than half of one member's items over 5 tasks | an `asks` line from the member to the reviewer |
+| the rounds limit was hit in 3 tasks this month | the coordinator decides after 2 rounds |
+| the person tried to speak to a persona member without a line in 3 chats | a `you talks` line |
+| the person chose another style in 3 of the team's chats | that style becomes the team's |
+
+Proposals have target `team`, are answered on the team's page in Settings →
+Personas & teams (which is badged, not Self), go through the golden guard, and
+are governed by the autonomy class `ways`. A change is a new team version made
+by `evolution`; `Undo::Team` puts the team back unless it changed since. A
+locked team is never read, and a card waiting when it was locked is refused.
+
+### 20.9 What the window shows
+
+- **Who leads** in the chat setup menu (Poiesis, personas, teams, "Use for this
+  project too", "Manage personas and teams..."); the composer button draws the
+  leader's glyph with the style as a badge; the sidebar marks rows by leader and
+  filters by it.
+- **Settings → Personas & teams**: Poiesis as the fixed first persona ("Who
+  Poiesis is" is the global system prompt), each persona's folded sections
+  (Who, What it uses, How it works, What it knows, In teams, Handing it work),
+  and the Teams tab whose chart is the editor (click two places to draw a line).
+- **Coordination view** for a team-led chat: Chart (live: the working member's
+  orb, line widths by posts, items as dots, the "Now:" sentence), Board (posts,
+  filter by member), Replay (the task's posts in order), Members. Fleet cards
+  read "api · Atlas"; the organization strip shows members' faces.
+- **Waiting for you · N** at the top of the sidebar, opening a fixed-size dialog
+  grouped by session; the session row shows a quiet tint, and unread chats a dot.
+- **Tasks:** "Who does it" in the task dialog, "Done by X" on the card.
+
+---
+
+## 21. Known limits
 
 - **`run_agent` takes 20 arguments.** `TurnCtx` bundles them inside the loop,
   but the public signature has not followed.
@@ -1303,6 +1575,17 @@ recorded reply (`fixtures/composio/`).
 - **A connector has no field for an environment variable**, so a stdio MCP server
   that needs a token the user exported inherits it; only `POIESIS_*` and the
   model providers' keys are withheld.
+- **Teams have never run on a real model**, and the notification click has not
+  been tried on a real desktop (on Windows the plugin works only for an
+  installed app). Members run on the coordinator's model, not their persona's
+  own, and the cost card names that one model for all of them. `owners` checks
+  only the file tools, not `run_code` or shell commands. Reviews, merges and
+  waking a member happen only when the coordinator hands over or collects
+  reports, so a coordinator that never collects never has them. A scheduled
+  team task has no cost card (nobody can answer it). An agent-app member's cost
+  is not counted against the budget. The header mark's tooltip still says
+  "helpers" for members. Evolution's `/ask` and chosen-style signals count only
+  from 2026-11-19.
 - **There is no mail inbox outside the `mail-triage` experiment.** Mail is still
   fetched only when a tool asks; the small inbox and its background fetch exist
   only with the experiment on, a local decision model and a Mail account.

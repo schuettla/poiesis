@@ -175,6 +175,11 @@ pub struct Fact {
     /// *other* projects see; it never hides an entry from its own project.
     #[serde(default)]
     pub project: Option<String>,
+    /// `TEAM-5`: the persona this was learned under. `None` means shared with everyone,
+    /// as most of it is. Another persona's entries are left out of a run the way another
+    /// project's are; "Share with everyone" clears it.
+    #[serde(default)]
+    pub persona: Option<String>,
     /// `CPX-5`: where a lesson came from, when that is worth saying. `rewind` is
     /// a lesson learned because the user went back on abandoned work. Facts and
     /// ordinary lessons never set this.
@@ -259,6 +264,16 @@ impl Fact {
         !self.is_superseded() && self.kind != "intention" && self.fires.is_none()
     }
 
+    /// `TEAM-5`: is this entry for a run led by `persona` (`None`: Poiesis, or a persona
+    /// that does not remember)? Shared entries are for everyone; a tagged one is only
+    /// for the persona it was learned under.
+    pub fn shown_to(&self, persona: Option<&str>) -> bool {
+        match self.persona.as_deref() {
+            None => true,
+            Some(tag) => Some(tag) == persona,
+        }
+    }
+
     /// The marker the index line carries when the entry should be hedged.
     pub fn hedge_marker(&self) -> Option<String> {
         let word = if self.status.as_deref() == Some("contested") {
@@ -300,11 +315,14 @@ pub struct Cues {
     /// `PRJ-S1`: lessons that reached answers in this project's finished (`done`)
     /// conversations. They rank a little higher here.
     pub proven: std::collections::HashSet<String>,
+    /// `TEAM-5`: the persona leading this turn, when it remembers. Its own entries are
+    /// eligible beside the shared ones; another persona's are not.
+    pub persona: Option<String>,
 }
 
 impl Cues {
     pub fn from_turn(message: &str, session_entities: Vec<String>) -> Cues {
-        Cues { message_names: names_in(message), session_names: session_entities, proven: Default::default() }
+        Cues { message_names: names_in(message), session_names: session_entities, ..Default::default() }
     }
 
     /// If this fact is about something the turn names, why, in words.
@@ -524,6 +542,7 @@ fn parse_entry(name: &str, text: &str) -> Fact {
     let mut last_seen = None;
     let mut expires_at = None;
     let mut project = None;
+    let mut persona = None;
     let mut origin = None;
     let mut cue = None;
     let mut confidence = None;
@@ -561,6 +580,8 @@ fn parse_entry(name: &str, text: &str) -> Fact {
             // direction: a mis-tagged fact stays reachable instead of
             // disappearing into a project nobody can name.
             "project" => project = Some(value),
+            // `TEAM-5`: the same tolerance, and the same safe direction.
+            "persona" => persona = Some(value),
             "origin" => origin = Some(value),
             "cue" => cue = Some(value),
             // An unrecognized value reads as absent, like `scope`: a typo must
@@ -600,6 +621,7 @@ fn parse_entry(name: &str, text: &str) -> Fact {
         last_seen,
         expires_at,
         project,
+        persona,
         origin,
         cue,
         confidence,
@@ -702,6 +724,9 @@ fn render_entry(f: &Fact) -> String {
     }
     if let Some(project) = &f.project {
         out.push_str(&format!("project: {}\n", one_line(project)));
+    }
+    if let Some(persona) = &f.persona {
+        out.push_str(&format!("persona: {}\n", one_line(persona)));
     }
     if let Some(origin) = &f.origin {
         out.push_str(&format!("origin: {}\n", one_line(origin)));
@@ -1051,6 +1076,7 @@ impl MemoryStore {
                 body: right_now,
                 scope: before.scope.clone(),
                 project: before.project.clone(),
+                persona: before.persona.clone(),
                 ..Default::default()
             },
         )
@@ -1075,6 +1101,32 @@ impl MemoryStore {
         self.write_index();
         self.sync_fts(db);
         Ok(())
+    }
+
+    /// `TEAM-5`, "Share with everyone": an entry a persona learned becomes one everyone
+    /// knows. The tag is all there is to it; nothing about the entry changes.
+    pub fn share_with_everyone(&self, db: &Db, collection: &str, name: &str) -> Result<(), String> {
+        if !COLLECTIONS.contains(&collection) {
+            return Err("that isn't a memory collection".into());
+        }
+        self.rewrite(collection, name, |f| f.persona = None)?;
+        self.write_index();
+        self.sync_fts(db);
+        Ok(())
+    }
+
+    /// `TEAM-5`: when a persona is deleted, what it alone knew goes to the trash with it,
+    /// recoverable there. Returns how many entries.
+    pub fn forget_persona(&self, db: &Db, persona_id: &str) -> usize {
+        let mut gone = 0;
+        for collection in [FACTS, LESSONS] {
+            for f in self.list_in(collection) {
+                if f.persona.as_deref() == Some(persona_id) && self.forget_in(db, collection, &f.name).is_ok() {
+                    gone += 1;
+                }
+            }
+        }
+        gone
     }
 
     /// Facts never classified (`SCP-3`): missing scope reads as global until
@@ -1474,6 +1526,7 @@ impl MemoryStore {
                     None => true,
                     Some(tag) => Some(tag) == project,
                 }
+                && f.shown_to(cues.persona.as_deref())
         };
         let fact_credit = db.memory_credit_map(FACTS).unwrap_or_default();
         let lesson_credit = db.memory_credit_map(LESSONS).unwrap_or_default();
@@ -1764,7 +1817,9 @@ impl MemoryStore {
     pub fn sync_fts(&self, db: &Db) {
         let mut rows = Vec::new();
         for collection in COLLECTIONS {
-            for f in self.list_in(collection) {
+            // `TEAM-5`: the search is anyone's (`search_history`, an agent app's `recall`), so
+            // what only one persona knows is not in it. That persona still has it in its index.
+            for f in self.list_in(collection).into_iter().filter(|f| f.persona.is_none()) {
                 rows.push((f.name, f.description, f.body, f.kind));
             }
         }
@@ -1805,6 +1860,7 @@ mod tests {
             fires: None,
             trigger: None,
             project: None,
+            persona: None,
         }
     }
 
@@ -2370,6 +2426,13 @@ mod tests {
         // Forgetting removes it from search too.
         s.forget(&db, "prefers-metric").unwrap();
         assert!(db.search_memory_fts("metric", 5).unwrap().is_empty());
+
+        // `TEAM-5`: what one persona knows is not in a search anyone can run, until shared.
+        s.save(&db, &Fact { persona: Some("mira".into()), ..fact("prefers-metric", "Always give measurements in metric.") })
+            .unwrap();
+        assert!(db.search_memory_fts("metric", 5).unwrap().is_empty());
+        s.share_with_everyone(&db, FACTS, "prefers-metric").unwrap();
+        assert_eq!(db.search_memory_fts("metric", 5).unwrap().len(), 1);
     }
 
     #[test]
@@ -2770,6 +2833,57 @@ mod tests {
         assert!(s.read_in(FACTS, "tagged").is_some());
         let untagged = parse_entry("plain", "---\nname: plain\nproject:\n---\nbody\n");
         assert!(untagged.project.is_none());
+    }
+
+    fn recall_as(s: &MemoryStore, db: &Db, persona: Option<&str>) -> RecallSet {
+        let cues = Cues { persona: persona.map(str::to_string), ..Default::default() };
+        s.recall_with_cues(db, None, None, &cues)
+    }
+
+    /// `TEAM-5`: a run sees what is shared and its own persona's, never another's.
+    #[test]
+    fn recall_shows_a_persona_its_own_entries_and_the_shared_ones_only() {
+        let (s, db, _tmp) = store();
+        s.save(&db, &fact("company-name", "The company is Acme.")).unwrap();
+        s.save(&db, &Fact { persona: Some("mira".into()), ..fact("short-intros", "Likes short intros.") }).unwrap();
+        s.save(&db, &Fact { persona: Some("atlas".into()), ..fact("long-intros", "Likes long intros.") }).unwrap();
+        s.save_lesson(&db, &Fact { persona: Some("mira".into()), kind: "lesson".into(), ..fact("warm-opener", "Open warmly.") }).unwrap();
+
+        let mira = recall_as(&s, &db, Some("mira")).index;
+        assert!(mira.contains("company-name") && mira.contains("short-intros") && mira.contains("warm-opener"), "{mira}");
+        assert!(!mira.contains("long-intros"), "another persona's is left out:\n{mira}");
+
+        let poiesis = recall_as(&s, &db, None).index;
+        assert!(poiesis.contains("company-name"));
+        assert!(!poiesis.contains("short-intros") && !poiesis.contains("long-intros") && !poiesis.contains("warm-opener"), "{poiesis}");
+
+        // The unscoped entry points are Poiesis's, as before.
+        assert_eq!(s.recall_for(&db, None).index, poiesis);
+    }
+
+    #[test]
+    fn a_persona_tag_survives_the_file_and_sharing_clears_it() {
+        let (s, db, _tmp) = store();
+        s.save(&db, &Fact { persona: Some("mira".into()), ..fact("short-intros", "Likes short intros.") }).unwrap();
+        assert_eq!(s.read("short-intros").unwrap().persona.as_deref(), Some("mira"));
+
+        s.share_with_everyone(&db, FACTS, "short-intros").unwrap();
+        assert!(s.read("short-intros").unwrap().persona.is_none());
+        assert!(recall_as(&s, &db, None).index.contains("short-intros"), "now everyone knows it");
+        assert!(s.share_with_everyone(&db, "elsewhere", "short-intros").is_err());
+    }
+
+    #[test]
+    fn deleting_a_persona_sets_aside_what_only_it_knew() {
+        let (s, db, _tmp) = store();
+        s.save(&db, &fact("company-name", "The company is Acme.")).unwrap();
+        s.save(&db, &Fact { persona: Some("mira".into()), ..fact("short-intros", "Likes short intros.") }).unwrap();
+        s.save(&db, &Fact { persona: Some("atlas".into()), ..fact("long-intros", "Likes long intros.") }).unwrap();
+        s.save_lesson(&db, &Fact { persona: Some("mira".into()), kind: "lesson".into(), ..fact("warm-opener", "Open warmly.") }).unwrap();
+
+        assert_eq!(s.forget_persona(&db, "mira"), 2);
+        assert!(s.read("short-intros").is_none() && s.read_in(LESSONS, "warm-opener").is_none());
+        assert!(s.read("company-name").is_some() && s.read("long-intros").is_some(), "nobody else's is touched");
     }
 
     #[test]

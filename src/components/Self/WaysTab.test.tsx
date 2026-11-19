@@ -85,6 +85,7 @@ const view = (over: Partial<WaysView> = {}): WaysView => ({
   ],
   global_default: "ad-hoc",
   defaults: [],
+  starts: [{ scope: "global", label: "Everywhere", style: null, leader: null }],
   deleted: [],
   proposals: [],
   moments: [],
@@ -144,7 +145,7 @@ describe("the story and the lists", () => {
     await show();
     expect(container.querySelector(".ways-story")?.textContent).toBe("I've changed how I work 2 times since November.");
     const heads = [...container.querySelectorAll(".ways-heading h3")].map((h) => h.textContent);
-    expect(heads).toEqual(["Styles", "Rules in every style", "A different style for one place"]);
+    expect(heads).toEqual(["Styles", "Rules in every style", "Where chats start"]);
     expect(container.querySelector(".ways-style.on")?.textContent).toContain("Lean");
     expect(container.querySelector(".ways-detail h3")?.textContent).toBe("Lean");
     // The switched-off rule is folded away, not gone.
@@ -294,9 +295,54 @@ describe("presets", () => {
     expect(api.restorePreset).toHaveBeenCalledWith("1-preset-old.md");
   });
 
-  it("sets where a project, persona or kind of work starts", async () => {
+  it("sets where a project or a kind of work starts (the leader column has its own tests)", async () => {
     await show();
+    await click(byLabel("Start in"));
+    await click(Array.from(document.querySelectorAll<HTMLElement>("[role=option]")).find((o) => o.textContent === "Lean")!);
     await click(byText("Set"));
     expect(api.setStyleDefault).toHaveBeenCalledWith("project:nexus", "lean");
+  });
+});
+
+describe("links with Personas & teams (TEAM-5b)", () => {
+  const openPersonas = vi.fn();
+  beforeEach(() => {
+    openPersonas.mockReset();
+    useAppStore.setState({ openPersonas, personas: [{ id: "p1", name: "Mira" }], selfTabRequest: null } as never);
+  });
+
+  it("says on a style which places start in it, and a persona there opens its entry", async () => {
+    await show(
+      view({
+        starts: [
+          { scope: "global", label: "Everywhere", style: null, leader: null },
+          { scope: "project:nexus", label: "Project: Nexus", style: "lean", leader: null },
+          { scope: "persona:p1", label: "Persona: Mira", style: "lean", leader: null },
+        ],
+      })
+    );
+    expect(container.textContent).toContain("Chats start in it for: Project: Nexus, Mira");
+    await click(buttons().find((b) => b.textContent === "Mira")!);
+    expect(openPersonas).toHaveBeenCalledWith("p1");
+  });
+
+  it("says nothing of the kind when only everywhere starts in it", async () => {
+    await show();
+    expect(container.textContent).not.toContain("Chats start in it for");
+  });
+
+  it("opens on the style a link asks for", async () => {
+    useAppStore.setState({ selfTabRequest: { tab: "ways", nonce: 1, focus: "mine" } } as never);
+    api.waysView.mockImplementation((p?: string) => Promise.resolve(view({ preset: p ?? "lean" })));
+    await act(async () => root.render(<WaysTab />));
+    await act(async () => {});
+    expect(api.waysView).toHaveBeenLastCalledWith("mine");
+  });
+
+  it("opens Where chats start, folded under More settings, when a link asks for it", async () => {
+    useAppStore.setState({ selfTabRequest: { tab: "ways", nonce: 2, focus: "starts" } } as never);
+    await show();
+    expect(container.querySelector<HTMLDetailsElement>("details.ways-advanced")!.open).toBe(true);
+    expect(container.querySelector("#ways-starts")).not.toBeNull();
   });
 });

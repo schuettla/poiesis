@@ -144,8 +144,16 @@ export interface SubRun {
   conversationId: string;
   /** The conversation whose turn started it. */
   parentConversationId: string;
-  /** The agent type: a persona name, or "general". */
+  /** The answer message of that turn, when the run was read back from the database: the turn's
+   * `subRunIds` are made from it whichever of the two arrives first. */
+  parentMessageId?: string;
+  /** The agent type: a persona name, or "general". For a team member, its role. */
   agent: string;
+  /** `TEAM-14`: the role of the team place this run is, and the plan item (from 1) it has. */
+  member?: string;
+  item?: number;
+  /** A member's run that has not left the team's queue yet (`member_started` clears it). */
+  waiting?: boolean;
   task: string;
   status: import("./api").SubRunStatus;
   /** Why it ended, once it has (`HRN-3`'s vocabulary). */
@@ -316,6 +324,11 @@ export interface Message {
   /** `VTN-7`: this turn was spoken: a user turn that was heard, or a reply that
    * was read out. */
   spoken?: boolean;
+  /** `TEAM-3`: who gave this reply (`poiesis`, `persona:<id>`). Absent on user turns and
+   * on replies from before it was kept. */
+  author?: string;
+  /** `TEAM-17`: on a user turn, the member of a team the person spoke to (its role). */
+  addressed?: string;
   /** `VTN-6`: when the user cut a spoken reply off, `text` is only what they
    * heard and this is the whole written reply. */
   unspoken?: string;
@@ -367,6 +380,9 @@ export interface Conversation {
   enginesOff?: boolean;
   /** `WRK-3`: how this chat works, as a preset's slug. `null` is Ad hoc. */
   style?: string | null;
+  /** `TEAM-1`: who leads this chat (`poiesis`, `persona:<id>`); `null` when nobody chose
+   * and where chats start decides. `personaId` above is what the turn code reads. */
+  leader?: string | null;
   /** `PRJ-1`: the project this session belongs to, or null for a loose chat.
    * With one set, the project owns the folder and the trust level and the two
    * fields above are only the fallback. */
@@ -463,6 +479,8 @@ export const ALL_VIEWS = [
   "settings",
   "library",
   "self",
+  // `TEAM-4`: who can lead a chat, and what each of them is.
+  "personas",
   "tasks",
   "activity",
   "skills",
@@ -491,25 +509,45 @@ export type View = (typeof ALL_VIEWS)[number];
  * store needs it too (to collapse the whole hub onto one route tab) and
  * importing a route module from the store would drag every settings panel into
  * its module graph. `SettingsHub` re-exports this as `HUB_TABS`. */
-export const HUB_SECTIONS: { view: View; label: string; icon: string }[] = [
-  { view: "firststeps", label: "First steps", icon: "⚑" },
-  { view: "settings", label: "General", icon: "⚙" },
-  { view: "models", label: "Models", icon: "▤" },
-  { view: "providers", label: "Providers", icon: "⌁" },
-  { view: "runtime", label: "Runtime", icon: "◧" },
-  { view: "engines", label: "External agents", icon: "⇄" },
-  { view: "tools", label: "Tools", icon: "⚒" },
-  { view: "skills", label: "Skills", icon: "▦" },
-  { view: "apps", label: "Apps", icon: "◇" },
-  { view: "self", label: "Self", icon: "" },
-  { view: "tasks", label: "Tasks", icon: "◷" },
-  { view: "mail", label: "Mail", icon: "✉" },
-  { view: "activity", label: "Activity", icon: "≡" },
-  { view: "usage", label: "Usage", icon: "◔" },
-  // `EXP-UI-1`: between Usage and Working dir.
-  { view: "experiments", label: "Experiments", icon: "⚗" },
-  { view: "workingdir", label: "Working dir", icon: "▥" },
+export type HubGroup = "basics" | "models" | "capabilities" | "poiesis" | "insight";
+
+/** The groups the settings nav is split into, in order. An empty label draws
+ * the group without a heading. `firststeps` has no
+ * group: it is drawn apart, at the bottom, under a divider. `about` has none
+ * either: it closes the list above it. */
+export const HUB_GROUPS: { id: HubGroup; label: string }[] = [
+  { id: "basics", label: "" },
+  { id: "models", label: "Models & agents" },
+  { id: "capabilities", label: "Capabilities" },
+  { id: "poiesis", label: "Poiesis" },
+  { id: "insight", label: "Insight" },
+];
+
+export const HUB_SECTIONS: { view: View; label: string; icon: string; group?: HubGroup }[] = [
+  // Basics: the app itself.
+  { view: "settings", label: "General", icon: "⚙", group: "basics" },
+  // Models & agents: what runs the thinking.
+  { view: "models", label: "Models", icon: "▤", group: "models" },
+  { view: "providers", label: "Providers", icon: "⌁", group: "models" },
+  { view: "runtime", label: "Runtime", icon: "◧", group: "models" },
+  { view: "engines", label: "External agents", icon: "⇄", group: "models" },
+  // Capabilities: what I can reach and do.
+  { view: "tools", label: "Tools", icon: "⚒", group: "capabilities" },
+  { view: "skills", label: "Skills", icon: "▦", group: "capabilities" },
+  { view: "apps", label: "Apps", icon: "◇", group: "capabilities" },
+  { view: "mail", label: "Mail", icon: "✉", group: "capabilities" },
+  // Poiesis: who I am and how I work.
+  { view: "self", label: "Self", icon: "", group: "poiesis" },
+  { view: "personas", label: "Personas & teams", icon: "◎", group: "poiesis" },
+  { view: "tasks", label: "Tasks", icon: "◷", group: "poiesis" },
+  // `EXP-UI-1`: the last of the Poiesis group.
+  { view: "experiments", label: "Experiments", icon: "⚗", group: "poiesis" },
+  // Insight: what has happened.
+  { view: "activity", label: "Activity", icon: "≡", group: "insight" },
+  { view: "usage", label: "Usage", icon: "◔", group: "insight" },
+  { view: "workingdir", label: "Working dir", icon: "▥", group: "insight" },
   { view: "about", label: "About", icon: "ⓘ" },
+  { view: "firststeps", label: "First steps", icon: "⚑" },
 ];
 
 /** What a project is called before the user names it (`PRJ-UI-1a`). Also the
@@ -569,6 +607,12 @@ export interface TurnModifiers {
   /** `WRK-3`: work this one message the way a preset says (`/style lean <message>`).
    * The chat's own setting does not change. Never a default. */
   style?: string;
+  /** `TEAM-1`: let this persona lead this one message (`/lead mira <message>`): `persona:<id>`
+   * or `poiesis`. The chat's own leader does not change. Never a default. */
+  leader?: string;
+  /** `TEAM-17`: speak to this member of the team that leads the chat (its role) with the next
+   * message. The member answers it alone; the team keeps leading. Never a default. */
+  addressed?: string;
   /** `WRK-12`: what done means, when `/goal ... until ...` said it up front. Agreed, so the
    * run does not ask. For this message alone. Never a default. */
   criteria?: string[];
@@ -619,6 +663,9 @@ export interface PendingQuestion {
   multi: boolean;
   /** `MCPS-2`: set when an agent app is the one asking ("Claude Code"). */
   agent?: string;
+  /** `TEAM-12`: the card's own heading, and the words of a checkbox beside its buttons. */
+  title?: string;
+  check?: string;
 }
 
 /** `AGC-2`: the one suggestion on screen. Replaced, never stacked. */
@@ -639,8 +686,9 @@ export interface HarnessProposalView {
   messageId: string;
   name: "switch_mode" | "schedule" | "compact";
   reason: string;
-  /** `WRK-13`: `style` is set when `mode` is a way of working (a preset slug), not a composer mode. */
-  payload: { mode?: string; style?: boolean; auto?: boolean; when?: string; task?: string };
+  /** `WRK-13`: `style` is set when `mode` is a way of working (a preset slug), not a composer mode.
+   * `TEAM-7`: `leader` is set when `mode` is someone to hand the chat to (`persona:<id>`), with their `name`. */
+  payload: { mode?: string; style?: boolean; leader?: boolean; name?: string; auto?: boolean; when?: string; task?: string };
 }
 
 /** `CMP-3`: something from elsewhere that the next message should be read

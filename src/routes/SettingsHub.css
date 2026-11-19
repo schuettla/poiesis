@@ -20,6 +20,29 @@
   overflow-y: auto;
 }
 
+/* First steps is a walkthrough, not a setting: same row as the rest, set apart
+   by a divider above it, at the bottom of the nav. */
+.settings-hub-first {
+  padding-top: var(--sp-3);
+  margin-top: var(--sp-4);
+  border-top: 1px solid var(--paper-edge-2);
+}
+/* A group: a small label, the rows, and air before the next one. */
+.settings-hub-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.settings-hub-group + .settings-hub-group {
+  margin-top: var(--sp-4);
+}
+.settings-hub-group-label {
+  padding: 0 8px var(--sp-1);
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+  user-select: none;
+}
+
 .settings-hub-tab {
   display: flex;
   align-items: center;

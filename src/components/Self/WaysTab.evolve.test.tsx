@@ -53,6 +53,7 @@ const view = (over: Partial<WaysView> = {}): WaysView => ({
   rules: [],
   global_default: "ad-hoc",
   defaults: [],
+  starts: [{ scope: "global", label: "Everywhere", style: null, leader: null }],
   deleted: [],
   proposals: [],
   moments: [],

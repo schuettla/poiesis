@@ -4,6 +4,7 @@ import type { StopReason } from "../../lib/api";
 import { isPersistedId, useAppStore } from "../../lib/store";
 import Timeline from "./Timeline";
 import CheckedAnswer from "./VerifyPanel";
+import RunText from "./RunText";
 import { experimentOn } from "../../lib/experiments";
 import { canVerify } from "../../lib/verify";
 import ChatMedia, { ChatMediaPending } from "./ChatMedia";
@@ -15,7 +16,8 @@ import ProposalCard from "./ProposalCard";
 import QuestionCard from "./QuestionCard";
 import HarnessProposal from "./HarnessProposal";
 import Orb from "../Orb/Orb";
-import { ChevronIcon, KebabIcon } from "../Icons/Icons";
+import { ChevronIcon, DownloadIcon, KebabIcon } from "../Icons/Icons";
+import { artifactKind, downloadArtifact } from "../Workbench/artifactFiles";
 import { SpokenGlyph, StoppedHere } from "./SpokenMark";
 import { orbForStep } from "../Orb/orbState";
 import type { OrbState } from "thinking-orbs";
@@ -193,6 +195,7 @@ export function StoppedNote({ reason, canContinue = false }: { reason: StopReaso
     timeout: "I ran out of time. This is what I had.",
     max_steps: "I stopped at my step limit. This is what I had.",
     stuck: "I stopped because I was not getting anywhere. This is what I had.",
+    budget: "The team reached its limit and stopped. This is what was done.",
     error: "The model call failed partway. This is what I had.",
     // `VTN-6`: a spoken reply the user cut off has its own mark (`SpokenMark`).
     interrupted: "",
@@ -216,9 +219,9 @@ export function StoppedNote({ reason, canContinue = false }: { reason: StopReaso
   );
 }
 
-/** Inline chips for artifacts produced during this turn (CHT-6). Clicking one
- * opens the Workbench straight on that artifact instead of always landing on
- * whichever one is currently selected. */
+/** Cards for artifacts produced during this turn (CHT-6). The card opens the
+ * Workbench straight on that artifact instead of always landing on whichever
+ * one is currently selected; the button at its edge saves the file. */
 function ArtifactChips({ ids }: { ids: string[] }) {
   const convId = useAppStore((s) => s.activeConversationId);
   const artifacts = useAppStore((s) => (convId ? s.artifacts[convId] ?? [] : []));
@@ -229,17 +232,31 @@ function ArtifactChips({ ids }: { ids: string[] }) {
       {ids.map((id) => {
         const artifact = artifacts.find((a) => a.id === id);
         if (!artifact) return null;
+        const { Icon, meta } = artifactKind(artifact);
         return (
-          <button
-            key={id}
-            className="artifact-chip"
-            onClick={() => openArtifact(id)}
-            title={`Open “${artifact.title}” in the Workbench`}
-          >
-            <span className="artifact-chip-kind">{artifact.kind}</span>
-            <span className="artifact-chip-title">{artifact.title}</span>
-            <span className="artifact-chip-arrow" aria-hidden="true">→</span>
-          </button>
+          <div key={id} className="chat-artifact">
+            <button
+              className="chat-artifact-open"
+              onClick={() => openArtifact(id)}
+              title={`Open “${artifact.title}” in the Workbench`}
+            >
+              <span className="chat-artifact-icon">
+                <Icon size={18} />
+              </span>
+              <span className="chat-artifact-text">
+                <span className="chat-artifact-title">{artifact.title}</span>
+                <span className="chat-artifact-meta">{meta}</span>
+              </span>
+            </button>
+            <button
+              className="chat-artifact-save"
+              onClick={() => void downloadArtifact(artifact)}
+              title="Download"
+              aria-label={`Download “${artifact.title}”`}
+            >
+              <DownloadIcon size={16} />
+            </button>
+          </div>
         );
       })}
     </div>
@@ -455,7 +472,50 @@ export function RunAsks({ message }: { message: Message }) {
   );
 }
 
-export default function AgentRun({ message, last = false }: { message: Message; last?: boolean }) {
+/** `/focus`: an answer as its words and nothing around them. What it made (a
+ * picture, a clip) is part of what it said, so that stays. A question the run is
+ * waiting on stays too: hidden, the run would wait for ever on something nobody can
+ * see. While it works with nothing yet to read, one orb says so. */
+function FocusedRun({ message }: { message: Message }) {
+  const media = message.attachments?.filter((a) => a.kind === "image" || a.kind === "video") ?? [];
+  const waiting = !!message.streaming && !message.text && media.length === 0;
+  const blank = !message.streaming && !message.text && media.length === 0 && !message.pendingMedia;
+  // Nothing to read: the turn leaves no empty box behind, only what it asks of you.
+  if (blank) return <RunAsks message={message} />;
+  return (
+    <div className="agent-run focus">
+      {message.text && <RunText text={message.text} streaming={message.streaming} />}
+      {media.map((a) => (
+        <ChatMedia key={a.id} attachment={a} />
+      ))}
+      {message.pendingMedia && (
+        <ChatMediaPending
+          modality={message.pendingMedia.modality}
+          aspectRatio={message.pendingMedia.aspectRatio}
+          startedAt={message.pendingMedia.startedAt}
+          jobId={message.pendingMedia.jobId}
+        />
+      )}
+      {waiting && <Thinking />}
+      <RunAsks message={message} />
+    </div>
+  );
+}
+
+export default function AgentRun({
+  message,
+  last = false,
+  focus = false,
+}: {
+  message: Message;
+  last?: boolean;
+  focus?: boolean;
+}) {
+  if (focus) return <FocusedRun message={message} />;
+  return <FullRun message={message} last={last} />;
+}
+
+function FullRun({ message, last }: { message: Message; last: boolean }) {
   const model = message.model;
   const busyNow = useAppStore((s) => s.busy);
   // Who answered is said over the answer only when it changed from the answer

@@ -293,6 +293,25 @@
 .ways-addrow .select {
   width: 100%;
 }
+/* `TEAM-5b`: Where chats start: the place, who leads, the style, and a way to take it away. */
+.ways-start {
+  align-items: center;
+}
+.ways-start .ways-text {
+  flex: 1 1 140px;
+}
+.ways-start .select {
+  flex: 0 0 170px;
+}
+.ways-start-fixed {
+  flex: 0 0 170px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+.ways-start-gap {
+  flex: 0 0 52px;
+}
 .ways-word {
   font-family: var(--font-sans);
   font-size: var(--fs-ui);

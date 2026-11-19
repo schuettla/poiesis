@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useActiveConversation, useAppStore } from "../../lib/store";
 import { stillWorking } from "../../lib/api";
+import { leaderOf } from "../../lib/leaders";
 import type { DockView } from "../../lib/types";
 import AgentsPanel from "./AgentsPanel";
 import BrowserPanel from "./BrowserPanel";
@@ -149,7 +150,12 @@ export default function Workbench() {
   const agentsWorking = subRuns.some((r) => stillWorking(r.status));
   // `WRK-15`: a run working under a way of working has an organization to show, with or
   // without helpers.
-  const organisedRun = !!useCoordinationStyle(convId);
+  // `TEAM-14`: a session a team leads always has its Coordination view: the team is the organization.
+  const teamLed = useAppStore((s) => {
+    const c = convId ? s.conversations.find((x) => x.id === convId) : undefined;
+    return !!c && leaderOf(c).startsWith("team:");
+  });
+  const organisedRun = !!useCoordinationStyle(convId) || teamLed;
   const runLive = useAppStore((s) => !!(convId && s.runSummaries[convId]?.live));
 
   const browsing = !!browserSession && !browserSession.closed;

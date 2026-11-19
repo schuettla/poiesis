@@ -39,6 +39,17 @@
   --danger: #a8453a; /* errors only */
   --caution: #98650f; /* amber: a claim not confirmed (Verify), 5:1 on paper */
 
+  /* Eight muted hues that tell personas apart (`TEAM-2`). Identity, never meaning:
+     none of them says good or bad. Each holds 3:1 on paper (UI), like --ink-faint. */
+  --persona-1: #3d4fa0; /* indigo */
+  --persona-2: #b5642e; /* copper */
+  --persona-3: #4a7a5e; /* moss */
+  --persona-4: #8a4f7d; /* plum */
+  --persona-5: #2f7a8a; /* teal */
+  --persona-6: #8a7424; /* ochre */
+  --persona-7: #a8453a; /* brick */
+  --persona-8: #5f6b78; /* slate */
+
   /* code highlighting (Shiki's css-variables theme, `lib/highlight.ts`).
      Drawn from the functional hues above, darkened where needed so every
      token holds AA (4.5:1) on paper. Comments and punctuation recede into the
@@ -178,6 +189,15 @@
   --ok: #7fb596;
   --danger: #d6776b;
   --caution: #d9a441;
+
+  --persona-1: #8c97e8;
+  --persona-2: #d6884a;
+  --persona-3: #7fb596;
+  --persona-4: #c58bb8;
+  --persona-5: #6fb7c5;
+  --persona-6: #cdb760;
+  --persona-7: #d6776b;
+  --persona-8: #9aa6b4;
 
   --hl-token-keyword: #9ca6ee;
   --hl-token-string: #8fc0a1;

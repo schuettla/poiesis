@@ -1,66 +1,142 @@
-.persona-editor {
+/* ---- Personas & teams: the cards (the styles' cards from How I work), and the picked one
+   under them in one card (TEAM-4) ---- */
+.personas-tab {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
 }
-
-/* ---- soul: standing instructions + their proposals (SOUL-UI-1) ---- */
-.soul-section {
+.pick-cards .ways-style-line {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.persona-card {
+  gap: 12px;
+}
+.persona-card .persona-head-name {
+  font-size: var(--fs-title);
+}
+.persona-who {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--paper-edge);
+  gap: 6px;
 }
-.soul-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
+.persona-who .field-label {
+  margin-top: 4px;
 }
-.soul-title {
+.poiesis-lines {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 16px;
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--paper-edge);
   font-family: var(--font-sans);
-  font-variant-numeric: tabular-nums;
   font-size: var(--fs-ui);
-  color: var(--ink);
 }
-.soul-hint {
-  font-size: var(--fs-footnote);
-  color: var(--ink-faint);
+.poiesis-lines dt {
+  color: var(--ink-muted);
+}
+.poiesis-lines dd {
+  margin: 0;
+  color: var(--ink);
 }
 
-.soul-proposal {
-  padding: 12px 14px;
-  border: 1px solid var(--paper-edge-2);
-  border-radius: var(--radius);
-}
-.soul-proposal-why {
-  margin: 0 0 8px;
-  font-size: var(--fs-ui);
-  color: var(--ink);
-}
-.soul-diff {
+.persona-detail {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-.soul-diff-side {
-  flex: 1 1 200px;
+  flex-direction: column;
+  gap: 12px;
   min-width: 0;
 }
-.soul-diff-label {
-  font-family: var(--font-sans);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--fs-caption);
-  color: var(--ink-faint);
+.persona-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
-.soul-diff-side pre {
-  margin: 4px 0 0;
-  font-family: var(--font-mono);
+.persona-head-text {
+  flex: 1;
+  min-width: 0;
+}
+.persona-head-name {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink);
+}
+.persona-head-line {
+  margin: 2px 0 0;
   font-size: var(--fs-footnote);
-  line-height: 1.5;
   color: var(--ink-muted);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+}
+.persona-head-led {
+  margin: 2px 0 0;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+/* One section of a persona or a team. Folded to a line; an open one shows its fields. */
+.persona-fold {
+  border-top: 1px solid var(--paper-edge);
+}
+.persona-fold-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 2px;
+  background: none;
+  border: none;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.persona-fold-head:hover {
+  color: var(--ink);
+}
+.persona-fold.open .persona-fold-head {
+  font-weight: 600;
+}
+.persona-fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0 16px 19px;
+}
+.persona-fold-body .field-label {
+  margin-top: 6px;
+}
+
+/* The face: a letter in a circle and the 8 hues. */
+.persona-face {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.persona-face-letter {
+  width: 44px;
+  text-align: center;
+}
+.persona-face-hues {
+  display: flex;
+  gap: 6px;
+}
+.persona-face-hue {
+  display: inline-flex;
+  padding: 3px;
+  background: none;
+  border: 1.4px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.persona-face-hue:hover {
+  background: var(--fill-hover);
+}
+.persona-face-hue[aria-pressed="true"] {
+  border-color: var(--ink-muted);
 }
 
 /* ---- role-shaped starting points, not a blank textarea ---- */
@@ -102,55 +178,18 @@
   background: none;
 }
 
-.persona-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--paper-edge);
-}
-.persona-row:last-of-type {
-  border-bottom: none;
-}
-.persona-info {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-.persona-name {
-  font-family: var(--font-sans);
-  font-size: var(--fs-ui);
-  font-weight: 600;
-  color: var(--ink);
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
 .persona-default {
   font-family: var(--font-sans);
   font-size: var(--fs-caption);
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   color: var(--local);
   border: 1px solid color-mix(in srgb, var(--local) 40%, transparent);
   border-radius: var(--radius-lg);
   padding: 1px 8px;
 }
-.persona-preview {
-  font-family: var(--font-sans);
-  font-size: var(--fs-footnote);
-  color: var(--ink-muted);
-  line-height: 1.5;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
 .persona-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
   flex-shrink: 0;
 }
@@ -158,13 +197,6 @@
 .persona-form {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 4px 0;
-}
-/* .field-label is a shared primitive (styles/global.css); the stacked form
-   here is the only place that needs the labels spaced off the field above. */
-.persona-form .field-label {
-  margin-top: 6px;
 }
 .persona-form-row {
   display: flex;
@@ -212,6 +244,30 @@
   font-size: var(--fs-caption);
   color: var(--ink-faint);
   font-style: italic;
+}
+
+/* `TEAM-5`: what a persona knows, one line each with what can be done to it. */
+.persona-knows {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.persona-knows-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.persona-knows-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-ui);
+  color: var(--ink);
+}
+.persona-knows-kind {
+  color: var(--ink-faint);
 }
 
 /* `SUB-UI-5`: a persona is an agent type. These two say when it gets used and

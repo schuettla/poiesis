@@ -19,6 +19,7 @@ export default function ModifierChips() {
   const clear = useAppStore((s) => s.clearTurnModifier);
   const makeDefault = useAppStore((s) => s.makeModifierDefault);
   const presets = useAppStore((s) => s.presets);
+  const personas = useAppStore((s) => s.personas);
 
   const chips: { key: keyof TurnModifiers; label: string; fromDefault?: boolean; once?: boolean }[] = [];
   // `DEF-5`: a chip my default put there says so, and removing it is "not this
@@ -44,6 +45,13 @@ export default function ModifierChips() {
       once: true,
     });
   }
+  // `TEAM-2`: `/lead mira <message>`. The chat's own leader is untouched.
+  if (mods.leader) {
+    const who = mods.leader.startsWith("persona:") ? personas.find((p) => p.id === mods.leader!.slice("persona:".length))?.name : "Poiesis";
+    chips.push({ key: "leader", label: `${who ?? "Poiesis"}, this once`, once: true });
+  }
+  // `TEAM-17`: the member the next message goes to. The row above the composer says the same.
+  if (mods.addressed) chips.push({ key: "addressed", label: `To ${mods.addressed}, this once`, once: true });
   if (mods.lastTime) {
     chips.push({ key: "lastTime", label: `Same way as ${shortDate(mods.lastTime.at)}`, once: true });
   }

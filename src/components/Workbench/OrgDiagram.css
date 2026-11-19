@@ -214,3 +214,1053 @@
   font-size: var(--fs-footnote);
   color: var(--ink);
 }
+
+/* `TEAM-9`: a team's chart. The box is a fixed height and the drawing scales inside it, so
+   the chart never changes size when a member comes or goes. Hues only tell personas apart. */
+.org-diagram.team {
+  padding: 0;
+  border-bottom: none;
+}
+.org-svg.team-svg {
+  height: 240px;
+  max-height: none;
+}
+/* A persona's hue, on its place, the line its post is on, the post in flight, its replay tick and
+   its messages. */
+.org-svg [data-hue="1"], .team-coord [data-hue="1"] { --persona-hue: var(--persona-1); }
+.org-svg [data-hue="2"], .team-coord [data-hue="2"] { --persona-hue: var(--persona-2); }
+.org-svg [data-hue="3"], .team-coord [data-hue="3"] { --persona-hue: var(--persona-3); }
+.org-svg [data-hue="4"], .team-coord [data-hue="4"] { --persona-hue: var(--persona-4); }
+.org-svg [data-hue="5"], .team-coord [data-hue="5"] { --persona-hue: var(--persona-5); }
+.org-svg [data-hue="6"], .team-coord [data-hue="6"] { --persona-hue: var(--persona-6); }
+.org-svg [data-hue="7"], .team-coord [data-hue="7"] { --persona-hue: var(--persona-7); }
+.org-svg [data-hue="8"], .team-coord [data-hue="8"] { --persona-hue: var(--persona-8); }
+.org-node.persona {
+  color: var(--persona-hue, var(--ink-muted));
+}
+.org-node.persona .org-shape {
+  fill: color-mix(in srgb, var(--persona-hue, var(--ink-muted)) 10%, var(--paper));
+}
+.org-node .org-letter {
+  fill: currentColor;
+  font-size: 12px;
+  font-weight: 600;
+}
+.org-node.picked .org-shape {
+  stroke-width: 2.6;
+}
+.org-node.picked .org-name {
+  fill: var(--ink);
+  font-weight: 600;
+}
+.org-svg.team-svg.editing .org-node[role="button"] {
+  cursor: pointer;
+}
+/* What a line is, by how it is drawn: work handed over is solid with an arrowhead, a review is
+   dotted, a question is dashed, a report is faint and dashed, and you talking is thin. */
+.org-edge.k-hands-over {
+  stroke: var(--ink-muted);
+}
+.org-edge.k-reviews {
+  stroke-dasharray: 1.5 3.5;
+  stroke-width: 1.8;
+}
+.org-edge.k-asks {
+  stroke-dasharray: 6 3;
+}
+.org-edge.k-talks {
+  stroke-width: 0.9;
+}
+.org-edge.k-reports {
+  stroke: var(--ink-faint);
+  stroke-dasharray: 3 4;
+}
+/* `TEAM-14`: a member working. The orb is a soft disc round its place that breathes; under
+   reduced motion it stays still and the "Now:" sentence says what it says. */
+.org-orb {
+  fill: currentColor;
+  fill-opacity: 0.14;
+  stroke: currentColor;
+  stroke-opacity: 0.35;
+  stroke-width: 1;
+  pointer-events: none;
+}
+.org-node.working .org-shape {
+  stroke-width: 2;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .org-node.working .org-orb {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: org-orb 2.4s ease-in-out infinite;
+  }
+  .org-svg.stopped .org-node.working .org-orb {
+    animation: none;
+  }
+}
+@keyframes org-orb {
+  0%,
+  100% {
+    transform: scale(0.9);
+    fill-opacity: 0.08;
+  }
+  50% {
+    transform: scale(1.1);
+    fill-opacity: 0.22;
+  }
+}
+.org-line.selected .org-edge {
+  stroke: var(--ink);
+  stroke-width: 2.4;
+}
+.org-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.org-hit:focus-visible {
+  outline: none;
+  stroke: color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
+/* `TEAM-14`: the Coordination view of a session a team leads. The head, the tabs, then a box
+   that is always the chart's height, so switching tabs or a member coming and going moves
+   nothing. */
+.team-coord {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 4px 8px;
+}
+.team-coord-wait {
+  height: 330px;
+}
+.team-tabs {
+  display: flex;
+  gap: 2px;
+}
+.team-tab {
+  min-height: 26px;
+  padding: 0 10px;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.team-tab:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.team-tab.active {
+  background: var(--fill-selected);
+  color: var(--ink);
+  font-weight: 500;
+}
+.team-members {
+  box-sizing: border-box;
+  height: 240px;
+  overflow-y: auto;
+  padding: 4px 8px;
+  background: var(--fill-quiet);
+  border: 1px solid var(--paper-edge);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+}
+.team-member {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.team-member:last-child {
+  border-bottom: none;
+}
+.team-member-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--fs-ui);
+}
+.team-member-role {
+  color: var(--ink);
+  font-weight: 500;
+}
+.team-member-persona {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-muted);
+}
+.team-member-doing {
+  margin: 0 0 0 26px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.team-member-items {
+  margin: 0 0 0 26px;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.team-member-items li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-member-items li.item-todo,
+.team-member-items li.item-dropped {
+  color: var(--ink-faint);
+}
+
+/* `TEAM-16`: the team chart as something to watch. A dotted ground, You in solid ink, the
+   coordinator with a halo, each persona in its hue. A post travels its line as a comet in the
+   sender's hue and the receiver pings; a working member has a turning ring round its orb. The
+   places arrive one after another when the chart opens. Every movement is in the
+   `no-preference` block at the end; the "Now:" sentence says it all without them. */
+.org-svg.team-svg {
+  background-color: var(--fill-quiet);
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--ink) 12%, transparent) 0.9px, transparent 1.3px);
+  background-size: 16px 16px;
+  background-position: center;
+}
+.team-svg .org-node:not(.item) .org-shape {
+  filter: drop-shadow(0 1px 2px rgba(16, 24, 20, 0.14));
+}
+.team-svg .org-node.you .org-shape {
+  fill: var(--ink);
+  stroke: var(--ink);
+}
+.team-svg .org-node.you .org-name.inside {
+  fill: var(--paper);
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+}
+.team-svg .org-node.persona .org-shape {
+  fill: color-mix(in srgb, var(--persona-hue, var(--ink-muted)) 16%, var(--paper));
+  stroke-width: 1.6;
+}
+.team-svg .org-node.coord .org-shape {
+  stroke-width: 1.8;
+}
+.org-halo {
+  fill: none;
+  stroke: currentColor;
+  stroke-opacity: 0.3;
+  stroke-width: 1;
+  pointer-events: none;
+}
+/* A name sits on a thin halo of the ground, so a line running under it does not cut it. */
+.team-svg .org-node .org-name {
+  font-weight: 500;
+  paint-order: stroke;
+  stroke: var(--paper);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.team-svg .org-node.you .org-name.inside {
+  stroke: none;
+}
+.team-svg .org-node.working .org-name {
+  fill: var(--ink);
+  font-weight: 600;
+}
+.team-svg .org-line.busy .org-edge {
+  stroke: var(--ink-muted);
+}
+.team-svg .org-line.current .org-edge {
+  stroke: var(--persona-hue, var(--ink));
+}
+.org-edge-glow {
+  fill: none;
+  stroke: var(--persona-hue, var(--ink));
+  stroke-opacity: 0.16;
+  stroke-width: 10;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+/* The ring that turns round a working member. */
+.org-spin {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 9 13;
+  stroke-opacity: 0.75;
+  pointer-events: none;
+}
+/* A post on its way: the line lights up behind it, the comet runs, the receiver pings. It is only
+   drawn when motion is allowed (`Flight` checks), and its fades are in the block below. */
+.org-flight {
+  color: var(--persona-hue, var(--ink));
+  pointer-events: none;
+}
+.org-flight-path {
+  fill: none;
+  stroke: none;
+}
+.org-flight-trace {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-opacity: 0.5;
+  stroke-dasharray: 0 10000;
+}
+.org-flight.landed .org-flight-trace {
+  stroke-opacity: 0;
+}
+.org-flight-head {
+  fill: currentColor;
+  stroke: var(--paper);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 4px currentColor);
+}
+.org-flight-tail {
+  fill: currentColor;
+}
+.org-ping {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* The sentence under the team chart: a dot while the run goes on, a ring while it replays. */
+/* Two lines at most, so the replay row under it stays where it is; the whole sentence is still
+   there for a screen reader. */
+.team-coord .org-sentence {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  min-height: 2.9em;
+  padding: 0 4px;
+  line-height: 1.45;
+  color: var(--ink);
+  text-wrap: balance;
+}
+.org-sentence.live::before,
+.org-sentence.replay::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  vertical-align: 0.05em;
+  border-radius: 50%;
+  background: var(--ink);
+}
+.org-sentence.replay::before {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px var(--ink-muted);
+}
+
+/* `TEAM-16`: the replay row under the chart. Ink like every control: a round play button, a rail
+   with one tick per post in the sender's hue, an ink thumb, and Live as a pill that is solid ink
+   while it is on. The native range lies over the rail, transparent, so keys and screen readers
+   work as they always do. */
+.org-line.current .org-edge {
+  stroke: var(--ink);
+}
+.team-replay {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+}
+.team-replay-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--ink-muted);
+}
+.team-replay-btn:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.team-replay-play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: var(--ink);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--paper);
+  box-shadow: var(--shadow-xs);
+}
+.team-replay-play:not(.on) svg {
+  margin-left: 2px;
+}
+.team-replay-btn:focus-visible,
+.team-replay-play:focus-visible,
+.team-replay-live:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+.team-replay-track {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  margin: 0 4px;
+}
+.team-replay-rail {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  right: 8px;
+  height: 4px;
+  margin-top: -2px;
+  border-radius: var(--radius-pill);
+  background: var(--paper-edge);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.team-replay-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  border-radius: inherit;
+  background: var(--ink);
+  /* Revealed by a clip, not a width, so moving it never lays the row out again. */
+  clip-path: inset(0 calc(100% - var(--fill, 100%)) 0 0 round 999px);
+}
+.team-replay-tick {
+  position: absolute;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: var(--paper);
+  border: 1.5px solid var(--persona-hue, var(--ink-faint));
+}
+.team-replay-tick.past {
+  background: var(--persona-hue, var(--ink));
+  border-color: var(--paper);
+}
+.team-replay-tick.at {
+  transform: scale(1.5);
+}
+.team-replay-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.team-replay-range:focus-visible {
+  outline: none;
+}
+.team-replay-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+.team-replay-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--ink);
+  border: 3px solid var(--paper);
+  box-shadow: 0 0 0 1px var(--ink), var(--shadow-xs);
+}
+.team-replay-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 1px var(--ink), var(--ring);
+}
+.team-replay-range::-moz-range-track {
+  background: transparent;
+}
+.team-replay-range::-moz-range-thumb {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ink);
+  border: 3px solid var(--paper);
+  box-shadow: 0 0 0 1px var(--ink), var(--shadow-xs);
+}
+.team-replay-live {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  background: none;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+.team-replay-live:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.team-replay-live.on {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+.team-replay-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.45;
+}
+.team-replay-live.on .team-replay-live-dot {
+  opacity: 1;
+}
+
+/* `TEAM-16`: Tasks, who was given what. One row per piece of work: where it is (the chart's item
+   ring), the item number, what it is, how far and from whom, the newest word about it, and on the
+   right the face and role of the one who has it. Questions and notes that are no piece of work sit
+   under it. The box keeps the chart's height. */
+.team-tasks {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--fill-quiet);
+  border: 1px solid var(--paper-edge);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+}
+.team-tasks-empty {
+  margin: auto;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
+.team-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* A row is plain: no box of its own, only the hover fill says it can be pressed. */
+.team-task-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 4px;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+}
+button.team-task-row {
+  cursor: pointer;
+}
+.team-task-row:hover {
+  background: var(--fill-hover);
+}
+.team-task-row:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+.team-task.done .team-task-text,
+.team-task.dropped .team-task-text {
+  color: var(--ink-muted);
+}
+.team-task.dropped .team-task-text {
+  text-decoration: line-through;
+}
+.team-task-mark {
+  flex: none;
+  margin-top: 1px;
+  color: var(--ink);
+}
+.team-task-mark .ring {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+}
+.team-task-mark.todo .ring,
+.team-task-mark.dropped .ring,
+.team-task-mark.stopped .ring {
+  stroke: var(--ink-faint);
+}
+.team-task-mark.doing .ring {
+  stroke-opacity: 0.25;
+}
+.team-task-mark .arc {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-dasharray: 11 28;
+  transform-origin: 8px 8px;
+}
+.team-task-mark.checking .ring,
+.team-task-mark.sent-back .ring {
+  stroke-dasharray: 2.4 2.4;
+}
+.team-task-mark.done .ring {
+  fill: var(--ink);
+}
+.team-task-mark .tick {
+  fill: none;
+  stroke: var(--paper);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.team-task-mark .dot {
+  fill: currentColor;
+}
+.team-task-mark .cross {
+  stroke: var(--ink-faint);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+.team-task-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.team-task-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--fs-ui);
+  font-weight: 500;
+}
+.team-task-n {
+  flex: none;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: var(--radius-xs);
+  background: var(--fill-selected);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+.team-task-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  min-width: 0;
+  overflow: hidden;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+/* Who has it, where it is, who gave it, when: one line, the face and role first. */
+.team-task-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 2px;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.team-task-meta > * + *::before {
+  content: "·";
+  margin-right: 6px;
+  color: var(--ink-faint);
+}
+.team-task-who {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  max-width: 45%;
+  font-weight: 600;
+  color: var(--ink);
+}
+.team-task-who::before {
+  content: none;
+}
+.team-task-role {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.team-task-word {
+  flex: none;
+  color: var(--ink-muted);
+  font-weight: 500;
+}
+.team-task-from {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.team-task-time {
+  flex: none;
+  margin-left: auto;
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+}
+.team-task-time::before {
+  content: none !important;
+}
+.team-task-last {
+  margin-top: 4px;
+  padding-left: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-left: 2px solid color-mix(in srgb, var(--persona-hue, var(--ink)) 35%, var(--paper-edge));
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.team-task-last-who {
+  color: var(--ink);
+}
+.team-talk {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 6px 4px;
+}
+.team-talk-head {
+  margin: 0 0 2px;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.team-talk-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.team-talk-who {
+  flex: none;
+  font-weight: 500;
+  color: var(--ink);
+}
+.team-talk-kind {
+  flex: none;
+  color: var(--ink-faint);
+}
+.team-talk-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* `TEAM-16`: the details card of a piece of work. It floats over everything (a portal), so it
+   takes the floating shadow. It never takes the pointer, so a long hand-over is cut at 14 lines
+   and each post at 6; the chat has the rest. */
+.team-tip {
+  position: fixed;
+  z-index: 1000;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  line-height: 1.45;
+  color: var(--ink);
+  pointer-events: none;
+}
+.team-tip-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+.team-tip-title {
+  margin: 0;
+  font-size: var(--fs-callout);
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.team-tip-who {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.team-tip-role {
+  font-weight: 600;
+}
+.team-tip-persona {
+  color: var(--ink-muted);
+}
+.team-tip-from {
+  margin-left: auto;
+  color: var(--ink-faint);
+}
+.team-tip-part {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+.team-tip-head {
+  margin: 0;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.team-tip-brief {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 14;
+  overflow: hidden;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.team-tip-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.team-tip-thread li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.team-tip-post-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--ink-faint);
+}
+.team-tip-post-who {
+  font-weight: 600;
+  color: var(--ink);
+}
+.team-tip-post-head time {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.team-tip-post-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink-muted);
+}
+.team-tip-foot {
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+  color: var(--ink-faint);
+}
+
+/* All the movement of the team chart, the replay row and the task list, for people who allow it. */
+@media (prefers-reduced-motion: no-preference) {
+  .team-svg .org-node:not(.item) {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: org-in 520ms var(--ease-pop) backwards;
+    animation-delay: calc(var(--i, 0) * 70ms);
+  }
+  .team-svg .org-node:not(.item) .org-shape {
+    transition: stroke-width var(--t-fast);
+  }
+  .team-svg .org-node .org-name {
+    transition: fill var(--t-fast);
+  }
+  .team-svg .org-line {
+    animation: org-fade-in 600ms var(--ease-out) 160ms backwards;
+  }
+  .team-svg .org-edge {
+    transition:
+      stroke-width var(--dur-slow) var(--ease-out),
+      stroke var(--dur) var(--ease-out);
+  }
+  .team-svg .org-line.current .org-edge-glow {
+    animation: org-fade-in 400ms var(--ease-out) backwards;
+  }
+  .org-node.working .org-spin {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: org-spin 2.8s linear infinite;
+  }
+  .org-svg.stopped .org-node.working .org-spin {
+    animation: none;
+  }
+  .org-flight.landed .org-flight-trace {
+    animation: org-trace-out 700ms var(--ease-out);
+  }
+  .org-ping {
+    animation: org-ping 800ms var(--ease-out);
+  }
+  .team-replay-btn {
+    transition:
+      background var(--t-fast),
+      color var(--t-fast);
+  }
+  .team-replay-play {
+    transition: transform var(--t-fast);
+  }
+  .team-replay-play:hover {
+    transform: scale(1.07);
+  }
+  .team-replay-play:active {
+    transform: scale(0.95);
+  }
+  .team-replay-fill {
+    transition: clip-path var(--dur) var(--ease-out);
+  }
+  .team-replay-tick {
+    transition:
+      background var(--t-fast),
+      transform var(--dur) var(--ease-pop);
+  }
+  .team-replay-range::-webkit-slider-thumb {
+    transition: transform var(--t-fast);
+  }
+  .team-replay-range:hover::-webkit-slider-thumb {
+    transform: scale(1.15);
+  }
+  .team-replay-live {
+    transition:
+      background var(--t-fast),
+      color var(--t-fast),
+      border-color var(--t-fast);
+  }
+  .team-replay-live.on.running .team-replay-live-dot {
+    animation: org-beat 1.6s ease-in-out infinite;
+  }
+  .team-task-row {
+    transition: background var(--t-fast);
+  }
+  .team-tip {
+    animation: team-tip-in 160ms var(--ease-out) backwards;
+  }
+  .team-task-mark .arc {
+    animation: org-spin 1.4s linear infinite;
+  }
+  .team-task.fresh .team-task-row {
+    animation: team-task-in 420ms var(--ease-out) backwards;
+  }
+}
+@keyframes org-in {
+  from {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+}
+@keyframes org-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes org-trace-out {
+  from {
+    stroke-opacity: 0.5;
+  }
+  to {
+    stroke-opacity: 0;
+  }
+}
+@keyframes org-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes org-ping {
+  from {
+    transform: scale(1);
+    stroke-opacity: 0.85;
+  }
+  to {
+    transform: scale(2);
+    stroke-opacity: 0;
+  }
+}
+@keyframes org-beat {
+  50% {
+    opacity: 0.25;
+  }
+}
+@keyframes team-task-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@keyframes team-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}

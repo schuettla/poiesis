@@ -2,6 +2,9 @@ import type { ReactNode } from "react";
 import * as api from "../../lib/api";
 import { itemDot } from "../../lib/orgState";
 import { useAppStore } from "../../lib/store";
+import { whoIs, workingRoles } from "../../lib/teamLive";
+import { useLedTeam } from "../../lib/useLedTeam";
+import MemberGlyph from "../Personas/MemberGlyph";
 import StyleGlyph from "../Mark/StyleGlyph";
 import "./OrgStrip.css";
 
@@ -41,12 +44,22 @@ export default function OrgStrip({
 }) {
   const preset = useAppStore((s) => (plan.style ? s.presets.find((p) => p.slug === plan.style) : undefined));
   const openOrganization = useAppStore((s) => s.openOrganization);
-  const helpers = useAppStore((s) => {
-    const conv = s.activeConversationId;
-    return live && conv
-      ? Object.values(s.subRuns).filter((r) => r.parentConversationId === conv && api.stillWorking(r.status)).length
-      : 0;
-  });
+  const conv = useAppStore((s) => s.activeConversationId);
+  const helpers = useAppStore((s) =>
+    live && conv
+      ? Object.values(s.subRuns).filter((r) => r.parentConversationId === conv && api.stillWorking(r.status) && !r.member).length
+      : 0
+  );
+  // `TEAM-14`: in a team's session the helpers out are its members, shown as their faces. A
+  // string, so the strip only redraws when who is working changes.
+  const working = useAppStore((s) =>
+    live && conv
+      ? workingRoles(Object.values(s.subRuns).filter((r) => r.parentConversationId === conv)).join(",")
+      : ""
+  );
+  const roles = working ? working.split(",") : [];
+  const { team } = useLedTeam(roles.length ? conv : null);
+  const personas = useAppStore((s) => s.personas);
   if (!plan.style || plan.style === "ad-hoc") return <>{fallback}</>;
 
   // A custom preset or an offspring is drawn the way its parent is.
@@ -105,6 +118,15 @@ export default function OrgStrip({
         )}
       </ol>
       <span className="org-who">
+        {roles.length > 0 && (
+          <span className="org-members">
+            {roles.map((role) => (
+              <span key={role} className="org-member" title={`${role} is working`}>
+                <MemberGlyph who={team ? whoIs(team, role, personas) : { kind: "helper", name: null }} size={14} />
+              </span>
+            ))}
+          </span>
+        )}
         {helpers > 0 && <span title="A helper is out">◌ helper</span>}
         {checking && <span title="Someone is taking a second look">◌ second look</span>}
       </span>

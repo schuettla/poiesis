@@ -17,7 +17,8 @@ import {
   type DownloadProgress,
 } from "../lib/api";
 import { useAppStore, READING_SCALES, MESSAGE_FONTS, CHAT_WIDTHS, type PlanMode } from "../lib/store";
-import PersonaEditor from "../components/Personas/PersonaEditor";
+import SoulEditor from "../components/Personas/SoulEditor";
+import NotifyWaiting from "../components/Waiting/NotifyWaiting";
 import "./Surface.css";
 import "./Settings.css";
 
@@ -193,11 +194,8 @@ function PlanFirst() {
 }
 
 export default function Settings() {
-  const systemPrompt = useAppStore((s) => s.systemPrompt);
   const setView = useAppStore((s) => s.setView);
-  const setSystemPrompt = useAppStore((s) => s.setSystemPrompt);
-  const [draft, setDraft] = useState(systemPrompt);
-  const [saved, setSaved] = useState(false);
+  const openPersonas = useAppStore((s) => s.openPersonas);
   const [grants, setGrants] = useState<Grant[]>([]);
   const [capabilityGrants, setCapabilityGrants] = useState<CapabilityGrant[]>([]);
   const openRuntime = useAppStore((s) => s.openRuntime);
@@ -216,7 +214,6 @@ export default function Settings() {
   const setExpert = useAppStore((s) => s.setExpert);
   const resetFirstTimeExplanations = useAppStore((s) => s.resetFirstTimeExplanations);
 
-  useEffect(() => setDraft(systemPrompt), [systemPrompt]);
   useEffect(() => {
     if (!inTauri()) return;
     refreshPermissions();
@@ -225,12 +222,6 @@ export default function Settings() {
 
   function refreshPermissions() {
     listPermissions().then(setGrants).catch(() => {});
-  }
-
-  async function save() {
-    await setSystemPrompt(draft);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1600);
   }
 
   async function addFolder(mode: "read" | "read-write") {
@@ -255,37 +246,18 @@ export default function Settings() {
     <div className="surface">
       <div className="surface-inner">
         <h1>General</h1>
-        <p className="lede">Your system prompt, file access, and a log of what Poiesis Agent has done.</p>
-
-        <section className="setting-block">
-          <h2 className="setting-title">System prompt</h2>
-          <p className="setting-help">
-            Sets how Poiesis Agent behaves across every chat. One global prompt for now; saved profiles
-            come later.
-          </p>
-          <textarea
-            className="system-prompt"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            rows={5}
-            spellCheck={false}
-          />
-          <div className="setting-actions">
-            <button className="btn-primary" onClick={save} disabled={draft === systemPrompt}>
-              Save
-            </button>
-            {saved && <span className="saved-note">Saved</span>}
-          </div>
-        </section>
+        <p className="lede">Your standing instructions, file access, and how this app looks and behaves.</p>
 
         {inTauri() && (
-          <section className="setting-block" id="settings-personas">
-            <h2 className="setting-title">Personas</h2>
+          <section className="setting-block" id="settings-soul">
+            <h2 className="setting-title">Standing instructions</h2>
             <p className="setting-help">
-              Saved profiles that bundle a system prompt (and optionally a model and temperature).
-              Pick one per chat from the composer; the global prompt above is the fallback.
+              Sent with every conversation, whoever leads it.{" "}
+              <button className="link-btn" onClick={() => openPersonas("poiesis")}>
+                Who Poiesis is, and the personas, are in Personas &amp; teams
+              </button>
             </p>
-            <PersonaEditor />
+            <SoulEditor />
           </section>
         )}
 
@@ -307,6 +279,8 @@ export default function Settings() {
               of your way
             </span>
           </label>
+          {/* `TEAM-21`: the one notification there is. */}
+          {inTauri() && <NotifyWaiting />}
           {expert && (
             <div className="setting-actions">
               <button className="btn-text" onClick={() => resetFirstTimeExplanations()}>

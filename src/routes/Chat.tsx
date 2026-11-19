@@ -4,6 +4,7 @@ import UserTurn from "../components/Conversation/UserTurn";
 import AgentRun from "../components/Conversation/AgentRun";
 import CompactDivider from "../components/Conversation/CompactDivider";
 import CommandNote from "../components/Conversation/CommandNote";
+import SpeakerLine, { speakerChanges } from "../components/Conversation/SpeakerLine";
 import RewindDialog from "../components/Conversation/RewindDialog";
 import Introduction from "../components/Conversation/Introduction";
 import FolderInvite from "../components/Conversation/FolderInvite";
@@ -63,6 +64,8 @@ export default function Chat() {
   const presence = useAppStore((s) => s.presence);
   const checkingMyself = useAppStore((s) => s.checkupRunning);
   const voiceShown = useVoiceStore((s) => s.shown);
+  // `/focus`: the messages and nothing around them.
+  const focus = useAppStore((s) => s.focusMode);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const msgs = conversation?.messages ?? [];
@@ -83,6 +86,7 @@ export default function Chat() {
   const isEmpty = !conversation || conversation.messages.length === 0;
   const allNotes = useAppStore((s) => (conversation ? s.commandNotes[conversation.id] : undefined));
   const notes = placeNotes(allNotes ?? [], msgs);
+  const speakers = speakerChanges(msgs);
 
   // A voice conversation lives over the stream. If one is up while the canvas
   // is, the canvas steps aside the way the stream does for it; the mic stays on
@@ -111,7 +115,7 @@ export default function Chat() {
         <SessionMenu />
         <div className="main" ref={scrollRef}>
           <div className="conversation">
-            {!isEmpty && <SessionStrip />}
+            {!isEmpty && !focus && <SessionStrip />}
             {isEmpty ? (
               <div className="empty-state">
                 {/* The same presence the mark in the top bar carries, at
@@ -135,14 +139,16 @@ export default function Chat() {
                       const i = messageIndex.get(m.id)!;
                       const turn =
                         m.role === "user" ? (
-                          <UserTurn key={m.id} message={m} />
+                          <UserTurn key={m.id} message={m} focus={focus} />
                         ) : (
                           <AgentRun
                             key={m.id}
                             message={m}
                             last={i === conversation!.messages.length - 1}
+                            focus={focus}
                           />
                         );
+                      if (focus) return turn;
                       // The boundary sits *after* the last summarized turn, so
                       // the divider goes before the message that follows it.
                       const isFirstUnsummarized =
@@ -151,6 +157,10 @@ export default function Chat() {
                       const lines = (notes.before.get(m.id) ?? []).map((n) => (
                         <CommandNote key={n.id} note={n} />
                       ));
+                      // `TEAM-3`: a name where the speaker changes, after any handover line.
+                      if (speakers.has(m.id)) lines.push(<SpeakerLine key={`who-${m.id}`} author={m.author!} />);
+                      // `TEAM-17`: a message the person spoke to a member of the team.
+                      if (m.role === "user" && m.addressed) lines.push(<p key={`to-${m.id}`} className="addressed-line">To {m.addressed}</p>);
                       if (!isFirstUnsummarized || !conversation!.summary) {
                         // A fragment, not a wrapper: a user turn is sticky within
                         // its group, and a div around it would become the box it
@@ -177,12 +187,12 @@ export default function Chat() {
                     })}
                   </div>
                 ))}
-                {notes.end.map((n) => (
+                {!focus && notes.end.map((n) => (
                   <CommandNote key={n.id} note={n} />
                 ))}
                 {/* `CHK-UI-2`: said up front, because the last check is a real
                     model call and would otherwise look like nothing happened. */}
-                {checkingMyself && (
+                {checkingMyself && !focus && (
                   <div className="command-note" role="status">
                     <span aria-hidden="true">◆ </span>I'm checking myself. The last check asks my model something, so
                     it takes a moment.

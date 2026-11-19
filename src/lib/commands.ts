@@ -13,6 +13,8 @@ import { watchSignIn } from "./signin";
 import { cloudTarget, useAppStore, type AppState } from "./store";
 import * as api from "./api";
 import { ranked } from "./fuzzy";
+import { leaderOf } from "./leaders";
+import { addressableMembers, ledTeamOf, matchMember, membersWithoutLine } from "./members";
 import { EFFORTS } from "./effort";
 import { proposedDraft, scheduleDraft } from "./when";
 import { workspaceAvailable } from "./experiments";
@@ -32,7 +34,8 @@ export type CommandSection =
   | "skills";
 export type ArgSource =
   | "effort"
-  | "personas"
+  | "leaders"
+  | "members"
   | "models"
   | "turns"
   | "facts"
@@ -399,6 +402,18 @@ function styleActions(s: AppState): ArgChoice[] {
   return out;
 }
 
+/** `TEAM-2`: the rows at the end of the `/lead` list that are about leaders, not a leader.
+ * They begin with `@`, which no name does. */
+function leaderActions(s: AppState): ArgChoice[] {
+  const conv = s.conversations.find((c) => c.id === s.activeConversationId);
+  const out: ArgChoice[] = [];
+  if (conv?.leader && conv.projectId) {
+    out.push({ value: "@project", label: "Use for this project too", hint: "New chats in this project start this way", group: "Change" });
+  }
+  out.push({ value: "@manage", label: "Manage personas and teams…", hint: "Open Personas & teams", group: "Change" });
+  return out;
+}
+
 /** The options for a `choice` argument, filtered by what has been typed. */
 export function argChoices(
   source: ArgSource,
@@ -417,11 +432,28 @@ export function argChoices(
         { value: "on", label: "On" },
         { value: "off", label: "Off" },
       ]);
-    case "personas":
-      return filter([
-        { value: "none", label: "No persona" },
-        ...s.personas.map((p) => ({ value: p.name, label: p.name })),
+    case "leaders": {
+      // `TEAM-2`: Poiesis first, then the personas under their own heading with a count,
+      // then what is about leaders themselves (the rows that begin with `@`).
+      const rows = filter([
+        { value: "poiesis", label: "Poiesis", hint: "The default: no persona" },
+        ...s.personas.map((p) => ({ value: p.name, label: p.name, hint: p.description ?? undefined, group: `Personas · ${s.personas.length}` })),
+        // `TEAM-8`: a team leads through its coordinator.
+        ...s.teams.map((t) => ({ value: t.name, label: t.name, hint: t.line || undefined, group: `Teams · ${s.teams.length}` })),
       ]);
+      return words.length ? rows : [...rows, ...leaderActions(s)];
+    }
+    case "members": {
+      // `TEAM-17`: the members of the team that leads this chat the person has a line to.
+      const team = ledTeamOf(s);
+      return filter(
+        (team ? addressableMembers(team, s.personas) : []).map((m) => ({
+          value: m.name,
+          label: m.name,
+          hint: m.role,
+        }))
+      );
+    }
     case "models": {
       const favourites = new Set(s.modelPrefs.favorites.chat);
       const chat = s.models.filter(isChatModel);
@@ -562,6 +594,8 @@ export function controlFor(name: string, s: AppState, now?: { effort?: string })
       return { kind: "switch", on: s.workspaceMode };
     case "tools":
       return { kind: "switch", on: s.toolsEnabled };
+    case "focus":
+      return { kind: "switch", on: s.focusMode };
     case "external":
       return { kind: "switch", on: !s.conversations.find((c) => c.id === s.activeConversationId)?.enginesOff };
     case "plan":
@@ -584,11 +618,11 @@ export function controlFor(name: string, s: AppState, now?: { effort?: string })
       const name = s.presets.find((p) => p.slug === slug)?.name ?? "Ad hoc";
       return { kind: "pick", options, value: name, current: name };
     }
-    case "persona": {
-      const options = argChoices("personas", "", s);
-      const id = s.conversations.find((c) => c.id === s.activeConversationId)?.personaId;
-      const name = s.personas.find((p) => p.id === id)?.name ?? null;
-      return { kind: "pick", options, value: name ?? "none", current: name ?? "No persona" };
+    case "lead": {
+      const options = argChoices("leaders", "", s);
+      const conv = s.conversations.find((c) => c.id === s.activeConversationId);
+      const name = leaderName(s, conv ? leaderOf(conv) : "poiesis");
+      return { kind: "pick", options, value: name, current: name };
     }
     case "model": {
       const options = argChoices("models", "", s);
@@ -685,6 +719,33 @@ export function matchPreset(
       if (lower === key) return { preset, rest: "" };
       if (lower.startsWith(`${key} `)) return { preset, rest: typed.trim().slice(key.length).trim() };
     }
+  }
+  return null;
+}
+
+/** `/lead mira fix the intro` -> who, and the words after the name. Names can be more than
+ * one word, so every one is tried, longest first. `none` and `no persona` still mean Poiesis:
+ * that is what `/persona none` said. */
+/** Who a leader string (`poiesis`, `persona:<id>`, `team:<slug>`) is, by name. */
+export function leaderName(s: Pick<AppState, "personas" | "teams">, leader: string): string {
+  if (leader.startsWith("persona:")) return s.personas.find((p) => p.id === leader.slice(8))?.name ?? "Poiesis";
+  if (leader.startsWith("team:")) return s.teams.find((t) => t.slug === leader.slice(5))?.name ?? "Poiesis";
+  return "Poiesis";
+}
+
+export function matchLeader(
+  s: Pick<AppState, "personas" | "teams">,
+  typed: string
+): { leader: string; name: string; rest: string } | null {
+  const lower = typed.trim().toLowerCase();
+  const known = [
+    ...s.personas.map((p) => ({ key: p.name.toLowerCase(), leader: `persona:${p.id}`, name: p.name })),
+    ...s.teams.map((t) => ({ key: t.name.toLowerCase(), leader: `team:${t.slug}`, name: t.name })),
+    ...["poiesis", "none", "no persona"].map((key) => ({ key, leader: "poiesis", name: "Poiesis" })),
+  ].sort((a, b) => b.key.length - a.key.length);
+  for (const k of known) {
+    if (lower === k.key) return { leader: k.leader, name: k.name, rest: "" };
+    if (lower.startsWith(`${k.key} `)) return { leader: k.leader, name: k.name, rest: typed.trim().slice(k.key.length).trim() };
   }
   return null;
 }
@@ -1044,6 +1105,14 @@ export const HANDLERS: Record<string, Handler> = {
     s.setToolsEnabled(want);
     return done(want ? "let me use my tools" : "took my tools away");
   },
+  focus: (args, s) => {
+    // The stream shows the messages and nothing around them. How the chat is read,
+    // not how it works, so it is on screen for every chat and leaves no note behind.
+    const want = onOff(args);
+    if (want === "bad") return fail("Say on or off.");
+    s.setFocusMode(want === null ? !s.focusMode : want);
+    return done();
+  },
   external: async (args, s) => {
     // `CLI-UI-6`: this chat only. The agent apps stay set up; this chat stops
     // handing work to them.
@@ -1055,19 +1124,61 @@ export const HANDLERS: Record<string, Handler> = {
     await s.setEnginesOff(id, !want);
     return done(want ? "let me hand work to external agents again" : "stopped handing work to external agents in this chat");
   },
-  persona: async (args, s) => {
+  lead: async (args, s) => {
+    // `TEAM-2`: `/lead mira` hands this chat to Mira; `/lead mira fix the intro` lets Mira
+    // lead that message alone and leaves the chat as it was. `/lead poiesis` and the old
+    // `/persona none` hand it back to Poiesis.
     const id = activeId(s);
     if (!id) return fail("Start a conversation first.");
     const typed = args.trim();
     if (!typed) return { kind: "needsArg" };
-    if (["none", "no persona"].includes(typed.toLowerCase())) {
-      await s.applyPersona(id, null);
-      return done("removed the persona");
+    const conv = s.conversations.find((c) => c.id === id);
+    if (typed.startsWith("@")) {
+      if (typed === "@manage") {
+        s.openPersonas();
+      } else if (typed === "@project" && conv?.leader && conv.projectId) {
+        await api.setLeaderDefault(`project:${conv.projectId}`, conv.leader);
+      } else {
+        return fail("That does not apply here.");
+      }
+      return done();
     }
-    const persona = findByName(s.personas, typed);
-    if (!persona) return fail(`I don't know a persona called "${typed}".`);
-    await s.applyPersona(id, persona.id);
-    return done(`became ${persona.name}`);
+    const hit = matchLeader(s, typed);
+    if (!hit) return fail(`I don't know anyone called "${typed.split(/\s+/)[0]}".`);
+    if (hit.rest) {
+      // A team works on a task with its members and their chats, which one message cannot lend.
+      if (hit.leader.startsWith("team:")) return fail(`${hit.name} leads a whole chat. Use /lead ${hit.name}, then write the task.`);
+      s.setTurnModifier({ leader: hit.leader });
+      return { kind: "modifier", send: hit.rest };
+    }
+    const before = conv?.leader ?? (conv?.personaId ? `persona:${conv.personaId}` : "poiesis");
+    await s.setConversationLeader(id, hit.leader);
+    // `TEAM-3`: handing a chat that has begun to someone else is said in the chat, one plain
+    // line. In a chat with nothing in it there is nothing to hand over.
+    const handover = !!conv?.messages.length && before !== hit.leader;
+    return done(handover ? `${hit.name} leads this chat from here.` : `${hit.name} leads this chat`);
+  },
+  ask: (args, s) => {
+    // `TEAM-17`: `/ask kai is the copy fine?` speaks to Kai with that message alone; `/ask kai` makes
+    // the next message Kai's. The team keeps leading either way.
+    const id = activeId(s);
+    if (!id) return fail("Start a conversation first.");
+    const typed = args.trim();
+    if (!typed) return { kind: "needsArg" };
+    const team = ledTeamOf(s);
+    if (!team) return fail("No team leads this chat. Use /lead to pick one.");
+    const members = addressableMembers(team, s.personas);
+    // `TEAM-23`: a member the person has no line to is what Poiesis offers to draw one for, after three chats.
+    const unreachable = matchMember(membersWithoutLine(team, s.personas), typed);
+    if (unreachable && !matchMember(members, typed)) {
+      void api.teamAsked(id, unreachable.member.role);
+      return fail(`You have no line to ${unreachable.member.name} in ${team.name}. Draw one in Personas & teams.`);
+    }
+    if (members.length === 0) return fail(`You have no line to speak to anyone in ${team.name} but the coordinator. Draw one in Personas & teams.`);
+    const hit = matchMember(members, typed);
+    if (!hit) return fail(`I don't know anyone called "${typed.split(/\s+/)[0]}" in ${team.name} that you can speak to.`);
+    s.setTurnModifier({ addressed: hit.member.role });
+    return hit.rest ? { kind: "modifier", send: hit.rest } : done(`your next message goes to ${hit.member.name}`);
   },
   model: (args, s) => {
     const typed = args.trim();

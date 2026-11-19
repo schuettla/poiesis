@@ -10,9 +10,10 @@
 //! └─ ways/
 //!    ├─ stop-the-line.md      an Always rule
 //!    ├─ ask-on-repeat.md
-//!    └─ presets/
-//!       ├─ ad-hoc.md          a preset: name, one line, and its rules
-//!       └─ lean.md
+//!    ├─ presets/
+//!    │  ├─ ad-hoc.md          a preset: name, one line, and its rules
+//!    │  └─ lean.md
+//!    └─ teams/                a team: members and the lines between them (`teams.rs`)
 //! ```
 //!
 //! The person owns these files, like the rest of `memory/`. A built-in preset's
@@ -29,9 +30,11 @@ use super::{one_line, today, MemoryStore};
 mod edit;
 mod history;
 mod rings;
-pub use edit::{DeletedPreset, PresetEdit, WayEdit};
-pub use history::{Back, HistoryEntry};
+mod teams;
+pub use edit::{valid_leader, DeletedPreset, PresetEdit, WayEdit};
+pub use history::{Back, HistoryEntry, TeamHistoryEntry};
 pub use rings::Moment;
+pub use teams::{shape_lines, Folder, Limits, Line, LineKind, Member, Report, Shape, Team, TeamRead};
 
 
 pub const WAYS_DIR: &str = "ways";

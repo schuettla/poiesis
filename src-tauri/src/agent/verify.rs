@@ -840,7 +840,7 @@ impl<'a> Live<'a> {
             tokio::time::sleep(wait).await;
         }
         let _ = self.db.log_activity(Some(self.conversation_id), "web", &format!("searched: {} (checking an answer)", claim.text));
-        let result = super::websearch::search(self.client, &claim.text).await;
+        let result = super::websearch::search(&claim.text).await;
         self.state.lock().unwrap().last_search = Some(std::time::Instant::now());
         let hits = match result {
             Ok(h) => h,

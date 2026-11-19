@@ -62,6 +62,9 @@ pub struct Held {
     pub description: String,
     pub body: String,
     pub cue: String,
+    /// `TEAM-5`: the persona whose session it came from; `None` is shared. Set by
+    /// `rules_found`, which knows who led the conversation.
+    pub persona: Option<String>,
 }
 
 /// The candidates of these episodes that no one has acted on (`held`).
@@ -85,6 +88,7 @@ pub fn held_candidates(episodes: &[Episode]) -> Vec<Held> {
                 description: text("description"),
                 body,
                 cue: text("cue"),
+                persona: None,
             });
         }
     }
@@ -92,13 +96,15 @@ pub fn held_candidates(episodes: &[Episode]) -> Vec<Held> {
 }
 
 /// Group candidates that say the same thing. Greedy: a candidate joins the first group
-/// any member of which it looks like.
+/// any member of which it looks like. What two personas learned is never the same thing.
 fn group_alike(held: &[Held]) -> Vec<Vec<&Held>> {
     let mut groups: Vec<Vec<&Held>> = Vec::new();
     for h in held {
         let at = groups
             .iter()
-            .position(|g| g.iter().any(|o| lessons_look_alike(&o.name, &o.description, &h.name, &h.description)));
+            .position(|g| {
+                g.iter().any(|o| o.persona == h.persona && lessons_look_alike(&o.name, &o.description, &h.name, &h.description))
+            });
         match at {
             Some(i) => groups[i].push(h),
             None => groups.push(vec![h]),
@@ -135,9 +141,10 @@ pub fn promotions(
         conversations.reverse();
         let first = group[0];
         let slug = crate::memory::slugify(&first.name).unwrap_or_else(|_| first.name.clone());
-        let existing = lessons
-            .iter()
-            .find(|l| l.name == slug || lessons_look_alike(&l.name, &l.description, &first.name, &first.description));
+        let existing = lessons.iter().find(|l| {
+            l.persona == first.persona
+                && (l.name == slug || lessons_look_alike(&l.name, &l.description, &first.name, &first.description))
+        });
         if let Some(l) = existing {
             // Already believed: only worth saying when there is a source it lacks.
             if conversations.iter().all(|c| l.evidence.contains(c)) {
@@ -151,6 +158,7 @@ pub fn promotions(
             cue: Some(first.cue.clone()).filter(|c| !c.is_empty()),
             evidence: conversations,
             into: existing.map(|l| l.name.clone()),
+            persona: first.persona.clone(),
             members: group.iter().map(|h| (h.conversation_id.clone(), h.name.clone())).collect(),
         });
     }
@@ -158,7 +166,9 @@ pub fn promotions(
 }
 
 /// Notes that say the same: the older survives and the newer folds into it. Lessons
-/// use the wording check reflection already uses for "the same lesson again".
+/// use the wording check reflection already uses for "the same lesson again". Entries
+/// that belong to different personas (or to one and to everyone) are never folded
+/// together (`TEAM-5`): what Mira knows is not Atlas's.
 pub fn duplicate_merges(facts: &[Fact], lessons: &[Fact]) -> Vec<ConsolidationMerge> {
     fn fold(
         entries: &[&Fact],
@@ -192,11 +202,11 @@ pub fn duplicate_merges(facts: &[Fact], lessons: &[Fact]) -> Vec<ConsolidationMe
         out
     }
     let active: Vec<&Fact> = facts.iter().filter(|f| f.in_prompt()).collect();
-    let mut out = fold(&active, |a, b| belief::relation(a, b) == belief::Relation::Same, None);
+    let mut out = fold(&active, |a, b| a.persona == b.persona && belief::relation(a, b) == belief::Relation::Same, None);
     let lessons: Vec<&Fact> = lessons.iter().collect();
     out.extend(fold(
         &lessons,
-        |a, b| lessons_look_alike(&a.name, &a.description, &b.name, &b.description),
+        |a, b| a.persona == b.persona && lessons_look_alike(&a.name, &a.description, &b.name, &b.description),
         Some(LESSONS),
     ));
     out
@@ -239,13 +249,24 @@ pub fn rules_found(db: &Db, mem: &MemoryStore, reach: Reach) -> Found {
     let now = crate::db::now_ms();
     let new = db.unconsolidated_episodes(NEW_EPISODES).unwrap_or_default();
     let pool = db.episodes_since(now - POOL_DAYS * DAY_MS).unwrap_or_default();
+    // `TEAM-5`: a candidate belongs to the persona who led its conversation, and to nobody
+    // when that persona does not remember.
+    let mut held = held_candidates(&pool);
+    held.retain_mut(|h| match crate::agent::leader::keep(db, &h.conversation_id, false) {
+        crate::agent::leader::Keep::Nowhere => false,
+        crate::agent::leader::Keep::Persona(id) => {
+            h.persona = Some(id);
+            true
+        }
+        crate::agent::leader::Keep::Shared => true,
+    });
     let new_ids: HashSet<String> = new.iter().map(|e| e.conversation_id.clone()).collect();
     let must = (reach == Reach::New).then_some(&new_ids);
 
     let facts = mem.list();
     let lessons = mem.list_in(LESSONS);
     let mut proposal = Consolidation {
-        promotes: promotions(&held_candidates(&pool), &lessons, must),
+        promotes: promotions(&held, &lessons, must),
         merges: duplicate_merges(&facts, &lessons),
         ..Default::default()
     };
@@ -689,6 +710,106 @@ mod tests {
         assert!(db.episode(&ids[0]).unwrap().unwrap().candidates_json.unwrap().contains("promoted"));
         // Nothing left to say the next night.
         assert!(rules_found(&db, &mem, Reach::Everything).proposal.promotes.is_empty());
+    }
+
+    fn a_persona(db: &Db, name: &str) -> String {
+        db.create_persona(&crate::db::NewPersona {
+            name: name.into(),
+            system_prompt: format!("You are {name}."),
+            model_id: None,
+            params_json: None,
+            tools_json: None,
+            skills_json: None,
+            description: None,
+            spawnable: false,
+        })
+        .unwrap()
+        .id
+    }
+
+    /// A chat led by `persona` (or by nobody), with one candidate nobody has acted on.
+    fn chat_with_candidate(db: &Db, persona: Option<&str>, n: usize) -> String {
+        let id = db.create_conversation(&format!("Chat {n}"), None, false).unwrap().id;
+        if let Some(p) = persona {
+            db.set_conversation_leader(&id, Some(&format!("persona:{p}")), Some(p)).unwrap();
+        }
+        db.save_episode_rules(&id, "done", "report", "{}").unwrap();
+        let c = format!("[{}]", cand(&format!("check-header-{n}"), "check the header row first", "held"));
+        db.save_episode_draft(&id, "g", "I did it.", "I read the header first.", "", &c).unwrap();
+        id
+    }
+
+    /// `TEAM-5`: what a persona learned is promoted only from what that persona learned, and
+    /// stays that persona's; three different leaders make no lesson at all.
+    #[test]
+    fn a_lesson_is_promoted_within_one_persona_and_stays_theirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mem = MemoryStore::new(tmp.path()).unwrap();
+        let db = Db::open_in_memory().unwrap();
+        let (mira, atlas) = (a_persona(&db, "Mira"), a_persona(&db, "Atlas"));
+        chat_with_candidate(&db, Some(&mira), 0);
+        chat_with_candidate(&db, Some(&atlas), 1);
+        chat_with_candidate(&db, None, 2);
+        assert!(rules_found(&db, &mem, Reach::Everything).proposal.promotes.is_empty(), "three voices, no pattern");
+
+        chat_with_candidate(&db, Some(&mira), 3);
+        let found = rules_found(&db, &mem, Reach::Everything);
+        assert_eq!(found.proposal.promotes.len(), 1);
+        assert_eq!(found.proposal.promotes[0].persona.as_deref(), Some(mira.as_str()));
+        assert_eq!(found.proposal.promotes[0].evidence.len(), 2, "only Mira's two");
+        let done = crate::commands::memory::apply_proposal(&db, &mem, &found.proposal);
+        assert_eq!(done.promoted, 1);
+        assert_eq!(mem.list_lessons()[0].persona.as_deref(), Some(mira.as_str()));
+    }
+
+    /// A persona told not to remember learns nothing for itself, so its chats make no lesson.
+    #[test]
+    fn what_a_persona_that_does_not_remember_taught_is_not_promoted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mem = MemoryStore::new(tmp.path()).unwrap();
+        let db = Db::open_in_memory().unwrap();
+        let mira = a_persona(&db, "Mira");
+        let mut p = db.get_persona(&mira).unwrap().unwrap();
+        p.remembers = false;
+        db.update_persona(&p).unwrap();
+        chat_with_candidate(&db, Some(&mira), 0);
+        chat_with_candidate(&db, Some(&mira), 1);
+        assert!(rules_found(&db, &mem, Reach::Everything).proposal.promotes.is_empty());
+    }
+
+    /// `TEAM-5`: notes that say the same are folded only when they belong to the same persona,
+    /// and a merge proposed any other way (the model's) is refused when it is applied.
+    #[test]
+    fn notes_of_different_personas_are_never_folded_together() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mem = MemoryStore::new(tmp.path()).unwrap();
+        let db = Db::open_in_memory().unwrap();
+        let tea = |name: &str, persona: Option<&str>, created: &str| Fact {
+            name: name.into(),
+            description: "Prefers tea".into(),
+            kind: "preference".into(),
+            body: "Prefers tea.".into(),
+            created: created.into(),
+            persona: persona.map(str::to_string),
+            ..Default::default()
+        };
+        mem.save(&db, &tea("tea-a", Some("mira"), "2026-01-01")).unwrap();
+        mem.save(&db, &tea("tea-b", Some("atlas"), "2026-02-01")).unwrap();
+        mem.save(&db, &tea("tea-c", None, "2026-03-01")).unwrap();
+        assert!(duplicate_merges(&mem.list(), &[]).is_empty(), "three owners, nothing is the same note");
+
+        mem.save(&db, &tea("tea-d", Some("mira"), "2026-04-01")).unwrap();
+        let merges = duplicate_merges(&mem.list(), &[]);
+        assert_eq!(merges.len(), 1);
+        assert_eq!((merges[0].keep.as_str(), merges[0].drop.clone()), ("tea-a", vec!["tea-d".to_string()]));
+
+        // A model's merge across owners does not go through.
+        let across = Consolidation {
+            merges: vec![ConsolidationMerge { keep: "tea-a".into(), drop: vec!["tea-b".into(), "tea-c".into()], text: "Prefers tea.".into(), collection: None }],
+            ..Default::default()
+        };
+        assert_eq!(crate::commands::memory::apply_proposal(&db, &mem, &across).merged, 0);
+        assert!(mem.read("tea-b").is_some() && mem.read("tea-c").is_some());
     }
 
     #[test]

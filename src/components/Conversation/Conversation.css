@@ -83,6 +83,32 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* A passage quoted from a document, above what was said about it. */
+.user-quote {
+  margin: 0 0 10px;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--paper-edge-2);
+  max-width: var(--measure);
+}
+.turn-user .user-quote-text {
+  margin: 0;
+  font-family: var(--font-message);
+  font-size: var(--fs-ui);
+  line-height: 1.55;
+  color: var(--ink-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.user-quote-where {
+  margin-top: 4px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+}
 .turn-stamp {
   grid-column: 2;
   grid-row: 1;
@@ -792,50 +818,90 @@
   font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
-.artifact-chip {
+/* An artifact the turn made. The timeline's panel (paper, hairline, large radius)
+   with two buttons inside it: the card opens it, the edge button saves it. Hover
+   is the fill every other row in the stream uses, not a lift. */
+.chat-artifact {
   display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 11px;
+  align-items: stretch;
+  flex: 1 1 280px;
+  max-width: 400px;
+  min-width: 0;
   border: 1px solid var(--hairline);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--paper);
-  box-shadow: var(--shadow-xs);
+  overflow: hidden;
+}
+.chat-artifact-open,
+.chat-artifact-save {
+  background: none;
+  border: none;
   cursor: pointer;
   font-family: var(--font-sans);
+  color: var(--ink-muted);
+}
+.chat-artifact-open {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  padding: 12px 14px;
+  text-align: left;
+  color: var(--ink);
+}
+.chat-artifact-open:hover,
+.chat-artifact-open:focus-visible {
+  background: var(--fill-quiet);
+}
+.chat-artifact-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius);
+  background: var(--fill-hover);
+  color: var(--ink-muted);
+}
+.chat-artifact-open:hover .chat-artifact-icon {
+  color: var(--ink);
+}
+.chat-artifact-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.chat-artifact-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-callout);
+  font-weight: 500;
+  color: var(--ink);
+}
+.chat-artifact-meta {
   font-size: var(--fs-footnote);
-  color: var(--ink);
-  transition:
-    border-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur) var(--ease-out),
-    transform var(--dur) var(--ease-out);
-}
-.artifact-chip:hover {
-  border-color: var(--paper-edge-2);
-  box-shadow: var(--shadow-sm);
-  transform: translateY(-1px);
-}
-.artifact-chip:active {
-  transform: translateY(0) scale(0.98);
-  transition-duration: 60ms;
-}
-.artifact-chip-kind {
-  font-family: var(--font-sans);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--fs-caption);
-  font-weight: 500;
   color: var(--ink-faint);
 }
-.artifact-chip-title {
-  font-weight: 500;
-}
-.artifact-chip-arrow {
+.chat-artifact-save {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  border-left: 1px solid var(--paper-edge);
   color: var(--ink-faint);
-  transition: transform var(--dur) var(--ease-out);
 }
-.artifact-chip:hover .artifact-chip-arrow {
-  transform: translateX(2px);
+.chat-artifact-save:hover,
+.chat-artifact-save:focus-visible {
+  background: var(--fill-hover);
   color: var(--ink);
+}
+.chat-artifact-save:active {
+  background: var(--fill-press);
 }
 
 /* ---- timeline ----
@@ -1364,30 +1430,26 @@
 .run-text > :first-child {
   margin-top: 0;
 }
+/* Headings are the chosen message font, set heavier and a little larger, so a
+   long answer has a spine without a second typeface or a document look. */
 .run-text :is(h1, h2, h3, h4) {
-  font-family: var(--font-serif);
-  font-weight: 500;
-  line-height: 1.3;
-  letter-spacing: -0.005em;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
   color: var(--ink);
-  margin: 1.5em 0 0.5em;
+  margin: 1.4em 0 0.45em;
 }
 .run-text h1 {
-  font-size: 1.45em;
+  font-size: 1.3em;
 }
 .run-text h2 {
-  font-size: 1.28em;
+  font-size: 1.18em;
 }
 .run-text h3 {
-  font-size: 1.12em;
+  font-size: 1.06em;
 }
 .run-text h4 {
-  font-family: var(--font-sans);
-  font-size: 0.78em;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-muted);
+  font-size: 1em;
 }
 .run-text :is(ul, ol) {
   margin: 0 0 0.9em;
@@ -1399,11 +1461,6 @@
 }
 .run-text li::marker {
   color: var(--ink-faint);
-}
-.run-text ol > li::marker {
-  font-family: var(--font-sans);
-  font-variant-numeric: tabular-nums;
-  font-size: 0.85em;
 }
 .run-text strong {
   font-weight: 600;
@@ -1428,36 +1485,41 @@
   border-top: 1px solid var(--paper-edge-2);
   margin: 1.6em 0;
 }
+/* A table is a soft panel like the timeline: hairline frame, a tinted header in
+   sentence case, quiet row rules. It scrolls sideways inside its own frame. */
 .run-text table {
   display: block;
+  width: max-content;
   max-width: 100%;
   overflow-x: auto;
-  border-collapse: collapse;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  border-collapse: separate;
+  border-spacing: 0;
   margin: 0 0 1em;
-  font-size: 0.88em;
+  font-size: 0.92em;
   line-height: 1.5;
 }
 .run-text :is(th, td) {
-  padding: 6px 12px 6px 0;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--paper-edge);
   text-align: left;
   vertical-align: top;
 }
+.run-text tr:last-child > :is(th, td) {
+  border-bottom: none;
+}
 .run-text th {
-  font-family: var(--font-sans);
-  font-size: 0.85em;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ink-muted);
-  border-bottom-color: var(--paper-edge-2);
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--fill-quiet);
 }
 .run-text code {
   font-family: var(--font-mono);
-  font-size: 0.84em;
-  background: var(--fill-press);
-  padding: 0.12em 0.4em;
-  border-radius: var(--radius-xs);
+  font-size: 0.86em;
+  background: var(--fill-hover);
+  padding: 0.1em 0.38em;
+  border-radius: var(--radius-sm);
 }
 .run-text pre {
   font-family: var(--font-mono);
@@ -1775,6 +1837,9 @@
   font: inherit;
   font-size: var(--fs-timeline);
   border-radius: var(--radius);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .fleet-action:hover {
   color: var(--ink);
@@ -2260,6 +2325,17 @@ button.plan-mark.ringed:hover {
   text-decoration: line-through;
 }
 
+/* `TEAM-3`: who is speaking, said only where it changes. */
+.speaker-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 0 4px;
+  font-size: var(--fs-footnote);
+  letter-spacing: 0.02em;
+  color: var(--ink-muted);
+}
+
 /* `SKC-2`: a skill command's bubble — `/name` and what it was asked, with the
    instructions it loaded one click away. */
 .command-chip {
@@ -2465,4 +2541,13 @@ button.plan-mark.ringed:hover {
 .plan-more-btn:hover {
   background: var(--fill-hover);
   color: var(--ink);
+}
+
+/* `TEAM-17`: one quiet line above a message the person spoke to a member of the team. */
+.addressed-line {
+  margin: 8px 0 -2px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+  text-align: right;
 }

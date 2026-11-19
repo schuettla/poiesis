@@ -12,6 +12,7 @@
     "core:window:allow-is-maximized",
     "opener:default",
     "dialog:default",
+    "notification:default",
     "process:allow-restart"
   ]
 }

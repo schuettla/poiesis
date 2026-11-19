@@ -22,6 +22,8 @@ use futures_util::future::join_all;
 use crate::agent::decide::handover;
 use crate::agent::fleet::RunLimits;
 use crate::agent::run::{run_agent, RunContext};
+use crate::agent::team;
+use crate::agent::team_folder;
 use crate::agent::toolsets::{set_step_note, ToolContext, Toolset};
 use crate::agent::{AgentEvent, EngineBadge};
 use crate::db::engines::EngineRule;
@@ -191,6 +193,11 @@ pub struct TaskSpec {
     /// `WRK-18`: the way of working the helper runs under, as the lead named it.
     /// `None` is Lean.
     pub style: Option<String>,
+    /// `TEAM-10`: which item of the plan this task is (from 1), when the lead said.
+    pub item: Option<usize>,
+    /// `TEAM-11`: the loop handed this over itself (a review, a send-back). It needs no line from
+    /// the coordinator and does not count against the turn's cap. Never read from a model's arguments.
+    pub by_loop: bool,
 }
 
 impl TaskSpec {
@@ -228,6 +235,8 @@ pub fn parse_tasks(args: &serde_json::Value) -> Result<Vec<TaskSpec>, String> {
                 output: None,
                 because: None,
                 style: None,
+                item: None,
+                by_loop: false,
             },
             serde_json::Value::Object(_) => {
                 let task = ["task", "prompt", "instruction", "objective", "description"]
@@ -262,6 +271,12 @@ pub fn parse_tasks(args: &serde_json::Value) -> Result<Vec<TaskSpec>, String> {
                         .and_then(|v| v.as_str())
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty()),
+                    item: entry
+                        .get("item")
+                        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+                        .map(|n| n as usize)
+                        .filter(|n| *n > 0),
+                    by_loop: false,
                 }
             }
             _ => continue,
@@ -755,7 +770,45 @@ pub async fn execute(
 
 async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<String, String> {
     let tasks = parse_tasks(args)?;
-    run_delegation(ctx, tasks, wants_background(args), None).await.map(|d| d.report)
+    let mut done = run_delegation(ctx, tasks, wants_background(args), None).await?;
+    // `TEAM-11`: members that were waited for (no pool to run them in) are looked at before the
+    // coordinator reads what they found, just as `collect_agents` does for the ones that ran on.
+    if !done.children.is_empty() && ctx.delegation.is_some_and(|d| d.parent_run.parent.is_none()) {
+        if let Some(team) = team::of_session(ctx.db, ctx.memory, ctx.conversation_id) {
+            done.report.push_str(&looked_at(ctx, &team, &done.children).await);
+            // `TEAM-15`: what those members posted to the coordinator while they worked.
+            if let Some(posts) = team::read_posts(ctx.db, ctx.conversation_id) {
+                done.report.push_str("\n\n");
+                done.report.push_str(&posts);
+            }
+        }
+    }
+    Ok(done.report)
+}
+
+/// `TEAM-11`: settle the reviews owed for members that just finished in the foreground, and say what
+/// came of them. A member that did not finish is something the person may want to hear.
+async fn looked_at(ctx: &ToolContext<'_>, team: &crate::memory::ways::Team, children: &[Finished]) -> String {
+    team::settle(ctx, team, false).await;
+    team_folder::merge_done(ctx.db, ctx.data_dir, ctx.conversation_id, ctx.ledger, team, ctx.headless);
+    let rows = ctx.db.list_subagent_runs(ctx.conversation_id).unwrap_or_default();
+    let mut out = String::new();
+    for child in children {
+        let Some(own) = rows.iter().find(|r| r.id == child.run_id) else { continue };
+        let Some(role) = own.member.clone() else { continue };
+        team::failed(ctx.conversation_id, own);
+        let Some(at) = rows.iter().rposition(|r| r.member.as_deref() == Some(role.as_str())) else { continue };
+        if rows[at].id != own.id {
+            out.push_str(&format!(
+                "\n\n{role} was sent back and worked on it again. Its latest report:\n{}",
+                clip(&escape_frame(rows[at].result.as_deref().unwrap_or_default().trim()), REPORT_CLIP)
+            ));
+        }
+        if let Some(note) = team::note(team, &rows, at) {
+            out.push_str(&format!("\n\n{role}: {note}"));
+        }
+    }
+    out
 }
 
 /// How one child ended, for a caller that wants more than the lead's report.
@@ -803,12 +856,28 @@ pub async fn run_delegation(
 
     let db = ctx.db;
     let mut tasks = tasks;
+    // `TEAM-10`: a team leads this session, so the coordinator hands work to members. Not for the
+    // loop's own helpers (`folders`), and never from a child.
+    let team = if folders.is_none() && del.parent_run.parent.is_none() {
+        team::of_session(db, ctx.memory, ctx.conversation_id)
+    } else {
+        None
+    };
+    // `TEAM-12`: once the task's money or time is spent, nobody new starts.
+    if team.is_some() {
+        if let Some(why) = team::spent(ctx.conversation_id) {
+            return Err(why);
+        }
+    }
+    // `TEAM-11`: a review or a send-back the loop makes itself.
+    let looped = team.is_some() && tasks.iter().all(|t| t.by_loop);
 
     // Caps, and say so — a lead that silently loses a branch reports on work
     // nobody did.
     let mut clipped_note = String::new();
-    let max_parallel = capped(db, "subagents.max_parallel", 3, MAX_PARALLEL_CAP);
-    if tasks.len() > max_parallel {
+    // A team's members wait in its own queue (`limits.at_once`), so the call may name them all.
+    let max_parallel = if team.is_some() { MAX_PARALLEL_CAP } else { capped(db, "subagents.max_parallel", 3, MAX_PARALLEL_CAP) };
+    if tasks.len() > max_parallel && !looped {
         clipped_note = format!(
             "\nI only ran the first {max_parallel} of the {} tasks you asked for. Ask again for the rest if you still need them.",
             tasks.len()
@@ -819,10 +888,10 @@ pub async fn run_delegation(
         .list_subagent_runs(ctx.conversation_id)
         .unwrap_or_default()
         .into_iter()
-        .filter(|r| r.parent_message_id.as_deref() == ctx.assistant_message_id)
+        .filter(|r| r.parent_message_id.as_deref() == ctx.assistant_message_id && !team::made_by_loop(&r.task))
         .count();
     let room = MAX_PER_TURN.saturating_sub(already);
-    if tasks.len() > room {
+    if tasks.len() > room && !looped {
         clipped_note = format!(
             "\nThis turn has already used its {MAX_PER_TURN} agents, so I ran {room} of them. Finish with what you have."
         );
@@ -840,8 +909,10 @@ pub async fn run_delegation(
     // for its own run and ends when it ends; a child that outlives it would
     // report to nobody, and its permission prompts would already have been
     // refused for exactly the same reason.
-    let background = asked_background && !ctx.headless && crate::agent::background::available();
-    if asked_background && !background {
+    // `TEAM-10`: in a team run a hand-over always runs in the background.
+    let wants_background = asked_background || (team.is_some() && !looped);
+    let background = wants_background && !ctx.headless && crate::agent::background::available();
+    if wants_background && !background {
         clipped_note.push_str(
             "\nI couldn't leave these running on their own here, so I waited for them instead. The answers below are complete.",
         );
@@ -857,9 +928,56 @@ pub async fn run_delegation(
     let (offered, blocked) = rules::offered(db, &route);
     let mut refused: Vec<(String, String)> = Vec::new();
     let mut counted = std::collections::HashMap::new();
-    let mut plan: Vec<(TaskSpec, Option<EnginePick>)> = Vec::new();
+    let mut plan: Vec<(TaskSpec, Option<EnginePick>, Option<team::Assigned>)> = Vec::new();
     let named = del.delegate_to.as_deref();
+    // `TEAM-10`: where this task started, and whom this call already handed work to.
+    let task_start = team.as_ref().map(|_| team::boundary(db, ctx.conversation_id, ctx.assistant_message_id));
+    let mut handed: Vec<String> = Vec::new();
     for mut spec in tasks {
+        if let (Some(team), Some(start)) = (&team, &task_start) {
+            let label = spec.agent.clone().unwrap_or_else(|| "task".to_string());
+            let assigned = match if spec.by_loop {
+                team::member_named(db, team, spec.agent.as_deref().unwrap_or_default()).ok_or_else(|| "Nobody by that name is in this team.".to_string())
+            } else {
+                team::assign(db, team, spec.agent.as_deref())
+            } {
+                Ok(a) => a,
+                Err(why) => {
+                    refused.push((label, why));
+                    continue;
+                }
+            };
+            let role = assigned.member.role.clone();
+            // One run at a time in a member's chat: a second hand-over would write into it while
+            // the first is still going.
+            let busy = handed.contains(&role)
+                || team::earlier_run(db, ctx.conversation_id, &role, start).is_some_and(|r| r.ended_at.is_none());
+            if busy {
+                refused.push((role.clone(), format!("{role} is still working on an earlier hand-over. Collect it first, or put both tasks in one.")));
+                continue;
+            }
+            // A persona on an agent app does its work there; they chose the pairing, so only the guards apply.
+            let engine_id = assigned.persona.as_ref().and_then(|p| p.engine_id.clone()).filter(|e| !e.is_empty());
+            let pick = match engine_id {
+                Some(engine_id) => match rules::offered_for_persona(db, &route, &engine_id) {
+                    Ok(o) => match prepare_engine(ctx, &o, &spec, &mut counted, Via::Persona).await {
+                        Ok(pick) => Some(pick),
+                        Err(why) => {
+                            refused.push((role, why));
+                            continue;
+                        }
+                    },
+                    Err(why) => {
+                        refused.push((role, why));
+                        continue;
+                    }
+                },
+                None => None,
+            };
+            handed.push(role);
+            plan.push((spec, pick, Some(assigned)));
+            continue;
+        }
         // `CLI-UI-6`: the user named the agent for this message. A task with no
         // agent goes there; one for another agent is refused, whatever the lead
         // made of it.
@@ -874,7 +992,7 @@ pub async fn run_delegation(
             }
         }
         let Some(want) = spec.agent.clone() else {
-            plan.push((spec, None));
+            plan.push((spec, None, None));
             continue;
         };
         // `CLI-UI-4`: a persona the user set to run on an agent app. They chose
@@ -886,7 +1004,7 @@ pub async fn run_delegation(
         if let Some(engine_id) = persona_engine {
             match rules::offered_for_persona(db, &route, &engine_id) {
                 Ok(o) => match prepare_engine(ctx, &o, &spec, &mut counted, Via::Persona).await {
-                    Ok(pick) => plan.push((spec, Some(pick))),
+                    Ok(pick) => plan.push((spec, Some(pick), None)),
                     Err(why) => refused.push((want.clone(), why)),
                 },
                 Err(why) => refused.push((want.clone(), why)),
@@ -896,13 +1014,13 @@ pub async fn run_delegation(
         if let Some(o) = offered.iter().find(|o| rules::matches_name(&o.row, &want)) {
             let via = if named.is_some_and(|x| rules::matches_name(&o.row, x)) { Via::Asked } else { Via::Rule };
             match prepare_engine(ctx, o, &spec, &mut counted, via).await {
-                Ok(pick) => plan.push((spec, Some(pick))),
+                Ok(pick) => plan.push((spec, Some(pick), None)),
                 Err(why) => refused.push((o.row.display_name.clone(), why)),
             }
         } else if let Some((name, block)) = blocked.iter().find(|(n, _)| rules::same_name(n, &want)) {
             refused.push((name.clone(), block.message(name)));
         } else {
-            plan.push((spec, None));
+            plan.push((spec, None, None));
         }
     }
     if plan.is_empty() {
@@ -931,16 +1049,21 @@ pub async fn run_delegation(
         sink: crate::agent::run::AgentEventSink,
         /// `CLI-4`: an agent app does this one, and this is what it needs.
         engine: Option<(Offered, String)>,
+        temperature: f32,
+        /// `TEAM-10`: set for a team member.
+        seat: Option<team::Seat>,
     }
 
     let mut children = Vec::new();
-    for (index, (spec, pick)) in plan.into_iter().enumerate() {
+    for (index, (spec, pick, member)) in plan.into_iter().enumerate() {
         let matched = spec.agent.as_ref().and_then(|want| {
             types
                 .iter()
                 .find(|t| rules::same_name(&t.name, want))
         });
         let agent = match (&pick, matched) {
+            // `TEAM-10`: a team member is known by its role.
+            _ if member.is_some() => member.as_ref().map(|m| m.member.role.clone()).unwrap_or_default(),
             // A persona on an agent app keeps its own name on the Fleet card; the
             // chips say which app is doing the work.
             (Some(_), Some(t)) if t.persona_id.is_some() => t.name.clone(),
@@ -948,31 +1071,82 @@ pub async fn run_delegation(
             (None, Some(t)) => t.name.clone(),
             (None, None) => GENERAL.to_string(),
         };
-        let persona = matched
-            .and_then(|t| t.persona_id.clone())
-            .and_then(|id| db.get_persona(&id).ok().flatten());
+        let persona = match &member {
+            Some(m) => m.persona.clone(),
+            None => matched
+                .and_then(|t| t.persona_id.clone())
+                .and_then(|id| db.get_persona(&id).ok().flatten()),
+        };
 
-        let title = format!("{agent} · {}", clip(&spec.task, 40));
-        let conv = db
-            .create_conversation(&title, None, false)
-            .map_err(|e| format!("I couldn't open a workspace for the agent: {e}"))?;
-        let _ = db.set_conversation_parent(&conv.id, ctx.conversation_id);
+        // `TEAM-10`: a member's next hand-over in the same task goes on in the chat it has.
+        let earlier = member
+            .as_ref()
+            .zip(task_start.as_ref())
+            .and_then(|(m, start)| team::earlier_run(db, ctx.conversation_id, &m.member.role, start));
+        let conv_id = match &earlier {
+            Some(r) => r.child_conversation_id.clone(),
+            None => {
+                let title = format!("{agent} · {}", clip(&spec.task, 40));
+                db.create_conversation(&title, None, false)
+                    .map_err(|e| format!("I couldn't open a workspace for the agent: {e}"))?
+                    .id
+            }
+        };
+        let _ = db.set_conversation_parent(&conv_id, ctx.conversation_id);
+        // `TEAM-13`: in a team on `copies` a member works in a copy of the folder, one per chat, and a
+        // reviewer reads the copy of the member it looks at. A folder too big to copy leaves the
+        // member in the main folder, and the coordinator reads that.
+        let in_copy: Option<std::path::PathBuf> = match (&team, &member, folder.as_deref()) {
+            (Some(t), Some(m), Some(main)) if t.folder == crate::memory::ways::Folder::Copies && pick.is_none() => {
+                match team::reviewed(&spec.task).filter(|_| spec.by_loop) {
+                    Some(reviewed) => team_folder::copy_of(db, ctx.data_dir, ctx.conversation_id, reviewed),
+                    None => {
+                        let (data, main, chat) = (ctx.data_dir.to_path_buf(), std::path::PathBuf::from(main), conv_id.clone());
+                        match tokio::task::spawn_blocking(move || team_folder::make_copy(&data, &main, &chat)).await {
+                            Ok(Ok(dir)) => Some(dir),
+                            other => {
+                                let why = match other {
+                                    Ok(Err(why)) => why,
+                                    _ => "The copy did not finish.".to_string(),
+                                };
+                                clipped_note.push_str(&format!("\n{} works in the main folder, not in a copy: {why}", m.member.role));
+                                None
+                            }
+                        }
+                    }
+                }
+            }
+            _ => None,
+        };
         // Inherited, never widened: the child works where the parent works, or in
         // the copy the loop made for it.
-        let child_folder = folders.and_then(|f| f.get(index)).map(|p| p.to_string_lossy().to_string()).or_else(|| folder.clone());
+        let child_folder = folders
+            .and_then(|f| f.get(index))
+            .or(in_copy.as_ref())
+            .map(|p| p.to_string_lossy().to_string())
+            .or_else(|| folder.clone());
         if let Some(path) = child_folder.as_deref() {
-            let _ = db.set_conversation_folder(&conv.id, Some(path));
-            let _ = db.set_conversation_trust(&conv.id, &trust);
+            // A member's copy is the chat's own folder, not a project (`set_conversation_copy`).
+            let _ = match &in_copy {
+                Some(_) => db.set_conversation_copy(&conv_id, path),
+                None => db.set_conversation_folder(&conv_id, Some(path)),
+            };
+            let _ = db.set_conversation_trust(&conv_id, &trust);
         }
         if let Some(p) = &persona {
-            let _ = db.set_conversation_persona(&conv.id, Some(&p.id), None);
+            let _ = db.set_conversation_persona(&conv_id, Some(&p.id), None);
         }
         // `WRK-18`: a helper works one thing at a time unless the lead said otherwise.
         // A preset that is gone is Ad hoc (`Work::resolve`), so nothing here can stop the job.
-        let _ = db.set_conversation_style(&conv.id, Some(spec.style.as_deref().unwrap_or("lean")));
+        // `TEAM-10`: a member works the team's way, whatever the coordinator wrote.
+        let style = match &team {
+            Some(t) if member.is_some() => team::member_style(t),
+            _ => spec.style.as_deref().unwrap_or("lean"),
+        };
+        let _ = db.set_conversation_style(&conv_id, Some(style));
 
         let run = del.fleet.open(
-            &conv.id,
+            &conv_id,
             CancelFlag::new(),
             Some(del.parent_run.id.clone()),
             del.parent_run.depth + 1,
@@ -981,20 +1155,49 @@ pub async fn run_delegation(
             &run.id,
             ctx.conversation_id,
             ctx.assistant_message_id,
-            &conv.id,
+            &conv_id,
             &agent,
             &spec.task,
         );
+        // `TEAM-12`: the task's limit stops this member (and so queued ones too).
+        if member.is_some() {
+            if let Some(allowance) = team::allowance_of(ctx.conversation_id) {
+                allowance.enroll(&run.cancel);
+            }
+        }
+        if let Some(m) = &member {
+            let _ = db.set_subagent_member(&run.id, &m.member.role, spec.item);
+            // `TEAM-15`: what the coordinator handed over is a post. The loop's own hand-overs (a
+            // review, a send-back, a post that wakes a member) are written where they are made.
+            if !spec.by_loop {
+                team::record(
+                    db,
+                    ctx.sink,
+                    ctx.conversation_id,
+                    crate::db::NewPost {
+                        run_id: Some(&run.id),
+                        from: "coordinator",
+                        to: &m.member.role,
+                        kind: team::KIND_HAND_OVER,
+                        item: spec.item,
+                        text: &clip(&spec.task, 1500),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
         if let Some(p) = &pick {
             let _ = db.set_subagent_engine(&run.id, &p.offered.row.id, Some(&p.label));
         }
         ctx.sink.emit(AgentEvent::SubSpawned {
             run_id: run.id.clone(),
-            conversation_id: conv.id.clone(),
+            conversation_id: conv_id.clone(),
             agent: agent.clone(),
             task: spec.task.clone(),
             index,
             engine: pick.as_ref().map(badge),
+            member: member.as_ref().map(|m| m.member.role.clone()),
+            item: member.as_ref().and(spec.item),
         });
 
         let mut system = String::new();
@@ -1004,12 +1207,17 @@ pub async fn run_delegation(
                 system.push_str("\n\n");
             }
         }
-        system.push_str(CONTRACT);
-        if background {
-            system.push_str("\n\n");
-            system.push_str(BACKGROUND_CONTRACT);
+        match (&team, &member) {
+            (Some(t), Some(m)) => system.push_str(&team::contract(t, &m.member)),
+            _ => {
+                system.push_str(CONTRACT);
+                if background {
+                    system.push_str("\n\n");
+                    system.push_str(BACKGROUND_CONTRACT);
+                }
+            }
         }
-        if let Some(brief) = crate::agent::filesystem::working_folder_brief(db, &conv.id) {
+        if let Some(brief) = crate::agent::filesystem::working_folder_brief(db, &conv_id) {
             system.push_str("\n\n");
             system.push_str(&brief);
         }
@@ -1026,22 +1234,34 @@ pub async fn run_delegation(
             }
         }
 
+        // A continued chat starts from everything its last run saw, then the new task.
+        let continued = earlier.as_ref().and_then(|r| team::continued(db, r, &user));
         children.push(Child {
             sink: ctx.sink.child(&run.id),
             run,
             agent,
-            conversation_id: conv.id,
+            conversation_id: conv_id.clone(),
             // An agent app is told its situation by its driver, not by a
             // transcript; the loop's messages are for the loop.
             messages: if pick.is_some() {
                 Vec::new()
             } else {
-                vec![
-                    serde_json::json!({ "role": "system", "content": system }),
-                    serde_json::json!({ "role": "user", "content": user }),
-                ]
+                continued.unwrap_or_else(|| {
+                    vec![
+                        serde_json::json!({ "role": "system", "content": system }),
+                        serde_json::json!({ "role": "user", "content": user }),
+                    ]
+                })
             },
             engine: pick.map(|p| (p.offered, user)),
+            // A member's own persona sets how warm it runs.
+            temperature: if member.is_some() { crate::agent::turn::temperature_for(db, &conv_id) } else { del.temperature },
+            seat: member.as_ref().zip(team.as_ref()).map(|(m, t)| team::Seat {
+                session: ctx.conversation_id.to_string(),
+                at_once: t.limits.at_once as usize,
+                role: m.member.role.clone(),
+                item: spec.item,
+            }),
         });
     }
 
@@ -1065,7 +1285,7 @@ pub async fn run_delegation(
                     endpoint: del.endpoint.clone(),
                     local_endpoint: ctx.local_endpoint.cloned(),
                     model_name: del.model_name.to_string(),
-                    temperature: del.temperature,
+                    temperature: child.temperature,
                     toolsets: del.toolsets.clone(),
                     provenance: del.provenance.to_string(),
                     context_window: del.context_window,
@@ -1078,12 +1298,21 @@ pub async fn run_delegation(
                         folder: std::path::PathBuf::from(folder.clone().unwrap_or_default()),
                         folder_trust: if del.read_only { Trust::ReadOnly } else { Trust::parse(&trust) },
                     }),
+                    seat: child.seat,
                 }
             })
             .collect();
         let count = spawns.len();
         crate::agent::background::submit(spawns);
         set_step_note(ctx, format!("{count} agent{} in the background", plural(count)));
+        if let Some(t) = &team {
+            return Ok(Delegated { children: Vec::new(), report: format!(
+                "{count} task{} handed over. The member{} will work in the background, at most {} at a time and the rest in order. You do not have their results yet:\n{started}\nCarry on, or call collect_agents with until \"any\" to read the first member that finishes while the others work. check_agents shows how they are doing.{clipped_note}",
+                plural(count),
+                plural(count),
+                t.limits.at_once
+            ) });
+        }
         return Ok(Delegated { children: Vec::new(), report: format!(
             "{count} agent{} {} now working in the background. You do not have their answers yet:\n{started}\nCarry on without them. Use check_agents to see how they are doing, or collect_agents to read their reports once you need them — that one waits, so do not call it until you have nothing else to do. If you have nothing left in this turn, tell the user what you started and finish; they are told the moment each one lands.{clipped_note}",
             plural(count),
@@ -1097,6 +1326,8 @@ pub async fn run_delegation(
         deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64)),
         max_depth: usize::from(nested),
         plan_ceiling: None,
+        // `TEAM-12`: members of a team task run under its allowance.
+        allowance: team.as_ref().and_then(|_| team::allowance_of(ctx.conversation_id)),
     };
     let started = std::time::Instant::now();
     // For an agent-app child: where it works, and the most the folder allows.
@@ -1105,6 +1336,9 @@ pub async fn run_delegation(
     // `PLF-2`: below a plan-first run an agent app may only look.
     let engine_trust = if del.read_only { Trust::ReadOnly } else { Trust::parse(&trust) };
 
+    // A team's members come `at_once` at a time here too, the rest in order.
+    let gate = tokio::sync::Semaphore::new(team.as_ref().map_or(children.len(), |t| t.limits.at_once as usize).max(1));
+    let gate = &gate;
     let outcomes = join_all(children.iter().map(|child| {
         let rc = RunContext {
             run: &child.run,
@@ -1125,9 +1359,16 @@ pub async fn run_delegation(
         // Boxed because this is `run_agent` calling itself through a tool call:
         // without it the future's size is defined in terms of itself.
         Box::pin(async move {
-            // `CLI-4`: an agent app does this one. Same settle, different worker.
-            if let Some((offered, task)) = &child.engine {
-                return crate::engines::run::run_external(crate::engines::run::Request {
+            // Fair: whoever asked first starts first.
+            let _place = gate.acquire().await;
+            // `TEAM-15`: nobody can answer a member's question while the coordinator waits for it here.
+            let _in_foreground = child.seat.as_ref().map(|_| team::in_foreground(&child.run.id));
+            if let Some(seat) = &child.seat {
+                ctx.sink.emit(AgentEvent::MemberStarted { run_id: child.run.id.clone(), member: seat.role.clone(), item: seat.item });
+            }
+            let outcome = if let Some((offered, task)) = &child.engine {
+                // `CLI-4`: an agent app does this one. Same settle, different worker.
+                crate::engines::run::run_external(crate::engines::run::Request {
                     db,
                     perms: ctx.perms,
                     sink: &child.sink,
@@ -1141,8 +1382,8 @@ pub async fn run_delegation(
                     headless: ctx.headless,
                     resume: None,
                 })
-                .await;
-            }
+                .await
+            } else {
             run_agent(
                 ctx.client,
                 del.endpoint,
@@ -1159,7 +1400,7 @@ pub async fn run_delegation(
                 ctx.data_dir,
                 del.model_name,
                 child.messages.clone(),
-                del.temperature,
+                child.temperature,
                 true,
                 // `SUB-8`: a foreground child may prompt, and the panel says
                 // which agent is asking. A child of a headless run stays headless.
@@ -1168,6 +1409,11 @@ pub async fn run_delegation(
                 &child.sink,
             )
             .await
+            };
+            if let Some(seat) = &child.seat {
+                ctx.sink.emit(AgentEvent::MemberEnded { run_id: child.run.id.clone(), member: seat.role.clone(), item: seat.item });
+            }
+            outcome
         })
     }))
     .await;
@@ -1179,7 +1425,7 @@ pub async fn run_delegation(
         let secs = child.run.elapsed_ms() / 1000;
         let status = match outcome.stop_reason {
             crate::agent::fleet::StopReason::Completed => "done",
-            crate::agent::fleet::StopReason::Aborted => "stopped",
+            crate::agent::fleet::StopReason::Aborted | crate::agent::fleet::StopReason::Budget => "stopped",
             crate::agent::fleet::StopReason::Error => "error",
             _ => "done",
         };
@@ -1203,6 +1449,8 @@ pub async fn run_delegation(
             text,
             outcome.steps,
         );
+        // `TEAM-15`: what a member found goes to the coordinator as a post.
+        team::record_end(db, del.fleet, ctx.sink, &child.run.id);
         ctx.sink.emit(AgentEvent::SubEnded {
             run_id: child.run.id.clone(),
             status: status.to_string(),
@@ -1296,6 +1544,7 @@ fn headline(stop_reason: &str, steps: usize, secs: u64) -> String {
         "aborted" => format!("stopped by the user after {steps} steps — this is what it had"),
         "timeout" => format!("ran out of time after {steps} steps — this is what it had"),
         "max_steps" => format!("hit its step limit ({steps} steps) — this is what it had"),
+        "budget" => format!("was stopped when the team's limit was reached ({steps} steps) — this is what it had"),
         "stuck" => format!("was not getting anywhere ({steps} steps) — this is what it had"),
         "error" => format!("failed after {steps} steps"),
         _ => format!("finished after {steps} steps"),
@@ -1364,17 +1613,43 @@ async fn collect_agents(
         .and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect());
 
+    // `TEAM-10`: a team's coordinator may ask for the first member that finishes. A report it has
+    // already read does not count, so the next call waits for the next one.
+    let team = if ctx.delegation.is_some() { team::of_session(db, ctx.memory, ctx.conversation_id) } else { None };
+    let team_run = team.is_some();
+    let any = team_run && team::wants_any(args);
+    // Only this task's members: what is read is kept in memory, so after a restart (or with
+    // helpers from before the team led) an old report would otherwise end the wait at once.
+    let task = any.then(|| team::boundary(db, ctx.conversation_id, ctx.assistant_message_id));
+
     let mine = |rows: Vec<crate::db::SubagentRun>| -> Vec<crate::db::SubagentRun> {
-        match &wanted {
-            Some(ids) => rows.into_iter().filter(|r| ids.iter().any(|w| w == &r.id)).collect(),
+        let rows: Vec<crate::db::SubagentRun> = match (&wanted, &task) {
+            (Some(ids), _) => rows.into_iter().filter(|r| ids.iter().any(|w| w == &r.id)).collect(),
+            (None, Some(b)) => rows.into_iter().filter(|r| team::in_task(r, b) && !team::is_read(&r.id)).collect(),
+            (None, None) => rows,
+        };
+        // `TEAM-11`: a run its reviewer sent back, after which the member worked again, is out of date.
+        match &team {
+            Some(t) => {
+                let all = db.list_subagent_runs(ctx.conversation_id).unwrap_or_default();
+                rows.into_iter().filter(|r| !all.iter().position(|a| a.id == r.id).is_some_and(|i| team::is_gone(t, &all, i))).collect()
+            }
             None => rows,
         }
     };
 
+    // `TEAM-11`: a reviewed member's report is settled by the loop before the coordinator reads it.
+    if let Some(t) = &team {
+        team::settle(ctx, t, true).await;
+        team_folder::merge_done(ctx.db, ctx.data_dir, ctx.conversation_id, ctx.ledger, t, ctx.headless);
+    }
     let rows = mine(db.list_subagent_runs(ctx.conversation_id).unwrap_or_default());
-    if rows.is_empty() {
+    // `TEAM-15`: a post for the coordinator is something to read even when no report is waiting.
+    if rows.is_empty() && !(team_run && team::posts_waiting(db, ctx.conversation_id, false)) {
+        let started = !db.list_subagent_runs(ctx.conversation_id).unwrap_or_default().is_empty();
         return Ok(match &wanted {
             Some(_) => "None of those run ids belong to an agent you started here. check_agents lists the ones that do.".to_string(),
+            None if any && started => "You have read every report already. Nothing is waiting for you.".to_string(),
             None => "You have not started any agents in this conversation.".to_string(),
         });
     }
@@ -1388,7 +1663,13 @@ async fn collect_agents(
     let mut gave_up = String::new();
     if wait {
         loop {
-            if rows.iter().all(|r| r.ended_at.is_some()) {
+            // `TEAM-15`: a member that asks something is holding on for the answer, so any post ends
+            // the wait for the first member, and a question ends even the wait for them all.
+            let posted = team_run && team::posts_waiting(db, ctx.conversation_id, !any);
+            let settled = posted
+                || rows.is_empty()
+                || if any { rows.iter().any(|r| r.ended_at.is_some()) } else { rows.iter().all(|r| r.ended_at.is_some()) };
+            if settled {
                 break;
             }
             if cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
@@ -1400,6 +1681,10 @@ async fn collect_agents(
                 break;
             }
             tokio::time::sleep(COLLECT_POLL).await;
+            if let Some(t) = &team {
+                team::settle(ctx, t, true).await;
+                team_folder::merge_done(ctx.db, ctx.data_dir, ctx.conversation_id, ctx.ledger, t, ctx.headless);
+            }
             rows = mine(db.list_subagent_runs(ctx.conversation_id).unwrap_or_default());
         }
     }
@@ -1430,6 +1715,18 @@ async fn collect_agents(
             headline(row.stop_reason.as_deref().unwrap_or(""), row.steps, secs),
             clip(&escape_frame(text), REPORT_CLIP)
         ));
+        // A member that failed or was stopped reaches the coordinator here, never as silence.
+        if row.member.is_some() && row.stop_reason.as_deref() != Some("completed") {
+            report.push_str("It did not finish. Decide whether to hand it over again, do the work yourself or tell the person.\n\n");
+            team::failed(ctx.conversation_id, row);
+        }
+        // `TEAM-11`: what the member that looked at its work said, or that the rounds ran out.
+        if let Some(t) = &team {
+            let all = db.list_subagent_runs(ctx.conversation_id).unwrap_or_default();
+            if let Some(note) = all.iter().position(|a| a.id == row.id).and_then(|i| team::note(t, &all, i)) {
+                report.push_str(&format!("{note}\n\n"));
+            }
+        }
         let artifacts = db.list_artifacts(&row.child_conversation_id).unwrap_or_default();
         if !artifacts.is_empty() {
             let names: Vec<String> = artifacts.iter().map(|a| a.title.clone()).collect();
@@ -1437,6 +1734,13 @@ async fn collect_agents(
         }
     }
     report.push_str(&gave_up);
+    if team_run {
+        if let Some(posts) = team::read_posts(db, ctx.conversation_id) {
+            report.push_str(&posts);
+            report.push_str("\n\n");
+        }
+        team::mark_read(rows.iter().filter(|r| r.ended_at.is_some()).map(|r| r.id.clone()));
+    }
     let done = rows.len() - pending;
     set_step_note(ctx, format!("{done} report{}", plural(done)));
     Ok(report.trim_end().to_string())

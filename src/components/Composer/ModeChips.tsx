@@ -1,12 +1,11 @@
 import { useAppStore, useSelectedModel } from "../../lib/store";
 import { tierOf, tierTag } from "../../lib/tier";
-import { usePersonaAppsLine } from "../Apps/personaAppsLine";
 import { CloseIcon } from "../Icons/Icons";
 import "./ModeChips.css";
 
 /**
- * `CMP-7`: state that outlasts one message — Workspace mode, tools off, a
- * persona. These used to hang off the `+`, where "on" was only a lit button.
+ * `CMP-7`: state that outlasts one message — Workspace mode, tools off. (Who
+ * leads the chat lives in the "this chat" menu, `TEAM-2`.) These used to hang off the `+`, where "on" was only a lit button.
  * Naming them beside the footer makes the current state readable, and each one
  * can be turned off right where it is read.
  *
@@ -15,7 +14,7 @@ import "./ModeChips.css";
  * message stream, because that is the thing you reach for, and the x leaves the mode.
  */
 export interface ModeChip {
-  key: "workspace" | "tools" | "tier" | "external" | "persona";
+  key: "workspace" | "focus" | "tools" | "tier" | "external";
   label: string;
   command: string;
   off: () => void;
@@ -36,7 +35,8 @@ export function useModeChips(): ModeChip[] {
   const toolsEnabled = useAppStore((s) => s.toolsEnabled);
   const setWorkspaceMode = useAppStore((s) => s.setWorkspaceMode);
   const setToolsEnabled = useAppStore((s) => s.setToolsEnabled);
-  const applyPersona = useAppStore((s) => s.applyPersona);
+  const focusMode = useAppStore((s) => s.focusMode);
+  const setFocusMode = useAppStore((s) => s.setFocusMode);
   const convId = useAppStore((s) => s.activeConversationId);
   // `CLI-UI-6`: only when this chat has turned agent apps off, and only if there
   // is an agent app that could have been used.
@@ -50,12 +50,6 @@ export function useModeChips(): ModeChip[] {
   const setModelTier = useAppStore((s) => s.setModelTier);
   const model = useSelectedModel();
   const runTier = useAppStore((s) => (s.activeRun?.convId === s.activeConversationId ? s.activeRun?.tier : undefined));
-  const persona = useAppStore((s) => {
-    const id = s.conversations.find((c) => c.id === s.activeConversationId)?.personaId;
-    return id ? (s.personas.find((p) => p.id === id) ?? null) : null;
-  });
-  // `CA-UI-6`: a persona narrowed to some apps says which.
-  const appsLine = usePersonaAppsLine(persona?.id);
 
   const chips: ModeChip[] = [];
   if (workspaceMode) {
@@ -69,6 +63,17 @@ export function useModeChips(): ModeChip[] {
         run: () => setWorkspaceShown(!workspaceShown),
         title: workspaceShown ? "Show the message stream" : "Open the workspace",
       },
+    });
+  }
+  // `/focus` hides everything but the messages, so the way back is always in reach.
+  if (focusMode) {
+    chips.push({
+      key: "focus",
+      label: "Focus",
+      command: "/focus ",
+      off: () => setFocusMode(false),
+      offLabel: "Show everything in the chat again",
+      hint: "Only the messages are shown",
     });
   }
   if (!toolsEnabled) {
@@ -112,16 +117,6 @@ export function useModeChips(): ModeChip[] {
       command: "/external ",
       off: () => void setEnginesOff(convId, false),
       offLabel: "Let me hand work to external agents again",
-    });
-  }
-  if (persona && convId) {
-    chips.push({
-      key: "persona",
-      label: persona.name,
-      command: "/persona ",
-      off: () => void applyPersona(convId, null),
-      offLabel: `Remove the ${persona.name} persona`,
-      hint: appsLine,
     });
   }
   return chips;

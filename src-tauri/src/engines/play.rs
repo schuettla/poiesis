@@ -105,7 +105,7 @@ pub async fn flush<T>(asks: &mut Asks<'_, T>) {
 /// marked, so the agent can tell an instruction from the user's own message.
 pub fn steer_text(steer: &Steer) -> String {
     match steer.from {
-        SteerSource::User => steer.text.clone(),
+        SteerSource::User | SteerSource::Team => steer.text.clone(),
         SteerSource::Lead => format!("New instruction: {}", steer.text),
     }
 }

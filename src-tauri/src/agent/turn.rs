@@ -572,6 +572,75 @@ pub fn save_turn(db: &crate::db::Db, input: &TurnInput) -> Result<SavedTurn, cra
     Ok(SavedTurn { user_message_id: user.id, assistant_message_id: assistant.id })
 }
 
+/// `TEAM-18`: the one row of a reply nobody asked for. There is no user row: what the persona is told
+/// (`input.text`) is not the person's and is never saved. The id the turn reads as "the current user
+/// row" is the reply's own, which is empty, so history leaves it out.
+pub fn save_unasked(db: &crate::db::Db, input: &TurnInput) -> Result<SavedTurn, crate::db::DbError> {
+    let assistant = db.append_message(
+        &input.conversation_id,
+        &NewMessage {
+            role: "assistant".into(),
+            content: String::new(),
+            model_name: Some(input.model.name.clone()),
+            model_provenance: Some(input.model.provenance.clone()),
+            steps_json: None,
+            attachments: Vec::new(),
+        },
+    )?;
+    Ok(SavedTurn { user_message_id: assistant.id.clone(), assistant_message_id: assistant.id })
+}
+
+/// `TEAM-17`/`TEAM-18`: the person spoke to a member of the team that leads this chat, or a persona is
+/// speaking up unasked. That member answers this message alone, as itself, and the team keeps leading
+/// (`give_back`). Anything else (no line, a helper, a role that is not there) goes to the coordinator as
+/// any message does. Returns what the turn is lent to, who answers, and what the board says of that
+/// member's work (read before the chat is lent: while the member answers, no team leads it).
+///
+/// A function of its own and never inlined, so the locals stay out of `run_turn`'s frame: a member's
+/// work runs inside the coordinator's call in a test, and that stack is shallow enough to notice.
+#[inline(never)]
+fn lend_to_a_member(
+    env: &TurnEnv<'_>,
+    sink: &AgentEventSink,
+    input: &TurnInput,
+    conversation_id: &str,
+    user_id: &str,
+    lent: Option<crate::agent::leader::Lent>,
+) -> (Option<crate::agent::leader::Lent>, Option<crate::agent::team::Addressable>, Option<String>) {
+    let db = env.db;
+    let unasked = input.options.unasked;
+    let addressed = input
+        .options
+        .addressed
+        .as_deref()
+        .and_then(|role| {
+            if unasked {
+                crate::agent::team::voice(db, env.memory, conversation_id, role)
+            } else {
+                crate::agent::team::addressable(db, env.memory, conversation_id, role)
+            }
+        })
+        .filter(|_| lent.is_none());
+    let board_note = addressed.as_ref().and_then(|a| {
+        crate::agent::team::of_session(db, env.memory, conversation_id).map(|t| crate::agent::team::board_note(db, &t, conversation_id, &a.role))
+    });
+    let lent = match &addressed {
+        Some(a) => crate::agent::leader::lend_member(db, conversation_id, &a.persona_id),
+        None => lent,
+    };
+    let addressed = addressed.filter(|_| lent.is_some());
+    if let (Some(a), false) = (&addressed, unasked) {
+        let _ = db.set_message_addressed(user_id, Some(&a.role));
+        crate::agent::team::record(
+            db,
+            sink,
+            conversation_id,
+            crate::db::NewPost { from: crate::agent::team::YOU, to: &a.role, kind: crate::agent::team::KIND_NOTE, text: input.text.trim(), ..Default::default() },
+        );
+    }
+    (lent, addressed, board_note)
+}
+
 /// `HRW-1`: start, run and save one user turn.
 ///
 /// In order: the user row and an empty assistant row are saved (unless the
@@ -584,8 +653,9 @@ pub async fn run_turn(env: &TurnEnv<'_>, input: TurnInput, on_event: Channel<Age
     let conversation_id = input.conversation_id.as_str();
     let (sink, fold) = folding_sink(on_event);
 
-    // 1. The two rows.
-    let saved = match input.saved.clone().map_or_else(|| save_turn(db, &input), Ok) {
+    // 1. The two rows. `TEAM-18`: a reply nobody asked for has only its own.
+    let unasked = input.options.unasked;
+    let saved = match input.saved.clone().map_or_else(|| if unasked { save_unasked(db, &input) } else { save_turn(db, &input) }, Ok) {
         Ok(saved) => saved,
         Err(e) => {
             sink.emit(AgentEvent::Error { message: format!("I couldn't save your message. {e}") });
@@ -596,9 +666,13 @@ pub async fn run_turn(env: &TurnEnv<'_>, input: TurnInput, on_event: Channel<Age
 
     // 2. The window takes the real ids at once.
     sink.emit(AgentEvent::TurnSaved {
-        user_message_id: Some(user_id.clone()),
+        user_message_id: (!unasked).then(|| user_id.clone()),
         assistant_message_id: assistant_id.clone(),
     });
+
+    // `TEAM-1`: a chat nobody led yet takes the leader where it starts says, before
+    // anything below reads its persona.
+    let placed = crate::agent::leader::start_of_turn(db, env.memory, conversation_id);
 
     // 3. Where this turn runs.
     let setup = match resolve_turn(env.mgr, db, &input.target).await {
@@ -623,6 +697,24 @@ pub async fn run_turn(env: &TurnEnv<'_>, input: TurnInput, on_event: Channel<Age
     // 4. The model's copy of the message.
     let (pdfs, images) = read_attachments(env, &input).await;
     let content = user_content(user_text(&input, &pdfs), images);
+
+    // `TEAM-1`: `/lead mira <message>`. Mira reads this message alone; the chat's own
+    // leader comes back below, before the answer is finished.
+    let lent = crate::agent::leader::lend(db, conversation_id, input.options.leader.as_deref());
+
+    // `TEAM-17`/`TEAM-18`: a member of the team that leads this chat answers this message alone.
+    let (lent, addressed, board_note) = lend_to_a_member(env, &sink, &input, conversation_id, &user_id, lent);
+
+    // `TEAM-3`: the reply is stamped with who gives it, which is how a name line can
+    // appear where the speaker changes. The window hears it too: a default it never saw
+    // is the chat's leader now.
+    let mut speaker = crate::agent::leader::speaker(db, env.memory, conversation_id, lent.is_some());
+    if placed && lent.is_none() {
+        // The place gave the chat its leader just now: said as such, so the window takes it.
+        speaker.source = "default";
+    }
+    let _ = db.set_message_author(&assistant_id, Some(&speaker.leader));
+    sink.emit(AgentEvent::LeaderSet { leader: speaker.leader, source: speaker.source.to_string() });
 
     // 5. The system prompt, and what recall brought in.
     let query = input.action.as_deref().unwrap_or(&input.text);
@@ -658,6 +750,12 @@ pub async fn run_turn(env: &TurnEnv<'_>, input: TurnInput, on_event: Channel<Age
     };
     let mut msgs = budgeted_turns(env, &input, &system, current, &user_id, &sink, spec_tokens).await;
     context::insert_briefs(db, conversation_id, tools_enabled, false, &mut msgs);
+    // `TEAM-17`: who is speaking, and what the board says of its work, just before the message.
+    if let (Some(_), Some(note)) = (&addressed, &board_note) {
+        if !msgs.is_empty() {
+            msgs.insert(msgs.len() - 1, serde_json::json!({ "role": "system", "content": note }));
+        }
+    }
 
     // 6. The run.
     let temperature = temperature_for(db, conversation_id);
@@ -675,6 +773,9 @@ pub async fn run_turn(env: &TurnEnv<'_>, input: TurnInput, on_event: Channel<Age
         &sink,
     )
     .await;
+    if let Some(lent) = lent {
+        crate::agent::leader::give_back(db, lent);
+    }
 
     // 7. The assistant row, finished.
     let mut refs = inputs.context_refs.clone();
@@ -706,6 +807,8 @@ pub async fn resume_turn(
 ) -> bool {
     let db = env.db;
     let (sink, fold) = folding_sink(on_event);
+    // `TEAM-1`: a one-message lead the app closed during ends here, before the run goes on.
+    crate::agent::leader::give_back_left(db, conversation_id);
 
     let row = match db.append_message(
         conversation_id,
@@ -2663,5 +2766,662 @@ REASON: fine".to_string()])],
         assert!(system.contains("Your notes about the user"), "{system}");
         assert!(system.contains("Only these descriptions are available"), "{system}");
         assert!(system.contains("tea"));
+    }
+
+    /// What it takes to run a team with a reviewed member: a team that leads the chat, `api` on a
+    /// route of its own and `verifier` on another, so the scripted server tells their turns apart.
+    fn reviewed_team(rig: &Rig, rounds: u32, reviewed: bool) -> String {
+        use crate::memory::ways::{Limits, Line, LineKind, Member, Team, AD_HOC};
+        rig.memory.ensure_ways();
+        let member = |role: &str, job: &str| Member { role: role.into(), persona: "helper".into(), job: job.into(), owns: vec![] };
+        let mut team = Team::blank();
+        team.name = "Shop team".into();
+        team.line = "Builds web shop features".into();
+        team.member_style = AD_HOC.into();
+        // Nobody answers a check-in card in a test, so the team reports at the end only.
+        team.report = crate::memory::ways::Report::End;
+        // These tests are about the work, and nobody answers a cost card in them.
+        team.limits = Limits { rounds, ask_cost: false, ..Limits::default() };
+        team.members = vec![member("api", "Builds the API"), member("verifier", "Checks every change")];
+        team.lines = vec![
+            Line::new(LineKind::HandsOver, "coordinator", "api"),
+            Line::new(LineKind::Reports, "coordinator", "you"),
+            Line::new(LineKind::Talks, "you", "coordinator"),
+        ];
+        if reviewed {
+            team.lines.push(Line::new(LineKind::Reviews, "verifier", "api"));
+        }
+        rig.memory.save_team(team, "you", "").unwrap().slug
+    }
+
+    fn team_routes(verdicts: &[&str]) -> Vec<(&'static str, Vec<serde_json::Value>)> {
+        vec![
+            (
+                "Your part: Builds the API",
+                vec![
+                    serde_json::json!({ "content": "Built the charge endpoint." }),
+                    serde_json::json!({ "content": "Built it again, with a test." }),
+                    serde_json::json!({ "content": "Built it a third time." }),
+                ],
+            ),
+            (
+                "Your part: Checks every change",
+                verdicts.iter().map(|v| serde_json::json!({ "content": v })).collect(),
+            ),
+        ]
+    }
+
+    async fn run_team_turn(rig: &Rig, rounds: u32, reviewed: bool, verdicts: &[&str]) -> (String, Arc<Mutex<Vec<serde_json::Value>>>, Bodies) {
+        let slug = reviewed_team(rig, rounds, reviewed);
+        let (url, bodies) = scripted_model_full(
+            vec![
+                call(
+                    "delegate",
+                    serde_json::json!({ "tasks": [{ "agent": "api", "task": "Build the charge endpoint", "item": 1 }] }),
+                ),
+                serde_json::json!({ "content": "All done." }),
+            ],
+            Vec::new(),
+            team_routes(verdicts),
+        )
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        crate::agent::leader::set_leader(&rig.db, &rig.memory, &conv, Some(&crate::agent::leader::Leader::Team(slug))).unwrap();
+        rig.db.set_conversation_style(&conv, Some(crate::memory::ways::AD_HOC)).unwrap();
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Add Apple Pay");
+        turn.tools_enabled = true;
+        run_turn(&rig.env(), turn, channel).await;
+        (conv, events, bodies)
+    }
+
+    /// `TEAM-T11`: the member on a `reviews` line looks at the item without the coordinator
+    /// asking for it, and a send-back reaches the member as a new task in its own chat.
+    #[test]
+    fn a_reviewed_member_is_looked_at_by_the_loop_and_sent_back_with_the_reason() {
+        on_a_big_stack(|| async {
+        let rig = Rig::new();
+        let (conv, events, bodies) = run_team_turn(
+            &rig,
+            3,
+            true,
+            &["VERDICT: SENT BACK\nREASON: There is no test.", "VERDICT: CHECKED\nREASON: The test is there."],
+        )
+        .await;
+
+        // The coordinator handed work to api and nobody else: every other run is the loop's.
+        let runs = rig.db.list_subagent_runs(&conv).unwrap();
+        let story: Vec<String> =
+            runs.iter().map(|r| format!("{} {}", r.member.clone().unwrap_or_default(), r.task.lines().next().unwrap_or(""))).collect();
+        assert_eq!(
+            story,
+            vec![
+                "api Build the charge endpoint",
+                "verifier Review item 1 by api: Build the charge endpoint",
+                "api Sent back by verifier on item 1: There is no test.",
+                "verifier Review item 1 by api: Build the charge endpoint",
+            ]
+        );
+        assert!(runs.iter().all(|r| r.item == Some(1)));
+        // The reviewer was handed the report and told how to answer.
+        assert!(
+            runs[1].task.contains("api's report:\nBuilt the charge endpoint.") && runs[1].task.contains("VERDICT: CHECKED or SENT BACK"),
+            "{}",
+            runs[1].task
+        );
+        // Its second review continued its own chat; api's second run continued api's.
+        assert_eq!(runs[1].child_conversation_id, runs[3].child_conversation_id);
+        assert_eq!(runs[0].child_conversation_id, runs[2].child_conversation_id);
+        let seen = bodies.lock().unwrap();
+        let second_api = seen
+            .iter()
+            .filter(|b| b["messages"].to_string().contains("Your part: Builds the API"))
+            .nth(1)
+            .expect("api worked again");
+        assert!(says(second_api, "Built the charge endpoint.") && says(second_api, "Sent back by verifier on item 1: There is no test."));
+        drop(seen);
+
+        // The board hears it, with the item as the plan numbers it (from 0).
+        let events = events.lock().unwrap();
+        let looks: Vec<String> =
+            events.iter().filter(|e| e["type"] == "review").map(|e| format!("{} {}", e["item"], e["state"].as_str().unwrap())).collect();
+        assert_eq!(looks, vec!["0 checking", "0 sent_back", "0 checking", "0 checked"]);
+        assert_eq!(events.iter().filter(|e| e["type"] == "member_started").count(), 4);
+
+        // The coordinator read the final report, with what the reviewer said.
+        let turns = loop_turns(&bodies);
+        let last = turns.last().unwrap();
+        assert!(says(last, "Built it again, with a test."), "{:?}", last["messages"]);
+        assert!(says(last, "verifier looked at it and kept it. The test is there."), "{:?}", last["messages"]);
+        });
+    }
+
+    /// `TEAM-T11`: at `limits.rounds` the loop stops the back and forth and tells the coordinator
+    /// in the plan's words.
+    #[test]
+    fn at_the_rounds_limit_the_coordinator_is_told_the_two_did_not_agree() {
+        on_a_big_stack(|| async {
+        let rig = Rig::new();
+        let (conv, _, bodies) = run_team_turn(&rig, 2, true, &["VERDICT: SENT BACK\nREASON: There is still no test."]).await;
+
+        let runs = rig.db.list_subagent_runs(&conv).unwrap();
+        let roles: Vec<&str> = runs.iter().map(|r| r.member.as_deref().unwrap()).collect();
+        assert_eq!(roles, vec!["api", "verifier", "api", "verifier"], "two rounds, and api does not work a third time");
+
+        let turns = loop_turns(&bodies);
+        let last = turns.last().unwrap();
+        assert!(says(last, "api and verifier did not agree on item 1: There is still no test."), "{:?}", last["messages"]);
+        assert!(says(last, "Decide what happens with it"));
+        });
+    }
+
+    /// `TEAM-T11`: a member nobody reviews is handed back as before.
+    #[test]
+    fn a_member_nobody_reviews_is_handed_back_as_before() {
+        on_a_big_stack(|| async {
+        let rig = Rig::new();
+        let (conv, events, bodies) = run_team_turn(&rig, 3, false, &["VERDICT: SENT BACK\nREASON: never read"]).await;
+        assert_eq!(rig.db.list_subagent_runs(&conv).unwrap().len(), 1);
+        assert!(events.lock().unwrap().iter().all(|e| e["type"] != "review"));
+        // The coordinator's request says the work is the members'; the member's own does not.
+        let told = |b: &serde_json::Value| b["messages"].as_array().unwrap().iter().any(|m| {
+            m["role"] == "system" && m["content"].as_str().is_some_and(|c| c.starts_with("You coordinate the team \"Shop team\""))
+        });
+        let bodies = bodies.lock().unwrap();
+        assert!(told(&bodies[0]), "the coordinator's first request");
+        assert_eq!(bodies[0]["messages"][1]["role"], "system", "the note comes right after the system prompt");
+        assert!(told(&serde_json::json!({ "messages": [bodies[0]["messages"][1].clone()] })));
+        // And it can only hand work over: its own work tools are off; the member keeps them.
+        let tools = |b: &serde_json::Value| -> Vec<String> {
+            b["tools"].as_array().map(|t| t.iter().filter_map(|s| s["function"]["name"].as_str().map(str::to_string)).collect()).unwrap_or_default()
+        };
+        let coordinator = tools(&bodies[0]);
+        assert!(coordinator.contains(&"delegate".to_string()), "{coordinator:?}");
+        let allowed = ["delegate", "check_agents", "collect_agents", "post", "plan", "ask_user", "harness", "read_result", "search_result"];
+        assert!(coordinator.iter().all(|n| allowed.contains(&n.as_str())), "{coordinator:?}");
+        let member = bodies.iter().find(|b| !told(b)).expect("a member's request");
+        assert!(tools(member).iter().any(|n| !allowed.contains(&n.as_str())), "the member keeps its tools: {:?}", tools(member));
+        });
+    }
+
+    // ---- TEAM-12 ----
+
+    /// A team that asks before a task (the default), with one member, leading a new chat.
+    async fn asking_team_turn(rig: &Rig, text: &str, answer: Option<&[&str]>) -> (String, Arc<Mutex<Vec<serde_json::Value>>>, Bodies, ChatTarget) {
+        use crate::memory::ways::{Line, LineKind, Member, Team};
+        rig.memory.ensure_ways();
+        let mut team = Team::blank();
+        team.name = "Shop team".into();
+        team.member_style = crate::memory::ways::AD_HOC.into();
+        team.report = crate::memory::ways::Report::End;
+        team.members = vec![Member { role: "api".into(), persona: "helper".into(), job: "Builds the API".into(), owns: vec![] }];
+        team.lines = vec![
+            Line::new(LineKind::HandsOver, "coordinator", "api"),
+            Line::new(LineKind::Reports, "coordinator", "you"),
+            Line::new(LineKind::Talks, "you", "coordinator"),
+        ];
+        let slug = match rig.memory.teams().into_iter().next() {
+            Some(t) => t.team.slug,
+            None => rig.memory.save_team(team, "you", "").unwrap().slug,
+        };
+        let (url, bodies) = fake_model("Built it.").await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        crate::agent::leader::set_leader(&rig.db, &rig.memory, &conv, Some(&crate::agent::leader::Leader::Team(slug))).unwrap();
+        rig.db.set_conversation_style(&conv, Some(crate::memory::ways::AD_HOC)).unwrap();
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target.clone(), text);
+        turn.tools_enabled = true;
+        let watching = events.clone();
+        let fleet = &rig.fleet;
+        let answering = async move {
+            let Some(choices) = answer else { return };
+            for _ in 0..300 {
+                let q = watching.lock().unwrap().iter().find(|e| e["type"] == "question").cloned();
+                if let Some(q) = q {
+                    let run = fleet.get(q["run_id"].as_str().unwrap()).expect("the run waits");
+                    let choices = choices.iter().map(|c| c.to_string()).collect();
+                    assert!(run.answer("team-cost", crate::agent::fleet::Answer { choices, text: None }));
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            panic!("the cost card never came");
+        };
+        let env = rig.env();
+        tokio::join!(run_turn(&env, turn, channel), answering);
+        (conv, events, bodies, target)
+    }
+
+    fn chat_requests(bodies: &Bodies) -> usize {
+        bodies.lock().unwrap().iter().filter(|b| b["messages"].is_array()).count()
+    }
+
+    /// `TEAM-T12`: the card comes before the coordinator's first request, in its own words.
+    /// Start lets the task go ahead and it is not asked again in this chat.
+    #[tokio::test]
+    async fn the_cost_card_comes_before_the_first_task_and_start_goes_ahead() {
+        let rig = Rig::new();
+        let (conv, events, bodies, target) = asking_team_turn(&rig, "Add Apple Pay", Some(&["Start"])).await;
+        let events = events.lock().unwrap();
+        let card = events.iter().find(|e| e["type"] == "question").expect("a card");
+        assert_eq!(card["title"], "Shop team is about to start");
+        assert_eq!(card["check"], "Don't ask for this team");
+        let labels: Vec<&str> = card["options"].as_array().unwrap().iter().map(|o| o["label"].as_str().unwrap()).collect();
+        assert_eq!(labels, vec!["Start", "Not now"]);
+        let text = card["question"].as_str().unwrap();
+        assert!(text.contains("2 members: Poiesis (fake-model), api (fake-model)."), "{text}");
+        assert!(text.ends_with("It stops at $2.00 or after 90 minutes."), "{text}");
+        assert!(chat_requests(&bodies) >= 1, "the coordinator ran");
+        let rows = rig.db.list_messages(&conv).unwrap();
+        assert_eq!(rows[1].content, "Built it.");
+        drop(events);
+
+        // The same chat, the next message: no card.
+        let (channel, again) = recording_channel();
+        let mut next = typed(&conv, target, "And Google Pay");
+        next.tools_enabled = true;
+        run_turn(&rig.env(), next, channel).await;
+        assert!(again.lock().unwrap().iter().all(|e| e["type"] != "question"), "asked once per chat");
+    }
+
+    /// `TEAM-T12`: Not now means the task does not start: the model is never asked.
+    #[tokio::test]
+    async fn not_now_leaves_the_task_unstarted() {
+        let rig = Rig::new();
+        let (conv, events, bodies, _) = asking_team_turn(&rig, "Add Apple Pay", Some(&["Not now"])).await;
+        assert_eq!(chat_requests(&bodies), 0, "no model request was made");
+        let rows = rig.db.list_messages(&conv).unwrap();
+        assert_eq!(rows[1].content, "Not started.");
+        assert!(rig.db.list_subagent_runs(&conv).unwrap().is_empty());
+        assert!(events.lock().unwrap().iter().any(|e| e["type"] == "turn_finalized"));
+    }
+
+    /// `TEAM-T12`: the box writes `ask_cost: no` to the team file as a version, and the team
+    /// does not ask in the next chat either.
+    #[tokio::test]
+    async fn the_box_stops_the_team_asking() {
+        let rig = Rig::new();
+        let (_, events, _, _) = asking_team_turn(&rig, "Add Apple Pay", Some(&["Start", "Don't ask for this team"])).await;
+        assert!(events.lock().unwrap().iter().any(|e| e["type"] == "question"));
+        let team = rig.memory.teams().into_iter().next().unwrap().team;
+        assert!(!team.limits.ask_cost);
+        assert!(team.version >= 2, "saved as a version: {}", team.version);
+
+        let (_, events, bodies, _) = asking_team_turn(&rig, "Another job", None).await;
+        assert!(events.lock().unwrap().iter().all(|e| e["type"] != "question"));
+        assert_eq!(chat_requests(&bodies), 1);
+    }
+
+    /// A chat nobody led with a team never meets the card.
+    #[tokio::test]
+    async fn a_chat_poiesis_leads_is_never_asked() {
+        let rig = Rig::new();
+        let (url, bodies) = fake_model("Hello").await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Hi");
+        turn.tools_enabled = true;
+        run_turn(&rig.env(), turn, channel).await;
+        assert!(events.lock().unwrap().iter().all(|e| e["type"] != "question"));
+        assert_eq!(chat_requests(&bodies), 1);
+    }
+
+    // ---- TEAM-15 ----
+
+    /// Run a test on a thread with room for the loop to call itself. A member that works inside the
+    /// coordinator's call (no pool in a test) and uses a tool is the loop three levels deep, which the
+    /// default 2 MB test stack does not hold in a debug build; the app runs members on the pool.
+    fn on_a_big_stack<F: std::future::Future<Output = ()> + 'static>(make: impl FnOnce() -> F + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(make());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+
+    /// A reviewed-less team of `api` and `verifier`, a coordinator that follows `lead` and `api` that
+    /// follows `api_script`, on a scripted model.
+    async fn run_posting_team(
+        rig: &Rig,
+        lead: Vec<serde_json::Value>,
+        api_script: Vec<serde_json::Value>,
+    ) -> (String, Arc<Mutex<Vec<serde_json::Value>>>, Bodies) {
+        let slug = reviewed_team(rig, 3, false);
+        let (url, bodies) = scripted_model_full(lead, Vec::new(), vec![("Your part: Builds the API", api_script)]).await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        crate::agent::leader::set_leader(&rig.db, &rig.memory, &conv, Some(&crate::agent::leader::Leader::Team(slug))).unwrap();
+        rig.db.set_conversation_style(&conv, Some(crate::memory::ways::AD_HOC)).unwrap();
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Add Apple Pay");
+        turn.tools_enabled = true;
+        run_turn(&rig.env(), turn, channel).await;
+        (conv, events, bodies)
+    }
+
+    fn posted(events: &Arc<Mutex<Vec<serde_json::Value>>>) -> Vec<serde_json::Value> {
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e["type"].as_str() {
+                Some("posted") => Some(e["post"].clone()),
+                Some("sub") if e["event"]["type"] == "posted" => Some(e["event"]["post"].clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `TEAM-T15`: a member posts to the coordinator along its line, a post to someone it has no line to
+    /// is refused in the plan's words, and the coordinator reads what was posted with the report. Every
+    /// hand-over and result is on the board too, in order, and the window hears each as it is written.
+    #[test]
+    fn a_member_posts_along_a_line_and_the_board_keeps_what_passed() {
+        on_a_big_stack(|| async {
+        let rig = Rig::new();
+        let (conv, events, bodies) = run_posting_team(
+            &rig,
+            vec![
+                call("delegate", serde_json::json!({ "tasks": [{ "agent": "api", "task": "Build the charge endpoint", "item": 1 }] })),
+                serde_json::json!({ "content": "All done." }),
+            ],
+            vec![
+                call("post", serde_json::json!({ "to": "coordinator", "text": "The charge table is locked." })),
+                call("post", serde_json::json!({ "to": "verifier", "text": "Look at this" })),
+                serde_json::json!({ "content": "Built it." }),
+            ],
+        )
+        .await;
+
+        let board: Vec<String> =
+            rig.db.list_posts(&conv).unwrap().iter().map(|p| format!("{} {}>{} {}", p.kind, p.from_member, p.to_member, p.text)).collect();
+        assert_eq!(
+            board,
+            vec![
+                "hand-over coordinator>api Build the charge endpoint",
+                "note api>coordinator The charge table is locked.",
+                "result api>coordinator Built it.",
+            ],
+            "the refused post is not on the board"
+        );
+        assert_eq!(rig.db.list_posts(&conv).unwrap()[0].item, Some(1));
+        assert_eq!(posted(&events).len(), 3, "the window heard all three");
+
+        let turns = loop_turns(&bodies);
+        let api_turns: Vec<&serde_json::Value> = turns.iter().filter(|b| says(b, "Your part: Builds the API")).collect();
+        assert!(tools_of(api_turns[0]).contains(&"post".to_string()), "a member is offered the tool");
+        assert!(tools_of(&turns[0]).contains(&"post".to_string()), "and so is the coordinator");
+        let after_refusal = api_turns.last().unwrap();
+        assert!(says(after_refusal, "Posted to coordinator."), "{:?}", after_refusal["messages"]);
+        assert!(says(after_refusal, "There is no line from api to verifier in this team. Ask the coordinator instead."));
+
+        // The coordinator reads the note with the report.
+        let last = turns.iter().rev().find(|b| !says(b, "Your part: Builds the API")).unwrap();
+        assert!(says(last, "Posts for you:") && says(last, "api says on item 1"), "{:?}", last["messages"]);
+        assert!(says(last, "The charge table is locked."));
+        });
+    }
+
+    /// `TEAM-T15`: a question the coordinator waits on wakes the member that is not working, with the
+    /// post as its next task, and the member's final message comes back as the answer. Nothing was
+    /// handed over by the coordinator's `delegate`, so only the post and its answer are on the board.
+    #[test]
+    fn a_question_wakes_an_idle_member_and_its_final_message_is_the_answer() {
+        on_a_big_stack(|| async {
+        let rig = Rig::new();
+        let (conv, events, bodies) = run_posting_team(
+            &rig,
+            vec![
+                call("post", serde_json::json!({ "to": "api", "text": "Which table does the charge endpoint use?", "wait": true })),
+                serde_json::json!({ "content": "Used the charges table." }),
+            ],
+            vec![serde_json::json!({ "content": "The charges table." })],
+        )
+        .await;
+
+        let posts = rig.db.list_posts(&conv).unwrap();
+        let kinds: Vec<&str> = posts.iter().map(|p| p.kind.as_str()).collect();
+        assert_eq!(kinds, vec!["ask", "result", "answer"], "{posts:#?}");
+        let (ask, answer) = (&posts[0], &posts[2]);
+        assert!(ask.delivered_at.is_some(), "the member was woken with it");
+        assert_eq!((answer.reply_to.as_deref(), answer.from_member.as_str(), answer.to_member.as_str()), (Some(ask.id.as_str()), "api", "coordinator"));
+        assert_eq!(answer.text, "The charges table.");
+
+        let runs = rig.db.list_subagent_runs(&conv).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].task.starts_with(&format!("Message from coordinator (post {})", ask.id)), "{}", runs[0].task);
+        let turns = loop_turns(&bodies);
+        let api = turns.iter().find(|b| says(b, "Your part: Builds the API")).unwrap();
+        assert!(says(api, "Which table does the charge endpoint use?") && says(api, "This is a question for you"));
+        // The coordinator was told the answer as the tool's result, and went on.
+        let last = turns.last().unwrap();
+        assert!(says(last, "api answered: The charges table."), "{:?}", last["messages"]);
+        assert_eq!(posted(&events).len(), 3);
+        });
+    }
+
+    // ---- TEAM-17 ----
+
+    /// A persona by name, with a system prompt the scripted server can tell apart.
+    fn persona_named(rig: &Rig, name: &str) -> String {
+        rig.db
+            .create_persona(&crate::db::NewPersona {
+                name: name.into(),
+                system_prompt: format!("You are {name}, speaking as yourself."),
+                model_id: None,
+                params_json: None,
+                tools_json: None,
+                skills_json: None,
+                description: None,
+                spawnable: false,
+            })
+            .unwrap()
+            .id
+    }
+
+    /// A team of Mira (coordinator, Poiesis) and a member `kai` that is Kai, with a line from the
+    /// person to Kai only when `talks`.
+    fn talking_team(rig: &Rig, kai: &str, talks: bool) -> String {
+        use crate::memory::ways::{Limits, Line, LineKind, Member, Team, AD_HOC};
+        rig.memory.ensure_ways();
+        let mut team = Team::blank();
+        team.name = "Shop team".into();
+        team.member_style = AD_HOC.into();
+        team.report = crate::memory::ways::Report::End;
+        team.limits = Limits { ask_cost: false, ..Limits::default() };
+        team.members = vec![Member { role: "kai".into(), persona: format!("persona:{kai}"), job: "Checks the copy".into(), owns: vec![] }];
+        team.lines = vec![Line::new(LineKind::HandsOver, "coordinator", "kai"), Line::new(LineKind::Reports, "coordinator", "you"), Line::new(LineKind::Talks, "you", "coordinator")];
+        if talks {
+            team.lines.push(Line::new(LineKind::Talks, "you", "kai"));
+        }
+        rig.memory.save_team(team, "you", "").unwrap().slug
+    }
+
+    async fn ask_kai(rig: &Rig, talks: bool) -> (String, String, Arc<Mutex<Vec<serde_json::Value>>>, Bodies) {
+        let kai = persona_named(rig, "Kai");
+        let slug = talking_team(rig, &kai, talks);
+        let (url, bodies) = scripted_model_full(
+            vec![serde_json::json!({ "content": "The coordinator speaks." })],
+            Vec::new(),
+            vec![("You are Kai, speaking as yourself.", vec![serde_json::json!({ "content": "Kai here: the copy is fine." })])],
+        )
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        crate::agent::leader::set_leader(&rig.db, &rig.memory, &conv, Some(&crate::agent::leader::Leader::Team(slug))).unwrap();
+        // Something passed on the board that Kai was part of.
+        rig.db
+            .add_post(&conv, &crate::db::NewPost { from: "coordinator", to: "kai", kind: "hand-over", item: Some(2), text: "Read the Apple Pay copy", delivered: true, ..Default::default() })
+            .unwrap();
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Is the copy fine?");
+        turn.tools_enabled = true;
+        turn.options.addressed = Some("kai".into());
+        run_turn(&rig.env(), turn, channel).await;
+        (conv, kai, events, bodies)
+    }
+
+    /// `TEAM-T17`: a message spoken to a member is answered by that member, as itself, in the session:
+    /// the row says whom it was for, the reply says who gave it, the member read what the board says of
+    /// it, and the team leads the chat again afterwards.
+    #[tokio::test]
+    async fn a_message_spoken_to_a_member_is_answered_by_that_member_and_the_team_keeps_leading() {
+        let rig = Rig::new();
+        let (conv, kai, events, bodies) = ask_kai(&rig, true).await;
+
+        let rows = rig.db.list_messages(&conv).unwrap();
+        assert_eq!(rows[0].addressed.as_deref(), Some("kai"));
+        assert_eq!(rows[1].content, "Kai here: the copy is fine.");
+        assert_eq!(rows[1].author, Some(format!("persona:{kai}")), "the reply carries the member's name line");
+        assert_eq!(rows[1].addressed, None);
+
+        // Kai read its own instructions, the board and the person's words; this was not a team's task.
+        let turns = loop_turns(&bodies);
+        assert_eq!(turns.len(), 1);
+        assert!(says(&turns[0], "You are Kai, speaking as yourself."));
+        assert!(says(&turns[0], "The person is speaking to you directly"), "{:?}", turns[0]["messages"]);
+        assert!(says(&turns[0], "coordinator to kai, hand-over, item 2: Read the Apple Pay copy"));
+        let tools = turns[0]["tools"].as_array().unwrap();
+        let delegate = tools.iter().find(|t| t["function"]["name"] == "delegate");
+        assert!(delegate.is_none_or(|d| !d["function"]["description"].as_str().unwrap().contains("Shop team")), "Kai is not the coordinator");
+        assert!(!tools_of(&turns[0]).contains(&"post".to_string()), "and has no lines of its own to post along");
+        assert!(events.lock().unwrap().iter().all(|e| e["type"] != "question"), "no cost card for a member's answer");
+
+        // The team leads the chat again, and the person's words are on the board, from the person.
+        let led = rig.db.get_conversation(&conv).unwrap().unwrap();
+        assert!(led.leader.as_deref().is_some_and(|l| l.starts_with("team:")), "{:?}", led.leader);
+        let board = rig.db.list_posts(&conv).unwrap();
+        assert!(board.iter().any(|p| p.from_member == "you" && p.to_member == "kai" && p.text == "Is the copy fine?"));
+    }
+
+    /// `TEAM-T17`: with no line from the person to the member, the message goes to the coordinator.
+    #[tokio::test]
+    async fn without_a_line_to_the_member_the_message_goes_to_the_coordinator() {
+        let rig = Rig::new();
+        let (conv, _, _, bodies) = ask_kai(&rig, false).await;
+        let rows = rig.db.list_messages(&conv).unwrap();
+        assert_eq!(rows[0].addressed, None);
+        assert_eq!(rows[1].content, "The coordinator speaks.");
+        assert!(!says(&loop_turns(&bodies)[0], "You are Kai, speaking as yourself."));
+    }
+
+    // ---- TEAM-18 ----
+
+    /// A team where the person talks to Kai and Juno as well as the coordinator, so either may speak up
+    /// after the other.
+    fn open_team(rig: &Rig, kai: &str, juno: &str, juno_talks: bool) -> String {
+        use crate::memory::ways::{Limits, Line, LineKind, Member, Team, AD_HOC};
+        rig.memory.ensure_ways();
+        let mut team = Team::blank();
+        team.name = "Open team".into();
+        team.member_style = AD_HOC.into();
+        team.report = crate::memory::ways::Report::End;
+        team.limits = Limits { ask_cost: false, ..Limits::default() };
+        let member = |role: &str, id: &str| Member { role: role.into(), persona: format!("persona:{id}"), job: format!("Does {role}"), owns: vec![] };
+        team.members = vec![member("kai", kai), member("juno", juno)];
+        team.lines = vec![
+            Line::new(LineKind::Reports, "coordinator", "you"),
+            Line::new(LineKind::Talks, "you", "coordinator"),
+            Line::new(LineKind::Talks, "you", "kai"),
+        ];
+        if juno_talks {
+            team.lines.push(Line::new(LineKind::Talks, "you", "juno"));
+        }
+        rig.memory.save_team(team, "you", "").unwrap().slug
+    }
+
+    /// `TEAM-T18`: after Kai answers, one call picks Juno; Juno's reply is saved with no user row, says who
+    /// gave it, and the turn rule then closes it for this message. A reply that names nobody, or something
+    /// that is not on the list, is nobody.
+    #[tokio::test]
+    async fn an_unasked_reply_follows_one_answer_and_the_turn_rule_closes_it() {
+        let rig = Rig::new();
+        let (kai, juno) = (persona_named(&rig, "Kai"), persona_named(&rig, "Juno"));
+        let slug = open_team(&rig, &kai, &juno, true);
+        let (url, _bodies) = scripted_model_full(
+            vec![serde_json::json!({ "content": "The coordinator speaks." })],
+            Vec::new(),
+            vec![
+                ("You are Kai, speaking as yourself.", vec![serde_json::json!({ "content": "Kai: the copy is fine." })]),
+                ("You are Juno, speaking as yourself.", vec![serde_json::json!({ "content": "Juno: the button is too small." })]),
+            ],
+        )
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        crate::agent::leader::set_leader(&rig.db, &rig.memory, &conv, Some(&crate::agent::leader::Leader::Team(slug))).unwrap();
+        let mut ask = typed(&conv, target.clone(), "Is the page fine?");
+        ask.tools_enabled = true;
+        ask.options.addressed = Some("kai".into());
+        let (channel, _) = recording_channel();
+        run_turn(&rig.env(), ask, channel).await;
+
+        // Nothing is asked about when nobody could chime in, and what cannot be read is nobody.
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        let said = |reply: &'static str| {
+            let asked = &asked;
+            move |_: Vec<serde_json::Value>| async move {
+                asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Some(reply.to_string())
+            }
+        };
+        assert!(crate::agent::team_voices::next_voice(&rig.db, &rig.memory, &conv, said("SPEAKER: nobody")).await.is_none());
+        assert!(crate::agent::team_voices::next_voice(&rig.db, &rig.memory, &conv, said("kai, please")).await.is_none());
+        assert!(crate::agent::team_voices::next_voice(&rig.db, &rig.memory, &conv, said("SPEAKER: zed")).await.is_none());
+        let (voice, nudge) = crate::agent::team_voices::next_voice(&rig.db, &rig.memory, &conv, said("SPEAKER: juno")).await.expect("juno speaks up");
+        assert_eq!(voice.role, "juno");
+
+        // The reply is a turn of its own with no user row.
+        let before = rig.db.list_messages(&conv).unwrap().len();
+        let mut unasked = typed(&conv, target, nudge);
+        unasked.tools_enabled = true;
+        unasked.options.addressed = Some("juno".into());
+        unasked.options.unasked = true;
+        let (channel, events) = recording_channel();
+        run_turn(&rig.env(), unasked, channel).await;
+        let rows = rig.db.list_messages(&conv).unwrap();
+        assert_eq!(rows.len(), before + 1, "one row, the reply's");
+        let reply = rows.last().unwrap();
+        assert_eq!((reply.role.as_str(), reply.content.as_str()), ("assistant", "Juno: the button is too small."));
+        assert_eq!(reply.author, Some(format!("persona:{juno}")));
+        assert!(rows.iter().filter(|m| m.role == "user").all(|m| m.content != nudge), "the nudge is never saved as the person's");
+        let saved = events.lock().unwrap().iter().find(|e| e["type"] == "turn_saved").cloned().unwrap();
+        assert!(saved["user_message_id"].is_null(), "the window has no user bubble to fill in: {saved}");
+        // The team leads the chat again.
+        assert!(rig.db.get_conversation(&conv).unwrap().unwrap().leader.unwrap().starts_with("team:"));
+
+        // One unasked reply for each message of the person: nobody more is asked about.
+        let calls = asked.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(crate::agent::team_voices::next_voice(&rig.db, &rig.memory, &conv, said("SPEAKER: kai")).await.is_none());
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), calls, "the rule closed it without a call");
+    }
+
+    /// `TEAM-T18`: with no line from the person to Juno, Juno is never a candidate: no call is made.
+    #[tokio::test]
+    async fn without_a_line_nobody_is_asked_about_and_no_call_is_made() {
+        let rig = Rig::new();
+        let (kai, juno) = (persona_named(&rig, "Kai"), persona_named(&rig, "Juno"));
+        let slug = open_team(&rig, &kai, &juno, false);
+        let (url, _) = scripted_model_full(
+            vec![serde_json::json!({ "content": "x" })],
+            Vec::new(),
+            vec![("You are Kai, speaking as yourself.", vec![serde_json::json!({ "content": "Kai: fine." })])],
+        )
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        crate::agent::leader::set_leader(&rig.db, &rig.memory, &conv, Some(&crate::agent::leader::Leader::Team(slug))).unwrap();
+        let mut ask = typed(&conv, target, "Is it fine?");
+        ask.tools_enabled = true;
+        ask.options.addressed = Some("kai".into());
+        let (channel, _) = recording_channel();
+        run_turn(&rig.env(), ask, channel).await;
+        let asked = std::sync::atomic::AtomicBool::new(false);
+        let got = crate::agent::team_voices::next_voice(&rig.db, &rig.memory, &conv, |_| async {
+            asked.store(true, std::sync::atomic::Ordering::SeqCst);
+            Some("SPEAKER: juno".to_string())
+        })
+        .await;
+        assert!(got.is_none() && !asked.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

@@ -1,0 +1,73 @@
+.persona-glyph {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1.4px solid var(--persona-hue, var(--ink-muted));
+  color: var(--persona-hue, var(--ink-muted));
+  background: color-mix(in srgb, var(--persona-hue, var(--ink-muted)) 10%, transparent);
+  font-family: var(--font-sans);
+  font-weight: 600;
+  line-height: 1;
+  user-select: none;
+}
+
+.persona-glyph[data-hue="1"],
+.team-glyph[data-hue="1"] { --persona-hue: var(--persona-1); }
+.persona-glyph[data-hue="2"],
+.team-glyph[data-hue="2"] { --persona-hue: var(--persona-2); }
+.persona-glyph[data-hue="3"],
+.team-glyph[data-hue="3"] { --persona-hue: var(--persona-3); }
+.persona-glyph[data-hue="4"],
+.team-glyph[data-hue="4"] { --persona-hue: var(--persona-4); }
+.persona-glyph[data-hue="5"],
+.team-glyph[data-hue="5"] { --persona-hue: var(--persona-5); }
+.persona-glyph[data-hue="6"],
+.team-glyph[data-hue="6"] { --persona-hue: var(--persona-6); }
+.persona-glyph[data-hue="7"],
+.team-glyph[data-hue="7"] { --persona-hue: var(--persona-7); }
+.persona-glyph[data-hue="8"],
+.team-glyph[data-hue="8"] { --persona-hue: var(--persona-8); }
+
+/* A team as a leader: its mark in the coordinator's hue, no ring. */
+.team-glyph {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  color: var(--persona-hue, var(--ink-muted));
+}
+
+/* The way of working, small, in the lower right corner. It sits on a paper-coloured
+   disc so it stays readable over the letter's ring. */
+.persona-glyph-badge {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  display: inline-flex;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--ink-muted);
+}
+.persona-glyph-badge > svg {
+  width: 11px;
+  height: 11px;
+}
+
+/* `TEAM-14`: a plain helper in a team, `(·)`: a ring with a dot, no letter and no hue. */
+.member-glyph-helper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1.4px solid var(--ink-faint);
+  color: var(--ink-muted);
+  line-height: 1;
+  user-select: none;
+}

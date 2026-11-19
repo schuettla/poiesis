@@ -310,12 +310,28 @@ impl Db {
         Ok(rows)
     }
 
-    /// Has a proposal about this subject ever been made, answered or not?
+    /// Has a proposal about this subject ever been made, answered or not? (`way` and, from
+    /// `TEAM-23`, `team`: a subject names its team, so the two never meet.)
     pub fn way_proposal_exists(&self, slug: &str) -> bool {
         let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT COUNT(*) FROM change_proposals WHERE target = 'way' AND slug = ?1", [slug], |r| r.get::<_, i64>(0))
-            .map(|n| n > 0)
-            .unwrap_or(false)
+        conn.query_row(
+            "SELECT COUNT(*) FROM change_proposals WHERE target IN ('way', 'team') AND slug = ?1",
+            [slug],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .unwrap_or(false)
+    }
+
+    /// `TEAM-23`: what teams' chats showed evolution since `since` (ms): the conversation, when, and the payload.
+    pub fn team_events_since(&self, since: i64) -> Result<Vec<(String, i64, String)>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT conversation_id, created_at, payload_json FROM session_events
+             WHERE kind = 'team' AND created_at >= ?1 ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 }
 

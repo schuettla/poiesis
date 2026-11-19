@@ -1,0 +1,83 @@
+/* `TEAM-19`: the list of what runs nobody watched left for the person. It borrows the confirm
+   shell (`confirm-backdrop`, `confirm-card`) and fixes its size: the list scrolls inside, so
+   answering an entry never changes the height of the dialog. */
+.waiting-dialog {
+  width: min(520px, calc(100vw - 48px));
+  height: min(560px, calc(100vh - 80px));
+  display: flex;
+  flex-direction: column;
+}
+.waiting-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.waiting-empty {
+  margin: 0;
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+.waiting-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.waiting-title {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink);
+}
+.waiting-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.waiting-entry {
+  padding: 10px 12px;
+  background: var(--fill-quiet);
+  border-radius: var(--radius);
+}
+.waiting-line {
+  margin: 0;
+  font-size: var(--fs-ui);
+  line-height: 1.5;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.waiting-answer {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  box-sizing: border-box;
+  resize: none;
+  font: inherit;
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+}
+.waiting-error {
+  min-height: 1.2em;
+  margin: 4px 0 0;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.waiting-actions {
+  display: flex;
+  gap: 8px;
+}

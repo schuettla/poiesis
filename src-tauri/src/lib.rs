@@ -29,6 +29,7 @@ pub mod permissions;
 pub mod runtime;
 mod secrets;
 mod telemetry;
+pub mod waiting;
 
 use tauri::{Emitter, Manager};
 
@@ -68,6 +69,7 @@ pub fn run() {
             {
                 app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
                 app.handle().plugin(tauri_plugin_process::init())?;
+                app.handle().plugin(tauri_plugin_notification::init())?;
                 commands::updater::manage(app.handle());
             }
 
@@ -144,6 +146,8 @@ pub fn run() {
             // `/skillify` and `/delegate` real, written once so they can be
             // read, copied and changed like any other skill.
             agent::skillpack::seed_bundled(&base_dir, &db);
+            // `TEAM-1`: the persona flagged default leads new chats, once.
+            agent::leader::migrate_default_persona(&db, &memory);
             app.manage(db);
             app.manage(memory);
 
@@ -203,6 +207,7 @@ pub fn run() {
             // {background: true}` has nothing to spawn into and says so, rather
             // than accepting work it cannot do.
             agent::background::init(app.handle().clone());
+            waiting::init(app.handle().clone());
             // `DEC-5`: the decision seam reaches its engine through this handle,
             // as `background` does. Needs `app.manage(db)` and the managers above.
             agent::decide::init(app.handle().clone());
@@ -248,6 +253,7 @@ pub fn run() {
             commands::memory::remember_fact_cmd,
             commands::memory::list_intentions_cmd,
             commands::memory::set_fact_scope_cmd,
+            commands::memory::share_memory_cmd,
             commands::memory::forget_memory_fact_cmd,
             commands::memory::restore_memory_fact_cmd,
             commands::memory::set_soul_cmd,
@@ -314,6 +320,9 @@ pub fn run() {
             commands::personas::update_persona_cmd,
             commands::personas::delete_persona_cmd,
             commands::personas::set_default_persona_cmd,
+            commands::personas::conversation_leader_cmd,
+            commands::personas::set_conversation_leader_cmd,
+            commands::personas::leader_default_set_cmd,
             commands::personas::set_conversation_persona_cmd,
             commands::models::recommended_catalog_cmd,
             commands::models::search_huggingface_cmd,
@@ -335,6 +344,13 @@ pub fn run() {
             commands::agent::rewind_cmd,
             commands::agent::changes_since_cmd,
             commands::subagents::list_subagent_runs_cmd,
+            commands::subagents::list_posts_cmd,
+            commands::waiting::list_waiting_cmd,
+            commands::waiting::unread_sessions_cmd,
+            commands::waiting::mark_seen_cmd,
+            commands::waiting::mark_away_cmd,
+            commands::waiting::resolve_waiting_cmd,
+            commands::subagents::team_next_voice_cmd,
             commands::subagents::get_subagent_run_cmd,
             commands::subagents::stop_run_cmd,
             commands::subagents::steer_subagent_cmd,
@@ -539,6 +555,16 @@ pub fn run() {
             commands::ways_self::ways_undo_cmd,
             commands::ways_self::ways_go_back_cmd,
             commands::ways_self::ways_growth_cmd,
+            commands::teams::teams_list_cmd,
+            commands::teams::team_get_cmd,
+            commands::teams::team_save_cmd,
+            commands::teams::team_delete_cmd,
+            commands::teams::team_history_cmd,
+            commands::teams::team_back_cmd,
+            commands::teams::team_shape_lines_cmd,
+            commands::teams::team_blank_cmd,
+            commands::teams::team_from_session_cmd,
+            commands::teams::team_asked_cmd,
             commands::projects::list_projects_cmd,
             commands::projects::create_project_cmd,
             commands::projects::rename_project_cmd,

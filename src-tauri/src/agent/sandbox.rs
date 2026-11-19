@@ -171,6 +171,9 @@ pub async fn run(
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .env_clear();
+    // No visible console window for a snippet's interpreter (the app has none).
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
 
     // Preserve only the minimal environment the interpreter needs to start, so a
     // snippet can't read the app's inherited secrets/tokens from the environment.
@@ -267,6 +270,9 @@ pub async fn run_streaming(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // No visible console window for the command (the app has none).
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     match profile.env {
         EnvMode::Minimal => {
             cmd.env_clear();

@@ -37,7 +37,10 @@ function useOrg(): OrgFacts & { slug: string | null; pulsedAt?: number; freshAt?
   const convId = useAppStore((s) => s.activeConversationId);
   const summary = useAppStore((s) => (convId ? s.runSummaries[convId] : undefined));
   const helpers = useAppStore((s) =>
-    convId ? Object.values(s.subRuns).filter((r) => r.parentConversationId === convId && api.stillWorking(r.status)).length : 0
+    // `TEAM-14`: a member is a helper too, a bud while it works; one still in the team's queue is not yet.
+    convId
+      ? Object.values(s.subRuns).filter((r) => r.parentConversationId === convId && api.stillWorking(r.status) && !r.waiting).length
+      : 0
   );
   const style = summary?.style && summary.style.preset !== "ad-hoc" ? summary.style : null;
   return {

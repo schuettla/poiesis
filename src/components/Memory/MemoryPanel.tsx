@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import * as api from "../../lib/api";
 import { cloudTarget, useAppStore, useExpert } from "../../lib/store";
+import Select from "../Select/Select";
 import { Evidence, LetGo, RecentChanges, ThingsIWillDo, Unsure } from "./BeliefSections";
 import "./Memory.css";
 
@@ -49,6 +50,23 @@ export default function MemoryPanel() {
   const setView = useAppStore((s) => s.setView);
   const noteGlobalFactChange = useAppStore((s) => s.noteGlobalFactChange);
   const expert = useExpert();
+
+  // `TEAM-5`: whose entries are shown. `all`, `poiesis` (what everyone knows), or a persona's
+  // id (what only that persona knows). A link from a persona's page lands on its own.
+  const personas = useAppStore((s) => s.personas);
+  const tabRequest = useAppStore((s) => s.selfTabRequest);
+  const asked = (focus?: string) => (focus === "poiesis" ? "poiesis" : focus?.startsWith("persona:") ? focus.slice(8) : null);
+  const [whose, setWhose] = useState<string>(() => (tabRequest?.tab === "memory" ? asked(tabRequest.focus) : null) ?? "all");
+  useEffect(() => {
+    if (tabRequest?.tab === "memory") setWhose(asked(tabRequest.focus) ?? "all");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabRequest?.nonce]);
+  const personaName = (id: string) => personas.find((p) => p.id === id)?.name ?? "Someone gone";
+
+  async function share(name: string) {
+    await api.shareMemory("facts", name);
+    await refresh();
+  }
 
   async function refresh() {
     try {
@@ -161,14 +179,15 @@ export default function MemoryPanel() {
   }
 
   const needle = query.trim().toLowerCase();
+  const ofWhom = facts.filter((f) => (whose === "all" ? true : whose === "poiesis" ? !f.persona : f.persona === whose));
   const shown = needle
-    ? facts.filter(
+    ? ofWhom.filter(
         (f) =>
           f.name.toLowerCase().includes(needle) ||
           f.description.toLowerCase().includes(needle) ||
           f.body.toLowerCase().includes(needle)
       )
-    : facts;
+    : ofWhom;
 
   const hasProposal =
     !!pending &&
@@ -366,14 +385,31 @@ export default function MemoryPanel() {
 
       <h3 className="memory-section-title">What I know</h3>
       {facts.length > 0 && (
-        <input
-          className="field-input memory-search"
-          type="search"
-          placeholder="Search memories…"
-          aria-label="Search memories"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+        <div className="memory-filters">
+          <input
+            className="field-input memory-search"
+            type="search"
+            placeholder="Search memories…"
+            aria-label="Search memories"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {personas.length > 0 && (
+            <div className="memory-whose">
+              <span className="memory-whose-label">Whose</span>
+              <Select
+                label="Whose"
+                value={whose}
+                onChange={setWhose}
+                options={[
+                  { value: "all", label: "Everyone" },
+                  { value: "poiesis", label: "Poiesis" },
+                  ...personas.map((p) => ({ value: p.id, label: p.name })),
+                ]}
+              />
+            </div>
+          )}
+        </div>
       )}
 
       {facts.length === 0 && (
@@ -391,6 +427,7 @@ export default function MemoryPanel() {
           <div className="memory-card-head">
             <span className="memory-name">{f.name}</span>
             <span className="memory-kind">{f.kind}</span>
+            {f.persona && <span className="memory-kind">{personaName(f.persona)} only</span>}
             <span className="memory-created">{f.created}</span>
           </div>
           <p className="memory-desc">{f.description}</p>
@@ -455,6 +492,11 @@ export default function MemoryPanel() {
                 {f.source_conversation && !f.evidence?.length && (
                   <button className="btn-text" onClick={() => openSource(f.source_conversation!)}>
                     Where this came from
+                  </button>
+                )}
+                {f.persona && (
+                  <button className="btn-text" onClick={() => share(f.name)}>
+                    Share with everyone
                   </button>
                 )}
                 <button className="btn-text danger" onClick={() => remove(f.name)}>

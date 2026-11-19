@@ -35,6 +35,50 @@
   font-size: var(--fs-footnote);
   color: var(--ink-muted);
 }
+/* `TEAM-19`: what runs nobody watched left for the person. Same place and shape as the running job. */
+.rail-waiting-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - 12px);
+  margin: 0 12px 12px 0;
+  padding: 7px 8px;
+  font: inherit;
+  font-size: var(--fs-footnote);
+  text-align: left;
+  color: var(--ink);
+  background: var(--fill-quiet);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.rail-waiting-row:hover {
+  background: var(--fill-hover);
+}
+.rail-waiting-mark {
+  flex: none;
+  line-height: 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rail-waiting-mark {
+    animation: mark-breathe 2.4s ease-in-out infinite;
+  }
+}
+.rail-waiting-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail.collapsed .rail-waiting-row {
+  justify-content: center;
+  width: 100%;
+  margin-right: 0;
+  padding: 7px 0;
+}
+.rail.collapsed .rail-waiting-label {
+  display: none;
+}
 .rail-job-dot {
   flex: none;
   width: 6px;
@@ -300,6 +344,86 @@
 .chat-workspace {
   flex: none;
   display: inline-flex;
+  color: var(--ink-faint);
+}
+/* `TEAM-19`: a chat something waits in glows (a quiet tint, the same weight as hover);
+   `TEAM-20`: a chat a run changed while nobody watched has a dot until it is opened. */
+.chat-row.waiting {
+  background: var(--fill-quiet);
+}
+.chat-waiting {
+  flex: none;
+  font-size: var(--fs-caption);
+  line-height: 1;
+  color: var(--ink);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chat-waiting {
+    animation: mark-breathe 2.4s ease-in-out infinite;
+  }
+}
+.chat-unread {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+/* `TEAM-6`: who leads a chat, in the place the workspace mark used to take. */
+.chat-leader {
+  flex: none;
+  display: inline-flex;
+}
+
+/* `TEAM-6`: the ⋯ for the whole list, and the one line that says a filter is on. */
+.rail-filter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 26px;
+  margin: 0 12px 4px 0;
+  padding: 0 4px 0 8px;
+}
+.rail-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 1px 8px;
+  font: inherit;
+  font-size: var(--fs-caption);
+  color: var(--ink);
+  background: var(--fill-hover);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.rail-filter-chip:hover {
+  background: var(--fill-press);
+}
+.rail-filter-menu {
+  position: relative;
+  margin-left: auto;
+}
+.rail-more {
+  opacity: 1;
+}
+.rail-leader-item {
+  gap: 8px;
+}
+.rail-leader-item.active {
+  color: var(--ink);
+  font-weight: 500;
+}
+.rail-leader-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.rail-filter-empty {
+  margin: 4px 0 12px;
+  padding-left: 8px;
+  font-size: var(--fs-ui);
   color: var(--ink-faint);
 }
 

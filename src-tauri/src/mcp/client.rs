@@ -333,6 +333,10 @@ impl StdioTransport {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
+        // The app has no console of its own, so without this Windows opens a
+        // visible cmd window for every server it starts.
+        #[cfg(windows)]
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         // `LRN-3`: a server inherits the user's environment, minus Poiesis's own
         // variables and the model providers' keys it was never handed.
         for (key, _) in std::env::vars_os() {

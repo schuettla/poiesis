@@ -294,7 +294,7 @@ function RecurrenceEscalationProposal({ id }: { id: string }) {
     requestAnimationFrame(() =>
       requestAnimationFrame(() =>
         document
-          .getElementById("settings-personas")
+          .getElementById("settings-soul")
           ?.scrollIntoView({ behavior: "smooth", block: "start" })
       )
     );
@@ -528,7 +528,7 @@ function ProposalCardBody({ id }: { id: string }) {
     requestAnimationFrame(() =>
       requestAnimationFrame(() =>
         document
-          .getElementById("settings-personas")
+          .getElementById("settings-soul")
           ?.scrollIntoView({ behavior: "smooth", block: "start" })
       )
     );

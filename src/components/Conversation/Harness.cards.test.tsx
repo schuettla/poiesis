@@ -167,6 +167,18 @@ describe("something I asked to change (AGC-4)", () => {
     expect(texts(".harness-proposal-actions button")).toEqual(["Switch", "Keep going like this"]);
   });
 
+  it("offers to hand the chat to someone by name, with Hand it over and Keep going like this (TEAM-7)", () => {
+    const offer = {
+      ...proposal("switch_mode", { mode: "persona:p1", leader: true, name: "Mira" }),
+      reason: "This looks like a job for Mira: it is writing.",
+    };
+    render(<HarnessProposal proposal={offer} />);
+    expect(container.querySelector(".harness-proposal-text")?.textContent).toBe(
+      "◆ This looks like a job for Mira: it is writing. Shall I hand it over to Mira?"
+    );
+    expect(texts(".harness-proposal-actions button")).toEqual(["Hand it over", "Keep going like this"]);
+  });
+
   it("asks to schedule, saying when and what, with Set it up and Not now", () => {
     render(<HarnessProposal proposal={proposal("schedule", { when: "every weekday at 9", task: "summarise my mail" })} />);
     expect(container.textContent).toContain("I'd like to run this every weekday at 9: summarise my mail");

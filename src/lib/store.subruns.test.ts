@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { stillWorking } from "./api";
-import { applySubEvent, useAppStore } from "./store";
+import { applySubEvent, useAppStore, withSubRuns } from "./store";
 import type { Conversation, SubRun } from "./types";
 
 const CONV = "conv-lead";
@@ -280,5 +280,24 @@ describe("a child's spend (RUN-1b)", () => {
       plan: null,
     });
     expect(useAppStore.getState().subRuns[RUN].status).toBe("running");
+  });
+});
+
+describe("runs read back after a reload", () => {
+  const msg = (id: string, subRunIds?: string[]) => ({ id, role: "assistant" as const, text: "", steps: [], createdAt: 0, ...(subRunIds ? { subRunIds } : {}) });
+
+  it("are hung off the turn that started them when the messages arrive after the runs", () => {
+    const runs = { a: child({ runId: "a", parentMessageId: "m2" }), b: child({ runId: "b", parentMessageId: "m2" }), c: child({ runId: "c" }) };
+    const out = withSubRuns([msg("m1"), msg("m2")], runs);
+    expect(out[0].subRunIds).toBeUndefined();
+    expect(out[1].subRunIds).toEqual(["a", "b"]);
+  });
+
+  it("keep the runs a turn already had, and leave a message alone that has them all", () => {
+    const runs = { a: child({ runId: "a", parentMessageId: "m1" }) };
+    const had = msg("m1", ["live"]);
+    expect(withSubRuns([had], runs)[0].subRunIds).toEqual(["live", "a"]);
+    const full = msg("m1", ["a"]);
+    expect(withSubRuns([full], runs)[0]).toBe(full);
   });
 });

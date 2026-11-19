@@ -10,7 +10,8 @@
     "test": "vitest run",
     "tauri": "tauri",
     "build:local": "tauri build --config src-tauri/tauri.local.conf.json",
-    "build:release": "tauri build"
+    "build:release": "tauri build",
+    "clean:rust": "cargo clean --profile dev --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
     "@fontsource-variable/literata": "^5.3.0",

@@ -201,7 +201,11 @@ pub(crate) async fn execute_turn(
     let (plan, options) = options.settle_approval(plan);
     let cancel = env.mgr.new_cancel();
     let run = env.fleet.open(conversation_id, cancel, None, 0);
-    let limits = RunLimits::top(env.db).with_max_steps(options.max_steps);
+    let mut limits = RunLimits::top(env.db).with_max_steps(options.max_steps);
+    // `TEAM-12`: a team's coordinator runs under the allowance of its task.
+    limits.allowance = crate::agent::team::start_task(env.db, env.memory, conversation_id, assistant_message_id);
+    // `TEAM-13`: the task before this one is over: its done work is brought in and its copies go.
+    crate::agent::team_folder::sweep(env.db, env.memory, &env.mgr.generated_media_dir(), conversation_id, assistant_message_id);
     let provenance = target.provenance.as_deref().unwrap_or("local");
     let rc = RunContext::top(&run, &limits, Some(env.fleet), provenance, setup.context_window)
         .resuming(plan)
@@ -813,6 +817,8 @@ mod tests {
             stop_reason: None,
             plan_json: None,
             spoken: false,
+            author: None,
+            addressed: None,
             created_at: 0,
             attachments: Vec::new(),
         }

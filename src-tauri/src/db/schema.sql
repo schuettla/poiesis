@@ -310,7 +310,7 @@ END;
 CREATE TABLE IF NOT EXISTS change_proposals (
   id            TEXT PRIMARY KEY,
   target        TEXT NOT NULL,            -- soul|lesson|lesson-critic|skill|skill-revision|email|recipe(legacy)
-  persona_id    TEXT,                     -- when target='persona' (future)
+  persona_id    TEXT,                     -- when target='lesson': the persona it was learned under, NULL = shared (TEAM-5)
   slug          TEXT,                     -- when target='recipe'|'lesson': the entry name
   proposed_text TEXT NOT NULL,            -- full replacement/new text for the target
   rationale     TEXT NOT NULL,            -- why it is being proposed; shown to the user, never stored on the entry
@@ -549,9 +549,30 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   ended_at               INTEGER,
   engine_id              TEXT,               -- `CLI-4`: set when an agent app did the work
   because                TEXT,               -- the rule label it cited, or 'asked'
-  paid_by                TEXT                -- 'plan' | 'api-key' | 'own', once known
+  paid_by                TEXT,               -- 'plan' | 'api-key' | 'own', once known
+  member                 TEXT,               -- `TEAM-10`: the role a team member held, else NULL
+  item                   INTEGER             -- `TEAM-11`: the plan item (from 1) it was for, when said
 );
 CREATE INDEX IF NOT EXISTS idx_subagent_runs_parent ON subagent_runs(parent_conversation_id);
+
+-- `TEAM-15`: what passed between the people of a team in a session. No other table holds
+-- it: `messages` belong to one chat and one speaker, and a run's inbox is in memory only.
+-- Written by the loop where the loop does it (hand-over, result, review, verdict) and by the
+-- `post` tool where a persona does it (ask, answer, note, report).
+CREATE TABLE IF NOT EXISTS posts (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, -- the session
+  run_id          TEXT,          -- the run that wrote it
+  from_member     TEXT NOT NULL, -- role name, 'coordinator' or 'you'
+  to_member       TEXT NOT NULL, -- role name, 'coordinator', 'you' or 'all'
+  kind            TEXT NOT NULL, -- hand-over | result | review | sent-back | ask | answer | report | note
+  item            INTEGER,       -- the plan item (from 1), when there is one
+  reply_to        TEXT,          -- the post this answers
+  text            TEXT NOT NULL,
+  created_at      INTEGER NOT NULL,
+  delivered_at    INTEGER        -- when the one it is for got it; NULL while it waits
+);
+CREATE INDEX IF NOT EXISTS idx_posts_conversation ON posts(conversation_id, created_at);
 
 -- What one run cost (`OBS-1`/`OBS-2`). One row per run that reported anything,
 -- written when the run ends. Local runs land here too with zero cost: context

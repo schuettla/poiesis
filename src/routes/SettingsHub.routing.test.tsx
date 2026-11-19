@@ -74,6 +74,7 @@ describe("the settings hub", () => {
       Skills: "skills",
       Apps: "apps",
       Self: "self",
+      "Personas & teams": "personas",
       Tasks: "tasks",
       Mail: "mail",
       Activity: "activity",
@@ -87,6 +88,17 @@ describe("the settings hub", () => {
       expect(view, `no view mapped for the tab "${label}"`).toBeDefined();
       expect(isHubView(view), `"${label}" draws a tab but App would render nothing`).toBe(true);
     }
+  });
+
+  it("has Personas & teams right after Self, and General no longer holds the system prompt or the personas (TEAM-4)", () => {
+    renderAt("settings");
+    const labels = renderedTabs();
+    expect(labels.indexOf("Personas & teams")).toBe(labels.indexOf("Self") + 1);
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("System prompt");
+    expect(text).not.toContain("the global prompt above is the fallback");
+    renderAt("personas");
+    expect(container.querySelector("h1")?.textContent).toBe("Personas & teams");
   });
 
   it("does not claim the views that are not the hub's", () => {

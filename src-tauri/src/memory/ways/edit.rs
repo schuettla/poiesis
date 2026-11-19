@@ -15,9 +15,9 @@ use super::{
 use crate::memory::{one_line, slugify, today, MemoryStore};
 
 /// How long a preset's name may be. It is drawn in a chip and a menu row.
-const NAME_CAP: usize = 40;
+pub(super) const NAME_CAP: usize = 40;
 /// The longest one-line description.
-const LINE_CAP: usize = 120;
+pub(super) const LINE_CAP: usize = 120;
 /// The file that says which preset each place starts with.
 const DEFAULTS_FILE: &str = "defaults.md";
 
@@ -69,8 +69,40 @@ fn valid_default_scope(scope: &str) -> bool {
     }
 }
 
+/// One line of `defaults.md`: a place, the style chats start with there and who
+/// leads them. Either may be absent.
+#[derive(Debug, Clone)]
+struct DefaultRow {
+    scope: String,
+    style: Option<String>,
+    leader: Option<String>,
+}
+
+/// `TEAM-1`: who can lead a chat: `poiesis`, `persona:<id>` or `team:<slug>`.
+/// No whitespace, so a line of `defaults.md` stays one line.
+pub fn valid_leader(who: &str) -> bool {
+    match who.split_once(':') {
+        None => who == "poiesis",
+        Some((kind, id)) => matches!(kind, "persona" | "team") && !id.is_empty() && !id.contains(char::is_whitespace),
+    }
+}
+
+/// `rows` with the one for `scope` changed by `edit` (made if it is not there),
+/// and gone if that left it with nothing to say. Order is kept.
+fn with_default(mut rows: Vec<DefaultRow>, scope: &str, edit: impl FnOnce(&mut DefaultRow)) -> Vec<DefaultRow> {
+    match rows.iter().position(|r| r.scope == scope) {
+        Some(i) => edit(&mut rows[i]),
+        None => {
+            let mut row = DefaultRow { scope: scope.to_string(), style: None, leader: None };
+            edit(&mut row);
+            rows.push(row);
+        }
+    }
+    rows
+}
+
 /// A slug that is safe to put in a path: what `slugify` makes, nothing else.
-fn safe_slug(slug: &str) -> bool {
+pub(super) fn safe_slug(slug: &str) -> bool {
     !slug.is_empty() && slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
@@ -264,7 +296,10 @@ impl MemoryStore {
         let base = slugify(&name).unwrap_or_else(|_| "preset".into());
         let mut slug = base.clone();
         let mut n = 2;
-        while SHIPPED.iter().any(|s| s.slug == slug) || self.presets_dir().join(format!("{slug}.md")).exists() {
+        // `history/team-<slug>` is a team's: a style may not take that folder.
+        let a_teams_history =
+            |slug: &str| slug.strip_prefix("team-").is_some_and(|rest| self.teams_dir().join(format!("{rest}.md")).exists());
+        while SHIPPED.iter().any(|s| s.slug == slug) || self.presets_dir().join(format!("{slug}.md")).exists() || a_teams_history(&slug) {
             slug = format!("{base}-{n}");
             n += 1;
         }
@@ -429,60 +464,152 @@ impl MemoryStore {
 
     // ---- defaults ----
 
-    /// Which preset each place starts with, as `(scope, preset slug)`.
-    pub fn defaults(&self) -> Vec<(String, String)> {
+    /// Every line of `defaults.md`. A line is `scope -> style leader=who`: either
+    /// part may be left out, and a line that names neither is no line. Lines
+    /// written before `TEAM-1` (`scope -> style`) read as they always did.
+    fn default_rows(&self) -> Vec<DefaultRow> {
         let text = std::fs::read_to_string(self.ways_dir().join(DEFAULTS_FILE)).unwrap_or_default();
         text.lines()
             .filter_map(|l| {
-                let (scope, slug) = l.split_once("->")?;
-                let (scope, slug) = (scope.trim(), slug.trim());
-                (valid_default_scope(scope) && !slug.is_empty()).then(|| (scope.to_string(), slug.to_string()))
+                let (scope, rest) = l.split_once("->")?;
+                let scope = scope.trim();
+                if !valid_default_scope(scope) {
+                    return None;
+                }
+                let mut row = DefaultRow { scope: scope.to_string(), style: None, leader: None };
+                for word in rest.split_whitespace() {
+                    match word.strip_prefix("leader=") {
+                        Some(who) if valid_leader(who) => row.leader = Some(who.to_string()),
+                        Some(_) => {}
+                        None if row.style.is_none() => row.style = Some(word.to_string()),
+                        None => {}
+                    }
+                }
+                (row.style.is_some() || row.leader.is_some()).then_some(row)
             })
             .collect()
     }
 
-    fn write_defaults(&self, list: &[(String, String)]) -> Result<(), String> {
+    fn write_default_rows(&self, rows: &[DefaultRow]) -> Result<(), String> {
         std::fs::create_dir_all(self.ways_dir()).map_err(|e| e.to_string())?;
         let mut out = String::from("---\nname: Where each way of working starts\n---\n");
-        for (scope, slug) in list {
-            out.push_str(&format!("{scope} -> {slug}\n"));
+        for r in rows.iter().filter(|r| r.style.is_some() || r.leader.is_some()) {
+            let mut parts = vec![r.scope.clone(), "->".to_string()];
+            parts.extend(r.style.clone());
+            parts.extend(r.leader.as_ref().map(|l| format!("leader={l}")));
+            out.push_str(&parts.join(" "));
+            out.push('\n');
         }
         std::fs::write(self.ways_dir().join(DEFAULTS_FILE), out).map_err(|e| e.to_string())
     }
 
+    /// `TEAM-5b`: every place that says how or by whom chats start, as
+    /// `(scope, style slug, leader)`, in the order of the file.
+    pub fn starts(&self) -> Vec<(String, Option<String>, Option<String>)> {
+        self.default_rows().into_iter().map(|r| (r.scope, r.style, r.leader)).collect()
+    }
+
+    /// Which preset each place starts with, as `(scope, preset slug)`.
+    pub fn defaults(&self) -> Vec<(String, String)> {
+        self.default_rows().into_iter().filter_map(|r| Some((r.scope, r.style?))).collect()
+    }
+
     /// Say which preset a place starts with, or (`None`) take its default away.
     /// Ad hoc is a choice like the others: it lets a project opt out of the global one.
+    /// Who leads at that place is left as it is.
     pub fn set_default(&self, scope: &str, preset: Option<&str>) -> Result<(), String> {
         let scope = scope.trim();
         if !valid_default_scope(scope) {
             return Err("I don't know where that is.".into());
         }
+        let style = match preset.map(str::trim).filter(|p| !p.is_empty()) {
+            Some(typed) => {
+                Some(self.find_preset(typed).ok_or_else(|| format!("I don't have a style called \u{201c}{typed}\u{201d}."))?.slug)
+            }
+            None => None,
+        };
         let _guard = self.lock.lock().unwrap();
-        let mut list: Vec<(String, String)> = self.defaults().into_iter().filter(|(s, _)| s != scope).collect();
-        if let Some(typed) = preset.map(str::trim).filter(|p| !p.is_empty()) {
-            let found = self.find_preset(typed).ok_or_else(|| format!("I don't have a style called \u{201c}{typed}\u{201d}."))?;
-            list.push((scope.to_string(), found.slug));
-        }
-        self.write_defaults(&list)?;
+        self.write_default_rows(&with_default(self.default_rows(), scope, |r| r.style = style))?;
         self.note_change("Changed where chats start");
         Ok(())
     }
 
+    /// `TEAM-1`: say who leads the chats that start at a place (`global`,
+    /// `project:<id>` or `kind:<kind>`), or (`None`) take it away. `poiesis` is a
+    /// choice like the others: it lets a project opt out of the global leader.
+    /// A persona's own place has no leader: its chats are led by it already.
+    /// The style at that place is left as it is.
+    pub fn set_default_leader(&self, scope: &str, leader: Option<&str>) -> Result<(), String> {
+        let scope = scope.trim();
+        if !valid_default_scope(scope) || scope.starts_with("persona:") {
+            return Err("I don't know where that is.".into());
+        }
+        let leader = match leader.map(str::trim).filter(|l| !l.is_empty()) {
+            Some(l) if valid_leader(l) => Some(l.to_string()),
+            Some(_) => return Err("I don't know who that is.".into()),
+            None => None,
+        };
+        let _guard = self.lock.lock().unwrap();
+        self.write_default_rows(&with_default(self.default_rows(), scope, |r| r.leader = leader))?;
+        self.note_change("Changed where chats start");
+        Ok(())
+    }
+
+    /// Who leads a chat that starts here when nobody chose: the most particular
+    /// place wins (the kind of task, then the project, then everywhere). `poiesis`
+    /// is an answer, not an absence. `None` when nothing says.
+    pub fn default_leader_for(&self, ctx: &super::ScopeCtx<'_>) -> Option<String> {
+        let rows = self.default_rows();
+        [ctx.kind.map(|k| format!("kind:{k}")), ctx.project.map(|p| format!("project:{p}")), Some("global".to_string())]
+            .into_iter()
+            .flatten()
+            .find_map(|scope| rows.iter().find(|r| r.scope == scope).and_then(|r| r.leader.clone()))
+    }
+
+    /// Where a leader is the default, as scopes.
+    pub fn default_leader_places(&self, leader: &str) -> Vec<String> {
+        self.default_rows().into_iter().filter(|r| r.leader.as_deref() == Some(leader)).map(|r| r.scope).collect()
+    }
+
+    /// Forget every default that names a leader who is gone.
+    pub fn drop_default_leaders_for(&self, leader: &str) -> Result<(), String> {
+        let _guard = self.lock.lock().unwrap();
+        let mut rows = self.default_rows();
+        for r in rows.iter_mut().filter(|r| r.leader.as_deref() == Some(leader)) {
+            r.leader = None;
+        }
+        self.write_default_rows(&rows)
+    }
+
     /// The preset a place starts with when nobody chose one for the chat. The most
-    /// particular place wins: the kind of task, then the persona, then the project,
-    /// then everywhere. A default whose preset is gone is no default.
+    /// particular place wins: the kind of task, then the project, then the persona
+    /// who leads, then everywhere. A place the chat is in comes before the leader's
+    /// own habit (`TEAM-5b`, Erich 2026-11-18): "Shop · Mira · Lean" works Lean, even
+    /// when Mira on her own works another way. A default whose preset is gone is no default.
     pub fn default_for(&self, ctx: &super::ScopeCtx<'_>) -> Option<Preset> {
+        self.default_for_led(ctx, None)
+    }
+
+    /// `default_for` for a chat a team leads (`TEAM-10`): the team's own style (`team_style`, a
+    /// slug) stands where the persona's does, after the place the chat is in and before everywhere.
+    /// It stands in for the coordinator's own habit, so it comes before that too.
+    pub fn default_for_led(&self, ctx: &super::ScopeCtx<'_>, team_style: Option<&str>) -> Option<Preset> {
         let list = self.defaults();
         let places = [
             ctx.kind.map(|k| format!("kind:{k}")),
-            ctx.persona.map(|p| format!("persona:{p}")),
             ctx.project.map(|p| format!("project:{p}")),
-            Some("global".to_string()),
         ];
         places
             .into_iter()
             .flatten()
             .find_map(|scope| list.iter().find(|(s, _)| *s == scope).and_then(|(_, slug)| self.preset(slug)))
+            .or_else(|| team_style.filter(|s| !s.trim().is_empty()).and_then(|s| self.preset(s)))
+            .or_else(|| {
+                [ctx.persona.map(|p| format!("persona:{p}")), Some("global".to_string())]
+                    .into_iter()
+                    .flatten()
+                    .find_map(|scope| list.iter().find(|(s, _)| *s == scope).and_then(|(_, slug)| self.preset(slug)))
+            })
     }
 
     /// Where a preset is the default, as `(scope, preset)` pairs.
@@ -493,8 +620,11 @@ impl MemoryStore {
     /// Forget every default that names a preset that is gone.
     pub fn drop_defaults_for(&self, slug: &str) -> Result<(), String> {
         let _guard = self.lock.lock().unwrap();
-        let kept: Vec<(String, String)> = self.defaults().into_iter().filter(|(_, s)| s != slug).collect();
-        self.write_defaults(&kept)
+        let mut rows = self.default_rows();
+        for r in rows.iter_mut().filter(|r| r.style.as_deref() == Some(slug)) {
+            r.style = None;
+        }
+        self.write_default_rows(&rows)
     }
 
     // ---- the story ----
@@ -709,10 +839,13 @@ mod tests {
         let slug = |ctx: ScopeCtx<'_>| s.default_for(&ctx).map(|p| p.slug);
         assert_eq!(slug(ScopeCtx::default()), Some("lean".into()));
         assert_eq!(slug(ScopeCtx { project: Some("nexus"), ..Default::default() }), Some("swarm".into()));
+        // The project comes before the persona who leads (`TEAM-5b`); without one, the
+        // persona's own way comes before everywhere.
         assert_eq!(
             slug(ScopeCtx { project: Some("nexus"), persona: Some("assistant"), ..Default::default() }),
-            Some("mission-command".into())
+            Some("swarm".into())
         );
+        assert_eq!(slug(ScopeCtx { persona: Some("assistant"), ..Default::default() }), Some("mission-command".into()));
         assert_eq!(
             slug(ScopeCtx { project: Some("nexus"), persona: Some("assistant"), kind: Some("mail") }),
             Some("command-and-control".into())
@@ -731,6 +864,90 @@ mod tests {
         assert_eq!(slug(ScopeCtx { project: Some("x"), ..Default::default() }), Some("lean".into()));
         s.drop_defaults_for("mine").unwrap();
         assert!(s.defaults_using("mine").is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn who_leads_is_a_default_beside_the_style_and_the_most_particular_place_wins() {
+        let (s, dir) = store();
+        let leader = |ctx: ScopeCtx<'_>| s.default_leader_for(&ctx);
+        assert_eq!(leader(ScopeCtx::default()), None);
+        s.set_default_leader("global", Some("persona:p1")).unwrap();
+        s.set_default_leader("project:shop", Some("team:shop-team")).unwrap();
+        s.set_default_leader("kind:mail", Some("poiesis")).unwrap();
+        assert_eq!(leader(ScopeCtx::default()), Some("persona:p1".into()));
+        assert_eq!(leader(ScopeCtx { project: Some("shop"), ..Default::default() }), Some("team:shop-team".into()));
+        assert_eq!(leader(ScopeCtx { project: Some("shop"), kind: Some("mail"), ..Default::default() }), Some("poiesis".into()));
+        // A project nobody said anything about falls back to everywhere.
+        assert_eq!(leader(ScopeCtx { project: Some("other"), ..Default::default() }), Some("persona:p1".into()));
+
+        // Poiesis chosen on purpose is an answer: it beats the global leader.
+        s.set_default_leader("project:other", Some("poiesis")).unwrap();
+        assert_eq!(leader(ScopeCtx { project: Some("other"), ..Default::default() }), Some("poiesis".into()));
+        s.set_default_leader("project:other", None).unwrap();
+        assert_eq!(leader(ScopeCtx { project: Some("other"), ..Default::default() }), Some("persona:p1".into()));
+
+        // Nobody who cannot be written on one line, and a persona's own place has no leader.
+        assert!(s.set_default_leader("global", Some("mira")).is_err());
+        assert!(s.set_default_leader("global", Some("persona:a b")).is_err());
+        assert!(s.set_default_leader("persona:p1", Some("poiesis")).is_err());
+        assert!(s.set_default_leader("nowhere", Some("poiesis")).is_err());
+
+        // Gone leaders are forgotten where they were the default.
+        assert_eq!(s.default_leader_places("persona:p1"), vec!["global".to_string()]);
+        s.drop_default_leaders_for("persona:p1").unwrap();
+        assert_eq!(leader(ScopeCtx::default()), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn style_and_leader_of_one_place_are_kept_apart_and_old_lines_still_read() {
+        let (s, dir) = store();
+        // A file as it was written before `TEAM-1`.
+        std::fs::write(
+            s.ways_dir().join(DEFAULTS_FILE),
+            "---\nname: Where each way of working starts\n---\nglobal -> lean\nproject:x -> swarm\n",
+        )
+        .unwrap();
+        assert_eq!(s.defaults(), vec![("global".to_string(), "lean".to_string()), ("project:x".to_string(), "swarm".to_string())]);
+
+        s.set_default_leader("project:x", Some("persona:p1")).unwrap();
+        // Changing the style leaves the leader, and the other way round.
+        s.set_default("project:x", Some("lean")).unwrap();
+        assert_eq!(s.default_leader_for(&ScopeCtx { project: Some("x"), ..Default::default() }), Some("persona:p1".into()));
+        s.set_default_leader("project:x", None).unwrap();
+        assert_eq!(s.defaults().len(), 2, "the style is still there");
+
+        // A place with only a leader has no style default, and a deleted style takes only the style.
+        s.set_default_leader("kind:mail", Some("poiesis")).unwrap();
+        assert!(s.defaults().iter().all(|(scope, _)| scope != "kind:mail"));
+        s.set_default_leader("global", Some("poiesis")).unwrap();
+        s.drop_defaults_for("lean").unwrap();
+        assert_eq!(s.default_leader_for(&ScopeCtx::default()), Some("poiesis".into()));
+        assert!(s.defaults().iter().all(|(_, slug)| slug != "lean"));
+
+        // Taking both away takes the line away.
+        s.set_default_leader("global", None).unwrap();
+        assert!(!std::fs::read_to_string(s.ways_dir().join(DEFAULTS_FILE)).unwrap().contains("global"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `TEAM-5b`: a place can say only who leads, only the style, or both, and the list says which.
+    #[test]
+    fn starts_list_each_place_with_whichever_of_leader_and_style_it_sets() {
+        let (s, dir) = store();
+        s.set_default("global", Some("lean")).unwrap();
+        s.set_default_leader("project:x", Some("persona:p1")).unwrap();
+        s.set_default("kind:mail", Some("swarm")).unwrap();
+        s.set_default_leader("kind:mail", Some("poiesis")).unwrap();
+        assert_eq!(
+            s.starts(),
+            vec![
+                ("global".to_string(), Some("lean".to_string()), None),
+                ("project:x".to_string(), None, Some("persona:p1".to_string())),
+                ("kind:mail".to_string(), Some("swarm".to_string()), Some("poiesis".to_string())),
+            ]
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

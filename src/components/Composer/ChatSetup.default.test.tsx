@@ -14,6 +14,8 @@ vi.mock("../../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/api")>()),
   inTauri: () => true,
   conversationDefaultStyle: defaultStyle,
+  // `TEAM-2`: who leads is asked the same way; nobody here.
+  conversationLeader: vi.fn().mockResolvedValue(null),
 }));
 
 import ChatSetup from "./ChatSetup";
@@ -59,7 +61,8 @@ afterEach(() => {
 const trigger = () => container.querySelector<HTMLButtonElement>(".chat-setup-btn")!;
 const how = () => {
   if (!container.querySelector(".chat-setup-menu")) act(() => trigger().click());
-  return container.querySelector<HTMLButtonElement>(".chat-setup-menu [role=menuitem]")!;
+  const rows = Array.from(container.querySelectorAll<HTMLButtonElement>(".chat-setup-menu [role=menuitem]"));
+  return rows.find((r) => r.textContent?.startsWith("How I work"))!;
 };
 
 describe("where a chat starts", () => {

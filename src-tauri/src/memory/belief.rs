@@ -122,7 +122,9 @@ impl MemoryStore {
         let mut found: Vec<(f32, Fact, Relation)> = self
             .list_in(FACTS)
             .into_iter()
-            .filter(|f| f.in_prompt() && f.name != new.name)
+            // `TEAM-5`: held against what the writer could know: what is shared, and its
+            // own. Never against another persona's, which it must not replace or contest.
+            .filter(|f| f.in_prompt() && f.name != new.name && (f.persona.is_none() || f.persona == new.persona))
             .filter_map(|f| {
                 let r = relation(new, &f);
                 (r != Relation::Unrelated).then(|| (overlap(new, &f), f, r))
@@ -192,6 +194,9 @@ impl MemoryStore {
             valid_from: Some(today()),
             scope: f.scope.clone().or_else(|| before.scope.clone()),
             project: f.project.clone().or_else(|| before.project.clone()),
+            // `TEAM-5`: a better answer belongs to whoever held the old one. What everyone
+            // knew is not taken from them because one persona refined it.
+            persona: before.persona.clone(),
             status: None,
             ..f.clone()
         };
@@ -221,8 +226,10 @@ impl MemoryStore {
     /// Save `f` next to `old`, both marked contested. Same safety as `replace_fact`.
     fn contest_fact(&self, db: &Db, old: &str, f: &Fact) -> Result<String, String> {
         let old = slugify(old)?;
-        self.read(&old).ok_or_else(|| format!("no memory named {old}"))?;
-        let saved = self.save(db, &Fact { status: Some("contested".into()), ..f.clone() })?;
+        let before = self.read(&old).ok_or_else(|| format!("no memory named {old}"))?;
+        // `TEAM-5`: both sides of a dispute are seen by the same people, so the person can
+        // settle it where the old one is shown.
+        let saved = self.save(db, &Fact { status: Some("contested".into()), persona: before.persona.clone(), ..f.clone() })?;
         if let Err(e) = self.rewrite(FACTS, &old, |e| e.status = Some("contested".into())) {
             let _ = self.forget_in(db, FACTS, &saved);
             return Err(e);
@@ -346,6 +353,45 @@ mod tests {
         assert_eq!(relation(&b, &a), Relation::Unrelated);
         let global = fact("prefers-coffee", "Prefers coffee", "Prefers coffee.");
         assert_eq!(relation(&global, &a), Relation::Contradicts);
+    }
+
+    /// `TEAM-5`: what one persona learned is not something another can replace or contest.
+    #[test]
+    fn a_persona_does_not_dispute_another_personas_belief() {
+        let (_d, s, db) = store();
+        s.save(&db, &Fact { persona: Some("atlas".into()), ..fact("prefers-tea", "Prefers tea", "Prefers tea.") }).unwrap();
+        let mira = Fact { persona: Some("mira".into()), ..fact("prefers-coffee", "Prefers coffee", "Prefers coffee.") };
+        let saved = s.save_checked(&db, &mira, true).unwrap();
+        assert_eq!(saved.outcome, Outcome::New, "Atlas's belief is none of Mira's business");
+        assert!(s.read("prefers-tea").unwrap().status.is_none(), "and stays as it was");
+
+        // What is shared, though, is held against: Mira knows it.
+        s.save(&db, &fact("prefers-juice", "Prefers juice", "Prefers juice.")).unwrap();
+        let again = Fact { persona: Some("mira".into()), ..fact("prefers-juice-2", "Prefers juice", "prefers juice") };
+        assert_eq!(s.save_checked(&db, &again, true).unwrap().outcome, Outcome::Merged("prefers-juice".into()));
+    }
+
+    /// `TEAM-5`: a persona that corrects or disputes what everyone knows does not take it
+    /// away from everyone: the new answer is shared like the old one.
+    #[test]
+    fn a_persona_correcting_a_shared_belief_keeps_it_shared() {
+        let (_d, s, db) = store();
+        s.save(&db, &fact("prefers-tea", "Prefers tea black", "Prefers tea black.")).unwrap();
+        let mira = Fact { persona: Some("mira".into()), ..fact("prefers-tea-milk", "Prefers tea milk", "Prefers tea with milk.") };
+        assert_eq!(s.save_checked(&db, &mira, true).unwrap().outcome, Outcome::Replaced("prefers-tea".into()));
+        assert!(s.read("prefers-tea-milk").unwrap().persona.is_none(), "everyone still knows it");
+
+        let (_d2, s2, db2) = store();
+        s2.save(&db2, &fact("prefers-tea", "Prefers tea", "Prefers tea.")).unwrap();
+        let disputed = Fact { persona: Some("mira".into()), ..fact("prefers-coffee", "Prefers coffee", "Prefers coffee.") };
+        assert_eq!(s2.save_checked(&db2, &disputed, true).unwrap().outcome, Outcome::Contested("prefers-tea".into()));
+        assert!(s2.read("prefers-coffee").unwrap().persona.is_none(), "both sides are shown to the same people");
+
+        // Mira's own belief, corrected by Mira, stays Mira's.
+        s.save(&db, &Fact { persona: Some("mira".into()), ..fact("prefers-short", "Prefers short intros", "Prefers short intros.") }).unwrap();
+        let own = Fact { persona: Some("mira".into()), ..fact("prefers-short-2", "Prefers short intros", "Prefers very short intros.") };
+        let saved = s.save_checked(&db, &own, true).unwrap();
+        assert_eq!(s.read(&saved.name).unwrap().persona.as_deref(), Some("mira"));
     }
 
     #[test]

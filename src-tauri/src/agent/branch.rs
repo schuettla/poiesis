@@ -42,7 +42,7 @@ pub fn root(data_dir: &Path) -> PathBuf {
 }
 
 /// An id is a uuid and nothing else: it ends up in a path.
-fn clean_id(id: &str) -> bool {
+pub fn clean_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
@@ -225,6 +225,97 @@ pub fn apply(
     done
 }
 
+// `TEAM-13`: a team's members each work in a copy at the same time, so a copy is kept
+// against what the folder held when it was made (`Base`), and what it changed is told
+// apart from what the folder changed meanwhile. Same copies, same `apply` as above.
+
+/// What every file held when a copy was made: a hash, by path.
+pub type Base = std::collections::BTreeMap<String, String>;
+
+pub fn hash_of(path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+/// The base of a copy that was just made: what is in it now.
+pub fn base_of(root: &Path) -> Base {
+    files_under(root).into_iter().filter_map(|rel| hash_of(&root.join(&rel)).map(|h| (rel, h))).collect()
+}
+
+/// What `copy` changed since it was made.
+pub fn changes_since(base: &Base, copy: &Path) -> Vec<Changed> {
+    let now = files_under(copy);
+    let mut out = Vec::new();
+    for rel in &now {
+        match (base.get(rel), hash_of(&copy.join(rel))) {
+            (None, _) => out.push(Changed { rel: rel.clone(), kind: Kind::Added }),
+            (Some(was), Some(is)) if *was != is => out.push(Changed { rel: rel.clone(), kind: Kind::Modified }),
+            _ => {}
+        }
+    }
+    for rel in base.keys() {
+        if now.binary_search(rel).is_err() {
+            out.push(Changed { rel: rel.clone(), kind: Kind::Deleted });
+        }
+    }
+    out.sort_by(|a, b| a.rel.cmp(&b.rel));
+    out
+}
+
+/// A copy's changes, told apart by what the folder has done to the same file since the copy
+/// was made.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Split {
+    /// The folder still has what the copy started from: safe to write.
+    pub clean: Vec<Changed>,
+    /// The folder already has what the copy has: nothing to write.
+    pub same: Vec<Changed>,
+    /// The folder changed the file too, differently: never overwritten.
+    pub conflicts: Vec<Changed>,
+}
+
+pub fn split(base: &Base, main: &Path, copy: &Path, changes: Vec<Changed>) -> Split {
+    let mut out = Split::default();
+    for c in changes {
+        let (was, main_now) = (base.get(&c.rel), hash_of(&main.join(&c.rel)));
+        let copy_now = if c.kind == Kind::Deleted { None } else { hash_of(&copy.join(&c.rel)) };
+        if main_now.as_ref() == was {
+            out.clean.push(c);
+        } else if main_now == copy_now {
+            out.same.push(c);
+        } else {
+            out.conflicts.push(c);
+        }
+    }
+    out
+}
+
+/// The files of `done` are now the same in the folder and the copy: the next merge of this copy
+/// starts from there.
+pub fn advance(base: &mut Base, copy: &Path, done: &[Changed]) {
+    for c in done {
+        match (c.kind, hash_of(&copy.join(&c.rel))) {
+            (Kind::Deleted, _) | (_, None) => {
+                base.remove(&c.rel);
+            }
+            (_, Some(h)) => {
+                base.insert(c.rel.clone(), h);
+            }
+        }
+    }
+}
+
 /// What both ways did, kept after the copies are gone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
@@ -358,6 +449,49 @@ mod tests {
         }
         assert_eq!(std::fs::read_to_string(src.join("a.txt")).unwrap(), "one\ntwo\nthree\n");
         assert!(src.join("src/lib.rs").exists() && !src.join("new.txt").exists());
+    }
+
+    /// `TEAM-13`: a copy is read against what it was made from, so a file the folder changed in the
+    /// meantime is told apart from one only the copy changed.
+    #[test]
+    fn a_copy_is_split_by_what_the_folder_did_meanwhile() {
+        let src = project("split_src");
+        let dst = scratch("split_dst").join("a");
+        copy_folder(&src, &dst).unwrap();
+        let mut base = base_of(&dst);
+        assert!(changes_since(&base, &dst).is_empty());
+
+        std::fs::write(dst.join("a.txt"), "copy
+").unwrap();
+        std::fs::write(dst.join("new.txt"), "fresh
+").unwrap();
+        std::fs::write(dst.join("same.txt"), "both
+").unwrap();
+        std::fs::write(src.join("same.txt"), "both
+").unwrap();
+        // The folder changed a.txt too, and has a file the copy did not see.
+        std::fs::write(src.join("a.txt"), "folder
+").unwrap();
+        std::fs::write(src.join("other.txt"), "x").unwrap();
+        std::fs::remove_file(dst.join("src/lib.rs")).unwrap();
+
+        let c = changes_since(&base, &dst);
+        let kinds: Vec<(&str, Kind)> = c.iter().map(|c| (c.rel.as_str(), c.kind)).collect();
+        assert_eq!(
+            kinds,
+            vec![("a.txt", Kind::Modified), ("new.txt", Kind::Added), ("same.txt", Kind::Added), ("src/lib.rs", Kind::Deleted)]
+        );
+        let s = split(&base, &src, &dst, c);
+        let rels = |v: &[Changed]| v.iter().map(|c| c.rel.clone()).collect::<Vec<_>>();
+        assert_eq!(rels(&s.clean), vec!["new.txt", "src/lib.rs"]);
+        assert_eq!(rels(&s.same), vec!["same.txt"]);
+        assert_eq!(rels(&s.conflicts), vec!["a.txt"]);
+
+        // What was brought over is the new start; the conflict is still a difference.
+        let done: Vec<Changed> = s.clean.iter().chain(&s.same).cloned().collect();
+        advance(&mut base, &dst, &done);
+        let left: Vec<String> = changes_since(&base, &dst).into_iter().map(|c| c.rel).collect();
+        assert_eq!(left, vec!["a.txt"]);
     }
 
     #[test]

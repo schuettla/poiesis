@@ -24,6 +24,8 @@ pub enum SteerSource {
     User,
     /// A parent run redirecting a child it delegated to.
     Lead,
+    /// `TEAM-15`: a post from someone in the team. The text already says who from.
+    Team,
 }
 
 /// One mid-run instruction, waiting to be picked up at the next safe point.
@@ -44,7 +46,7 @@ impl Steer {
     /// having typed it a moment earlier.
     pub fn into_message(self) -> serde_json::Value {
         let content = match self.from {
-            SteerSource::User => self.text,
+            SteerSource::User | SteerSource::Team => self.text,
             SteerSource::Lead => format!("New instruction: {}", self.text),
         };
         serde_json::json!({ "role": "user", "content": content })
@@ -110,6 +112,8 @@ pub enum StopReason {
     Stuck,
     /// The model call itself failed.
     Error,
+    /// `TEAM-12`: the team's task spent what it was given, in money or in minutes.
+    Budget,
 }
 
 impl StopReason {
@@ -121,6 +125,7 @@ impl StopReason {
             StopReason::MaxSteps => "max_steps",
             StopReason::Stuck => "stuck",
             StopReason::Error => "error",
+            StopReason::Budget => "budget",
         }
     }
 
@@ -159,6 +164,100 @@ pub struct RunLimits {
     /// items keep getting done, up to this runaway guard. `None` keeps the plain
     /// budget (a helper, or a turn whose `/steps` was set by hand).
     pub plan_ceiling: Option<usize>,
+    /// `TEAM-12`: what the whole team task may spend and how long it may take, shared by
+    /// the coordinator and every member run of it. `None` for everything that is not a
+    /// team task.
+    pub allowance: Option<Arc<Allowance>>,
+}
+
+/// `TEAM-12`: the spend cap and the minutes of one team task, next to a run's own `deadline`.
+///
+/// One of these is shared by the coordinator's run and every member run of the task. Each run
+/// reports what it has cost so far; when the sum reaches the cap, or the time is up, every
+/// member that was enrolled is cancelled at once and the allowance reads as spent. The
+/// coordinator is not cancelled: it is told (`RunLimits::spent`) and gets its closing turn to
+/// say what is done and what is not.
+#[derive(Debug)]
+pub struct Allowance {
+    cap_usd: Option<f64>,
+    deadline: Option<Instant>,
+    /// What each run has cost so far, by run id. A run that ended keeps its last figure.
+    spent: Mutex<HashMap<String, f64>>,
+    /// The member runs to stop, which the coordinator's is not.
+    members: Mutex<Vec<CancelFlag>>,
+    reached: Mutex<Option<Spent>>,
+}
+
+/// What ran out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Spent {
+    Money,
+    Time,
+}
+
+impl Allowance {
+    /// `cap_usd` and `minutes` of 0 or less mean no limit of that kind.
+    pub fn new(cap_usd: f64, minutes: u32) -> Self {
+        Self {
+            cap_usd: (cap_usd > 0.0).then_some(cap_usd),
+            deadline: (minutes > 0).then(|| Instant::now() + std::time::Duration::from_secs(u64::from(minutes) * 60)),
+            spent: Mutex::new(HashMap::new()),
+            members: Mutex::new(Vec::new()),
+            reached: Mutex::new(None),
+        }
+    }
+
+    /// A member run that this allowance stops. One enrolled after the limit was reached is
+    /// stopped at once.
+    pub fn enroll(&self, cancel: &CancelFlag) {
+        if self.spent_out().is_some() {
+            cancel.cancel();
+            return;
+        }
+        if let Ok(mut members) = self.members.lock() {
+            members.push(cancel.clone());
+        }
+    }
+
+    /// What a run has cost so far (the whole figure, not the part since the last call).
+    /// Reaching the limit stops every member.
+    pub fn charge(&self, run_id: &str, usd: f64) {
+        if let Ok(mut spent) = self.spent.lock() {
+            spent.insert(run_id.to_string(), usd.max(0.0));
+        }
+        self.check();
+    }
+
+    pub fn spent_usd(&self) -> f64 {
+        self.spent.lock().map(|s| s.values().sum()).unwrap_or(0.0)
+    }
+
+    /// What ran out, if something did. Looks at the clock too, so a quiet task still ends on time.
+    pub fn spent_out(&self) -> Option<Spent> {
+        self.check();
+        self.reached.lock().ok().and_then(|r| *r)
+    }
+
+    fn check(&self) {
+        let Ok(mut reached) = self.reached.lock() else { return };
+        if reached.is_some() {
+            return;
+        }
+        let what = if self.cap_usd.is_some_and(|cap| self.spent_usd() >= cap) {
+            Spent::Money
+        } else if self.deadline.is_some_and(|d| Instant::now() >= d) {
+            Spent::Time
+        } else {
+            return;
+        };
+        *reached = Some(what);
+        drop(reached);
+        if let Ok(members) = self.members.lock() {
+            for cancel in members.iter() {
+                cancel.cancel();
+            }
+        }
+    }
 }
 
 /// The runaway guard for a run working to a plan. Not a budget: the run stops
@@ -167,7 +266,7 @@ pub const PLAN_CEILING: usize = 100;
 
 impl Default for RunLimits {
     fn default() -> Self {
-        Self { max_iterations: 12, deadline: None, max_depth: 1, plan_ceiling: None }
+        Self { max_iterations: 12, deadline: None, max_depth: 1, plan_ceiling: None, allowance: None }
     }
 }
 
@@ -208,7 +307,13 @@ impl RunLimits {
             deadline: Some(Instant::now() + std::time::Duration::from_secs(300)),
             max_depth: 0,
             plan_ceiling: None,
+            allowance: None,
         }
+    }
+
+    /// `TEAM-12`: the task this run belongs to has spent what it was given.
+    pub fn spent(&self) -> Option<Spent> {
+        self.allowance.as_ref().and_then(|a| a.spent_out())
     }
 
     pub fn out_of_time(&self) -> bool {
@@ -522,7 +627,7 @@ mod tests {
     #[test]
     fn a_partial_stop_reason_is_never_completed() {
         assert!(!StopReason::Completed.is_partial());
-        for reason in [StopReason::Aborted, StopReason::Timeout, StopReason::MaxSteps, StopReason::Error] {
+        for reason in [StopReason::Aborted, StopReason::Timeout, StopReason::MaxSteps, StopReason::Error, StopReason::Budget] {
             assert!(reason.is_partial(), "{} should read as partial", reason.as_str());
         }
     }
@@ -552,5 +657,62 @@ mod tests {
         assert!(!limits.out_of_time());
         limits.deadline = Some(Instant::now() - std::time::Duration::from_secs(1));
         assert!(limits.out_of_time());
+    }
+
+    /// `TEAM-12`: when what the task has cost, summed over the coordinator and every member,
+    /// reaches the cap, every member is stopped and the coordinator is not: it is told.
+    #[test]
+    fn the_cap_stops_every_member_of_the_task_and_not_the_coordinator() {
+        let fleet = Fleet::new();
+        let allowance = Arc::new(Allowance::new(1.0, 90));
+        let coordinator = fleet.open("session", CancelFlag::new(), None, 0);
+        let api = fleet.open("api-chat", CancelFlag::new(), Some(coordinator.id.clone()), 1);
+        let ui = fleet.open("ui-chat", CancelFlag::new(), Some(coordinator.id.clone()), 1);
+        let stranger = fleet.open("other", CancelFlag::new(), None, 0);
+        allowance.enroll(&api.cancel);
+        allowance.enroll(&ui.cancel);
+        let limits = RunLimits { allowance: Some(allowance.clone()), ..RunLimits::default() };
+
+        allowance.charge(&coordinator.id, 0.40);
+        allowance.charge(&api.id, 0.30);
+        assert!(limits.spent().is_none());
+        // A run reports the whole of what it has cost, not what is new: no double counting.
+        allowance.charge(&api.id, 0.35);
+        assert!((allowance.spent_usd() - 0.75).abs() < 1e-9);
+        assert!(!api.cancel.is_cancelled() && !ui.cancel.is_cancelled());
+
+        allowance.charge(&ui.id, 0.25);
+        assert_eq!(limits.spent(), Some(Spent::Money));
+        assert!(api.cancel.is_cancelled() && ui.cancel.is_cancelled(), "every member stops");
+        assert!(!coordinator.cancel.is_cancelled(), "the coordinator is told, not cut off");
+        assert!(!stranger.cancel.is_cancelled());
+
+        // A member that was still queued stops the moment it is enrolled.
+        let late = fleet.open("docs-chat", CancelFlag::new(), Some(coordinator.id.clone()), 1);
+        allowance.enroll(&late.cancel);
+        assert!(late.cancel.is_cancelled());
+        assert_eq!(StopReason::Budget.as_str(), "budget");
+    }
+
+    /// `TEAM-12`: the minutes of the task stop the members the same way.
+    #[test]
+    fn the_minutes_of_the_task_stop_every_member_too() {
+        let open = Allowance::new(0.0, 90);
+        let member = CancelFlag::new();
+        open.enroll(&member);
+        assert!(open.spent_out().is_none() && !member.is_cancelled());
+
+        let over = Allowance { deadline: Some(Instant::now() - std::time::Duration::from_secs(1)), ..Allowance::new(0.0, 90) };
+        let other = CancelFlag::new();
+        over.members.lock().unwrap().push(other.clone());
+        assert_eq!(over.spent_out(), Some(Spent::Time));
+        assert!(other.is_cancelled());
+    }
+
+    #[test]
+    fn no_cap_means_money_alone_never_stops_a_task() {
+        let allowance = Allowance::new(0.0, 90);
+        allowance.charge("run", 1000.0);
+        assert!(allowance.spent_out().is_none());
     }
 }

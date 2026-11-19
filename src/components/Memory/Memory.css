@@ -29,6 +29,26 @@
 .memory-search {
   margin-bottom: 2px;
 }
+/* `TEAM-5`: the search and, once there are personas, whose entries to show. */
+.memory-filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.memory-filters .memory-search {
+  flex: 1;
+  margin-bottom: 0;
+}
+.memory-whose {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.memory-whose-label {
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+}
 .memory-error {
   margin: 0;
   font-size: var(--fs-ui);

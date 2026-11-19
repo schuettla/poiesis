@@ -1,25 +1,45 @@
-//! `WRK-20`: a preset's versions, and going back to one.
+//! `WRK-20`: a preset's versions, and going back to one. `TEAM-8`: a team's, the same way.
 //!
 //! Every change to a preset is a new version, and the name stays. Each one is a
 //! plain file under `memory/ways/history/<preset>/`, the whole preset as it was
 //! then plus who changed it and why, so nothing is lost and going back is only
 //! writing an old version as a new one. Locking and unlocking are entries of their
-//! own, so it is clear why nothing changed for a while.
+//! own, so it is clear why nothing changed for a while. A team's versions live in
+//! `history/team-<slug>/`, written and read by the same code (`Kind`).
 //!
 //! ```text
 //! history/lean/
 //!    0001.md   original       (what shipped)
 //!    0002.md   version 2      (you, switched something off)
 //!    0003.md   locked
+//! history/team-shop-team/
+//!    0001.md   original
 //! ```
 
 use std::path::PathBuf;
 
 use super::edit::NewPreset;
+use super::teams::{parse_team, render_team, Team};
 use super::{header_value, parse_preset, render_preset, shipped_preset, split, Preset, PresetRule, SHIPPED};
 use crate::memory::{one_line, MemoryStore};
 
-/// Entries that carry a version of the preset's rules (the others only say a lock changed).
+/// What a history belongs to. A team's folder is `team-<slug>`, so the two never mix.
+#[derive(Clone, Copy)]
+pub(super) enum Kind {
+    Preset,
+    Team,
+}
+
+impl Kind {
+    fn folder(self, slug: &str) -> String {
+        match self {
+            Kind::Preset => slug.to_string(),
+            Kind::Team => format!("team-{slug}"),
+        }
+    }
+}
+
+/// Entries that carry a version of the preset's rules or the team's work (the others only say a lock changed).
 fn carries_rules(what: &str) -> bool {
     matches!(what, "original" | "version" | "back")
 }
@@ -41,20 +61,48 @@ pub struct HistoryEntry {
     pub removed: Vec<PresetRule>,
 }
 
-/// Where a preset goes back to.
+/// One line of a team's history: the team as it was, and what the version changed.
+#[derive(Debug, Clone)]
+pub struct TeamHistoryEntry {
+    pub seq: u32,
+    pub at: i64,
+    /// `you`, `evolution` or `original`.
+    pub by: String,
+    /// `original`, `version`, `back`, `locked`, `unlocked`.
+    pub what: String,
+    pub why: String,
+    pub version: u32,
+    pub team: Team,
+    /// What this version has that the one before did not, in the words of the file
+    /// (`api: persona:a1 · Builds the API`, `verifier reviews api`, `limits: { … }`).
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+}
+
+/// Where a preset or a team goes back to.
 #[derive(Debug, Clone, Copy)]
 pub enum Back {
     Original,
     Entry(u32),
 }
 
+/// One history file, as far as both kinds read it.
+struct Raw {
+    seq: u32,
+    at: i64,
+    by: String,
+    what: String,
+    why: String,
+    text: String,
+}
+
 impl MemoryStore {
-    fn history_dir(&self, slug: &str) -> PathBuf {
-        self.ways_dir().join("history").join(slug)
+    fn history_dir(&self, kind: Kind, slug: &str) -> PathBuf {
+        self.ways_dir().join("history").join(kind.folder(slug))
     }
 
-    fn history_files(&self, slug: &str) -> Vec<(u32, PathBuf)> {
-        let Ok(entries) = std::fs::read_dir(self.history_dir(slug)) else { return Vec::new() };
+    fn history_files(&self, kind: Kind, slug: &str) -> Vec<(u32, PathBuf)> {
+        let Ok(entries) = std::fs::read_dir(self.history_dir(kind, slug)) else { return Vec::new() };
         let mut out: Vec<(u32, PathBuf)> = entries
             .filter_map(|e| e.ok())
             .map(|e| e.path())
@@ -64,17 +112,42 @@ impl MemoryStore {
         out
     }
 
-    /// Write one entry: the preset as it is now, and what happened to it.
-    pub(super) fn log_preset(&self, p: &Preset, by: &str, what: &str, why: &str) {
-        let dir = self.history_dir(&p.slug);
+    /// Every entry, oldest first.
+    fn history_raw(&self, kind: Kind, slug: &str) -> Vec<Raw> {
+        self.history_files(kind, slug)
+            .into_iter()
+            .filter_map(|(seq, path)| {
+                let text = std::fs::read_to_string(&path).ok()?;
+                let (header, _) = split(&text);
+                Some(Raw {
+                    seq,
+                    at: header_value(&header, "at").and_then(|v| v.parse().ok()).unwrap_or(0),
+                    by: header_value(&header, "by").unwrap_or("you").to_string(),
+                    what: header_value(&header, "what").unwrap_or("version").to_string(),
+                    why: header_value(&header, "why").unwrap_or("").to_string(),
+                    text,
+                })
+            })
+            .collect()
+    }
+
+    /// Write one entry: `rendered` is the whole thing as it is now, and what happened to it.
+    fn log_entry(&self, kind: Kind, slug: &str, rendered: String, by: &str, what: &str, why: &str) {
+        let dir = self.history_dir(kind, slug);
         if std::fs::create_dir_all(&dir).is_err() {
             return;
         }
-        let seq = self.history_files(&p.slug).last().map_or(1, |(s, _)| s + 1);
-        let body = render_preset(p).replacen(
-            "---\n",
+        let seq = self.history_files(kind, slug).last().map_or(1, |(s, _)| s + 1);
+        let body = rendered.replacen(
+            "---
+",
             &format!(
-                "---\nat: {}\nby: {}\nwhat: {}\nwhy: {}\n",
+                "---
+at: {}
+by: {}
+what: {}
+why: {}
+",
                 chrono::Utc::now().timestamp_millis(),
                 one_line(by),
                 one_line(what),
@@ -85,11 +158,16 @@ impl MemoryStore {
         let _ = std::fs::write(dir.join(format!("{seq:04}.md")), body);
     }
 
+    /// Write one entry: the preset as it is now, and what happened to it.
+    pub(super) fn log_preset(&self, p: &Preset, by: &str, what: &str, why: &str) {
+        self.log_entry(Kind::Preset, &p.slug, render_preset(p), by, what, why);
+    }
+
     /// The history of a preset that has none yet starts with what it was before
     /// this change: what shipped, for a built-in, and then whatever the person had
     /// already done to it.
     pub(super) fn ensure_baseline(&self, before: &Preset) {
-        if !self.history_files(&before.slug).is_empty() {
+        if !self.history_files(Kind::Preset, &before.slug).is_empty() {
             return;
         }
         if before.built_in {
@@ -131,13 +209,10 @@ impl MemoryStore {
     pub fn preset_history(&self, slug: &str) -> Vec<HistoryEntry> {
         let mut prev: Option<Vec<PresetRule>> = None;
         let mut out: Vec<HistoryEntry> = Vec::new();
-        for (seq, path) in self.history_files(slug) {
-            let Ok(text) = std::fs::read_to_string(&path) else { continue };
-            let Some(p) = parse_preset(slug, &text) else { continue };
-            let (header, _) = split(&text);
-            let what = header_value(&header, "what").unwrap_or("version").to_string();
+        for raw in self.history_raw(Kind::Preset, slug) {
+            let Some(p) = parse_preset(slug, &raw.text) else { continue };
             let (mut added, mut removed) = (Vec::new(), Vec::new());
-            if carries_rules(&what) {
+            if carries_rules(&raw.what) {
                 if let Some(before) = &prev {
                     added = p.rules.iter().filter(|r| !before.contains(r)).copied().collect();
                     removed = before.iter().filter(|r| !p.rules.contains(r)).copied().collect();
@@ -145,11 +220,11 @@ impl MemoryStore {
                 prev = Some(p.rules.clone());
             }
             out.push(HistoryEntry {
-                seq,
-                at: header_value(&header, "at").and_then(|v| v.parse().ok()).unwrap_or(0),
-                by: header_value(&header, "by").unwrap_or("you").to_string(),
-                what,
-                why: header_value(&header, "why").unwrap_or("").to_string(),
+                seq: raw.seq,
+                at: raw.at,
+                by: raw.by,
+                what: raw.what,
+                why: raw.why,
                 version: p.version,
                 rules: p.rules,
                 added,
@@ -242,6 +317,77 @@ impl MemoryStore {
         }
         self.delete_preset(slug)?;
         Ok(parent)
+    }
+
+    // ---- teams ----
+
+    pub(super) fn log_team(&self, t: &Team, by: &str, what: &str, why: &str) {
+        self.log_entry(Kind::Team, &t.slug, render_team(t), by, what, why);
+    }
+
+    /// A team's history starts with what it was before the first change.
+    pub(super) fn ensure_team_baseline(&self, before: &Team) {
+        if self.history_files(Kind::Team, &before.slug).is_empty() {
+            self.log_team(before, "original", "original", "");
+        }
+    }
+
+    /// Change a team's work: the next version, kept in the history.
+    pub(super) fn commit_team(&self, before: &Team, after: Team, by: &str, what: &str, why: &str) -> Result<Team, String> {
+        let done = self.commit_team_quiet(before, after, by, what, why)?;
+        self.note_change(&if why.is_empty() { format!("Changed {}", done.name) } else { format!("{}: {why}", done.name) });
+        Ok(done)
+    }
+
+    /// The same, without a copy of how I work: for what goes back through here many times.
+    pub(super) fn commit_team_quiet(&self, before: &Team, mut after: Team, by: &str, what: &str, why: &str) -> Result<Team, String> {
+        self.ensure_team_baseline(before);
+        after.version = before.version + 1;
+        self.write_team(&after)?;
+        self.log_team(&after, by, what, why);
+        Ok(after)
+    }
+
+    /// Every entry of a team's history, newest first.
+    pub fn team_history(&self, slug: &str) -> Vec<TeamHistoryEntry> {
+        let mut prev: Option<Vec<String>> = None;
+        let mut out: Vec<TeamHistoryEntry> = Vec::new();
+        for raw in self.history_raw(Kind::Team, slug) {
+            let Some((team, _)) = parse_team(slug, &raw.text) else { continue };
+            let (mut added, mut removed) = (Vec::new(), Vec::new());
+            if carries_rules(&raw.what) {
+                let facts = team.facts();
+                if let Some(before) = &prev {
+                    added = facts.iter().filter(|f| !before.contains(f)).cloned().collect();
+                    removed = before.iter().filter(|f| !facts.contains(f)).cloned().collect();
+                }
+                prev = Some(facts);
+            }
+            out.push(TeamHistoryEntry { seq: raw.seq, at: raw.at, by: raw.by, what: raw.what, why: raw.why, version: team.version, team, added, removed });
+        }
+        out.reverse();
+        out
+    }
+
+    /// Go back to the original or to an earlier version of a team's work. It is
+    /// written as a new version, so going back can itself be gone back from.
+    pub fn go_back_team(&self, slug: &str, to: Back) -> Result<Team, String> {
+        let _guard = self.lock.lock().unwrap();
+        let before = self.team(slug).ok_or("I can't find that team.")?;
+        let mut carrying = self.team_history(slug).into_iter().filter(|e| carries_rules(&e.what));
+        let (then, why) = match to {
+            Back::Original => (carrying.last().ok_or("It has only the one version.")?.team, "went back to the original".to_string()),
+            Back::Entry(seq) => {
+                let e = carrying.find(|e| e.seq == seq).ok_or("I can't find that version.")?;
+                let why = format!("went back to version {}", e.version);
+                (e.team, why)
+            }
+        };
+        let after = before.with_content_of(&then);
+        if after == before {
+            return Err("It already works that way.".into());
+        }
+        self.commit_team(&before, after, "you", "back", &why)
     }
 }
 

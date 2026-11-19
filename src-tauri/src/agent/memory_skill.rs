@@ -9,6 +9,7 @@
 
 use super::toolsets::ToolContext;
 use super::AgentEvent;
+use super::leader::Keep;
 use crate::autonomy::{autonomy_gate, Rung};
 use crate::memory::belief::Outcome;
 use crate::memory::{Fact, FACTS};
@@ -142,8 +143,8 @@ async fn decide_scope(
     Some(kept)
 }
 
-/// The scope of a fact: the decision first, then the local chat model as before.
-/// `endpoint` is the local engine or nothing, never a cloud provider.
+/// The scope of a fact: the decision first, then a chat model: the local engine, or the
+/// model the chat runs on when the person chose a cloud one and nothing is loaded here.
 pub async fn scope_for(
     client: &reqwest::Client,
     endpoint: Option<&crate::cloud::ChatEndpoint>,
@@ -161,10 +162,9 @@ pub async fn scope_for(
     }
 }
 
-/// `SCP-1`: one local call, right at save time, asking whether a fact applies
-/// to every answer or only when its subject comes up. `endpoint` is always the
-/// local engine — this is a call the user did not ask for, so it never goes to
-/// a cloud provider even when the turn that triggered it did. `None` on any
+/// `SCP-1`: one call, right at save time, asking whether a fact applies to every
+/// answer or only when its subject comes up. `endpoint` is the local engine when
+/// one is loaded, else the model the chat runs on (`TEAM-5`). `None` on any
 /// failure (bad response, network hiccup) — the fact is simply left
 /// unclassified, which `recall_for` already treats as global (`SCP-2`/`SCP-3`),
 /// and the backfill in `recall_for` gets another try at it later.
@@ -223,11 +223,19 @@ async fn memory_op(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<St
         );
     }
 
+    // `TEAM-5`: another persona's entries are not this chat's to read, change or forget,
+    // the same as they are left out of its index. Such a name reads as no memory at all.
+    let mine = crate::agent::leader::memory_persona(ctx.db, ctx.conversation_id);
+    let hidden = |name: &str| mem.read(name).is_some_and(|f| !f.shown_to(mine.as_deref()));
+
     match op {
         "save" => {
             let name = required(args, "name")?;
             let description = required(args, "description")?;
             let text = required(args, "text")?;
+            if hidden(name) {
+                return Err(format!("the name {name} is taken; save it under another name"));
+            }
             let kind = args
                 .get("type")
                 .and_then(|t| t.as_str())
@@ -236,10 +244,18 @@ async fn memory_op(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<St
             if kind == crate::memory::intention::KIND {
                 return save_intention(ctx, name, description, text, args);
             }
-            // No local model loaded ⇒ leave it unclassified rather than reach
-            // for the turn's cloud endpoint; `backfill_scope` retries locally.
-            let scope =
-                scope_for(ctx.client, ctx.local_endpoint, name, description, text, Some(ctx.conversation_id)).await;
+            // The local model when one is loaded; otherwise the model this chat runs on,
+            // which the person chose (`TEAM-5`: whether it is about them everywhere decides
+            // whose it is, so it is asked rather than left open).
+            let scope = scope_for(
+                ctx.client,
+                Some(ctx.local_endpoint.unwrap_or(ctx.endpoint)),
+                name,
+                description,
+                text,
+                Some(ctx.conversation_id),
+            )
+            .await;
 
             // TTL-1: an explicit expiry from the model wins. Otherwise, a body
             // that reads as transient gets a 14-day default rather than living
@@ -253,6 +269,17 @@ async fn memory_op(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<St
                     " I'll let it go in 14 days since it read as temporary.".to_string(),
                 ),
                 _ => (None, String::new()),
+            };
+
+            // `TEAM-5`: what a persona learns is its own, except what is true of the
+            // person everywhere. A persona that does not remember keeps nothing.
+            let about_person = matches!(kind, "fact" | "preference") && scope.as_deref() != Some("topical");
+            let persona = match crate::agent::leader::keep(ctx.db, ctx.conversation_id, about_person) {
+                Keep::Shared => None,
+                Keep::Persona(id) => Some(id),
+                Keep::Nowhere => {
+                    return Ok("This persona does not keep memory across chats, so nothing was saved. If it is about the user in general, say it plainly and the user can ask for it to be remembered.".to_string());
+                }
             };
 
             // `BLF-2`: held against what is believed already. A turn the person is in
@@ -272,11 +299,16 @@ async fn memory_op(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<St
                     // where the turn is happening, the same way the working
                     // folder does.
                     project: project_of(ctx),
+                    persona,
                     ..Default::default()
                 },
                 !ctx.headless,
             )?;
-            let where_note = if project_of(ctx).is_some() {
+            // Where it ended up: an answer that replaces a shared one is shared, too.
+            let own = mem.read(&saved.name).is_some_and(|f| f.persona.is_some());
+            let where_note = if own {
+                " It is in your index in every chat you lead."
+            } else if project_of(ctx).is_some() {
                 " It is in your index in every chat in this project."
             } else {
                 " It is now in your index in every conversation."
@@ -305,6 +337,9 @@ async fn memory_op(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<St
                     )
                 }
             })
+        }
+        "update" | "forget" | "read" if hidden(required(args, "name")?) => {
+            Err(format!("no memory named {}", required(args, "name")?))
         }
         "update" => {
             let name = required(args, "name")?;

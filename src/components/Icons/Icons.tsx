@@ -45,6 +45,30 @@ function Glyph({ size = 14, strokeWidth = 1.3, className, children }: GlyphProps
 /** What every icon here accepts. */
 export type IconProps = Omit<GlyphProps, "children">;
 
+/** `TEAM-2`: a cell with its nucleus. Poiesis as a name in a list or a menu, where the live
+ * mark (which reads a run) would say too much. Ink-coloured: it has no hue. */
+export function CellIcon(props: IconProps) {
+  return (
+    <Glyph strokeWidth={1.4} {...props}>
+      <circle cx="10" cy="10" r="7.5" />
+      <circle cx="10" cy="10" r="2.8" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** `TEAM-9`: a team as a name in a list: a hexagon with a dot in each of three corners, so it
+ * reads as "several, held together" and not as one persona. Ink-coloured: a team has no hue. */
+export function TeamIcon(props: IconProps) {
+  return (
+    <Glyph strokeWidth={1.4} {...props}>
+      <path d="M10 2.5 16.5 6.2v7.6L10 17.5l-6.5-3.7V6.2z" strokeLinejoin="round" />
+      <circle cx="10" cy="7.2" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="7.3" cy="12" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="12.7" cy="12" r="1.3" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
 /** `SEE-2`: the quick thinking mark on the strip and the receipt. A bolt, drawn
  * here rather than typed as a glyph, so it looks the same on every system. */
 export function BoltIcon(props: IconProps) {
@@ -131,6 +155,56 @@ export function FileIcon(props: IconProps) {
   );
 }
 
+/** A written document: the file's page corner with lines of text on it. */
+export function DocumentIcon(props: IconProps) {
+  return (
+    <Glyph strokeWidth={1.2} {...props}>
+      <path d="M5 3.5h6L15 7.5v9H5z" strokeLinejoin="round" />
+      <path d="M11 3.5v4h4" strokeLinejoin="round" />
+      <path d="M7.5 11h5M7.5 13.5h5" strokeLinecap="round" />
+    </Glyph>
+  );
+}
+
+/** Source code: a pair of angle brackets. */
+export function CodeIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="m7.5 6.5-4 3.5 4 3.5M12.5 6.5l4 3.5-4 3.5" strokeLinecap="round" strokeLinejoin="round" />
+    </Glyph>
+  );
+}
+
+/** A quotation: two opening marks. */
+export function QuoteIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M8.5 6.5H5.8a1 1 0 0 0-1 1v3a1 1 0 0 0 1 1h2.7v1.2a2 2 0 0 1-2 2M15.5 6.5h-2.7a1 1 0 0 0-1 1v3a1 1 0 0 0 1 1h2.7v1.2a2 2 0 0 1-2 2" strokeLinecap="round" strokeLinejoin="round" />
+    </Glyph>
+  );
+}
+
+/** A web page: a globe. */
+export function GlobeIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <circle cx="10" cy="10" r="7" />
+      <ellipse cx="10" cy="10" rx="3" ry="7" />
+      <path d="M3 10h14" strokeLinecap="round" />
+    </Glyph>
+  );
+}
+
+/** A clip: a frame with the play triangle in it. */
+export function VideoIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <rect x="3" y="4.5" width="14" height="11" rx="2" />
+      <path d="M8.5 7.8v4.4l3.6-2.2z" strokeLinejoin="round" />
+    </Glyph>
+  );
+}
+
 /** `PRJ-UI-3`: one file's patch. The page corner a file tab wears, with a plus
  * over a minus inside it, so a diff tab reads as "a file, changed". */
 export function DiffIcon(props: IconProps) {
@@ -147,6 +221,25 @@ export function PlayIcon(props: IconProps) {
   return (
     <Glyph strokeWidth={1.3} {...props}>
       <path d="M7 5l8 5-8 5z" strokeLinejoin="round" />
+    </Glyph>
+  );
+}
+
+/** `TEAM-16`: pause the replay. Two bars, the height of the play triangle. */
+export function PauseIcon(props: IconProps) {
+  return (
+    <Glyph strokeWidth={1.3} {...props}>
+      <path d="M7.5 5.5v9M12.5 5.5v9" strokeLinecap="round" />
+    </Glyph>
+  );
+}
+
+/** `TEAM-16`: back to the start of the replay. A bar and the play triangle turned round. */
+export function SkipBackIcon(props: IconProps) {
+  return (
+    <Glyph strokeWidth={1.3} {...props}>
+      <path d="M6 5.5v9" strokeLinecap="round" />
+      <path d="M14.5 5.5L8 10l6.5 4.5z" strokeLinejoin="round" />
     </Glyph>
   );
 }
@@ -393,6 +486,15 @@ export function SectionIcon({ view, ...props }: IconProps & { view: string }) {
           <rect x="11" y="3.5" width="5.5" height="5.5" rx="1.4" />
           <rect x="3.5" y="11" width="5.5" height="5.5" rx="1.4" />
           <rect x="11" y="11" width="5.5" height="5.5" rx="1.4" />
+        </Glyph>
+      );
+    case "personas":
+      return (
+        <Glyph {...props}>
+          <circle cx="7.5" cy="7.2" r="2.6" />
+          <path d="M2.8 16c.4-2.6 2.2-4 4.7-4s4.3 1.4 4.7 4" strokeLinecap="round" />
+          <circle cx="13.6" cy="8" r="2.1" />
+          <path d="M13.8 12.2c1.6.1 2.9 1.1 3.4 3" strokeLinecap="round" />
         </Glyph>
       );
     case "tasks":

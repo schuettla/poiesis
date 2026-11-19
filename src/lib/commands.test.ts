@@ -306,6 +306,106 @@ describe("/plan (PLF)", () => {
   });
 });
 
+describe("/lead (TEAM-2)", () => {
+  const personas = [
+    { id: "p1", name: "Mira", description: "Writes and edits" },
+    { id: "p2", name: "Atlas Reed", description: null },
+  ];
+  const conv = (over: Record<string, unknown> = {}) => ({ id: "c1", title: "t", updatedAt: 0, messages: [], ...over });
+  const run = (line: string) => runCommand(parseCommandLine(line, views())!, useAppStore.getState());
+  const chat = () => useAppStore.getState().conversations[0];
+
+  const teams = [
+    { slug: "shop", name: "Shop team", line: "Builds and checks shop features", coordinator: "persona:p1", members: [] },
+    { slug: "desk", name: "Desk", line: "", coordinator: "poiesis", members: [] },
+  ];
+
+  beforeEach(() => {
+    useAppStore.setState({ personas, teams: [], conversations: [conv()], activeConversationId: "c1" } as never);
+  });
+
+  it("is the old /persona, still typed as /persona", () => {
+    expect(parseCommandLine("/persona mira", views())?.spec.name).toBe("lead");
+  });
+
+  it("hands the chat to a persona: its leader and the persona the turn reads change together", async () => {
+    expect(await run("/lead mira")).toEqual({ kind: "done", note: "Mira leads this chat" });
+    expect(chat().leader).toBe("persona:p1");
+    expect(chat().personaId).toBe("p1");
+  });
+
+  it("says so in the chat when a chat that has begun is handed to someone else (TEAM-3)", async () => {
+    const begun = { id: "m1", role: "user", text: "hi", createdAt: 1 };
+    useAppStore.setState({ conversations: [conv({ messages: [begun] })] } as never);
+    expect(await run("/lead mira")).toEqual({ kind: "done", note: "Mira leads this chat from here." });
+    expect(await run("/lead atlas reed")).toEqual({ kind: "done", note: "Atlas Reed leads this chat from here." });
+    expect(await run("/lead poiesis")).toEqual({ kind: "done", note: "Poiesis leads this chat from here." });
+    // Nobody new, nothing to hand over: a chat nobody led is Poiesis's already.
+    expect(await run("/lead poiesis")).toEqual({ kind: "done", note: "Poiesis leads this chat" });
+  });
+
+  it("takes a name of more than one word, in any case", async () => {
+    await run("/lead atlas reed");
+    expect(chat().leader).toBe("persona:p2");
+  });
+
+  it("hands it back to Poiesis, and 'none' still means that", async () => {
+    await run("/lead mira");
+    await run("/lead poiesis");
+    expect(chat().leader).toBe("poiesis");
+    expect(chat().personaId).toBeNull();
+    await run("/lead mira");
+    await run("/persona none");
+    expect(chat().leader).toBe("poiesis");
+  });
+
+  it("with words after the name, leads that message alone and leaves the chat as it was", async () => {
+    await run("/lead mira");
+    const result = await run("/lead atlas reed check the sources");
+    expect(result).toEqual({ kind: "modifier", send: "check the sources" });
+    expect(useAppStore.getState().turnModifiers.leader).toBe("persona:p2");
+    expect(chat().leader).toBe("persona:p1");
+  });
+
+  it("does not know anyone it was not told about", async () => {
+    expect((await run("/lead nobody")).kind).toBe("error");
+    expect(chat().leader).toBeUndefined();
+  });
+
+  it("lists Poiesis, then the personas under their count, then the rows about leaders", () => {
+    const rows = argChoices("leaders", "", useAppStore.getState());
+    expect(rows.map((r) => r.label)).toEqual(["Poiesis", "Mira", "Atlas Reed", "Manage personas and teams…"]);
+    expect(rows[1].group).toBe("Personas · 2");
+    expect(rows[1].hint).toBe("Writes and edits");
+    // "Use for this project too" only when this chat has a leader of its own in a project.
+    expect(rows.some((r) => r.value === "@project")).toBe(false);
+    useAppStore.setState({ conversations: [conv({ leader: "persona:p1", projectId: "pr1" })] } as never);
+    expect(argChoices("leaders", "", useAppStore.getState()).some((r) => r.value === "@project")).toBe(true);
+  });
+
+  it("typing narrows the list to people, without the rows about leaders", () => {
+    expect(argChoices("leaders", "mir", useAppStore.getState()).map((r) => r.label)).toEqual(["Mira"]);
+  });
+
+  it("lists the teams under their count, and hands the chat to a team through its coordinator", async () => {
+    useAppStore.setState({ teams } as never);
+    const rows = argChoices("leaders", "", useAppStore.getState());
+    expect(rows.map((r) => r.label)).toEqual(["Poiesis", "Mira", "Atlas Reed", "Shop team", "Desk", "Manage personas and teams…"]);
+    expect(rows[3]).toMatchObject({ group: "Teams · 2", hint: "Builds and checks shop features" });
+
+    expect(await run("/lead shop team")).toEqual({ kind: "done", note: "Shop team leads this chat" });
+    expect(chat()).toMatchObject({ leader: "team:shop", personaId: "p1" });
+    await run("/lead desk");
+    expect(chat()).toMatchObject({ leader: "team:desk", personaId: null });
+  });
+
+  it("a team does not lead one message alone", async () => {
+    useAppStore.setState({ teams } as never);
+    expect((await run("/lead shop team add apple pay")).kind).toBe("error");
+    expect(useAppStore.getState().turnModifiers.leader).toBeUndefined();
+  });
+});
+
 describe("/btw, /checkup (BTW, CHK)", () => {
   it("/btw needs a question", async () => {
     useAppStore.setState({

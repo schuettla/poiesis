@@ -526,19 +526,28 @@ async fn reflect_pass(
             continue;
         }
 
+        // `TEAM-5`: a persona that does not remember learns nothing for itself, so its
+        // sessions are not drawn on for lessons at all.
+        let keep = crate::agent::leader::keep(&db, &conversation_id, false);
+        if keep == crate::agent::leader::Keep::Nowhere {
+            continue;
+        }
+
         match rung {
             Rung::Off => break,
             Rung::Ask => {
-                if db
-                    .add_change_proposal(
-                        "lesson",
-                        Some(&slug),
-                        &draft.body,
-                        &draft.description,
-                        Some(&draft.description),
-                    )
-                    .is_ok()
-                {
+                if let Ok(proposal) = db.add_change_proposal(
+                    "lesson",
+                    Some(&slug),
+                    &draft.body,
+                    &draft.description,
+                    Some(&draft.description),
+                ) {
+                    // `TEAM-5`: a lesson a persona's session taught stays that persona's when
+                    // the person says yes.
+                    if let crate::agent::leader::Keep::Persona(id) = &keep {
+                        let _ = db.set_change_proposal_persona(&proposal.id, id);
+                    }
                     out.proposed.push(draft);
                 }
             }
@@ -565,6 +574,12 @@ async fn reflect_pass(
                         .ok()
                         .flatten()
                         .map(|p| p.id),
+                    // `TEAM-5`: and a lesson drawn from a persona's session is that
+                    // persona's.
+                    persona: match &keep {
+                        crate::agent::leader::Keep::Persona(id) => Some(id.clone()),
+                        _ => None,
+                    },
                     cue: Some(draft.cue.trim().to_string()).filter(|c| !c.is_empty()),
                     confidence: None,
                     status: None,
@@ -1062,6 +1077,7 @@ mod tests {
             expires_at: None,
             origin: None,
             project: None,
+            persona: None,
             cue: Some("tool:read_file".into()),
             confidence: None,
             status: None,

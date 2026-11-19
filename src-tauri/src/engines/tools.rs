@@ -459,7 +459,7 @@ impl<'a> Tools<'a> {
         self.asked.fetch_add(1, Ordering::Relaxed);
         let id = format!("ask_{}", uuid::Uuid::new_v4().simple());
         let waiting = self.run.ask(&id);
-        self.sink.emit(AgentEvent::Question { run_id: self.run.id.clone(), id: id.clone(), question: question.clone(), options, multi });
+        self.sink.emit(AgentEvent::Question { run_id: self.run.id.clone(), id: id.clone(), question: question.clone(), options, multi, title: None, check: None });
         self.log("question", &format!("{} asked: {}", self.engine, clip(&question, 120)));
 
         let outcome = tokio::select! {

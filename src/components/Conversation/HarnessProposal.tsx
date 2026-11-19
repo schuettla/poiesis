@@ -5,6 +5,11 @@ import "./HarnessProposal.css";
 
 /** What I would like to do, in the first person (`CPX-1`). */
 function wording(p: HarnessProposalView, presets: PresetView[]): { ask: string; yes: string; no: string } {
+  if (p.name === "switch_mode" && p.payload.leader) {
+    // `TEAM-7`: the reason says why it is a job for them, then the question, as II.3 words it.
+    const name = p.payload.name ?? "them";
+    return { ask: `${p.reason} Shall I hand it over to ${name}?`, yes: "Hand it over", no: "Keep going like this" };
+  }
   if (p.name === "switch_mode" && p.payload.style) {
     // `WRK-13`: another way of working, as II.9 words it: the reason, then the question.
     const preset = presets.find((x) => x.slug === p.payload.mode);

@@ -30,7 +30,8 @@ export default function CommandNote({ note }: { note: CommandNoteView }) {
   const text = sentence ?? `/${note.name}${note.args ? ` ${note.args}` : ""}`;
   // `AGC-4`: your answer to something I asked ("you said yes to /skillify") is a
   // whole sentence already, and already says who.
-  const answer = (note.outcome === "accepted" || note.outcome === "declined") && !!note.note;
+  // `TEAM-3`: so is "Mira leads this chat from here."
+  const answer = ((note.outcome === "accepted" || note.outcome === "declined") && !!note.note) || (note.name === "lead" && !!note.note);
 
   return (
     <div
