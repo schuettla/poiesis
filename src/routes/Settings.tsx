@@ -19,6 +19,7 @@ import {
 import { useAppStore, READING_SCALES, MESSAGE_FONTS, CHAT_WIDTHS, type PlanMode } from "../lib/store";
 import SoulEditor from "../components/Personas/SoulEditor";
 import NotifyWaiting from "../components/Waiting/NotifyWaiting";
+import StayAlive from "../components/Remote/StayAlive";
 import "./Surface.css";
 import "./Settings.css";
 
@@ -281,6 +282,8 @@ export default function Settings() {
           </label>
           {/* `TEAM-21`: the one notification there is. */}
           {inTauri() && <NotifyWaiting />}
+          {/* `REM-UI-2`: staying in the tray, and starting at sign-in, so a phone can reach me. */}
+          {inTauri() && <StayAlive />}
           {expert && (
             <div className="setting-actions">
               <button className="btn-text" onClick={() => resetFirstTimeExplanations()}>

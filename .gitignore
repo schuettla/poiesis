@@ -25,3 +25,7 @@ Thumbs.db
 
 # Planning docs are kept locally only
 /plans/
+
+# Phone link (REM-14): build output of the two new crates
+mobile/src-tauri/target/
+remote-proto/target/

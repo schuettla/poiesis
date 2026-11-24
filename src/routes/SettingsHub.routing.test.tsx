@@ -77,6 +77,7 @@ describe("the settings hub", () => {
       "Personas & teams": "personas",
       Tasks: "tasks",
       Mail: "mail",
+      Remote: "remote",
       Activity: "activity",
       Usage: "usage",
       Experiments: "experiments",

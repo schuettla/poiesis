@@ -163,7 +163,8 @@ async fn open_app(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
         }
     }
 
-    if !ctx.db.has_capability_grant("open-app", app_name).unwrap_or(false) {
+    // `REM-4`: a turn sent from outside asks every time, grant or not.
+    if ctx.remote || !ctx.db.has_capability_grant("open-app", app_name).unwrap_or(false) {
         if ctx.headless {
             return Err(
                 "Opening an app needs someone to approve it, and an unattended run can't ask."

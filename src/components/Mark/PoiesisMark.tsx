@@ -85,6 +85,8 @@ export default function PoiesisMark({ size = 20 }: { size?: number }) {
   // `WRK-21`: a fine layer for each time I changed how I work on my own. It forms
   // while I rest, so it never competes with what a run is doing.
   const layers = useAppStore((s) => Math.min(3, s.orgGrowth?.layers ?? 0));
+  // `REM-UI-2`: remote is on and a phone is connected. A thin outer ring, nothing else.
+  const reachable = useAppStore((s) => s.remoteReachable);
 
   // `WRK-8`: the organization, from real events and nothing else.
   const org = useOrg();
@@ -97,11 +99,17 @@ export default function PoiesisMark({ size = 20 }: { size?: number }) {
   const base = digestPending
     ? "Poiesis Agent — resting, with something to tell you"
     : `Poiesis Agent — ${LABELS[presence] ?? "resting"}`;
-  const label = [base, ...orgWords(org), ...(layers > 0 && !org.live ? ["I've changed how I work on my own"] : [])].join(" · ");
+  const label = [
+    base,
+    ...orgWords(org),
+    ...(layers > 0 && !org.live ? ["I've changed how I work on my own"] : []),
+    ...(reachable ? ["your phone can reach me"] : []),
+  ].join(" · ");
   const className = [
     "poiesis-mark",
     `stage-${stage}`,
     `state-${presence}`,
+    reachable && "reachable",
     digestPending && "digest-pending",
     org.live && org.slug && `org-${org.slug}`,
     org.stopped && org.live && "org-stopped",
@@ -169,6 +177,8 @@ export default function PoiesisMark({ size = 20 }: { size?: number }) {
         Array.from({ length: layers }, (_, i) => (
           <circle key={i} className="mark-layer" cx="12" cy="12" r={9.1 + i * 0.7} fill="none" />
         ))}
+      {/* `REM-UI-2`: reachable from a phone. Outside every other ring, still. */}
+      {reachable && <circle className="mark-reach" cx="12" cy="12" r="11.3" fill="none" />}
       {/* A second ring forms around the membrane while someone else looks. */}
       {org.looking && org.live && <circle className="mark-second" cx="12" cy="12" r="10.4" fill="none" />}
       {/* A helper is a small cell budded off the membrane, and gone when it is done. */}

@@ -139,6 +139,8 @@ pub struct Request<'a> {
     pub folder: &'a Path,
     pub folder_trust: Trust,
     pub headless: bool,
+    /// `REM-4`: the lead's turn came from outside, so the agent app's connected-app calls ask more.
+    pub remote: bool,
     /// A session of this agent in this conversation, to continue.
     pub resume: Option<String>,
 }
@@ -185,6 +187,7 @@ pub async fn run_external(req: Request<'_>) -> RunOutcome {
     let tools = ((row.memory_tools || row.app_tools) && driver.capabilities().mcp_tools).then(|| {
         let mut t = Tools::new(req.db, req.sink, req.run, &name, req.child_conversation_id, req.task, req.headless);
         t.memory = row.memory_tools;
+        t.remote = req.remote;
         if row.app_tools {
             t = t.with_apps(req.perms);
         }

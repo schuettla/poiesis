@@ -1573,6 +1573,10 @@ pub struct RunOptions {
     /// … until …`). The run starts with these agreed, so it asks nothing about them.
     #[serde(default)]
     pub criteria: Vec<String>,
+    /// `REM-4`: this turn was sent from a phone or a chat. It becomes `RunContext::remote`, which
+    /// every agent below it inherits. Only the gateway sets it.
+    #[serde(default)]
+    pub remote: bool,
 }
 
 impl RunOptions {
@@ -1644,6 +1648,11 @@ pub struct RunContext<'a> {
     /// `TIER-3`: what the model this run talks to can carry. A child runs on its
     /// lead's model, and only a Full run can hand work out, so a child is Full.
     pub tier: ModelTier,
+    /// `REM-4`: the turn was sent from a phone or a chat, not typed at this computer. It asks
+    /// more (plan, Part III.3): a change or a send is asked about whatever the trust, the
+    /// remembered answers or the app's own setting say. A child is handed its lead's value and
+    /// can never lift it.
+    pub remote: bool,
 }
 
 impl<'a> RunContext<'a> {
@@ -1666,7 +1675,14 @@ impl<'a> RunContext<'a> {
             options: RunOptions::default(),
             read_only: false,
             tier: ModelTier::Full,
+            remote: false,
         }
+    }
+
+    /// The same turn, sent from outside (`REM-4`).
+    pub fn with_remote(mut self, remote: bool) -> Self {
+        self.remote = remote;
+        self
     }
 
     /// The same turn, on a model that can carry only what `tier` allows (`TIER-3`).
@@ -1719,6 +1735,8 @@ pub struct DelegationContext<'a> {
     pub read_only: bool,
     /// `CLI-UI-6`: the agent the user named for this turn, if they did.
     pub delegate_to: Option<String>,
+    /// `REM-4`: a child of a remote run is remote too.
+    pub remote: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2445,6 +2463,7 @@ async fn run_agent_inner(
             context_window: rc.context_window,
             read_only,
             delegate_to: rc.options.delegate_to.clone(),
+            remote: rc.remote,
         }),
         registry,
         mcp_pool: Default::default(),
@@ -3864,6 +3883,7 @@ fn tool_context<'a>(&'a self, call_id: &'a str, rpc: Option<&'a super::toolrpc::
         call_id,
         memory: self.memory,
         headless: self.headless,
+        remote: self.rc.remote,
         rendered: std::sync::atomic::AtomicBool::new(false),
         step_note: std::sync::Mutex::new(None),
         extra_read_roots: &self.extra_read_roots,
@@ -4602,6 +4622,10 @@ async fn dispatch(
                 .map(|(_, t)| crate::permissions::Trust::parse(&t))
                 .unwrap_or(crate::permissions::Trust::Confirm)
         };
+        // `REM-4`: a turn sent from outside asks before it runs code, sends or drives a page.
+        if self.rc.remote && toolgate::asked_when_remote(name) {
+            toolgate::ask_remote(&self.gate_site(), name, args).await?;
+        }
         let note = if toolgate::is_asked(name, trust, self.headless) {
             match toolgate::before_own(&self.gate_site(), name, args).await {
                 toolgate::Before::Refuse(text) => return Err(text),
@@ -4691,6 +4715,7 @@ async fn dispatch(
             cancel: &self.cancel,
             conversation_id: self.conversation_id,
             headless: self.headless,
+            remote: self.rc.remote,
             day,
             notes: Some(&notes),
         };
@@ -4771,6 +4796,7 @@ impl TurnCtx<'_> {
             conversation_id: self.conversation_id,
             run_id: Some(&self.rc.run.id),
             headless: self.headless,
+            remote: self.rc.remote,
             request: &self.request,
         }
     }
@@ -5061,6 +5087,7 @@ impl TurnCtx<'_> {
             cancel: &self.cancel,
             conversation_id: self.conversation_id,
             headless: self.headless,
+            remote: self.rc.remote,
             read_only: self.read_only_now(),
             pool: &self.mcp_pool,
             request: Some(&self.request),
@@ -5133,6 +5160,8 @@ pub(crate) struct AppRelay<'a> {
     /// The conversation whose persona sets the grants and whose log gets the row.
     pub conversation_id: &'a str,
     pub headless: bool,
+    /// `REM-4`: the turn came from outside, so a change or a send is always asked about.
+    pub remote: bool,
     pub read_only: bool,
     pub pool: &'a McpPool,
     /// `USE-12`: what the call is compared with: what the user asked this turn, or
@@ -5217,6 +5246,7 @@ pub(crate) async fn relay_composio(
             cancel: r.cancel,
             conversation_id: r.conversation_id,
             headless: r.headless,
+            remote: r.remote,
             day: connector_gate::send_day(),
             notes: Some(&notes),
         };

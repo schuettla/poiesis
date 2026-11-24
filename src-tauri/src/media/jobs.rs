@@ -68,6 +68,8 @@ pub struct JobEvent {
 
 fn announce(event: JobEvent) {
     if let Some(app) = APP.get() {
+        // `REM-6`: a Telegram chat that asked for it gets the file too.
+        crate::remote::telegram::media_done(app, &event);
         let _ = app.emit("poiesis-media-job", event);
     }
 }

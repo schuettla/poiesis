@@ -511,6 +511,14 @@ export function SectionIcon({ view, ...props }: IconProps & { view: string }) {
           <path d="m3.4 5.6 6.6 5 6.6-5" strokeLinejoin="round" />
         </Glyph>
       );
+    case "remote":
+      // A phone, and a signal leaving it.
+      return (
+        <Glyph {...props}>
+          <rect x="3.6" y="2.8" width="7.4" height="14.4" rx="1.8" />
+          <path d="M7.3 14.4h.01M13.4 6.6a4.6 4.6 0 0 1 0 6.4M15.6 4.6a7.6 7.6 0 0 1 0 10.4" strokeLinecap="round" />
+        </Glyph>
+      );
     case "activity":
       return (
         <Glyph {...props}>
@@ -604,6 +612,25 @@ export function LayoutIcon(props: IconProps) {
     <Glyph {...props}>
       <rect x="3" y="3.5" width="14" height="13" rx="2" />
       <path d="M8 3.5v13M8 9h9" />
+    </Glyph>
+  );
+}
+
+/** A phone: where a chat came from (`REM-UI-3`). */
+export function PhoneIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <rect x="5.4" y="2.8" width="9.2" height="14.4" rx="2" />
+      <path d="M10 14.4h.01" strokeLinecap="round" />
+    </Glyph>
+  );
+}
+
+/** A paper plane: a chat that came in through Telegram (`REM-UI-3`). */
+export function PaperPlaneIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M17 3 3 8.6l5 2 2 5L17 3zM8 10.6 17 3" strokeLinejoin="round" strokeLinecap="round" />
     </Glyph>
   );
 }

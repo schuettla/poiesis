@@ -575,6 +575,9 @@ export interface AppState {
   appAccounts: api.AppAccount[];
   /** A sign-in has expired or failed; the Apps tab wears a dot until it is looked at. */
   appsNeedAttention: boolean;
+  /** `REM-UI-2`: remote is on and a paired phone is connected right now. The living mark wears a
+   * small ring for it. Set by the gateway's `poiesis-remote` event. */
+  remoteReachable: boolean;
   refreshApps: () => Promise<void>;
   /** `RUN-3`: the latest run's summary per conversation, for the run bar. Not
    * persisted. A new send replaces it; leaving the chat or the × clears it. */
@@ -1546,6 +1549,8 @@ function toConversation(c: api.DbConversation): Conversation {
     enginesOff: c.engines_off ?? false,
     style: c.style ?? null,
     leader: c.leader ?? null,
+    remoteSender: c.remote_sender ?? null,
+    remoteTransport: c.remote_transport ?? null,
   };
 }
 
@@ -1592,6 +1597,10 @@ function serializeOverrides(overrides: Conversation["overrides"]): string | null
     : null;
 }
 
+/** `bootstrap` has begun. Module state, not store state: it must hold from the first line of the first call. */
+let bootStarted = false;
+
+/** Mirrored in Rust by `remote::session::title_from` for a chat a phone starts. */
 function deriveTitle(text: string): string {
   const t = text.trim().replace(/\s+/g, " ");
   return t.length > 48 ? `${t.slice(0, 48)}…` : t || "New chat";
@@ -2435,6 +2444,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   appAccounts: [],
   appsNeedAttention: false,
+  remoteReachable: false,
   refreshApps: async () => {
     if (!api.inTauri()) return;
     try {
@@ -3577,7 +3587,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   bootstrap: async () => {
-    if (get().bootstrapped) return;
+    // `bootstrapped` turns true only at the end, after many awaits. A second call in that time (React runs the
+    // start effect twice in a dev build) would load everything again and listen to every app event twice, so a
+    // phone's turn arrived twice in the open chat, each piece doubled.
+    if (get().bootstrapped || bootStarted) return;
+    bootStarted = true;
     if (!api.inTauri()) {
       // Browser preview: use mock data.
       set({
@@ -7540,6 +7554,98 @@ export function cloudTarget(): api.ChatTarget | undefined {
   return isRemoteModel(model) ? targetFor(model) : undefined;
 }
 
+/** `REM-3`: the open feed of a turn a phone started, by conversation. While one is there, the
+ * turn's events are folded into the chat on screen exactly as a turn typed here is. */
+const remoteFeeds = new Map<string, (e: api.AgentEvent) => void>();
+
+/** `REM-UI-2`, `REM-UI-3`: what the gateway tells the window. `poiesis-remote` says whether a
+ * phone can reach me; `poiesis-remote-turn` carries every event of a turn a phone started. */
+export function listenForRemote(set: StoreSet, get: () => AppState) {
+  api.onAppEvent<{ enabled: boolean; connected: boolean }>(api.REMOTE_EVENT, (e) => {
+    set(() => ({ remoteReachable: e.enabled && e.connected }));
+  });
+  api.remoteStatus().then((r) => set(() => ({ remoteReachable: r.enabled && r.connected }))).catch(() => {});
+  api.onAppEvent<{ conversation_id: string; event: api.AgentEvent }>("poiesis-remote-turn", ({ conversation_id, event }) => {
+    // The phone answered a question, or its time ran out: the card here is not wanted any more.
+    if (event.type === "permission_gone") {
+      set((s) => ({ pendingPermissions: s.pendingPermissions.filter((p) => p.id !== event.id) }));
+      return;
+    }
+    const feed = remoteFeeds.get(conversation_id);
+    if (feed) feed(event);
+    else if (event.type === "turn_saved") {
+      void showRemoteTurn(set, get, conversation_id, event);
+      void mergeRemoteChats(set);
+    }
+  });
+}
+
+/** A phone turn began: the rail gets the chat it made and the title its first message gave (the list is otherwise
+ * read only at start). Only phone chats are touched, so a rename typed here is never undone. */
+async function mergeRemoteChats(set: StoreSet) {
+  try {
+    const rows = (await api.listConversations()).filter((r) => r.remote_sender);
+    set((s) => {
+      const known = new Set(s.conversations.map((c) => c.id));
+      const added = rows.filter((r) => !known.has(r.id)).map(toConversation);
+      const conversations = s.conversations.map((c) => {
+        const r = rows.find((x) => x.id === c.id);
+        return r && (r.title !== c.title || r.updated_at !== c.updatedAt) ? { ...c, title: r.title, updatedAt: r.updated_at } : c;
+      });
+      return { conversations: [...added, ...conversations] };
+    });
+  } catch {
+    /* the rail catches up at the next start */
+  }
+}
+
+/** Show a turn a phone started, live, in the chat if that chat is open here. The rows are
+ * already saved, so they are read in; the events then go through the same fold as a turn typed
+ * here. A chat that is not loaded, or a desktop turn already running, shows nothing: opening the
+ * chat later shows the saved turn. */
+async function showRemoteTurn(
+  set: StoreSet,
+  get: () => AppState,
+  convId: string,
+  saved: Extract<api.AgentEvent, { type: "turn_saved" }>
+) {
+  const s = get();
+  const model = s.models.find((m) => m.id === s.selectedModelId) ?? s.models[0];
+  if (!s.conversations.some((c) => c.id === convId) || !model || s.busy) return;
+  const queue: api.AgentEvent[] = [saved];
+  let feed: ((e: api.AgentEvent) => void) | null = null;
+  remoteFeeds.set(convId, (e) => (feed ? feed(e) : queue.push(e)));
+  try {
+    const rows = await api.listMessages(convId);
+    set((st) => ({
+      busy: true,
+      presence: "active" as const,
+      conversations: st.conversations.map((c) => {
+        if (c.id !== convId) return c;
+        const have = new Set(c.messages.map((m) => m.id));
+        return { ...c, messages: [...c.messages, ...rows.filter((r) => !have.has(r.id)).map(toMessage)] };
+      }),
+    }));
+    await streamAssistantTurn(set, get, {
+      convId,
+      assistantId: saved.assistant_message_id,
+      model,
+      start: (onEvent) =>
+        new Promise<void>((resolve) => {
+          feed = (e) => {
+            onEvent(e);
+            // The last thing a turn sends: what is on screen is what a reload would show.
+            if (e.type === "turn_finalized") resolve();
+          };
+          queue.splice(0).forEach(feed);
+        }),
+    });
+  } finally {
+    remoteFeeds.delete(convId);
+    set(() => ({ busy: false }));
+  }
+}
+
 /** Subscribe to the self-maintenance processes that run outside a chat stream
  * (REF-3, HEAL-1). Registered once, at bootstrap. */
 function listenForSelfEvents(set: StoreSet, get: () => AppState) {
@@ -7554,6 +7660,7 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
     void get().refreshWaiting();
     void get().refreshUnread();
   });
+  listenForRemote(set, get);
   // `TEAM-21`: a click on the desktop notification opens the session it was about.
   api.onAppEvent<string>("poiesis-open-session", (id) => {
     void get().openSession(id);

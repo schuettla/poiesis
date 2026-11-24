@@ -82,6 +82,15 @@
   stroke-width: 0.8;
   opacity: 0.45;
 }
+/* `REM-UI-2`: a phone can reach me. A fine, dotted, steady ring: it does not move, so it never reads
+   as working. */
+.poiesis-mark .mark-reach {
+  stroke: currentColor;
+  stroke-width: 0.6;
+  stroke-dasharray: 0.6 2.2;
+  stroke-linecap: round;
+  opacity: 0.6;
+}
 /* The line is stopped: the nucleus holds its breath, whole. */
 .poiesis-mark.org-stopped .mark-nucleus {
   opacity: 1;

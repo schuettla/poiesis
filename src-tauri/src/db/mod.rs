@@ -114,6 +114,13 @@ pub struct Conversation {
     /// cannot override it.
     #[serde(default)]
     pub leader: Option<String>,
+    /// `REM-UI-3`: who started this chat from outside (a phone's name), read from the latest
+    /// `remote` row of its log by `list_conversations`. `None` for a chat typed here.
+    #[serde(default)]
+    pub remote_sender: Option<String>,
+    /// `phone` | `telegram`, with `remote_sender`.
+    #[serde(default)]
+    pub remote_transport: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -1584,6 +1591,8 @@ impl Db {
             engines_off: false,
             style: None,
             leader: None,
+            remote_sender: None,
+            remote_transport: None,
             created_at: ts,
             updated_at: ts,
         })
@@ -1998,9 +2007,32 @@ impl Db {
                     parent_conversation_id, project_id, engines_off, style, leader
              FROM conversations ORDER BY updated_at DESC",
         )?;
-        let rows = stmt
+        let mut rows = stmt
             .query_map([], Self::map_conversation)?
             .collect::<Result<Vec<_>, _>>()?;
+        // `REM-UI-3`: a chat a phone started wears the phone's name. The latest `remote` row of a
+        // chat's log says who spoke last; no schema change.
+        let mut tags = conn.prepare(
+            "SELECT e.conversation_id, e.payload_json FROM session_events e
+             WHERE e.kind = 'remote'
+               AND e.seq = (SELECT MAX(seq) FROM session_events
+                            WHERE conversation_id = e.conversation_id AND kind = 'remote')",
+        )?;
+        let tagged: std::collections::HashMap<String, (Option<String>, Option<String>)> = tags
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .filter_map(Result::ok)
+            .filter_map(|(id, json)| {
+                let v: serde_json::Value = serde_json::from_str(&json).ok()?;
+                let text = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+                Some((id, (text("sender"), text("transport"))))
+            })
+            .collect();
+        for c in &mut rows {
+            if let Some((sender, transport)) = tagged.get(&c.id) {
+                c.remote_sender = sender.clone();
+                c.remote_transport = transport.clone();
+            }
+        }
         Ok(rows)
     }
 
@@ -3146,6 +3178,8 @@ impl Db {
                 engines_off: source.engines_off,
                 style: source.style,
                 leader: source.leader,
+                remote_sender: None,
+                remote_transport: None,
                 created_at: ts,
                 updated_at: ts,
             },
@@ -5657,6 +5691,8 @@ impl Db {
             engines_off: row.get::<_, i64>(15)? != 0,
             style: row.get(16)?,
             leader: row.get(17)?,
+            remote_sender: None,
+            remote_transport: None,
         })
     }
 
@@ -5738,6 +5774,25 @@ mod tests {
         .unwrap();
         db.set_setting("updates.fixture_marker", "kept").unwrap();
         conv.id
+    }
+
+    /// `REM-UI-3`: a chat a phone started wears the phone's name, taken from the newest `remote`
+    /// row of its log. A chat typed at the desktop wears nothing.
+    #[test]
+    fn a_chat_started_from_a_phone_is_listed_with_the_phones_name() {
+        let db = Db::open_in_memory().unwrap();
+        let typed = db.create_conversation("typed here", None, false).unwrap().id;
+        let phone = db.create_conversation("Phone", None, false).unwrap().id;
+        let row = |sender: &str| serde_json::json!({ "sender": sender, "transport": "phone", "what": "turn", "text": "hi" });
+        db.append_session_event(&phone, None, "remote", &row("Old phone")).unwrap();
+        db.append_session_event(&phone, None, "decision", &serde_json::json!({})).unwrap();
+        db.append_session_event(&phone, None, "remote", &row("Pixel")).unwrap();
+        let listed = db.list_conversations().unwrap();
+        let find = |id: &str| listed.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(find(&phone).remote_sender.as_deref(), Some("Pixel"));
+        assert_eq!(find(&phone).remote_transport.as_deref(), Some("phone"));
+        assert_eq!(find(&typed).remote_sender, None);
+        assert_eq!(find(&typed).remote_transport, None);
     }
 
     /// Run with `cargo test regenerate_release_fixture -- --ignored` at the

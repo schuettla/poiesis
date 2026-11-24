@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "mobile",
+  "description": "What the phone app's page may ask of the shell: its own commands, events and the QR scanner.",
+  "windows": ["main"],
+  "platforms": ["android", "iOS"],
+  "permissions": [
+    "core:default",
+    "barcode-scanner:allow-scan",
+    "barcode-scanner:allow-cancel",
+    "barcode-scanner:allow-check-permissions",
+    "barcode-scanner:allow-request-permissions"
+  ]
+}

@@ -118,6 +118,16 @@ pub fn is_asked(tool: &str, trust: impl FnOnce() -> Trust, headless: bool) -> bo
     }
 }
 
+/// `REM-4`: own tools a remote turn is asked about every time, whatever the person set at the
+/// desktop. They run code, send mail or drive a page. `run_command` and `run_task` ask in
+/// `coderun`, and `open_app` in `screen`, where a remote turn is made to ask as well.
+const REMOTE_ASKED: [&str; 6] =
+    ["run_code", "send_mail", "reply_mail", "browser_click", "browser_type", "browser_press"];
+
+pub fn asked_when_remote(tool: &str) -> bool {
+    REMOTE_ASKED.contains(&tool)
+}
+
 pub fn relaxable(tool: &str) -> bool {
     RELAXABLE.contains(&tool)
 }
@@ -493,6 +503,8 @@ pub struct Site<'a> {
     pub run_id: Option<&'a str>,
     /// Nobody is watching: a question cannot be asked, so it becomes a refusal.
     pub headless: bool,
+    /// `REM-4`: the turn came from a phone or a chat. See [`asked_when_remote`].
+    pub remote: bool,
     /// What the user asked this turn (for a child, the task it was given).
     pub request: &'a str,
 }
@@ -585,6 +597,31 @@ fn summary_of(tool: &str, args: &Value) -> String {
 /// The words the model reads when a person said no, or nobody could be asked.
 fn declined(tool: &str, f: &Flag) -> String {
     format!("The person did not want me to {}: {}. So I did not.", connector_gate::humanise(tool), f.reason())
+}
+
+/// `REM-4`: ask before a tool from [`asked_when_remote`] runs. Always asked: no experiment, no
+/// engine and no setting is needed, and none can turn it off. `Err` is for the model.
+pub async fn ask_remote(site: &Site<'_>, tool: &str, args: &Value) -> Result<(), String> {
+    if site.headless {
+        return Err(format!(
+            "I did not {}. Nobody is here to approve it, so it stays undone.",
+            connector_gate::humanise(tool)
+        ));
+    }
+    let id = format!("perm_{}", uuid::Uuid::new_v4());
+    let rx = site.perms.open_request(&id);
+    site.sink.send_permission(PermissionRequest::risk_ask(
+        id,
+        summary_of(tool, args),
+        tool.to_string(),
+        connector_gate::arguments_text(args),
+        "You asked from outside the desktop, so I ask first.".to_string(),
+    ));
+    match until_cancelled(site.cancel, rx).await.map(|d| d.unwrap_or(Decision::Deny)) {
+        None => Err("The person stopped the run before answering.".to_string()),
+        Some(Decision::Deny) => Err(format!("The person did not want me to {}. So I did not.", connector_gate::humanise(tool))),
+        Some(_) => Ok(()),
+    }
 }
 
 async fn ask_person(site: &Site<'_>, tool: &str, args: &Value, f: Flag, decision: &str) -> Before {
@@ -1209,6 +1246,7 @@ mod tests {
                 conversation_id: &self.conv,
                 run_id: None,
                 headless,
+                remote: false,
                 request: "Tidy my notes folder",
             }
         }
@@ -1407,5 +1445,35 @@ mod tests {
         assert_eq!(before_own(&site, "run_command", &args()).await, Before::Go(None));
         // On, with a request, but no engine in a test: still as before.
         assert_eq!(before_own(&h.site(false), "run_command", &args()).await, Before::Go(None));
+    }
+
+    /// `REM-4`: a turn from a phone asks before it runs code, sends or drives a page, with no
+    /// experiment, no engine and no setting involved. The tools that ask somewhere else are not here.
+    #[tokio::test]
+    async fn a_remote_turn_asks_before_code_mail_and_page_actions() {
+        for tool in ["run_code", "send_mail", "reply_mail", "browser_click", "browser_type", "browser_press"] {
+            assert!(asked_when_remote(tool), "{tool}");
+        }
+        // Reads and notes stay silent; files, tasks and apps ask in their own code.
+        for tool in ["read_file", "search_history", "write_file", "run_task", "run_command", "open_app"] {
+            assert!(!asked_when_remote(tool), "{tool}");
+        }
+        let h = Harness::new();
+        let body = serde_json::json!({ "to": "sam@example.com", "body": "I will be late" });
+        // No: refused, in words for the model.
+        let answer = h.answer_next(Decision::Deny);
+        let out = ask_remote(&h.site(false), "send_mail", &body).await;
+        answer.await.unwrap();
+        assert!(out.unwrap_err().contains("did not want me to send mail"));
+        // Yes (once): it runs.
+        let answer = h.answer_next(Decision::Once);
+        assert_eq!(ask_remote(&h.site(false), "send_mail", &body).await, Ok(()));
+        answer.await.unwrap();
+        let shown = h.shown.lock().unwrap();
+        assert_eq!(shown.len(), 2, "one question each time, nothing remembered");
+        assert!(shown[0].to_string().contains("sam@example.com"), "the card shows the real thing");
+        drop(shown);
+        // Nobody to ask (a run nobody watches): it stays undone rather than waiting.
+        assert!(ask_remote(&h.site(true), "send_mail", &body).await.is_err());
     }
 }

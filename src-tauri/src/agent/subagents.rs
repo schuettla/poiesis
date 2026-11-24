@@ -1290,6 +1290,7 @@ pub async fn run_delegation(
                     provenance: del.provenance.to_string(),
                     context_window: del.context_window,
                     read_only: del.read_only,
+                    remote: del.remote,
                     max_steps,
                     timeout_secs: timeout_secs as u64,
                     engine: child.engine.map(|(offered, task)| crate::agent::background::EngineSpawn {
@@ -1355,6 +1356,8 @@ pub async fn run_delegation(
             read_only: del.read_only,
             // Only a Full run can hand work out (`TIER-5`), so a child is Full.
             tier: crate::agent::tier::ModelTier::Full,
+            // `REM-4`: below a remote run, everything is remote.
+            remote: del.remote,
         };
         // Boxed because this is `run_agent` calling itself through a tool call:
         // without it the future's size is defined in terms of itself.
@@ -1380,6 +1383,7 @@ pub async fn run_delegation(
                     folder_trust: engine_trust,
                     // A foreground child can ask, unless its lead cannot.
                     headless: ctx.headless,
+                    remote: del.remote,
                     resume: None,
                 })
                 .await

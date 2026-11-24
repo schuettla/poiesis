@@ -511,6 +511,11 @@ impl PermissionManager {
         rx
     }
 
+    /// Whether a request is still waiting for an answer.
+    pub fn is_pending(&self, id: &str) -> bool {
+        self.pending.lock().unwrap().contains_key(id)
+    }
+
     /// Resolve a pending request with the user's decision.
     pub fn resolve(&self, id: &str, decision: Decision) {
         if let Some(tx) = self.pending.lock().unwrap().remove(id) {

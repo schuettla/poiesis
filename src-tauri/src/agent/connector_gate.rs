@@ -222,6 +222,9 @@ pub struct GateEnv<'a> {
     pub conversation_id: &'a str,
     /// Nobody is watching (a Task, a background child). Asking would hang.
     pub headless: bool,
+    /// `REM-4`: the turn came from a phone or a chat. A change or a send is asked about whatever
+    /// the app's policy says; a read keeps its policy.
+    pub remote: bool,
     /// `YYYY-MM-DD`: the day this call counts as.
     pub day: String,
     /// `USE-12`: what a quick decision noticed about this call. It can add a line to
@@ -432,6 +435,8 @@ pub async fn admit(env: &GateEnv<'_>, call: &Call<'_>) -> Result<Admit, String> 
                 }
             }
         };
+        // A remote turn is never let through on a standing "allow": that was said at the desktop.
+        let allowed = allowed && !(env.remote && g.kind != CallKind::Read);
         all_allowed &= allowed;
     }
 
@@ -820,6 +825,7 @@ mod tests {
                 cancel: &self.cancel,
                 conversation_id: "conv",
                 headless,
+                remote: false,
                 day: day.to_string(),
                 notes: None,
             }
@@ -927,6 +933,36 @@ mod tests {
         let Admit::Left(text) = third else { panic!("the cap should park the third send") };
         assert!(text.contains("already sent 2 things through Slack today"), "{text}");
         assert_eq!(h.db.app_send_count("c1", "", "2026-10-13").unwrap(), 2);
+    }
+
+    /// `REM-4`: an app the person allowed at the desktop is still asked about when the turn came
+    /// from a phone. Reads keep their policy.
+    #[tokio::test]
+    async fn a_remote_turn_asks_for_a_change_or_a_send_the_person_allowed_at_the_desktop() {
+        let h = Harness::new();
+        let args = serde_json::json!({});
+        let mut p = ConnectorPolicy::defaults("c1", "");
+        p.change_policy = "allow".into();
+        p.send_policy = "allow".into();
+        h.db.save_connector_policy(&p).unwrap();
+        // At the desktop: through, no question.
+        assert_eq!(admit(&h.env(false, "d"), &call(CallKind::Change, &args)).await, Ok(Admit::Run));
+        assert_eq!(admit(&h.env(false, "d"), &call(CallKind::Send, &args)).await, Ok(Admit::Run));
+        assert!(h.shown.lock().unwrap().is_empty());
+        // From a phone: a question for each, and no means no.
+        for kind in [CallKind::Change, CallKind::Send] {
+            let answer = h.answer_next(Decision::Deny);
+            let mut env = h.env(false, "d");
+            env.remote = true;
+            assert!(admit(&env, &call(kind, &args)).await.is_err(), "{kind:?} declined");
+            answer.await.unwrap();
+        }
+        assert_eq!(h.shown.lock().unwrap().len(), 2);
+        // A read keeps its policy.
+        let mut env = h.env(false, "d");
+        env.remote = true;
+        assert_eq!(admit(&env, &call(CallKind::Read, &args)).await, Ok(Admit::Run));
+        assert_eq!(h.shown.lock().unwrap().len(), 2, "a read from a phone is not asked about");
     }
 
     /// `MCG-T-6`: the count survives across runs and starts again the next day.

@@ -1,0 +1,31 @@
+.mark {
+  flex: none;
+  color: var(--ink);
+}
+.mark .mark-membrane {
+  stroke: currentColor;
+  opacity: 0.55;
+}
+.mark .mark-nucleus {
+  fill: currentColor;
+}
+.mark.state-away {
+  color: var(--ink-faint);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .mark.state-working .mark-nucleus {
+    animation: mark-breathe 2.4s ease-in-out infinite;
+    transform-origin: 12px 12px;
+  }
+}
+@keyframes mark-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.35);
+    opacity: 0.7;
+  }
+}

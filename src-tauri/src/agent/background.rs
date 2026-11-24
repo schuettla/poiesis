@@ -94,6 +94,8 @@ pub struct Spawn {
     pub context_window: Option<usize>,
     /// `PLF-2`: the lead was planning first, so this child may change nothing.
     pub read_only: bool,
+    /// `REM-4`: the lead's turn came from outside, so this child asks more too.
+    pub remote: bool,
     pub max_steps: usize,
     /// Seconds, counted from when the child actually starts rather than from
     /// when it was queued — otherwise a full pool spends a child's whole budget
@@ -294,6 +296,7 @@ async fn run_one(spawn: Spawn) {
         plan: None,
         options: Default::default(),
         read_only: spawn.read_only,
+        remote: spawn.remote,
         // Only a Full run can hand work out (`TIER-5`), so what it hands out is Full.
         tier: crate::agent::tier::ModelTier::Full,
     };
@@ -313,6 +316,7 @@ async fn run_one(spawn: Spawn) {
             folder: &e.folder,
             folder_trust: e.folder_trust,
             headless: false,
+            remote: spawn.remote,
             resume: None,
         })
         .await
@@ -431,6 +435,7 @@ mod tests {
             provenance: String::new(),
             context_window: None,
             read_only: false,
+            remote: false,
             max_steps: 1,
             timeout_secs: 1,
             engine: None,

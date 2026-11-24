@@ -58,6 +58,10 @@ export interface DbConversation {
   style?: string | null;
   /** `TEAM-1`: who leads this chat: `poiesis`, `persona:<id>` or `team:<slug>`. Null: nobody chose. */
   leader?: string | null;
+  /** `REM-UI-3`: the name of the phone (or account) that last spoke in this chat from outside. */
+  remote_sender?: string | null;
+  /** `phone` | `telegram`, with `remote_sender`. */
+  remote_transport?: string | null;
 }
 
 /** `PRJ-1`: a working directory and the sessions that happened in it. */
@@ -229,6 +233,70 @@ export const listAllArtifacts = () => invoke<Artifact[]>("list_all_artifacts_cmd
 export const getSetting = (key: string) => invoke<string | null>("get_setting_cmd", { key });
 export const setSetting = (key: string, value: string) =>
   invoke<void>("set_setting_cmd", { key, value });
+
+// ---- remote (REM-3, REM-UI-1) ----
+
+/** One paired phone (or, later, Telegram account), as the gateway keeps it. */
+export interface RemoteSender {
+  /** `phone` | `telegram`. */
+  transport: string;
+  id: string;
+  label: string;
+  paired_at: number;
+  /** Epoch ms. */
+  last_seen: number;
+  level: string;
+  conversation_id?: string | null;
+}
+export interface RemoteStatus {
+  enabled: boolean;
+  /** A link from a paired sender is open right now. */
+  connected: boolean;
+  senders: RemoteSender[];
+}
+/** The one-time code the desktop shows, and when it stops working (epoch ms). */
+export interface RemotePairingCode {
+  code: string;
+  expires_at: number;
+  /** The same as a QR image, as an SVG string, for the phone to scan. */
+  svg: string;
+  /** What the QR holds, for a phone that cannot scan. */
+  text: string;
+}
+export const remoteStatus = () => invoke<RemoteStatus>("remote_status_cmd");
+export const remoteSetEnabled = (on: boolean) => invoke<RemoteStatus>("remote_set_enabled_cmd", { on });
+export const remoteNewCode = () => invoke<RemotePairingCode>("remote_new_code_cmd");
+/** The pairing dialog closed: the code stops working at once. */
+export const remoteCancelCode = () => invoke<void>("remote_cancel_code_cmd");
+export const remoteRemoveSender = (transport: string, id: string) =>
+  invoke<boolean>("remote_remove_sender_cmd", { transport, id });
+/** The Telegram bot, as the Remote tab shows it (REM-UI-10). */
+export interface RemoteTelegramStatus {
+  /** `...last4` of the token. Never the token itself. */
+  token_hint: string | null;
+  /** `@name`, once Telegram has said whose token it is. */
+  bot: string | null;
+  /** What Telegram last said when it refused, in its words. */
+  error: string | null;
+  /** The bot is listening. */
+  polling: boolean;
+}
+export interface RemoteTelegramCode {
+  code: string;
+  expires_at: number;
+}
+export const remoteTelegramStatus = () => invoke<RemoteTelegramStatus>("remote_telegram_status_cmd");
+/** Checks the token with Telegram, then keeps it in the credential store. The error is Telegram's own words. */
+export const remoteTelegramConnect = (token: string) =>
+  invoke<RemoteTelegramStatus>("remote_telegram_connect_cmd", { token });
+export const remoteTelegramDisconnect = () => invoke<RemoteTelegramStatus>("remote_telegram_disconnect_cmd");
+/** A one-time code to send to the bot. Needs remote to be on. */
+export const remoteTelegramCode = () => invoke<RemoteTelegramCode>("remote_telegram_code_cmd");
+/** Whether Poiesis starts when the person signs in (REM-1). */
+export const autostartStatus = () => invoke<boolean>("autostart_status_cmd");
+export const autostartSet = (on: boolean) => invoke<boolean>("autostart_set_cmd", { on });
+/** `{enabled, connected}`, sent whenever the switch or a link changes. */
+export const REMOTE_EVENT = "poiesis-remote";
 
 // ---- runtime (Phase 1) ----
 

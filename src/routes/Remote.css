@@ -1,0 +1,133 @@
+/* Settings > Remote (REM-UI-1, REM-UI-10). Three blocks, no scrolling page; only the lists of phones and accounts grow. */
+.remote-block {
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  margin-bottom: 20px;
+}
+.remote-block h2 {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  font-weight: 600;
+  color: var(--ink);
+}
+.remote-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.remote-switch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+.remote-switch-label {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  color: var(--ink);
+}
+.remote-state,
+.remote-hint {
+  margin: 10px 0 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  line-height: 1.55;
+  color: var(--ink-muted);
+}
+.remote-phones {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  max-height: 112px;
+  overflow-y: auto;
+}
+.remote-phone {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--hairline);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+}
+.remote-phone-name {
+  flex: 1;
+  color: var(--ink);
+}
+.remote-phone-seen {
+  color: var(--ink-muted);
+  font-size: var(--fs-footnote);
+}
+
+/* The pairing dialog keeps one size whether a code is there, has run out or failed. */
+.remote-pair {
+  width: min(380px, calc(100vw - 48px));
+  height: 530px;
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+}
+/* A QR code needs a white card with a quiet border to be read, in light and dark alike. */
+.remote-qr {
+  margin: 14px auto 0;
+  width: 212px;
+  height: 212px;
+  display: grid;
+  place-items: center;
+  background: #fff;
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
+}
+.remote-qr-done {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  color: #000;
+}
+.remote-pair-alt {
+  text-align: center;
+  min-height: 24px;
+  margin-top: 4px;
+}
+.remote-code {
+  margin: 14px 0 6px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-page);
+  letter-spacing: 0.12em;
+  color: var(--ink);
+  min-height: 44px;
+}
+.remote-code-error {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  letter-spacing: 0;
+  color: var(--ink-muted);
+}
+.remote-countdown {
+  margin: 0;
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  min-height: 20px;
+}
+/* The Telegram dialog has no picture, so it is shorter. It keeps one size all the same. */
+.remote-pair.remote-pair-telegram {
+  height: 280px;
+}
+.remote-token {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.remote-token .field-input {
+  flex: 1;
+  min-width: 0;
+}
+.remote-pair .confirm-actions {
+  margin-top: auto;
+  gap: 8px;
+}

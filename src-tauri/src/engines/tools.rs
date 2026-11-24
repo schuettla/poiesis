@@ -202,6 +202,8 @@ pub struct Tools<'a> {
     pub task: String,
     /// Nobody is there to answer.
     pub headless: bool,
+    /// `REM-4`: the turn that started this job came from outside.
+    pub remote: bool,
     /// The user switched on *Let it use my memory*.
     pub memory: bool,
     /// `CAP-14`: the user switched on *Let it use my connected apps*, and there
@@ -225,6 +227,7 @@ impl<'a> Tools<'a> {
             child_conversation_id: child_conversation_id.to_string(),
             task: task.to_string(),
             headless,
+            remote: false,
             memory: true,
             apps: None,
             recalled: AtomicU32::new(0),
@@ -306,6 +309,7 @@ impl<'a> Tools<'a> {
             cancel: &joined,
             conversation_id: &self.child_conversation_id,
             headless: self.headless,
+            remote: self.remote,
             read_only: false,
             pool: &apps.pool,
             request: Some(&self.task),

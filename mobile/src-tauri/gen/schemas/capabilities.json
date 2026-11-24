@@ -1,0 +1,1 @@
+{"mobile":{"identifier":"mobile","description":"What the phone app's page may ask of the shell: its own commands, events and the QR scanner.","local":true,"windows":["main"],"permissions":["core:default","barcode-scanner:allow-scan","barcode-scanner:allow-cancel","barcode-scanner:allow-check-permissions","barcode-scanner:allow-request-permissions"],"platforms":["android","iOS"]}}

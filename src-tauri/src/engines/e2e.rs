@@ -171,6 +171,7 @@ impl Rig {
             folder: self.folder.path(),
             folder_trust: trust,
             headless,
+            remote: false,
             resume,
         })
         .await
@@ -341,6 +342,7 @@ async fn trust_picks_the_mode_and_nothing_secret_or_free_text_is_on_the_command_
         folder: rig.folder.path(),
         folder_trust: Trust::Auto,
         headless: false,
+        remote: false,
         resume: None,
     })
     .await;
@@ -471,6 +473,7 @@ async fn a_job_that_never_started_keeps_the_task_and_why() {
         folder: rig.folder.path(),
         folder_trust: Trust::Confirm,
         headless: false,
+        remote: false,
         resume: None,
     })
     .await;
@@ -537,6 +540,7 @@ impl Rig {
             folder: self.folder.path(),
             folder_trust: trust,
             headless,
+            remote: false,
             resume: None,
         })
         .await
@@ -841,6 +845,7 @@ impl Rig {
             folder: self.folder.path(),
             folder_trust: trust,
             headless: false,
+            remote: false,
             resume,
         })
         .await;

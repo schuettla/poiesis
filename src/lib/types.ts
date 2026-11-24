@@ -383,6 +383,10 @@ export interface Conversation {
   /** `TEAM-1`: who leads this chat (`poiesis`, `persona:<id>`); `null` when nobody chose
    * and where chats start decides. `personaId` above is what the turn code reads. */
   leader?: string | null;
+  /** `REM-UI-3`: who started or last spoke in this chat from outside: a phone's name. */
+  remoteSender?: string | null;
+  /** `phone` | `telegram`, with `remoteSender`. */
+  remoteTransport?: string | null;
   /** `PRJ-1`: the project this session belongs to, or null for a loose chat.
    * With one set, the project owns the folder and the trust level and the two
    * fields above are only the fallback. */
@@ -486,6 +490,8 @@ export const ALL_VIEWS = [
   "skills",
   "workingdir",
   "mail",
+  // `REM-UI-1`: reaching me from a phone.
+  "remote",
   "tools",
   "usage",
   "experiments",
@@ -536,6 +542,7 @@ export const HUB_SECTIONS: { view: View; label: string; icon: string; group?: Hu
   { view: "skills", label: "Skills", icon: "▦", group: "capabilities" },
   { view: "apps", label: "Apps", icon: "◇", group: "capabilities" },
   { view: "mail", label: "Mail", icon: "✉", group: "capabilities" },
+  { view: "remote", label: "Remote", icon: "⇆", group: "capabilities" },
   // Poiesis: who I am and how I work.
   { view: "self", label: "Self", icon: "", group: "poiesis" },
   { view: "personas", label: "Personas & teams", icon: "◎", group: "poiesis" },

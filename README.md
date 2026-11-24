@@ -5,7 +5,8 @@ Silicon) and Linux. Chat with local
 models that run entirely on your machine, give the assistant real capabilities
 (files, folder reading, web search, code execution, image generation, your
 connected apps, the coding agents you already have installed), talk to it out
-loud, and optionally bring your own cloud API keys — all in a calm, editorial
+loud, reach it from your phone or from Telegram when you are away from the
+desk, and optionally bring your own cloud API keys — all in a calm, editorial
 "Paper / Slate" interface.
 
 **Poiesis Agent** takes its name from *autopoiesis* (Maturana & Varela): a
@@ -68,6 +69,7 @@ looking for. What it may change without asking is set per class in
 - **Decision engine:** a small "decision model" (Clef-flash, 9B) on the same `llama-server` binary, or OpenRouter's decision models in the cloud — answers yes/no/pick-one questions in tens of milliseconds
 - **Image engine:** prebuilt `stable-diffusion.cpp` (downloaded on demand)
 - **Voice:** `sherpa-onnx` in-process — speech recognition and synthesis on your CPU, no cloud model
+- **Remote:** an Android companion app (Tauri 2) linked to the desktop over [iroh](https://iroh.computer) (end-to-end encrypted, through n0's free relays), and a Telegram bot over the plain Bot API (an outgoing long poll, no server, no open port)
 - **Agent apps:** Claude Code, Codex and OpenCode, driven headless over their own stdio protocols (stream-JSON, `app-server`, ACP)
 - **Connected apps:** Composio Connect (one hosted MCP endpoint, your own `ck_` key) beside any MCP server you add yourself
 - **Storage:** embedded SQLite (FTS5 full-text search + a vector store), plus markdown for the agent's memory
@@ -123,8 +125,9 @@ window. From there:
 6. Everything else lives behind the **cog** at the bottom of the left rail:
    General, **Models** (what you can use), **Providers** (where it comes from),
    **Runtime** (what runs on this PC), **External agents**, Tools, **Skills**,
-   **Apps**, **Self** (memory, lessons, health, autonomy), **Tasks** (scheduled
-   work), Mail, Activity, Usage, **Experiments**, Working dir and About.
+   **Apps**, **Remote** (your phone and Telegram), **Self** (memory, lessons,
+   health, autonomy), **Tasks** (scheduled work), Mail, Activity, Usage,
+   **Experiments**, Working dir and About.
 
 By default the app runs in **Simple** mode, which keeps the machinery out of
 the way. **Settings → General → "Show me everything"** reveals the engine
@@ -177,6 +180,26 @@ updater. It needs four secrets: `TAURI_SIGNING_PRIVATE_KEY` and
 `MAC_CERT_P12` and `MAC_CERT_PASSWORD` (a self-signed code-signing certificate,
 see `plans/CROSS_PLATFORM_PLAN.md` D-1). Line endings pasted into a secret are
 stripped by the workflow.
+
+### Building the phone app
+
+The Android companion lives in `mobile/` and is built on your own machine, not
+in CI. It needs Android Studio, the Android SDK and NDK 28.2. From PowerShell:
+
+```powershell
+cd mobile
+. .\android-env.ps1                    # sets JAVA_HOME, ANDROID_HOME, NDK_HOME for this session
+npx tauri android build --apk --debug  # an APK to install with adb
+npx tauri android build --aab          # the signed bundle for the Play Store
+```
+
+The release build is signed with the upload key named in
+`mobile/src-tauri/gen/android/keystore.properties` (`storeFile`, `storePassword`,
+`keyAlias`, `keyPassword`). That file is git-ignored and exists only on the
+machine that builds the app; keep the key outside the repo. Without it the
+release build is left unsigned. Raise `version` in
+`mobile/src-tauri/tauri.conf.json` before each upload: the Play Store needs a
+higher version code every time.
 
 ---
 
@@ -679,7 +702,50 @@ made exactly as asked, unless the file changed since), answer a question, or say
 not now. When you've answered everything for a chat, the work carries on from
 there. A chat a run changed while you were away gets a dot until you open it,
 and if the window isn't in front, a desktop notification says who is waiting
-("Mira is waiting for you"). Turn that off under Interface.
+("Mira is waiting for you"). Turn that off under Interface. With a Telegram
+account paired, the same line reaches you there, with Yes and No buttons (see
+[Reach it from your phone](#reach-it-from-your-phone-settings--remote)).
+
+### Reach it from your phone (Settings → Remote)
+Poiesis is the same one wherever you are. Your chats, memory, folders and models
+stay on your computer; the phone only talks to it. There are two ways in, and
+both are off until you turn on **"Let me be reached from outside"** in Settings →
+Remote (the same switch is in the tray menu). Off closes every way in within a
+second and stops any remote turn.
+
+- **It stays reachable.** Closing the window leaves Poiesis in the tray ("I keep
+  running here so you can reach me. Quit from the tray."). Under Settings →
+  General → Interface you can switch that off, or let it **start when you sign
+  in** to the computer. The computer has to be on, with Poiesis running.
+- **The companion app (Android).** Press **Pair a phone** on the desktop and scan
+  the QR code with the app, or type the 8-character code. Then: your chats (the
+  ones from the phone and the ones on the desktop), a new chat, "Waiting for you"
+  cards, approval cards with two large buttons, sending a photo, and **voice**:
+  the microphone button turns the composer into a voice bar, the phone is the
+  microphone and the speaker, and the desktop's own speech engine does the
+  hearing and speaking (so voice has to be installed on the desktop). The phone
+  finds the computer through iroh's free relay service, which sees your IP
+  address and never your messages. The app shows live state only while it is
+  open; it gets no push notifications. The app is not on the Play Store yet.
+- **The Telegram bot.** Make a bot with BotFather (`/newbot`), paste its token in
+  Settings → Remote and press **Connect**, then **Pair an account** and send the
+  code to the bot. Write to it as you would in the app. It shows "typing" while
+  it works, answers in one message (split at Telegram's limit), asks risky steps
+  with **Allow** and **Not now** buttons, takes pictures and PDFs up to 20 MB, and
+  sends back the files and pictures a turn makes (photos up to 10 MB, documents up
+  to 50 MB; a larger one stays on your desktop, and it says so). `/new`,
+  `/chats`, `/stop` and `/who` are its only commands. Group chats are never
+  answered, and anyone who is not paired gets silence.
+- **On the desktop.** A chat started from outside is an ordinary chat, marked in
+  the sidebar with a phone or a paper plane ("Started from Pixel"). You can watch
+  a remote turn live, open the chat and carry on. A question can be answered on
+  either side: the first answer wins, and the other card closes. The living mark
+  shows a ring while a phone is connected.
+- **Remote turns ask more.** File writes ask even in a folder you trust fully,
+  code tasks ask even when you said "always", and so do connected-app changes,
+  risky tool calls, browser actions and hand-overs to agent apps. A button says
+  yes once or no; "always" is for the desktop. A typed "ok" never approves
+  anything, and a question nobody answers in 10 minutes is a no.
 
 ### Making images and video
 **There is no image mode.** You ask for a picture in the conversation the way
@@ -791,6 +857,18 @@ Three sections answer three questions:
   own, and free-form commands never run through a shell.
 - **Scheduled tasks never change a file on their own** and never prompt: each
   change waits for your yes in Waiting for you — see Tasks, above.
+- **Remote is off by default**, and only paired senders get in. A phone that is
+  not paired is cut off before it can send anything but a hello, and an unknown
+  Telegram account gets no answer at all. Pairing needs the one-time code on the
+  desktop screen (5 minutes, one use, 5 wrong tries end it). A phone or a chat
+  can't change the remote settings or pair anyone. Every remote turn and every
+  remote answer (allowed, declined, run out) leaves a line in that chat's
+  session log, with the sender's name.
+- **The phone link is end-to-end encrypted.** The relay passes on encrypted
+  packets and sees your IP address. **Telegram is not:** messages to the bot pass
+  through Telegram's servers, and the Remote tab says so. The bot token and the
+  phone link's key live in the OS credential store; the tab shows only the
+  token's last four characters.
 - Telemetry is **off by default**, content-free, and stays on your PC.
 
 ---
@@ -858,7 +936,15 @@ poiesis/
 │       ├── commands/         # Tauri command surface (the IPC API), incl. scheduler,
 │       │                     #   reflect and projects
 │       ├── permissions/      # file-access grants + guards
+│       ├── remote/           # the way in from outside: gateway, pairing, remote
+│       │                     #   approvals, the phone link (iroh_host, phone_api)
+│       │                     #   and the Telegram bot (telegram, render)
+│       ├── tray.rs           # tray icon, stay running when the window closes
 │       └── secrets.rs        # OS credential store
+├── mobile/                   # the Android companion app: its own frontend (src/)
+│                             #   and its own Tauri crate (src-tauri/)
+├── remote-proto/             # the phone link's wire format, shared by the
+│                             #   desktop and the phone app
 ├── shared/                   # catalogs both sides read: commands.json (the `/` menu),
 │                             #   engines.json (agent apps), apps.json +
 │                             #   composio-catalog.json (connected apps)
@@ -1065,6 +1151,17 @@ Some behaviour can only be checked by hand against real models — see **Status*
   not in front, and only when "Tell me when someone is waiting for me" is on
   (Settings → General → Interface). On Windows, notifications work for the
   installed app; a development build shows them under PowerShell's name.
+- **The phone says it can't find the desktop.** The computer must be on, with
+  Poiesis running (the tray is enough) and the switch in Settings → Remote on.
+  If you quit from the tray, nothing can reach it; "Start when I sign in" under
+  Interface brings it back after a restart.
+- **Voice on the phone says it isn't ready.** The desktop does the hearing and
+  speaking: install the voice parts in Settings → Runtime → Voice on the desktop.
+- **The Telegram bot doesn't answer.** Check that the line under Telegram in
+  Settings → Remote says "Connected as @yourbot", that the switch is on, and that
+  your account is listed as paired; anyone else gets silence on purpose. A chat
+  also needs a default chat model in Models. If the token leaked, send `/token`
+  to BotFather for a new one and paste it in the tab.
 - **No proposals for my team.** A team you made starts locked: switch on "I may
   improve it" in the team's History section. Proposals come at most once a day,
   after enough finished tasks.

@@ -1,0 +1,242 @@
+/* Project Poiesis — design tokens.
+   "Daylight" (light) and "Backlit" (dark): one monochrome liquid-crystal
+   panel, read by ambient light or lit from behind. Names match the theme
+   switch in Settings.
+   The panels are flat — they share the surface colour and are separated by
+   hairlines, so --paper-edge-2 is load-bearing structure, not decoration. It
+   must stay clearly visible against --paper or the layout dissolves. Only
+   things that float over the panels (composer, menus, dialogs) take a soft
+   shadow. Ground and ink both carry a faint green cast (the glass tint). */
+
+:root {
+  /* ---- Light: "Daylight" ----
+     Recolored toward the palette used in the Poiesis Harness Shakedown
+     artifact: the same green-cast neutrals, but cooler and lighter — a
+     near-white panel instead of an off-white one, and less of the old khaki
+     saturation in the borders and muted text. Contrast ratios below are
+     recalculated against the new #ffffff paper, not carried over from the
+     old one. */
+  --canvas: #f3f5f3; /* recessed ground the panels sit on */
+  --paper: #ffffff; /* panel surface — was off-white, now a clean white */
+  --paper-edge: #e6eae6; /* inner dividers, timeline rail tint */
+  /* Not a straight lift of the artifact's `--rule` (#d8ddd8): against white
+     that measures 1.38:1, well under the old 1.72:1 this token held against
+     the old off-white paper. The artifact can afford that because it leans
+     on `box-shadow` for card definition; this UI has no shadow layer and is
+     flat by design (see file header), so the border *is* the only
+     separation and has to stay a real line, not a suggestion of one. This
+     value keeps the cooler, less-khaki cast the artifact has while holding
+     ~1.87:1 against the new white paper — slightly stronger than before. */
+  --paper-edge-2: #b8c0b8; /* panel outlines — the structural grid */
+  --ink: #17201c; /* primary text — dark green-black, 16.7:1 on paper */
+  --ink-muted: #5a6560; /* metadata, labels, step verbs — 6.06:1 (AA body) */
+  --ink-faint: #8a938e; /* secondary labels, hairlines, idle dots — 3.16:1 (AA large/UI) */
+
+  /* functional color — used sparingly, only where it serves a purpose */
+  --local: #3d4fa0; /* indigo — local model */
+  --cloud: #b5642e; /* oxidized copper — cloud model */
+  --ok: #4a7a5e; /* completed timeline step dot */
+  --danger: #a8453a; /* errors only */
+  --caution: #98650f; /* amber: a claim not confirmed (Verify), 5:1 on paper */
+
+  /* Eight muted hues that tell personas apart (`TEAM-2`). Identity, never meaning:
+     none of them says good or bad. Each holds 3:1 on paper (UI), like --ink-faint. */
+  --persona-1: #3d4fa0; /* indigo */
+  --persona-2: #b5642e; /* copper */
+  --persona-3: #4a7a5e; /* moss */
+  --persona-4: #8a4f7d; /* plum */
+  --persona-5: #2f7a8a; /* teal */
+  --persona-6: #8a7424; /* ochre */
+  --persona-7: #a8453a; /* brick */
+  --persona-8: #5f6b78; /* slate */
+
+  /* code highlighting (Shiki's css-variables theme, `lib/highlight.ts`).
+     Drawn from the functional hues above, darkened where needed so every
+     token holds AA (4.5:1) on paper. Comments and punctuation recede into the
+     existing muted ink rather than taking a colour of their own. */
+  --hl-foreground: var(--ink);
+  --hl-background: transparent;
+  --hl-token-keyword: #3d4fa0;
+  --hl-token-string: #3b6a4e;
+  --hl-token-string-expression: #3b6a4e;
+  --hl-token-constant: #95501f;
+  --hl-token-function: #2a5d6b;
+  --hl-token-parameter: var(--ink);
+  --hl-token-comment: var(--ink-muted);
+  --hl-token-punctuation: var(--ink-muted);
+  --hl-token-link: #3d4fa0;
+
+  /* type roles */
+  --font-serif: "Newsreader Variable", "Newsreader", Georgia, "Times New Roman",
+    serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
+
+  /* editorial type scale (PRD §5.2) */
+  --fs-timeline: 12px;
+  --fs-ui: 13px;
+  --fs-ui-lg: 15px;
+  --fs-reading: 17.5px; /* long-form documents (Workbench markdown) */
+  --fs-display: 21px;
+  --lh-reading: 1.68;
+  /* The chat answer: sans, a step smaller and a touch more open than a
+     document page — it sits among UI, and reads best in the UI's own face. */
+  --font-reading: var(--font-sans);
+  /* User-chosen face for chat messages, yours and the agent's (Settings →
+     Message font). Set from the store; defaults to the UI's own sans. */
+  --font-message: var(--font-sans);
+  --fs-answer: 15.5px;
+  --lh-answer: 1.72;
+  --measure: 64ch;
+  /* Width of the message column and the composer (Settings → Chat width). */
+  --chat-width: 700px;
+  /* User-adjustable reading size (Settings, §5.5). Scales the serif reading
+     column; content reflows rather than truncating. */
+  --reading-scale: 1;
+
+  /* ---- type ramp ----
+     One step per role, whole pixels only. The UI had drifted to thirteen
+     sizes between 9px and 15px, most of them half-pixel neighbours (11.5,
+     12.5, 13.5, 14.5) that read as "slightly off" rather than as hierarchy.
+     Every literal size in the sheets now maps onto one of these. */
+  --fs-micro: 10px; /* badges, counters inside chips */
+  --fs-caption: 11px; /* timestamps, kbd, section labels */
+  --fs-footnote: 12px; /* secondary lines, hints, metadata */
+  /* --fs-ui (13px) above is body; --fs-ui-lg (15px) is emphasised body */
+  --fs-callout: 14px; /* field text, list titles that lead a row */
+  --fs-title: 17px; /* card and dialog titles */
+  --fs-page: 28px; /* a page's own title */
+  /* Display sizes track tighter, the way optical sizes do. */
+  --tracking-tight: -0.011em;
+  --tracking-display: -0.02em;
+
+  /* ---- spacing: a 4pt grid ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+
+  /* ---- shape ----
+     Nested radii, macOS proportions: a control inside a card is one step
+     smaller than the card, so the two curves stay concentric. Still crisp —
+     softened from the old 4/6px, never pill-round. */
+  --radius-xs: 3px; /* code spans, keycaps, tiny chips */
+  --radius-sm: 5px; /* segments inside a control, small icon buttons */
+  --radius: 7px; /* buttons, fields, rows */
+  --radius-lg: 10px; /* cards, panels, menus */
+  --radius-xl: 14px; /* the composer, dialogs */
+  --radius-pill: 999px;
+
+  /* Control heights: everything that sits on one line with something else is
+     one of these, so a button beside a field beside a select line up. */
+  --control-sm: 26px;
+  --control: 32px;
+  --control-lg: 36px;
+
+  /* ---- interaction fills ----
+     Derived from ink rather than added as colours, so they sit correctly on
+     both the canvas and white paper and invert themselves in Backlit. */
+  --fill-hover: color-mix(in srgb, var(--ink) 5%, transparent);
+  --fill-press: color-mix(in srgb, var(--ink) 9%, transparent);
+  --fill-selected: color-mix(in srgb, var(--ink) 8%, transparent);
+  --fill-quiet: color-mix(in srgb, var(--ink) 3.5%, transparent);
+  --hairline: color-mix(in srgb, var(--paper-edge-2) 70%, transparent);
+
+  /* ---- elevation ----
+     The panels stay flat and hairline-separated; elevation is reserved for
+     things that genuinely float above them — the composer, menus, popovers,
+     dialogs. Neutral shadows only, so the palette is untouched. */
+  --shadow-xs: 0 1px 2px rgba(16, 24, 20, 0.05);
+  --shadow-sm: 0 1px 2px rgba(16, 24, 20, 0.04), 0 2px 10px rgba(16, 24, 20, 0.05);
+  --shadow-float: 0 0 0 0.5px rgba(16, 24, 20, 0.06), 0 10px 30px rgba(16, 24, 20, 0.12),
+    0 2px 8px rgba(16, 24, 20, 0.06);
+  --shadow-modal: 0 0 0 0.5px rgba(16, 24, 20, 0.08), 0 24px 70px rgba(16, 24, 20, 0.2),
+    0 6px 16px rgba(16, 24, 20, 0.08);
+  /* Focus halo: the indigo already used for the focus ring, softened. */
+  --ring: 0 0 0 3px color-mix(in srgb, var(--local) 22%, transparent);
+
+  /* ---- motion ----
+     Ease-out with a long tail for anything arriving or responding to the
+     pointer; a quicker, sharper deceleration (no overshoot) for small things that pop; symmetric for
+     layout that moves both ways. */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-pop: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 140ms;
+  --dur: 220ms;
+  --dur-slow: 360ms;
+  --t-fast: var(--dur-fast) var(--ease-out);
+  --t-mode: var(--dur-slow) var(--ease-in-out);
+}
+
+[data-mode="dark"] {
+  /* ---- Dark: "Backlit" — the same panel lit from behind, same green cast ---- */
+  --canvas: #0d100e;
+  --paper: #141814; /* panel lifted off the canvas, mirroring the light mode */
+  --paper-edge: #232a24;
+  --paper-edge-2: #333c34; /* outlines stay readable against the panel */
+  --ink: #e3e9e0;
+  --ink-muted: #8f9a90; /* 6.15:1 on panel (AA body) */
+  --ink-faint: #6a756c; /* 3.74:1 on panel (AA large/UI) */
+
+  --local: #8c97e8;
+  --cloud: #d6884a;
+  --ok: #7fb596;
+  --danger: #d6776b;
+  --caution: #d9a441;
+
+  --persona-1: #8c97e8;
+  --persona-2: #d6884a;
+  --persona-3: #7fb596;
+  --persona-4: #c58bb8;
+  --persona-5: #6fb7c5;
+  --persona-6: #cdb760;
+  --persona-7: #d6776b;
+  --persona-8: #9aa6b4;
+
+  --hl-token-keyword: #9ca6ee;
+  --hl-token-string: #8fc0a1;
+  --hl-token-string-expression: #8fc0a1;
+  --hl-token-constant: #dc9d68;
+  --hl-token-function: #82bcc7;
+  --hl-token-link: #9ca6ee;
+
+  /* Fills mix toward ink, which is light here — re-declared so the mix
+     resolves against this mode's ink rather than inheriting Daylight's. */
+  --fill-hover: color-mix(in srgb, var(--ink) 6%, transparent);
+  --fill-press: color-mix(in srgb, var(--ink) 10%, transparent);
+  --fill-selected: color-mix(in srgb, var(--ink) 9%, transparent);
+  --fill-quiet: color-mix(in srgb, var(--ink) 4%, transparent);
+  --hairline: color-mix(in srgb, var(--paper-edge-2) 80%, transparent);
+
+  /* On a dark ground a shadow has to be deeper to read at all, and a faint
+     light rim does the edge-defining work the shadow does in Daylight. */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 10px rgba(0, 0, 0, 0.25);
+  --shadow-float: 0 0 0 0.5px rgba(255, 255, 255, 0.06), 0 12px 34px rgba(0, 0, 0, 0.5),
+    0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-modal: 0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 28px 80px rgba(0, 0, 0, 0.6),
+    0 6px 16px rgba(0, 0, 0, 0.35);
+  --ring: 0 0 0 3px color-mix(in srgb, var(--local) 30%, transparent);
+}
+
+/* Respect OS reduced-motion: no pulsing dot, no blinking cursor, instant mode swap. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-fast: 0s;
+    --t-mode: 0s;
+    --dur-fast: 0s;
+    --dur: 0s;
+    --dur-slow: 0s;
+  }
+  * {
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0s !important;
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "request": {
+    "diff": "+ a new line",
+    "id": "req1",
+    "in_folder": true,
+    "mode": "read-write",
+    "path": "C:/Users/x/report.md",
+    "summary": "Write to report.md"
+  },
+  "type": "permission"
+}

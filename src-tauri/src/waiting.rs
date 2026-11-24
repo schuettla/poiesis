@@ -43,6 +43,10 @@ pub fn changed(session: &str) {
 /// not looking at it.
 pub fn announce(db: &Db, entry: &ChangeProposal) {
     changed(entry.session_id.as_deref().unwrap_or_default());
+    // `REM-7`: a paired Telegram account hears of it too, when remote is on.
+    if let Some(app) = APP.get() {
+        crate::remote::telegram::notify_waiting(app, db, entry);
+    }
     #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     notify(db, entry);
     #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
@@ -69,7 +73,7 @@ fn first_time(entry_id: &str) -> bool {
 /// Who is waiting, in the words of the notification: the persona that plays the member who asked
 /// ("Atlas", not its role "api"), a helper by its role, else the persona that leads the session, else
 /// Poiesis. Without the memory store (in tests) a member is named by its role.
-fn who_waits(db: &Db, mem: Option<&MemoryStore>, entry: &ChangeProposal) -> String {
+pub(crate) fn who_waits(db: &Db, mem: Option<&MemoryStore>, entry: &ChangeProposal) -> String {
     let session = entry.session_id.as_deref();
     if let Some(role) = entry.author.as_deref().map(str::trim).filter(|a| !a.is_empty() && *a != crate::agent::team::COORDINATOR) {
         let persona = mem

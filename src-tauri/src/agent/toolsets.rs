@@ -71,6 +71,9 @@ pub struct ToolContext<'a> {
     /// True for an unattended run (SCH-3): a headless caller has no one to look
     /// at a render, so toolsets must skip emitting one rather than waste the work.
     pub headless: bool,
+    /// `REM-4`: the turn came from a phone or a chat. Tools that change something ask even where
+    /// the person's settings would let them run.
+    pub remote: bool,
     /// Whether this call has already emitted a render (RND-3). One context is
     /// built per tool call, so this enforces "one render per tool call" here
     /// rather than trusting every toolset to remember it.

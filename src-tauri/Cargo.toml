@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Poiesis — a local-first, agentic desktop LLM application"
 authors = ["Poiesis contributors"]
 edition = "2021"
-rust-version = "1.90"
+rust-version = "1.91"
 
 # The library powers both the desktop binary and (eventually) integration tests.
 [lib]
@@ -15,7 +15,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+# `tray-icon`: REM-1, Poiesis keeps running in the tray when the window is closed.
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
@@ -111,6 +112,14 @@ bzip2 = { version = "0.5", optional = true }
 tar = "0.4"
 flate2 = "1"
 
+# REM-8: the phone link. One iroh endpoint, end to end encrypted, reached through a relay. Default features
+# keep `tls-ring` (no C build step on Windows or Android). Checked in the Phase 0 spike on a real phone.
+iroh = "1.5"
+# REM-11: frame format, pairing payload and the command allow-list, shared with the phone app.
+remote-proto = { path = "../remote-proto" }
+# REM-12: the pairing code as a QR image, drawn to SVG in Rust. 0.15 does not build on docs.rs, 0.14.1 does.
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+
 # Unix stand-in for the Job Object (CROSS_PLATFORM_PLAN XP-4): process groups,
 # PR_SET_PDEATHSIG on Linux, and the sandbox's memory rlimit.
 [target.'cfg(unix)'.dependencies]
@@ -139,6 +148,10 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 # `TEAM-21`: tell the person when something waits for them. 2.8.1 reports a click on desktop.
 tauri-plugin-notification = "2"
+# REM-1: "Start with Windows" for an app that now stays in the tray.
+tauri-plugin-autostart = "2"
+# REM-1: an app that stays alive must not start a second copy on the same database.
+tauri-plugin-single-instance = "2"
 
 [features]
 default = ["voice"]

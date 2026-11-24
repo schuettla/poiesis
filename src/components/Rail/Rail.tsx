@@ -12,6 +12,8 @@ import {
   FolderIcon,
   KebabIcon,
   LayoutIcon,
+  PaperPlaneIcon,
+  PhoneIcon,
   MessageIcon,
   PlusIcon,
   SearchIcon,
@@ -255,6 +257,17 @@ function ChatRow({ c, active, now }: { c: Conversation; active: boolean; now: nu
       {team && (
         <span className="chat-leader" role="img" aria-label={`Led by ${team.name}`} title={`Led by ${team.name}`}>
           <TeamGlyph coordinator={coordinator} size={14} />
+        </span>
+      )}
+      {/* `REM-UI-3`: a chat a phone or a chat app started says where it came from. */}
+      {c.remoteSender && (
+        <span
+          className="chat-leader"
+          role="img"
+          aria-label={`Started from ${c.remoteSender}`}
+          title={`Started from ${c.remoteSender}`}
+        >
+          {c.remoteTransport === "telegram" ? <PaperPlaneIcon size={13} /> : <PhoneIcon size={13} />}
         </span>
       )}
       <span className="chat-title">{c.title}</span>
@@ -555,6 +568,7 @@ export default function Rail() {
     "settings",
     "workingdir",
     "mail",
+    "remote",
     "tools",
     "about",
   ].includes(view);

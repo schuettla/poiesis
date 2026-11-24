@@ -198,6 +198,7 @@ pub(crate) async fn execute_turn(
 ) -> RunOutcome {
     // `PLF-4`: a Go ahead starts from the plan the user approved, with nothing
     // restricted. Settled here, once, so a stray chip can never loop approval.
+    let remote = options.remote;
     let (plan, options) = options.settle_approval(plan);
     let cancel = env.mgr.new_cancel();
     let run = env.fleet.open(conversation_id, cancel, None, 0);
@@ -210,7 +211,8 @@ pub(crate) async fn execute_turn(
     let rc = RunContext::top(&run, &limits, Some(env.fleet), provenance, setup.context_window)
         .resuming(plan)
         .with_options(options)
-        .with_tier(setup.tier);
+        .with_tier(setup.tier)
+        .with_remote(remote);
     let images_dir = env.mgr.generated_media_dir();
     let outcome = run_agent(
         &env.mgr.client,
@@ -695,10 +697,17 @@ pub(crate) fn build_cloud_endpoint(target: &ChatTarget) -> Result<ChatEndpoint, 
     })
 }
 
-/// Answer a pending permission request from the side panel (§5.4.4).
+/// Answer a pending permission request from the side panel (§5.4.4). A question a phone or a
+/// Telegram chat also has is closed there (`REM-4`).
 #[tauri::command]
-pub fn resolve_permission_cmd(perms: State<'_, PermissionManager>, id: String, decision: Decision) {
+pub fn resolve_permission_cmd(
+    perms: State<'_, PermissionManager>,
+    gateway: State<'_, crate::remote::Gateway>,
+    id: String,
+    decision: Decision,
+) {
     perms.resolve(&id, decision);
+    gateway.answered_at_desktop(&id);
 }
 
 /// `ART-5`: hand the console output of an artifact's live preview to the agent

@@ -17,6 +17,7 @@ import Activity from "./Activity";
 import Settings from "./Settings";
 import WorkingDir from "./WorkingDir";
 import Mail from "./Mail";
+import Remote from "./Remote";
 import Tools from "./Tools";
 import Usage from "./Usage";
 import Experiments from "./Experiments";
@@ -149,6 +150,7 @@ export default function SettingsHub() {
         {view === "settings" && <Settings />}
         {view === "workingdir" && <WorkingDir />}
         {view === "mail" && <Mail />}
+        {view === "remote" && <Remote />}
         {view === "tools" && <Tools />}
         {view === "models" && <Models />}
         {view === "providers" && <Providers />}

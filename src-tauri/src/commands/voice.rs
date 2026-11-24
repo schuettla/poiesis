@@ -316,6 +316,11 @@ pub fn voice_push_audio_cmd(sessions: State<'_, VoiceSessions>, request: Request
     let InvokeBody::Raw(bytes) = request.body() else {
         return Err(err("expected raw audio"));
     };
+    push_audio(&sessions, bytes)
+}
+
+/// The body of `voice_push_audio_cmd`, for the phone link too (`REM-19`): the same batch layout.
+pub fn push_audio(sessions: &VoiceSessions, bytes: &[u8]) -> Cmd<()> {
     if bytes.len() < 8 {
         return Err(err("audio batch is too short"));
     }

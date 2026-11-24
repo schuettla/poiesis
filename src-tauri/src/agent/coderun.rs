@@ -122,6 +122,9 @@ pub struct GateInput {
     /// The project itself says `allow`, rather than inheriting it.
     pub explicit_allow: bool,
     pub headless: bool,
+    /// `REM-4`: the task was asked for from a phone or a chat. It asks, even in a project set to
+    /// `allow` and even for a task the person allowed before at the desktop.
+    pub remote: bool,
     pub remembered: bool,
 }
 
@@ -157,7 +160,7 @@ pub fn gate(input: &GateInput) -> Gate {
             )
         };
     }
-    if input.policy == Policy::Allow || input.remembered {
+    if !input.remote && (input.policy == Policy::Allow || input.remembered) {
         Gate::Run
     } else {
         Gate::Ask
@@ -524,6 +527,7 @@ async fn run_task(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
         policy: project_policy(ctx.db, &project),
         explicit_allow: project.exec_policy == "allow",
         headless: ctx.headless,
+        remote: ctx.remote,
         remembered: allow.tasks.iter().any(|t| t == &task.name),
     });
     let mut argv = task.argv.clone();
@@ -578,7 +582,7 @@ async fn run_command(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<
     }
     let key = command_key(&command, &rest);
     let mut allow = allow_of(&project);
-    if !allow.commands.iter().any(|c| c == &key) {
+    if ctx.remote || !allow.commands.iter().any(|c| c == &key) {
         let mut argv = vec![command.clone()];
         argv.extend(rest.iter().cloned());
         match ask(ctx, "command", format!("Run a command in {}?", project.name), &root, argv, &project, key.clone()).await {
@@ -607,6 +611,7 @@ mod tests {
             policy: Policy::Ask,
             explicit_allow: false,
             headless: false,
+            remote: false,
             remembered: false,
         }
     }
@@ -621,6 +626,18 @@ mod tests {
             }
         }
         assert!(matches!(gate(&GateInput { has_folder: false, ..input() }), Gate::Refuse(_)));
+    }
+
+    /// `REM-4`: a task asked for from a phone asks, even in a project set to allow and even when
+    /// the person allowed that task before. Refusals stay refusals.
+    #[test]
+    fn a_remote_task_asks_whatever_the_project_or_the_person_said() {
+        let allowed = GateInput { policy: Policy::Allow, remembered: true, ..input() };
+        assert_eq!(gate(&allowed), Gate::Run, "at the desktop it runs");
+        assert_eq!(gate(&GateInput { remote: true, ..allowed }), Gate::Ask);
+        assert_eq!(gate(&GateInput { remote: true, policy: Policy::Ask, remembered: false, ..input() }), Gate::Ask);
+        assert!(matches!(gate(&GateInput { remote: true, trust: Trust::ReadOnly, ..input() }), Gate::Refuse(_)));
+        assert!(matches!(gate(&GateInput { remote: true, policy: Policy::Off, ..input() }), Gate::Refuse(_)));
     }
 
     /// `COD-7-T2`: headless refuses unless the project explicitly allows.

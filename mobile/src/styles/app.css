@@ -1,0 +1,962 @@
+/* The phone app. Every color, radius, shadow and curve comes from tokens.css (the desktop's DESIGN.md tokens);
+   nothing here has a color of its own. The desktop's type ramp is sized for a mouse; on a phone each role is one
+   step up, so the sizes below pick the next token, never a new number. Touch targets are at least 44 px. */
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui-lg);
+  line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+.app {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  overflow: hidden;
+}
+.screen {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  animation: screen-in var(--dur) var(--ease-out);
+}
+@keyframes screen-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ---- loading ---- */
+.boot {
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-6);
+}
+.lockup {
+  width: 132px;
+  height: auto;
+  /* The picture's ground is a little off white: lifted to white so no box shows around it. */
+  filter: grayscale(1) contrast(1.3) brightness(1.08);
+  mix-blend-mode: multiply;
+  animation: boot-breathe 2.4s var(--ease-in-out) infinite;
+}
+[data-mode="dark"] .lockup {
+  filter: grayscale(1) contrast(1.3) brightness(1.08) invert(1);
+  mix-blend-mode: screen;
+}
+@keyframes boot-breathe {
+  50% {
+    opacity: 0.6;
+  }
+}
+.boot-line {
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+}
+
+/* ---- the pictures ----
+   Engravings on paper: multiplied onto it in Daylight, dimmed in Backlit, and faded at the edge so they sit in the
+   page instead of in a frame. */
+.art {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  mix-blend-mode: multiply;
+  -webkit-mask-image: radial-gradient(closest-side, #000 72%, transparent 100%);
+  mask-image: radial-gradient(closest-side, #000 72%, transparent 100%);
+  user-select: none;
+}
+[data-mode="dark"] .art {
+  mix-blend-mode: normal;
+  filter: brightness(0.82) contrast(1.05);
+}
+.empty-art {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: auto 0;
+  padding: var(--sp-4) var(--sp-8) var(--sp-10);
+  text-align: center;
+}
+.empty-art .art {
+  width: min(240px, 66vw);
+  margin-bottom: var(--sp-2);
+}
+.empty-art h2 {
+  font-family: var(--font-serif);
+  font-size: var(--fs-display);
+  font-weight: 500;
+  letter-spacing: var(--tracking-display);
+}
+.empty-art p {
+  max-width: 30ch;
+  font-size: var(--fs-callout);
+  color: var(--ink-muted);
+}
+
+/* ---- top bar ---- */
+.top-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 60px;
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-2);
+  border-bottom: 1px solid var(--hairline);
+  background: var(--paper);
+}
+.bar-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+}
+.bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--ink);
+}
+.bar-btn:active {
+  background: var(--fill-press);
+}
+.top-bar-text {
+  flex: 1;
+  min-width: 0;
+  padding: 0 var(--sp-1);
+}
+.top-bar-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+}
+.top-bar-title.is-serif {
+  font-family: var(--font-serif);
+  font-size: var(--fs-display);
+  font-weight: 500;
+  letter-spacing: var(--tracking-display);
+}
+.top-bar-line {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.top-bar-line.link-notfound {
+  color: var(--danger);
+}
+
+/* A question in another chat. */
+.ask-pill {
+  position: absolute;
+  z-index: 5;
+  top: calc(env(safe-area-inset-top) + 68px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: calc(100% - var(--sp-8));
+  min-height: 40px;
+  padding: 0 var(--sp-4);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  box-shadow: var(--shadow-float);
+  font-size: var(--fs-callout);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: pill-in var(--dur-slow) var(--ease-pop);
+}
+.ask-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--caution);
+}
+@keyframes pill-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+}
+
+/* ---- buttons ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 48px;
+  padding: 0 var(--sp-5);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  font-weight: 600;
+  transition: background var(--t-fast), transform var(--t-fast);
+}
+.btn:active {
+  transform: scale(0.98);
+}
+.btn-primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+.btn-secondary:active,
+.btn-ghost:active {
+  background: var(--fill-press);
+}
+.btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-muted);
+  font-weight: 500;
+}
+.btn-danger {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--paper-edge-2));
+  color: var(--danger);
+}
+.btn-wide {
+  width: 100%;
+}
+.btn-sm {
+  min-height: 40px;
+  padding: 0 var(--sp-4);
+}
+.btn:disabled {
+  opacity: 0.4;
+  transform: none;
+}
+
+.round-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--ink);
+  transition: background var(--t-fast), transform var(--t-fast), opacity var(--t-fast);
+}
+.round-btn:active {
+  transform: scale(0.94);
+}
+.round-btn.quiet {
+  color: var(--ink-muted);
+}
+.round-btn.quiet:active {
+  background: var(--fill-press);
+}
+.round-btn.solid {
+  background: var(--ink);
+  color: var(--paper);
+}
+.round-btn.outline {
+  border-color: var(--paper-edge-2);
+}
+.round-btn.is-on {
+  color: var(--danger);
+  background: var(--fill-press);
+}
+.round-btn.is-hidden {
+  visibility: hidden;
+}
+.round-btn:disabled {
+  opacity: 0.4;
+  transform: none;
+}
+
+/* ---- pair ---- */
+.pair {
+  overflow-y: auto;
+  padding: var(--sp-6) var(--sp-6) var(--sp-8);
+}
+.pair-card {
+  width: 100%;
+  max-width: 400px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.pair-art {
+  width: min(220px, 60vw);
+  margin: 0 auto var(--sp-2);
+}
+.pair-card h1 {
+  font-family: var(--font-serif);
+  font-size: var(--fs-page);
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: var(--tracking-display);
+  text-align: center;
+}
+.pair-card > p {
+  font-size: var(--fs-callout);
+  line-height: 1.55;
+  color: var(--ink-muted);
+  text-align: center;
+  margin-bottom: var(--sp-2);
+}
+.pair-card strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.pair-problem {
+  min-height: 40px;
+  font-size: var(--fs-callout);
+  color: var(--danger);
+  text-align: center;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--fs-footnote);
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+.field input,
+.field textarea {
+  min-height: 48px;
+  padding: var(--sp-3);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--fs-ui-lg);
+  font-weight: 400;
+  resize: none;
+}
+
+/* ---- home: the chat list ---- */
+.home {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) 0 96px;
+}
+.home > .card {
+  margin: 0 var(--sp-4);
+}
+.list-group {
+  display: flex;
+  flex-direction: column;
+}
+.group-label {
+  padding: var(--sp-3) var(--sp-5) var(--sp-2);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.list-group > .card {
+  margin: 0 var(--sp-4) var(--sp-2);
+}
+.chat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--sp-2);
+}
+.chat-row {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 64px;
+  padding: var(--sp-3);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: none;
+  text-align: left;
+  transition: background var(--t-fast);
+}
+.chat-row:active {
+  background: var(--fill-press);
+}
+.chat-row-title {
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--fs-ui-lg);
+  font-weight: 500;
+}
+.chat-row-meta {
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+
+.fab {
+  position: absolute;
+  right: var(--sp-4);
+  bottom: var(--sp-4);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 52px;
+  padding: 0 var(--sp-5) 0 var(--sp-4);
+  border: 0;
+  border-radius: var(--radius-xl);
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 600;
+  box-shadow: var(--shadow-float);
+  transition: transform var(--t-fast);
+}
+.fab:active {
+  transform: scale(0.96);
+}
+
+/* ---- cards: questions and things waiting ---- */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xl);
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
+  animation: card-in var(--dur-slow) var(--ease-out);
+}
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.card-label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--caution);
+}
+.card-label::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.card-actions {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+.card-actions .btn {
+  flex: 1;
+}
+.waiting-card p {
+  font-size: var(--fs-ui-lg);
+}
+.approval {
+  border-color: color-mix(in srgb, var(--caution) 40%, var(--hairline));
+}
+.approval-question {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  line-height: 1.35;
+}
+.approval-path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+.approval-detail {
+  margin: 0;
+  max-height: 168px;
+  overflow: auto;
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quiet);
+  font-family: var(--font-mono);
+  font-size: var(--fs-footnote);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.approval-more {
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+
+/* ---- chat ---- */
+.chat-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  padding: var(--sp-5) var(--sp-4) var(--sp-4);
+}
+.message {
+  max-width: 100%;
+  animation: card-in var(--dur) var(--ease-out);
+}
+.message-user {
+  align-self: flex-end;
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: var(--radius-xl) var(--radius-xl) var(--radius-sm) var(--radius-xl);
+  background: var(--fill-selected);
+}
+.message-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-message);
+  font-size: var(--fs-ui-lg);
+}
+.answer {
+  font-family: var(--font-message);
+  font-size: var(--fs-answer);
+  line-height: var(--lh-answer);
+  overflow-wrap: anywhere;
+}
+.answer > :first-child {
+  margin-top: 0;
+}
+.answer > :last-child {
+  margin-bottom: 0;
+}
+.answer p,
+.answer ul,
+.answer ol {
+  margin: 0 0 0.75em;
+}
+.answer ul,
+.answer ol {
+  padding-left: 1.3em;
+}
+.answer h1,
+.answer h2,
+.answer h3 {
+  margin: 1.1em 0 0.4em;
+  font-size: var(--fs-title);
+  line-height: 1.3;
+}
+.answer pre {
+  overflow-x: auto;
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quiet);
+  border: 1px solid var(--hairline);
+  font-family: var(--font-mono);
+  font-size: var(--fs-footnote);
+  line-height: 1.55;
+}
+.answer code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+.answer :not(pre) > code {
+  padding: 1px 4px;
+  border-radius: var(--radius-xs);
+  background: var(--fill-selected);
+}
+.answer blockquote {
+  margin: 0 0 0.75em;
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--paper-edge-2);
+  color: var(--ink-muted);
+}
+.answer table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: var(--fs-callout);
+}
+.answer th,
+.answer td {
+  padding: 6px 10px;
+  border: 1px solid var(--hairline);
+  text-align: left;
+}
+.working-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-callout);
+  color: var(--ink-muted);
+}
+.chat-note {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.chat-error {
+  color: var(--danger);
+}
+.chat-image {
+  display: block;
+  max-width: 100%;
+  border-radius: var(--radius-lg);
+  margin-bottom: 6px;
+}
+.chat-image-wait {
+  width: 100%;
+  height: 160px;
+  background: var(--fill-quiet);
+}
+.artifact-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: 60px;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  box-shadow: var(--shadow-xs);
+  text-align: left;
+}
+.artifact-card:active {
+  background: var(--fill-press);
+}
+.artifact-title {
+  font-weight: 600;
+}
+.artifact-kind {
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.scroll-end {
+  height: 1px;
+  flex: none;
+}
+
+/* ---- composer, and the voice bar in its place ---- */
+.composer-dock {
+  flex: none;
+  padding: var(--sp-1) var(--sp-3) var(--sp-3);
+  background: linear-gradient(to bottom, transparent, var(--paper) 30%);
+}
+.composer-reason {
+  display: block;
+  width: 100%;
+  margin: 0 0 var(--sp-2);
+  padding: 0 var(--sp-2);
+  border: 0;
+  background: none;
+  text-align: left;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xl);
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out);
+}
+.composer:focus-within {
+  border-color: var(--paper-edge-2);
+  box-shadow: var(--shadow-float);
+}
+.composer.is-off {
+  opacity: 0.6;
+}
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-1);
+}
+.composer textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  max-height: 140px;
+  padding: 11px var(--sp-1);
+  border: 0;
+  background: transparent;
+  font-size: var(--fs-ui-lg);
+  line-height: 1.45;
+  resize: none;
+}
+.composer textarea:focus-visible {
+  box-shadow: none;
+}
+.composer textarea::placeholder {
+  color: var(--ink-faint);
+}
+.composer-photos {
+  list-style: none;
+  display: flex;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 6px 6px 0;
+}
+.composer-photos li {
+  position: relative;
+}
+.composer-photos img {
+  display: block;
+  width: 60px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: var(--radius-lg);
+}
+.composer-photos button {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: 50%;
+  background: var(--paper);
+  box-shadow: var(--shadow-xs);
+}
+
+.voice-bar {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 84px;
+  padding: 0 var(--sp-2) 0 var(--sp-1);
+  box-shadow: var(--shadow-float);
+}
+.voice-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  flex: none;
+  transition: transform 90ms linear;
+}
+.voice-text {
+  flex: 1;
+  min-width: 0;
+}
+.voice-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-callout);
+  font-weight: 600;
+}
+.voice-live-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: boot-breathe 1.6s var(--ease-in-out) infinite;
+}
+/* Two lines of what was heard; the start is cut in the component, so the newest words stay. */
+.voice-heard {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  height: 2.7em;
+  line-height: 1.35;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+  transition: opacity var(--dur-slow) var(--ease-out);
+}
+.voice-heard.is-older {
+  opacity: 0.5;
+}
+.voice-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.voice-controls .btn {
+  margin-left: var(--sp-1);
+}
+.voice-error {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-footnote);
+  color: var(--danger);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.voice-note {
+  color: var(--caution);
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-mark {
+    transition: none;
+    transform: none !important;
+  }
+}
+
+/* ---- sheets ---- */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: flex-end;
+  background: color-mix(in srgb, var(--canvas) 30%, rgba(0, 0, 0, 0.42));
+  animation: fade-in var(--dur) var(--ease-out);
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+.sheet {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-5) calc(var(--sp-5) + env(safe-area-inset-bottom));
+  background: var(--paper);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  box-shadow: var(--shadow-modal);
+  animation: sheet-up var(--dur-slow) var(--ease-out);
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(40px);
+    opacity: 0;
+  }
+}
+/* Same height whatever it asks, so it never jumps between its steps. */
+.sheet-fixed {
+  height: 300px;
+}
+.sheet-fixed .sheet-actions {
+  margin-top: auto;
+}
+.sheet-tall {
+  height: 88%;
+}
+.sheet-grip {
+  align-self: center;
+  width: 36px;
+  height: 4px;
+  margin-bottom: var(--sp-2);
+  border-radius: 2px;
+  background: var(--paper-edge-2);
+}
+.sheet h2 {
+  font-size: var(--fs-title);
+  font-weight: 600;
+}
+.sheet p {
+  font-size: var(--fs-callout);
+  color: var(--ink-muted);
+}
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.sheet-head h2 {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sheet-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.sheet-text {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.sheet-code {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--fs-footnote);
+  line-height: 1.6;
+}

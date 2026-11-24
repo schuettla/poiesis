@@ -375,6 +375,10 @@ struct Clearance {
 /// resolves a `oneshot` nobody can see — wedging the scheduler's single run
 /// slot until the app restarts, since the cancel flag is only read between
 /// agent steps. It must return instead.
+///
+/// `remote` (`REM-4`) is a turn sent from a phone or a chat. It asks before every change, at any
+/// trust level, and a standing grant or a quick decision does not let a change through. A read
+/// keeps the rules it has.
 #[allow(clippy::too_many_arguments)]
 async fn authorize(
     db: &Db,
@@ -387,20 +391,23 @@ async fn authorize(
     name: &str,
     detail: Option<String>,
     headless: bool,
+    remote: bool,
 ) -> Result<Clearance, String> {
     let op_impact = impact(name);
+    // Only a read may go through on what the person said at the desktop.
+    let standing = !(remote && op_impact != Impact::Read);
 
     // ---- inside the working folder: trust decides ----
     if let Some(root) = folder {
         if path_within_root(path, root) {
-            let must_ask = gate(trust, op_impact)?;
+            let must_ask = gate(trust, op_impact)? || !standing;
             if !must_ask {
                 return Ok(Clearance { in_folder: true });
             }
             // `USE-12`, `relax-prompts`: a change to one file in the attached folder,
             // when a calibrated quick decision was very sure it is small and what was
             // asked for. Never a deletion or a move, and never outside the folder.
-            if op_impact == Impact::Modify {
+            if op_impact == Impact::Modify && standing {
                 if let Some(text) = super::decide::toolgate::skip_prompt(name) {
                     let _ = db.log_activity(Some(conversation_id), "decide", &text);
                     return Ok(Clearance { in_folder: true });
@@ -445,7 +452,7 @@ async fn authorize(
 
     // ---- outside it: the original scope-grant flow, unchanged ----
     let mode = required_mode(name);
-    if let Ok(grants) = db.list_permissions() {
+    if let Ok(grants) = db.list_permissions().map(|g| if standing { g } else { Vec::new() }) {
         for g in &grants {
             let gmode = if g.mode == "read-write" { Mode::ReadWrite } else { Mode::Read };
             if gmode.satisfies(mode) && path_within_root(path, Path::new(&g.path)) {
@@ -453,7 +460,7 @@ async fn authorize(
             }
         }
     }
-    if perms.chat_allows(conversation_id, path, mode) {
+    if standing && perms.chat_allows(conversation_id, path, mode) {
         return Ok(Clearance { in_folder: false });
     }
 
@@ -535,6 +542,7 @@ pub(crate) async fn clear_read(
         "read_file",
         None,
         ctx.headless,
+        ctx.remote,
     )
     .await
     .map(|_| ());
@@ -1059,6 +1067,7 @@ pub async fn execute(
             name,
             detail,
             ctx.headless,
+            ctx.remote,
         )
         .await?
     };
@@ -1077,6 +1086,7 @@ pub async fn execute(
             "write_file",
             None,
             ctx.headless,
+            ctx.remote,
         )
         .await?;
     }
@@ -1692,6 +1702,7 @@ mod tests {
                         "read_file",
                         None,
                         true,
+                        false,
                     ),
                 )
                 .await
@@ -1710,6 +1721,49 @@ mod tests {
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_file(&outside).ok();
+    }
+
+    /// `REM-4`: a change sent from a phone asks, in a folder the person trusts and where a saved
+    /// grant would let it through at the desktop. A read is not asked about. A headless call stands
+    /// for "a question was about to be asked", as in the tests around it.
+    #[tokio::test]
+    async fn a_remote_change_asks_where_the_desktop_would_not() {
+        let db = Db::open_in_memory().unwrap();
+        let perms = PermissionManager::new();
+        let sink = AgentEventSink::new(tauri::ipc::Channel::new(|_| Ok(())));
+        let root = canonicalize_lenient(&std::env::temp_dir()).join("poiesis-remote-folder");
+        std::fs::create_dir_all(&root).unwrap();
+        let inside = root.join("notes.txt");
+        let elsewhere = canonicalize_lenient(&std::env::temp_dir()).join("poiesis-remote-granted");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let granted = elsewhere.join("a.txt");
+        db.add_permission(&elsewhere.to_string_lossy(), "read-write").unwrap();
+
+        let run = |tool: &'static str, path: PathBuf, trust: &'static str, remote: bool| {
+            let (db, perms, sink, root) = (&db, &perms, &sink, root.clone());
+            async move {
+                authorize(db, perms, sink, "conv_remote", Some(root.as_path()), Trust::parse(trust), &path, tool, None, true, remote)
+                    .await
+            }
+        };
+
+        // Full trust in the folder: a change goes through at the desktop and asks from a phone.
+        assert!(run("edit_file", inside.clone(), "auto", false).await.is_ok());
+        assert!(run("edit_file", inside.clone(), "auto", true).await.unwrap_err().contains("needs an answer"));
+        assert!(run("write_file", inside.clone(), "auto", true).await.is_err());
+        // A saved grant outside the folder: through at the desktop, asked from a phone.
+        assert!(run("write_file", granted.clone(), "auto", false).await.is_ok());
+        assert!(run("write_file", granted.clone(), "auto", true).await.is_err());
+        // Reads stay silent, in the folder and under a grant.
+        assert!(run("read_file", inside.clone(), "auto", true).await.is_ok());
+        assert!(run("read_file", granted.clone(), "auto", true).await.is_ok());
+        // This chat's own grant is a standing yes too, so it does not carry a remote change.
+        perms.add_chat_grant("conv_remote", elsewhere.clone(), Mode::ReadWrite);
+        assert!(run("write_file", granted.clone(), "auto", false).await.is_ok());
+        assert!(run("write_file", granted, "auto", true).await.is_err());
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&elsewhere).ok();
     }
 
     /// `USE-12`, `relax-prompts`: with a calibrated, very sure decision behind it, a
@@ -1733,7 +1787,7 @@ mod tests {
         let ask = |tool: &'static str, path: PathBuf, note_for: Option<&'static str>| {
             let (db, perms, sink, root) = (&db, &perms, &sink, root.clone());
             async move {
-                let run = authorize(db, perms, sink, "conv_relax", Some(root.as_path()), trust, &path, tool, None, true);
+                let run = authorize(db, perms, sink, "conv_relax", Some(root.as_path()), trust, &path, tool, None, true, false);
                 match note_for {
                     Some(t) => with_note(Note::new(t, None, Some(sure)), run).await,
                     None => (run.await, None),

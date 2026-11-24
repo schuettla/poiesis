@@ -31,6 +31,9 @@ pub const SERVICE_COMPOSIO: &str = "poiesis-composio";
 /// is the `engines.id`. Injected into that agent's environment only.
 pub const SERVICE_ENGINES: &str = "poiesis-engines";
 
+/// The key that gives this desktop its identity on the phone link (`REM-10`). `account` is `"iroh-secret"`.
+pub const SERVICE_REMOTE: &str = "poiesis-remote";
+
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
     #[error("credential store error: {0}")]

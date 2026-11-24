@@ -26,9 +26,11 @@ mod mcp;
 pub mod media;
 pub mod memory;
 pub mod permissions;
+pub mod remote;
 pub mod runtime;
 mod secrets;
 mod telemetry;
+mod tray;
 pub mod waiting;
 
 use tauri::{Emitter, Manager};
@@ -57,7 +59,22 @@ pub type PoiesisResult<T> = Result<T, PoiesisError>;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // REM-1: a second launch must not open a second copy on the same database. It brings the
+    // running one forward instead. Registered first, as the plugin asks.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        tray::show_main(app);
+    }));
+    // REM-1: "Start with Windows". The argument keeps the window in the tray at login.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        Some(vec![tray::HIDDEN_ARG]),
+    ));
+    #[cfg(desktop)]
+    let builder = builder.on_window_event(tray::on_window_event);
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -71,6 +88,10 @@ pub fn run() {
                 app.handle().plugin(tauri_plugin_process::init())?;
                 app.handle().plugin(tauri_plugin_notification::init())?;
                 commands::updater::manage(app.handle());
+                // REM-1: the tray icon and the login start. The icon is what is left when the
+                // window is closed.
+                tray::build(app.handle())?;
+                tray::hide_if_started_hidden(app.handle());
             }
 
             // No WebView2 microphone box: the user already asked to talk.
@@ -208,6 +229,16 @@ pub fn run() {
             // than accepting work it cannot do.
             agent::background::init(app.handle().clone());
             waiting::init(app.handle().clone());
+            // `REM-3`: the gateway for a phone. It reads its switch from the settings, so it
+            // needs `app.manage(db)`; it does nothing until a transport hands it a message.
+            let gateway = remote::Gateway::new(app.handle().clone());
+            app.manage(gateway);
+            app.state::<remote::Gateway>().announce_start();
+            // `REM-10`: the phone link. It opens only while the switch is on.
+            remote::iroh_host::start(app.handle().clone());
+            // `REM-5`: the Telegram bot. It listens only while the switch is on and a token is kept.
+            app.manage(remote::telegram::Telegram::default());
+            remote::telegram::start(app.handle().clone());
             // `DEC-5`: the decision seam reaches its engine through this handle,
             // as `background` does. Needs `app.manage(db)` and the managers above.
             agent::decide::init(app.handle().clone());
@@ -228,6 +259,18 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
+            tray::autostart_status_cmd,
+            tray::autostart_set_cmd,
+            remote::cmd::remote_status_cmd,
+            remote::cmd::remote_set_enabled_cmd,
+            remote::cmd::remote_new_code_cmd,
+            remote::cmd::remote_cancel_code_cmd,
+            remote::cmd::remote_senders_cmd,
+            remote::cmd::remote_remove_sender_cmd,
+            remote::cmd::remote_telegram_status_cmd,
+            remote::cmd::remote_telegram_connect_cmd,
+            remote::cmd::remote_telegram_disconnect_cmd,
+            remote::cmd::remote_telegram_code_cmd,
             commands::problem_facts_cmd,
             commands::updater::update_check_cmd,
             commands::updater::update_install_cmd,
@@ -648,10 +691,15 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Poiesis application")
         .run(|app_handle, event| {
+            // REM-1: with the window closed and the setting on, the app stays in the
+            // tray. A real exit (code set) is never held back.
+            let held_back = tray::on_run_event(app_handle, &event);
             // Lifecycle safety (§7.4): terminate the engine on exit so no orphan
-            // process holds VRAM.
+            // process holds VRAM. Not when the exit was held back: the app lives on.
             if let tauri::RunEvent::ExitRequested { .. } = event {
-                shutdown_engines(app_handle);
+                if !held_back {
+                    shutdown_engines(app_handle);
+                }
             }
         });
 }
