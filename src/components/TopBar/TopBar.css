@@ -21,7 +21,7 @@
   flex-shrink: 0;
   padding: 0 8px 0 11px;
   border-right: 1px solid var(--paper-edge-2);
-  border-bottom: 1px solid var(--paper-edge-2);
+  /*border-bottom: 1px solid var(--paper-edge-2);*/
   /* No transition of its own: `--rail-w` is already a registered, animated
      property on `.app` (see App.css), so this width follows its
      interpolation live rather than needing a second `width` transition. */
@@ -195,11 +195,11 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  /* The session tab's own metrics (TabStrip.css `.ts-tab-main`, `.ts-session`):
-     10px in, 6px between glyph and label, 12px out — so the title doesn't
-     shift or change size when the strip appears around it. */
+  /* The session tab's own metrics (TabStrip.css `.ts-zone`, `.ts-tab-main`):
+     14px in (6px strip + 8px pill), 6px between glyph and label — so the title
+     doesn't shift or change size when the strip appears around it. */
   gap: 6px;
-  padding: 0 12px 0 10px;
+  padding: 0 12px 0 14px;
   border-bottom: 1px solid var(--paper-edge-2);
 }
 .topbar-where-icon {
@@ -225,4 +225,77 @@
   letter-spacing: var(--tracking-tight);
   color: var(--ink);
   animation: fade-in var(--dur) var(--ease-out);
+}
+
+/* ---- the chat's name: editable in place, with its menu beside it ----
+   Shared by the lone label above and the session tab (TabStrip.css), which both
+   draw `SessionTitle` and `SessionMenu`. */
+.topbar-where-label.session-title-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: text;
+}
+/* The same corner as the rail's active row (`--radius`). The padding is paid back
+   by the negative margin, so the name does not move when it is pointed at. */
+.topbar-where-label.session-title-btn {
+  padding: 3px 7px;
+  margin: -3px -7px;
+  border-radius: var(--radius);
+}
+.topbar-where-label.session-title-btn:hover {
+  background: var(--fill-hover);
+}
+.session-title-input {
+  flex: 1;
+  min-width: 0;
+  max-width: 420px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  letter-spacing: var(--tracking-tight);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--ink-faint);
+  border-radius: var(--radius);
+  padding: 2px 6px;
+  /* The text stays where the label's was: the field's padding and border grow outward. */
+  margin: 0 0 0 -7px;
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.session-menu-wrap {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+.session-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.session-more:hover,
+.session-more[aria-expanded="true"] {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.session-more:active {
+  background: var(--fill-press);
+}
+/* Placed from the chevron's own box (SessionMenu.tsx), opening to the right of
+   where it was pressed rather than leftward off the header's edge. */
+.row-menu.session-menu {
+  position: fixed;
+  right: auto;
+  transform-origin: top left;
 }

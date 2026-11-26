@@ -132,7 +132,7 @@ interface Options {
   setValue: (v: string) => void;
   focus: () => void;
   /** Send a skill command as a message with the skill preloaded (`SKC-2`). */
-  sendSkill: (text: string, skill: string, skillArgs?: string, delegateTo?: string) => void;
+  sendSkill: (text: string, skill: string, skillArgs?: string, delegateTo?: string, resumeSession?: string) => void;
   /** Send plain text as the message — the words after a modifier command. */
   sendText: (text: string) => void;
   /** Whether the composer is already talking to a live run. */
@@ -257,6 +257,13 @@ export function useCommandInput({ value, setValue, focus, sendSkill, sendText, b
     if (needsTargets) void useAppStore.getState().loadDelegateTargets();
   }, [needsTargets, activeConversationId]);
 
+  // `/resume` names sessions made outside Poiesis in this chat's folder (`XA-14`).
+  const outsideSessions = useAppStore((s) => s.outsideSessions);
+  const needsSessions = phase === "args" && argView?.args.lead === "outside";
+  useEffect(() => {
+    if (needsSessions) void useAppStore.getState().loadOutsideSessions();
+  }, [needsSessions, activeConversationId]);
+
   // ---- the lines ----
   const model = useMemo<CommandMenuModel>(() => {
     const listId = "composer-command-menu";
@@ -300,10 +307,18 @@ export function useCommandInput({ value, setValue, focus, sendSkill, sendText, b
         for (const choice of choices) {
           lines.push({ kind: "choice", key: `choice:${choice.value}`, choice, index: count++ });
         }
+        // `/resume` with nothing to continue says so, in place of the task hint.
+        const noSessions = a.lead === "outside" && !outsideSessions.length;
         lines.push({
           kind: "note",
           key: "note:arg",
-          text: choices.length ? "Pick who, or just type the task  ·  press Enter to go" : `${a.hint ?? "task"}  ·  press Enter to go`,
+          text: noSessions
+            ? "No Claude Code or Codex sessions in this folder yet."
+            : choices.length
+              ? a.lead === "outside"
+                ? "Pick a session, then say what it should do next  ·  press Enter to go"
+                : "Pick who, or just type the task  ·  press Enter to go"
+              : `${a.hint ?? "task"}  ·  press Enter to go`,
         });
       } else {
         const hint = a.hint ?? (a.type === "number" ? "a number" : "text");
@@ -389,7 +404,7 @@ export function useCommandInput({ value, setValue, focus, sendSkill, sendText, b
     }
     return { open: count > 0, phase: "name", lines, panel: heading, count, index, popover, filter, announcement, listId };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, dismissed, argView, parsedText, query, views, facts, index, popover, filter, announcement, panel, fromButton, workspaceMode, toolsEnabled, turnModifiers, selectedModelId, effortNow, personas, models, conversations, delegateTargets]);
+  }, [phase, dismissed, argView, parsedText, query, views, facts, index, popover, filter, announcement, panel, fromButton, workspaceMode, toolsEnabled, turnModifiers, selectedModelId, effortNow, personas, models, conversations, delegateTargets, outsideSessions]);
 
   // ---- completion while typing ----
   // The rest of the highlighted match, drawn faint after what has been typed:
@@ -458,7 +473,7 @@ export function useCommandInput({ value, setValue, focus, sendSkill, sendText, b
         setPopover(false);
         setValue("");
         // A connector's prompt is plain text; only a skill carries a name to preload.
-        if (result.skill) sendSkill(result.text, result.skill, result.skillArgs, result.delegateTo);
+        if (result.skill) sendSkill(result.text, result.skill, result.skillArgs, result.delegateTo, result.resumeSession);
         else sendText(result.text);
         break;
       case "needsArg":

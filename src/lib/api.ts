@@ -230,6 +230,23 @@ export const listArtifacts = (conversationId: string) =>
 
 export const listAllArtifacts = () => invoke<Artifact[]>("list_all_artifacts_cmd");
 
+/** What the Rail's hover card says about a session; counts only, read when asked. */
+export interface SessionCard {
+  created_at: number;
+  user_messages: number;
+  assistant_messages: number;
+  /** The newest artifacts (at most 20), without their content, and how many there are in all. */
+  artifacts: { title: string; kind: string; saved_path: string | null; path: string | null }[];
+  artifact_count: number;
+  files_changed: number;
+  helpers: number;
+}
+export const sessionCard = (conversationId: string) =>
+  invoke<SessionCard>("session_card_cmd", { conversationId });
+
+/** Per chat: `[artifacts made, files changed]`. One read for the whole list. */
+export const sessionOutputs = () => invoke<Record<string, [number, number]>>("session_outputs_cmd");
+
 export const getSetting = (key: string) => invoke<string | null>("get_setting_cmd", { key });
 export const setSetting = (key: string, value: string) =>
   invoke<void>("set_setting_cmd", { key, value });
@@ -518,7 +535,7 @@ export const stopChat = () => invoke<void>("stop_chat_cmd");
 /** `interrupted` (`VTN-6`) is a spoken reply the user cut off: what was saved is
  * only what they heard. */
 /** `budget` (`TEAM-12`): the team task spent its money or its minutes, so every member stopped. */
-export type StopReason = "completed" | "aborted" | "timeout" | "max_steps" | "stuck" | "error" | "interrupted" | "budget";
+export type StopReason = "completed" | "aborted" | "timeout" | "max_steps" | "stuck" | "error" | "interrupted" | "budget" | "plan_limit";
 
 /** What a run cost, when the provider reported it (`OBS-1`). */
 export interface TurnUsage {
@@ -718,7 +735,11 @@ export type AgentEvent =
       summary: string;
       steps: number;
       ms: number;
+      evidence?: RunEvidence;
     }
+  /** `PRF-5`: a helper waits for another to finish changing the same place (`because` says which),
+   * or has its place now (no `because`). */
+  | { type: "sub_waiting"; run_id: string; because?: string }
   /** `TEAM-10`: a team member's run began / ended. `item` is the plan item it has, when it has one. */
   | { type: "member_started"; run_id: string; member: string; item?: number }
   | { type: "member_ended"; run_id: string; member: string; item?: number }
@@ -966,6 +987,8 @@ export interface TurnRunOptions {
   skillArgs?: string;
   /** `CLI-UI-6`: the agent the user named with `/delegate <agent> ...`. */
   delegateTo?: string;
+  /** `XA-13`: the outside session `/resume` picked; the first task for `delegateTo` continues it. */
+  resumeSession?: string;
   /** `PLF`: may read, may not change; writes a plan and stops for approval. */
   planFirst?: boolean;
   /** `PLF-4`: the plan the user approved. The run starts from it, unrestricted. */
@@ -1298,6 +1321,21 @@ export interface SubagentRun {
   item?: number | null;
   /** The agent's own session id, for **Continue there**. */
   engine_session: string | null;
+  /** `PRF-2`: what the job changed and how the project's check went, when it changed files. */
+  evidence?: RunEvidence | null;
+  /** `PRF-5`: why it waits for a place to change, while it does. */
+  queued_because?: string | null;
+}
+
+/** `PRF-2`: what an agent app's job changed and what Poiesis saw of the project's check. The
+ * words are built from this (`evidenceLine`), so the backend and the screen say the same. */
+export interface RunEvidence {
+  changed: number;
+  /** The check the line names: the one it ran, or else the one it should have. */
+  check: string | null;
+  state: "passed" | "failed" | "before-last" | "not-run" | "none";
+  /** `PRF-3`: what the change left open, as short items. */
+  left?: string[];
 }
 
 /** An agent type the lead may hand a job to: `general`, plus spawnable personas. */
@@ -1373,6 +1411,23 @@ export interface DelegateTarget {
 export const listDelegateTargets = (conversationId: string | null) =>
   invoke<DelegateTarget[]>("list_delegate_targets_cmd", { conversationId });
 
+/** A Claude Code or Codex session made outside Poiesis in this chat's folder, for
+ * `/resume` (`XA-13`). */
+export interface OutsideSession {
+  engine_id: string;
+  /** What `/delegate` calls this agent. */
+  agent: string;
+  name: string;
+  session_id: string;
+  title: string;
+  last_at_ms: number;
+  /** The one word that picks it: `cc-` or `cx-` and the last 8 characters of its id. */
+  token: string;
+}
+
+export const listOutsideSessions = (conversationId: string) =>
+  invoke<OutsideSession[]>("outside_sessions_cmd", { conversationId });
+
 /** One line of the Usage panel (`OBS-2`): a day, a model, or a conversation. */
 export interface UsageBucket {
   /** A UTC day start in epoch ms, a model name, or a conversation id. */
@@ -1389,6 +1444,17 @@ export interface UsageBucket {
   cost_usd: number | null;
 }
 
+/** `XA-10`: what an agent app last said about the person's plan. */
+export interface PlanUsageView {
+  /** One per window of the plan: `name` is ready to show ("5 hours", "week", "month"). */
+  windows: { name: string; used: number; resets_at_ms: number | null }[];
+  /** Shut out right now, as of when it was read. */
+  reached: boolean;
+  resets_at_ms: number | null;
+  /** When the app said it. */
+  at_ms: number;
+}
+
 /** `CLI-UI-7`: what one agent app did for me over the range. Not part of any total. */
 export interface AgentAppUsage {
   name: string;
@@ -1400,6 +1466,8 @@ export interface AgentAppUsage {
   notional_usd: number | null;
   /** Who paid, `mixed` when the jobs differ. */
   paid_by: EnginePaidBy | "mixed" | null;
+  /** `XA-10`: what the app last said about the plan, when it ever did. */
+  plan?: PlanUsageView | null;
 }
 
 export interface PricedUsage {
@@ -3027,6 +3095,8 @@ export type EngineTrust = "read-only" | "confirm" | "auto";
 /** Everything Settings → External agents shows about one agent. The API key is
  * never in it: `has_key` says only whether one is saved. */
 export interface EngineInfo {
+  /** `XA-10`: what it last said about the plan. Claude Code and Codex only. */
+  plan?: PlanUsageView | null;
   id: string;
   kind: EngineKind;
   name: string;
@@ -3059,6 +3129,10 @@ export interface EngineInfo {
   supports_api_key: boolean;
   can_pick_model: boolean;
   install_url: string | null;
+  /** `XA-2`: file in `public/agent-logos/`. Null: show the first letter. */
+  logo: string | null;
+  /** `XA-2`: what a person types to install it. Shown, never run. */
+  install_line: string | null;
   /** Found for the first time since the section was last opened. */
   is_new: boolean;
   /** `RTE-1`: when the lead may use it. */
@@ -3069,6 +3143,8 @@ export interface EngineInfo {
   rules: EngineRule[];
   /** I can hand this kind of agent a job today. Others are configurable only. */
   delegate_ready: boolean;
+  /** `XA-4`: I make it ask before it acts (OpenCode only). Other ACP agents follow their own settings. */
+  forced_asking: boolean;
   /** `MCPS-2`: this kind of agent can be given my own tools (memory and the rest). */
   memory_ready: boolean;
   /** `CLI-10`: how its recent jobs went. */
@@ -3081,6 +3157,8 @@ export type EngineUseMode = "on_request" | "suggest" | "auto";
 export interface EngineBadge {
   id: string;
   name: string;
+  /** `XA-5`: file in `public/agent-logos/`. Absent or null: show the first letter. */
+  logo?: string | null;
   paid_by: EnginePaidBy | null;
   /** The rule it cited (`U2`), or `asked`. */
   because: string | null;

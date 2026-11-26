@@ -3,6 +3,8 @@ import { itemKey, useActiveConversation, useAppStore, useLiveItems } from "../..
 import { stillWorking } from "../../lib/api";
 import type { ItemRef } from "../../lib/types";
 import { AgentIcon, ChevronIcon, CloseIcon, DiffIcon, FileIcon, MessageIcon, SparkleIcon } from "../Icons/Icons";
+import SessionMenu from "../Conversation/SessionMenu";
+import SessionTitle from "../Conversation/SessionTitle";
 import "./TabStrip.css";
 
 /** `SHL-24`/`SHL-27`: the header's tab area, and the only one.
@@ -162,11 +164,14 @@ function Tab({
   onOpen,
   onClose,
   closeSlot,
+  labelNode,
   children,
 }: {
   className?: string;
   active: boolean;
   label: string;
+  /** Stands in for the plain label — the session tab's name is editable in place. */
+  labelNode?: React.ReactNode;
   title?: string;
   icon?: React.ReactNode;
   onOpen: () => void;
@@ -195,6 +200,8 @@ function Tab({
         }
       }}
       onKeyDown={(e) => {
+        // Only the tab's own keys: Enter and Space inside a field or button in it belong to that.
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onOpen();
@@ -207,7 +214,7 @@ function Tab({
             {icon}
           </span>
         )}
-        <span className="ts-tab-label">{label}</span>
+        {labelNode ?? <span className="ts-tab-label">{label}</span>}
         {children}
       </span>
       {closeSlot}
@@ -326,10 +333,13 @@ function SessionTab({ active }: { active: boolean }) {
       className="ts-session"
       active={active}
       label={label}
-      title={`${label} — back to the conversation`}
+      title={`${label} — back to the conversation (double-click to rename)`}
       icon={<MessageIcon size={12} />}
       onOpen={showConversation}
-    />
+      labelNode={<SessionTitle className="ts-tab-label" activate="dblclick" fallback="New chat" />}
+    >
+      <SessionMenu />
+    </Tab>
   );
 }
 

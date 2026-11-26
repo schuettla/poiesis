@@ -80,6 +80,13 @@
   height: 100%;
   object-fit: contain;
 }
+/* Three of the agent marks are one black shape (`fill="currentColor"` inside an
+   image, so black). On a dark ground they are turned white. */
+[data-mode="dark"] .app-logo img[src$="/opencode.svg"],
+[data-mode="dark"] .app-logo img[src$="/copilot.svg"],
+[data-mode="dark"] .app-logo img[src$="/cline.svg"] {
+  filter: invert(1);
+}
 .app-logo.large {
   width: 40px;
   height: 40px;

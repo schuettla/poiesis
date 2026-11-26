@@ -1,11 +1,34 @@
 .rail {
+  position: relative;
   grid-column: 1;
   grid-row: 2 / -1;
   border-right: 1px solid var(--paper-edge-2);
-  padding: 14px 0 14px 12px;
+  padding: 0px 0 10px 12px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* The drag handle sits on the rail's right edge, the mirror of the Workbench's `.wb-resizer`:
+   a few pixels wide, invisible until you approach it. Inside the edge, because the rail clips. */
+.rail-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 5;
+  cursor: col-resize;
+}
+.rail-resizer:hover,
+.app.dock-dragging .rail-resizer {
+  background: var(--local);
+  opacity: 0.5;
+}
+.rail-resizer:focus-visible {
+  background: var(--local);
+  opacity: 1;
+  outline: none;
 }
 
 /* The scroll container itself carries no horizontal padding, so its
@@ -280,6 +303,24 @@
     background-color var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out);
 }
+/* `UI-2`: a chat row is a column: its one line, and under it, while it works or waits, a second.
+   The line holds what the row used to hold itself. */
+.chat-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  min-height: 0;
+}
+.chat-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  min-width: 0;
+}
+.chat-group {
+  list-style: none;
+}
 .chat-row:focus-visible,
 .project-row:focus-visible {
   outline-offset: -2px;
@@ -351,24 +392,239 @@
 .chat-row.waiting {
   background: var(--fill-quiet);
 }
-.chat-waiting {
+/* `UI-1`: the slot after a row's title, there while the chat has a state or helpers. One glyph
+   per state, drawn in ink; only a failure is red. */
+.chat-state {
+  position: relative;
   flex: none;
-  font-size: var(--fs-caption);
-  line-height: 1;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.chat-state-glyph {
+  display: inline-flex;
   color: var(--ink);
 }
-@media (prefers-reduced-motion: no-preference) {
-  .chat-waiting {
-    animation: mark-breathe 2.4s ease-in-out infinite;
+.chat-state.done-unseen .chat-state-glyph {
+  color: var(--ink-muted);
+  animation: chat-state-pop 320ms var(--ease-pop);
+}
+.chat-state.failed .chat-state-glyph {
+  color: var(--danger);
+}
+.chat-state.running .chat-state-glyph svg {
+  animation: chat-state-turn 0.9s linear infinite;
+}
+.chat-state.needs-you .chat-state-glyph {
+  animation: chat-state-pulse 2.4s ease-in-out infinite;
+}
+@keyframes chat-state-turn {
+  to {
+    transform: rotate(360deg);
   }
 }
-.chat-unread {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ink);
+@keyframes chat-state-pulse {
+  50% {
+    opacity: 0.55;
+  }
 }
+@keyframes chat-state-pop {
+  0% {
+    transform: scale(0.4);
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* `UI-3`: the chevron of a chat that has helpers, after the title with the row's other marks. */
+.chat-twisty {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.chat-twisty:hover {
+  color: var(--ink);
+}
+.chat-twisty svg {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.chat-twisty[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+.chat-row.active .chat-twisty {
+  color: var(--ink-muted);
+}
+/* In the slot: alone while the chat is idle; over a state glyph, hidden until the row is
+   hovered or the chevron has focus, and then the glyph steps aside. */
+.chat-state > .chat-twisty {
+  position: absolute;
+  inset: -1px;
+}
+.chat-state.has-twisty:not(.idle) > .chat-twisty {
+  opacity: 0;
+  pointer-events: none;
+}
+.chat-row:hover .chat-state.has-twisty:not(.idle) > .chat-twisty,
+.chat-state.has-twisty:not(.idle):focus-within > .chat-twisty {
+  opacity: 1;
+  pointer-events: auto;
+}
+.chat-row:hover .chat-state.has-twisty:not(.idle) > .chat-state-glyph,
+.chat-state.has-twisty:not(.idle):focus-within > .chat-state-glyph {
+  visibility: hidden;
+}
+/* The slot shares the end of the row with the time: it leaves room for it. */
+.chat-line > .chat-state {
+  margin-right: 0;
+}
+
+/* `UI-2`: what a working chat does now, or the question a waiting one asks. The row grows
+   when the line arrives and shrinks when it goes; new words come in from below as the old
+   ones leave upward. Every animation here stops under reduced motion (tokens.css). */
+.chat-now {
+  display: grid;
+  grid-template-rows: 1fr;
+  box-sizing: border-box;
+  padding-right: 22px;
+  animation: chat-now-grow var(--dur-slow) var(--ease-out);
+}
+.chat-now.closing {
+  animation: chat-now-shrink var(--dur-slow) var(--ease-out) forwards;
+}
+.chat-now-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+.chat-now-line {
+  position: relative;
+  display: block;
+  height: 18px;
+  line-height: 14px;
+  overflow: hidden;
+  font-size: var(--fs-footnote);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+  font-weight: 400;
+}
+@keyframes chat-now-grow {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+@keyframes chat-now-shrink {
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+/* `UI-3`: the helpers of a chat. One plain hairline drops from under the start of the parent's
+   title, and the helpers sit 16px in: exactly how a project's sessions hang (`.project-sessions`). They arrive with a
+   rise; closing is instant. */
+.helper-list {
+  list-style: none;
+  position: relative;
+  margin: 1px 0 4px;
+  padding: 0 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  animation: rise-in var(--dur) var(--ease-out);
+}
+.helper-list::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 2px;
+  bottom: 2px;
+  width: 1px;
+  background: var(--hairline);
+}
+.helper-row {
+  position: relative;
+  box-sizing: border-box;
+  min-height: var(--control-sm);
+  padding: 0 8px;
+  border-radius: var(--radius);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.helper-row:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.helper-row:active {
+  background: var(--fill-press);
+}
+.helper-row.active {
+  background: var(--fill-selected);
+  color: var(--ink);
+}
+.helper-row:focus-visible {
+  outline-offset: -2px;
+}
+.helper-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--control-sm);
+  min-width: 0;
+}
+.helper-mark {
+  flex: none;
+  display: inline-flex;
+}
+.helper-mark .app-logo {
+  width: 14px;
+  height: 14px;
+  padding: 1px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: none;
+  font-size: var(--fs-micro);
+}
+.helper-clock {
+  color: var(--ink-muted);
+}
+.helper-more-row {
+  list-style: none;
+}
+.helper-more {
+  min-height: var(--control-sm);
+  padding: 0 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: var(--fs-footnote);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.helper-more:hover {
+  color: var(--ink);
+  background: var(--fill-hover);
+}
+
 /* `TEAM-6`: who leads a chat, in the place the workspace mark used to take. */
 .chat-leader {
   flex: none;
@@ -376,20 +632,30 @@
 }
 
 /* `TEAM-6`: the ⋯ for the whole list, and the one line that says a filter is on. */
+/* It owns no row: a zero-height strip pinned to the top of the scroll area, so its
+   contents sit at the right end of the first group label ("Projects", "Today") and
+   stay there while the list scrolls. */
 .rail-filter {
+  position: sticky;
+  top: 0;
+  z-index: 3;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-start;
+  justify-content: flex-end;
   gap: 6px;
-  min-height: 26px;
-  margin: 0 12px 4px 0;
+  height: 0;
+  margin: 0 12px 0 0;
   padding: 0 4px 0 8px;
+}
+.rail-filter > * {
+  margin-top: 3px;
 }
 .rail-filter-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
+  max-width: 150px;
   padding: 1px 8px;
   font: inherit;
   font-size: var(--fs-caption);
@@ -406,17 +672,39 @@
   position: relative;
   margin-left: auto;
 }
-.rail-more {
+/* Doubled class: `.chat-more` below sets opacity 0 at the same specificity and wins
+   by order, which left this button invisible. */
+.chat-more.rail-more {
   opacity: 1;
 }
-.rail-leader-item {
+/* The funnel menu and its flyouts are fixed popups on the page, not children of the rail, which
+   clips what leaves it. The flyout opens against the menu's right edge. */
+.rail-popup {
+  position: fixed;
+  right: auto;
+  z-index: 50;
+  transform-origin: top left;
+}
+.rail-filter-popup {
+  width: 200px;
+}
+.rail-flyout {
+  min-width: 180px;
+  max-width: 260px;
+  max-height: min(320px, calc(100vh - 16px));
+  overflow-y: auto;
+}
+.row-menu-parent[aria-expanded="true"] {
+  background: var(--fill-hover);
+}
+.rail-opt {
   gap: 8px;
 }
-.rail-leader-item.active {
+.rail-opt.active {
   color: var(--ink);
   font-weight: 500;
 }
-.rail-leader-item:disabled {
+.rail-opt:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -448,6 +736,84 @@
   color: var(--ink-faint);
   transition: opacity var(--t-fast);
 }
+/* The hover card of a session row (`SessionHoverCard`): fixed, beside the rail, never takes
+   the pointer. Same surface as the row menu. */
+.session-card {
+  position: fixed;
+  z-index: 60;
+  padding: 12px 14px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  pointer-events: none;
+  animation: pop-in var(--dur) var(--ease-out);
+  transform-origin: top left;
+}
+/* Reads like a glance at the conversation, not a record: where it sits, the last thing said,
+   what came out of it, and when. */
+.session-card-where {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  font-size: var(--fs-caption);
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+.session-card-where > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-card-title {
+  margin: 0;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.session-card-made-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 0;
+}
+.session-card-made {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 8px;
+  font-size: var(--fs-caption);
+  color: var(--ink-muted);
+  background: var(--fill-hover);
+  border-radius: var(--radius-pill);
+}
+.session-card-made > svg {
+  flex: none;
+}
+.session-card-made-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-card-foot {
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+}
+
 /* No transform here: a transformed ancestor would turn the menu's fixed
    backdrop into a box the size of this slot. */
 .chat-menu-wrap {
@@ -477,11 +843,11 @@
   color: var(--ink);
   background: var(--fill-press);
 }
-:is(.chat-row, .project-row):is(:hover, :focus-within) .chat-more,
+:is(.chat-row, .project-row, .helper-row):is(:hover, :focus-within) .chat-more,
 .chat-more[aria-expanded="true"] {
   opacity: 1;
 }
-:is(.chat-row, .project-row):is(:hover, :focus-within) .row-stamp,
+:is(.chat-row, .project-row, .helper-row):is(:hover, :focus-within) .row-stamp,
 .row-slot:has(.chat-more[aria-expanded="true"]) .row-stamp {
   opacity: 0;
 }

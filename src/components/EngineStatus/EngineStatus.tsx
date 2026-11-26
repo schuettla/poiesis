@@ -5,8 +5,8 @@ import "./EngineStatus.css";
 
 /**
  * Makes the local runtime visible: a model isn't usable until llama-server is
- * actually running it. Shows starting / ready / idle so it's never ambiguous
- * that an engine must be in place to chat.
+ * actually running it. Shows starting / ready / stopped / idle so it's never
+ * ambiguous that an engine must be in place to chat.
  *
  * It sits beside the Settings row at the foot of the Rail, which is both where
  * there is room for it and where the user goes to do anything about it — the
@@ -20,6 +20,7 @@ import "./EngineStatus.css";
  */
 export default function EngineStatus({ dotOnly = false }: { dotOnly?: boolean }) {
   const engineReady = useAppStore((s) => s.engineReady);
+  const engineFailed = useAppStore((s) => s.engineFailed);
   const loadingModel = useAppStore((s) => s.loadingModel);
   if (!inTauri()) return null;
 
@@ -34,6 +35,10 @@ export default function EngineStatus({ dotOnly = false }: { dotOnly?: boolean })
     state = "ready";
     label = "ready";
     full = "Runtime ready";
+  } else if (engineFailed) {
+    state = "stopped";
+    label = "stopped";
+    full = "Runtime stopped";
   }
 
   return (

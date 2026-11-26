@@ -10,55 +10,6 @@
   position: relative;
   container-type: inline-size;
 }
-/* Once the column is too narrow for the reading measure plus a gutter, the
-   session menu would sit on top of the pinned question; give it its own lane. */
-@container (max-width: 800px) {
-  .chat-body .main {
-    padding-right: 56px;
-  }
-}
-/* Container queries cannot read `--chat-width`, so the wider settings repeat
-   the rule at their own threshold (width + gutters + the menu lane). */
-@container (max-width: 960px) {
-  :root[data-chat-width="medium"] .chat-body .main {
-    padding-right: 56px;
-  }
-}
-@container (max-width: 1140px) {
-  :root[data-chat-width="wide"] .chat-body .main {
-    padding-right: 56px;
-  }
-}
-
-/* Session actions, pinned to the top-right of the reading area. Outside the
-   scroll container so it stays put as the conversation moves under it. */
-.session-menu-wrap {
-  position: absolute;
-  top: 8px;
-  right: 14px;
-  z-index: 15;
-}
-.session-more {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: color-mix(in srgb, var(--canvas) 85%, transparent);
-  backdrop-filter: blur(8px);
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  color: var(--ink-muted);
-  width: 30px;
-  height: 30px;
-  line-height: 1;
-  font-size: var(--fs-ui);
-  cursor: pointer;
-}
-.session-more:hover,
-.session-more[aria-expanded="true"] {
-  background: var(--fill-hover);
-  border-color: var(--hairline);
-  color: var(--ink);
-}
 .main {
   flex: 1;
   position: relative;
@@ -134,4 +85,74 @@
   .main {
     grid-column: 2;
   }
+}
+
+/* `UI-5`: the way back in a long chat. Both controls hang on zero-height sticky anchors at the
+   two ends of the stream, so they take no room and never move a message. */
+.stream-anchor {
+  position: sticky;
+  height: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+.stream-anchor.top {
+  top: 0;
+}
+.stream-anchor.bottom {
+  bottom: 12px;
+}
+.stream-anchor > * {
+  pointer-events: auto;
+}
+.stream-latest {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  translate: -50% 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control-sm);
+  padding: 0 12px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  white-space: nowrap;
+  cursor: pointer;
+  animation: rise-in var(--dur) var(--ease-out);
+}
+.stream-latest:hover {
+  border-color: var(--paper-edge-2);
+}
+.stream-asked {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: block;
+  box-sizing: border-box;
+  padding: 6px 12px;
+  background: var(--paper);
+  border: none;
+  border-bottom: 1px solid var(--hairline);
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  text-align: left;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  animation: fade-in var(--dur) var(--ease-out);
+}
+.stream-asked:hover {
+  color: var(--ink);
+}
+.stream-asked-label {
+  color: var(--ink-faint);
 }

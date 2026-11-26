@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Message } from "../../lib/types";
 import type { StopReason } from "../../lib/api";
 import { isPersistedId, useAppStore } from "../../lib/store";
-import Timeline from "./Timeline";
+import Timeline, { hasVisibleSteps } from "./Timeline";
 import CheckedAnswer from "./VerifyPanel";
 import RunText from "./RunText";
 import { experimentOn } from "../../lib/experiments";
@@ -20,6 +20,7 @@ import { ChevronIcon, DownloadIcon, KebabIcon } from "../Icons/Icons";
 import { artifactKind, downloadArtifact } from "../Workbench/artifactFiles";
 import { SpokenGlyph, StoppedHere } from "./SpokenMark";
 import { orbForStep } from "../Orb/orbState";
+import { liveActivity, stepWords } from "../../lib/liveWords";
 import type { OrbState } from "thinking-orbs";
 import "../Context/Context.css";
 
@@ -107,7 +108,7 @@ export function RunMeter({
     return (
       <div className="run-meter-row" role="status">
         <span className="run-meter-orb">{orb && <Orb state={orb} />}</span>
-        <p className="run-meter">{pending ? `${pending.verb} ${pending.target}`.trim() : "working"}</p>
+        <p className="run-meter">{pending ? stepWords(pending) : "working"}</p>
       </div>
     );
   }
@@ -120,24 +121,9 @@ export function RunMeter({
   const context = tight
     ? `context ${Math.min(100, Math.round((run.contextTokens / run.contextWindow!) * 100))}%`
     : null;
-  // What is happening right now, in this order of confidence: a tool that is
-  // actually running, then thinking we can see arriving, then the honest
-  // fallback — which names what the loop is really doing between steps, since
-  // "working" beside a clock reading 10:56 tells you nothing about whether
-  // anything is still alive.
-  const running = steps?.find((s) => s.status === "running");
-  const activity = running
-    ? `${running.verb} ${running.target}`.trim()
-    : run.thinking
-      ? "thinking"
-      : "waiting for the model";
-  // `PLN-UI-2`: the plan item says what the work is *for*, which the tool line
-  // never does — but it is the frame, not the pulse. It goes in front of the
-  // activity rather than replacing it: on its own it stood still for as long as
-  // an item took, and a stalled run was indistinguishable from a working one.
-  // Trimmed, because the card above already carries the item in full.
-  const item = run.plan?.items.find((i) => i.status === "doing");
-  const doing = item ? `${trim(item.text)} · ${activity}` : activity;
+  // What is happening right now: a tool that is running, then thinking we can see arriving,
+  // then the honest fallback, with the plan item in front (`liveActivity`).
+  const doing = liveActivity(steps, run);
   return (
     <>
       <div className="run-meter-row">
@@ -152,12 +138,6 @@ export function RunMeter({
   );
 }
 
-/** Enough of a plan item to recognise it. The whole thing belongs on the card
- * above, not in a one-line meter that also has to carry a clock. */
-function trim(text: string, max = 44): string {
-  return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
-}
-
 /** The model's thinking while it is thinking.
  *
  * A reasoning model can spend minutes here before its first word, and the meter
@@ -165,11 +145,11 @@ function trim(text: string, max = 44): string {
  * which reads as a hang. This is folded shut by default because thinking is not
  * the answer and should not compete with it, but it is openable, because the
  * only thing worse than a wall of reasoning is no evidence at all. */
-function ThinkingTrace({ text }: { text: string }) {
+function ThinkingTrace({ text, solo = false }: { text: string; solo?: boolean }) {
   const [open, setOpen] = useState(false);
   if (!text) return null;
   return (
-    <details className="run-thinking" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+    <details className={`run-thinking${solo ? " solo" : ""}`} open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>
         <span className="run-thinking-twisty" aria-hidden="true">
           <ChevronIcon dir="right" size={11} strokeWidth={1.6} />
@@ -182,6 +162,12 @@ function ThinkingTrace({ text }: { text: string }) {
       <pre>{text.slice(-4000)}</pre>
     </details>
   );
+}
+
+/** The model's thinking under a timeline that is live: the meter used to carry it. */
+function LiveThinking() {
+  const text = useAppStore((s) => s.activeRun?.thinking ?? "");
+  return <ThinkingTrace text={text} solo />;
 }
 
 /** `HRN-3`: why a turn stopped, when it stopped for anything but finishing.
@@ -197,6 +183,8 @@ export function StoppedNote({ reason, canContinue = false }: { reason: StopReaso
     stuck: "I stopped because I was not getting anywhere. This is what I had.",
     budget: "The team reached its limit and stopped. This is what was done.",
     error: "The model call failed partway. This is what I had.",
+    // `XA-11`: only a job of an agent app ends this way; its card says so, not this note.
+    plan_limit: "",
     // `VTN-6`: a spoken reply the user cut off has its own mark (`SpokenMark`).
     interrupted: "",
   };
@@ -483,7 +471,7 @@ function FocusedRun({ message }: { message: Message }) {
   // Nothing to read: the turn leaves no empty box behind, only what it asks of you.
   if (blank) return <RunAsks message={message} />;
   return (
-    <div className="agent-run focus">
+    <div className="agent-run focus" data-message-id={message.id}>
       {message.text && <RunText text={message.text} streaming={message.streaming} />}
       {media.map((a) => (
         <ChatMedia key={a.id} attachment={a} />
@@ -576,6 +564,10 @@ function FullRun({ message, last }: { message: Message; last: boolean }) {
       ? "composing"
       : null;
   const thinkingLabel = message.steps?.length ? "still working" : undefined;
+  // `UI-4`: a turn with steps has one live line, the head of its timeline, with the orb and
+  // the clock in it. The meter and the bare `Thinking` orb are for a turn that has none yet.
+  const timelineShown = hasVisibleSteps(message.steps);
+  const headOrb: OrbState | null = meterOrb ?? (isThinking ? "working" : null);
   // A run that stopped at a limit already says why it has nothing; the generic
   // "I said nothing" line under it would be the same news told worse.
   const saidNothing = !message.streaming && !hasContent && !message.stopReason;
@@ -590,7 +582,7 @@ function FullRun({ message, last }: { message: Message; last: boolean }) {
     (!message.stopReason || message.stopReason === "completed");
 
   return (
-    <div className="agent-run">
+    <div className="agent-run" data-message-id={message.id}>
       {model && !sameModel && (
         <div className="run-header">
           <span className={`provenance-dot ${model.provenance}`} aria-hidden="true" />
@@ -614,7 +606,7 @@ function FullRun({ message, last }: { message: Message; last: boolean }) {
       )}
       {/* `SEE-2`: what the quick decisions understood, before the first word. */}
       <ThoughtStrip message={message} />
-      {message.steps && <Timeline steps={message.steps} live={!!message.streaming} />}
+      {message.steps && <Timeline steps={message.steps} live={!!message.streaming} orb={headOrb} />}
       {message.subRunIds && message.subRunIds.length > 0 && (
         <FleetCard runIds={message.subRunIds} />
       )}
@@ -637,8 +629,9 @@ function FullRun({ message, last }: { message: Message; last: boolean }) {
           jobId={message.pendingMedia.jobId}
         />
       )}
-      {isThinking && <Thinking label={thinkingLabel} />}
-      {message.streaming && <RunMeter steps={message.steps} orb={meterOrb} />}
+      {isThinking && !timelineShown && <Thinking label={thinkingLabel} />}
+      {message.streaming && !timelineShown && <RunMeter steps={message.steps} orb={meterOrb} />}
+      {message.streaming && timelineShown && <LiveThinking />}
       {!message.streaming && message.stopReason && (
         <StoppedNote
           reason={message.stopReason}

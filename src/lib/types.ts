@@ -129,6 +129,10 @@ export interface AgentStep {
     diagnostics?: import("./api").Diagnostic[];
     tail?: string;
   };
+  /** `UI-4`: when the step began and ended, in ms. Set as the events arrive, so a step read
+   * back from a saved message has neither, and the timeline shows no time for it. */
+  startedAt?: number;
+  endedAt?: number;
   status: "running" | "done" | "error";
 }
 
@@ -174,6 +178,10 @@ export interface SubRun {
   engine?: import("./api").EngineBadge;
   /** The agent's own session id, for **Continue there** (`CLI-UI-5`). */
   engineSession?: string;
+  /** `PRF-2`: what the job changed and how the project's check went. */
+  evidence?: import("./api").RunEvidence;
+  /** `PRF-5`: why it waits for a place to change, while it does. */
+  queuedBecause?: string;
   /** `MCPS-2`: what the agent put on its card with `present` (a table, a bar). */
   blocks?: BlockView[];
   /** `RUN-1b`: what it used, and what that cost. `costUsd` is `undefined` while
@@ -714,6 +722,8 @@ export interface SendOptions {
   skillArgs?: string;
   /** `CLI-UI-6`: the agent `/delegate <agent>` named; this message only. */
   delegateTo?: string;
+  /** `XA-13`: the outside session `/resume` picked, for `delegateTo` to continue. */
+  resumeSession?: string;
   refs?: ContextRef[];
   /** `PLF-4`: Go ahead. The plan the user approved; the run starts from it with
    * nothing restricted, and the Plan first chip is never sent with it. */

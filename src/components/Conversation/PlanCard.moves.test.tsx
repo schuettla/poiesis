@@ -200,6 +200,8 @@ describe("a fresh start in the timeline", () => {
 
   it("is a line that opens the note, and the note is closed until asked for", () => {
     act(() => root.render(<Timeline steps={steps} live />));
+    // `UI-4`: a live timeline is closed until it is opened.
+    act(() => container.querySelector<HTMLButtonElement>(".timeline-head")!.click());
     const line = container.querySelector<HTMLButtonElement>(".item-divider-btn")!;
     expect(line.textContent).toBe("Fresh start: I wrote myself a handover note");
     expect(container.querySelector(".item-divider-note")).toBeNull();
@@ -210,7 +212,7 @@ describe("a fresh start in the timeline", () => {
   });
 
   it("is not counted among the steps", () => {
-    act(() => root.render(<Timeline steps={steps} live />));
-    expect(container.querySelector(".timeline-summary")?.textContent).toBe("1 step");
+    act(() => root.render(<Timeline steps={steps} />));
+    expect(container.querySelector(".timeline-title")?.textContent).toBe("1 step");
   });
 });

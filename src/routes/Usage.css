@@ -39,6 +39,16 @@
   color: var(--ink-muted);
 }
 
+/* `XA-10`: what an agent app last said about the plan, under its row. */
+.usage-plan {
+  grid-column: 1 / -1;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.usage-plan.warn {
+  color: var(--cloud);
+}
+
 /* An agent app's list-price figure: reported by the app, charged to no one. */
 .usage-notional {
   color: var(--ink-faint, var(--ink-muted));

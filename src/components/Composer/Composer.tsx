@@ -25,6 +25,7 @@ import RunBar from "./RunBar";
 import SuggestionChip from "./SuggestionChip";
 import BtwCard from "./BtwCard";
 import { useCommandInput } from "./useCommandInput";
+import { newer, older, promptsOf, type Recall } from "./promptHistory";
 import VoiceControl from "../Voice/VoiceControl";
 import { ChevronIcon, CloseIcon, FileIcon, ImageIcon, MessageIcon, PlayIcon, QuoteIcon, SlashIcon } from "../Icons/Icons";
 import { quoteBlock, quoteLabel, quoteWhere, type DocQuote } from "../../lib/mdQuote";
@@ -53,12 +54,25 @@ export default function Composer({
   onSend,
   busy,
   onStop,
+  inStream,
 }: {
   onSend: (text: string, attachments?: Attachment[], opts?: SendOptions) => void;
   busy?: boolean;
   onStop?: () => void;
+  /** Docked under the message stream: a smaller corner than the canvas view's box. */
+  inStream?: boolean;
 }) {
   const [value, setValue] = useState("");
+  // `UI-6`: walking this chat's earlier prompts with the arrow keys.
+  const [recall, setRecall] = useState<Recall>(null);
+  const chatMessages = useAppStore((s) => s.conversations.find((c) => c.id === s.activeConversationId)?.messages);
+  const history = useMemo(() => promptsOf(chatMessages), [chatMessages]);
+  // A sent message empties the box, and another chat has other prompts: the walk starts over.
+  useEffect(() => {
+    if (value === "") setRecall(null);
+  }, [value]);
+  const walkChat = useAppStore((s) => s.activeConversationId);
+  useEffect(() => setRecall(null), [walkChat]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [dropNotice, setDropNotice] = useState<string | null>(null);
@@ -234,7 +248,7 @@ export default function Composer({
     value,
     setValue,
     focus: () => inputRef.current?.focus(),
-    sendSkill: (text, skill, skillArgs, delegateTo) => sendWithExtras(text, { skill, skillArgs, delegateTo }),
+    sendSkill: (text, skill, skillArgs, delegateTo, resumeSession) => sendWithExtras(text, { skill, skillArgs, delegateTo, resumeSession }),
     sendText: (text) => sendWithExtras(text),
     busy: !!busy,
   });
@@ -539,7 +553,7 @@ export default function Composer({
         : "Message Poiesis";
 
   return (
-    <div className={`composer-wrap ${dragOver ? "drag-over" : ""}`}>
+    <div className={`composer-wrap ${dragOver ? "drag-over" : ""} ${inStream ? "in-stream" : ""}`}>
       <div className="composer-col">
         {/* `RUN`: what the run is doing and did, above everything else here. */}
         <RunBar />
@@ -821,6 +835,8 @@ export default function Composer({
               aria-label={mediaTarget === "video" ? "Describe a video to create" : mediaTarget === "image" ? "Describe an image to create" : "Message Poiesis Agent"}
               value={value}
               onChange={(e) => {
+                // Editing a recalled prompt makes it the draft; the history stays as it was.
+                setRecall(null);
                 setValue(e.target.value);
                 mention.track(e.target);
               }}
@@ -837,6 +853,20 @@ export default function Composer({
                 // "@src/a" or "/we" as a message.
                 if (mention.onKeyDown(e)) return;
                 if (cmd.onKeyDown(e)) return;
+                // `UI-6`: the menus had their turn, so the arrows walk earlier prompts. The box is
+                // one line, so every position is on its first and its last line, and Alt+arrow
+                // means the same as the arrow alone.
+                if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                  const step = e.key === "ArrowUp" ? older(history, recall, value) : newer(history, recall);
+                  if (step) {
+                    e.preventDefault();
+                    const input = e.currentTarget;
+                    setRecall(step.recall);
+                    setValue(step.text);
+                    requestAnimationFrame(() => input.setSelectionRange(step.text.length, step.text.length));
+                    return;
+                  }
+                }
                 // `PLF-5`: Shift+Tab is the one mode-cycling key. It flips the
                 // Plan first chip for this message and does nothing else.
                 if (e.key === "Tab" && e.shiftKey) {

@@ -50,9 +50,9 @@ use crate::runtime::proxy::{CancelFlag, Usage};
 
 use super::approve::{self, Port, Verdict};
 use super::driver::{
-    Approvals, Capabilities, DriverError, EngineDriver, ExternalOutcome, ExternalTurn, Job, Launch, ModelChoice, codex_stall,
+    Approvals, Capabilities, DriverError, EditSeen, EngineDriver, ExternalOutcome, ExternalTurn, Job, Launch, ModelChoice, codex_stall,
 };
-use super::play::{clip, flush, keep_tail, play, steer_text, Asks, Ev};
+use super::play::{clip, edit_path, flush, keep_plan, keep_tail, play, steer_text, Asks, Ev};
 use super::process::{self, Wait, Wire};
 use super::tools;
 use super::{EngineKind, PaidBy};
@@ -515,6 +515,7 @@ async fn run(turn: &ExternalTurn<'_>) -> Result<ExternalOutcome, DriverError> {
     out.unknown_events += wire.unknown + wire.dropped_lines();
     out.stderr_tail = wire.tail.text();
     keep_tail(job, &out.stderr_tail);
+    keep_plan(job, out.plan_usage.as_ref());
     let code = wire.finish().await;
 
     if let Some(err) = failure {
@@ -649,6 +650,39 @@ fn changes_of(item: &Value) -> Vec<Change> {
         .unwrap_or_default()
 }
 
+/// The lines each file of a `fileChange` added and removed (`PRF-1`). A new file's
+/// `diff` is its whole content and a deleted file has no lines to give. An update's is
+/// a unified diff: `+` lines are added, `-` lines removed. Lines before the first
+/// `@@` are file headers, not content.
+fn change_edits(id: &str, changes: &[Change], cwd: &Path) -> Vec<Ev> {
+    changes
+        .iter()
+        .map(|c| {
+            let (mut added, mut removed) = (Vec::new(), Vec::new());
+            match c.kind.as_str() {
+                "add" => added.extend(c.diff.lines().map(String::from)),
+                // Nothing of a deleted file is left to scan: it counts as changed, with no lines.
+                "delete" => {}
+                _ => {
+                    let mut in_hunk = false;
+                    for line in c.diff.lines() {
+                        if line.starts_with("@@") {
+                            in_hunk = true;
+                        } else if in_hunk {
+                            if let Some(a) = line.strip_prefix('+') {
+                                added.push(a.to_string());
+                            } else if let Some(r) = line.strip_prefix('-') {
+                                removed.push(r.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            Ev::Edit(EditSeen { id: id.to_string(), path: edit_path(&c.path, cwd), added, removed })
+        })
+        .collect()
+}
+
 /// One step in a `fileChange`, as the timeline words it: `(verb, target)`.
 fn change_step(changes: &[Change], cwd: &Path) -> (String, String) {
     let Some(first) = changes.first() else { return ("edited".into(), String::new()) };
@@ -739,6 +773,8 @@ struct Run {
     self_allowed: u32,
     /// Approvals that were refused: what they were.
     rejected: Vec<String>,
+    /// What it last said about the plan (`XA-9`).
+    plan_usage: Option<super::limits::PlanUsage>,
 }
 
 /// Method families we know exist. A message outside them is counted.
@@ -753,10 +789,29 @@ const KNOWN_PREFIXES: &[&str] = &[
     "windowsSandbox/",
     "model/",
     "deprecationNotice",
+    // Seen in the oh-my-hermes recordings (`XA-6`), all ignored on purpose:
+    // `warning` and `configWarning` are about the person's own Codex setup; `hook/`
+    // are their own hooks running; `error` tells of a reconnect (`willRetry`), and the
+    // failure that ends a turn comes again in `turn/completed`.
+    "warning",
+    "configWarning",
+    "hook/",
+    "error",
 ];
 
 /// Item types we show or deliberately ignore. Another is counted.
-const KNOWN_ITEMS: &[&str] = &["userMessage", "reasoning", "agentMessage", "commandExecution", "fileChange"];
+/// `subAgentActivity` and `collabAgentToolCall` are Codex's own helpers at work, and
+/// `sleep` a wait. Seen in the oh-my-hermes recordings (`XA-6`); not shown yet.
+const KNOWN_ITEMS: &[&str] = &[
+    "userMessage",
+    "reasoning",
+    "agentMessage",
+    "commandExecution",
+    "fileChange",
+    "subAgentActivity",
+    "collabAgentToolCall",
+    "sleep",
+];
 
 impl Run {
     fn new(cwd: &Path) -> Run {
@@ -783,6 +838,7 @@ impl Run {
             asked: HashSet::new(),
             self_allowed: 0,
             rejected: Vec::new(),
+            plan_usage: None,
         }
     }
 
@@ -823,6 +879,11 @@ impl Run {
                     Some("apikey") | Some("api_key") | Some("apiKey") => Some(PaidBy::ApiKey),
                     _ => self.paid_by,
                 };
+            }
+            "account/rateLimits/updated" => {
+                if let Some(u) = super::limits::from_codex(params) {
+                    self.plan_usage = Some(u);
+                }
             }
             "thread/tokenUsage/updated" => {
                 if let Some(t) = params.pointer("/tokenUsage/total") {
@@ -889,8 +950,13 @@ impl Run {
             Some("fileChange") => {
                 let changes = changes_of(item);
                 let (verb, target) = change_step(&changes, &self.cwd);
+                let edits = change_edits(&id, &changes, &self.cwd);
                 self.changes.insert(id.clone(), changes);
-                self.start(&id, verb, target)
+                let mut ev = self.start(&id, verb, target);
+                if !ev.is_empty() {
+                    ev.extend(edits);
+                }
+                ev
             }
             Some("mcpToolCall") if is_ours(item) => {
                 let (verb, target) = our_step(item, &self.cwd);
@@ -935,8 +1001,10 @@ impl Run {
                     if ty == Some("fileChange") {
                         let changes = changes_of(item);
                         let (verb, target) = change_step(&changes, &self.cwd);
+                        let edits = change_edits(&id, &changes, &self.cwd);
                         self.changes.insert(id.clone(), changes);
                         ev.extend(self.start(&id, verb, target));
+                        ev.extend(edits);
                     } else {
                         let command = inner_command(
                             item.get("command").and_then(|c| c.as_str()).unwrap_or(""),
@@ -1045,6 +1113,7 @@ impl Run {
             self_allowed: self.self_allowed,
             resume_failed: self.resume_failed,
             sandbox_off: self.sandbox_off,
+            plan_usage: self.plan_usage,
         }
     }
 }
@@ -1094,6 +1163,66 @@ mod tests {
         (run, events, answers, done)
     }
 
+    /// `XA-6`: the 26 Codex sessions oh-my-hermes recorded (0.167.0: helpers, a late
+    /// step after the turn, a resume that is gone, an edit by a helper, errors) fold
+    /// without a panic and without a notification this driver does not know. The
+    /// whole file is read, also what comes after the turn ends.
+    #[test]
+    fn every_omher_recording_replays() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/engines/omher/real");
+        let mut files = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if !name.starts_with("codex-") || !name.ends_with(".jsonl") {
+                continue;
+            }
+            files += 1;
+            let mut run = Run::new(Path::new(CWD));
+            for line in std::fs::read_to_string(&path).unwrap().lines().filter(|l| !l.trim().is_empty()) {
+                let row: Value = serde_json::from_str(line).unwrap();
+                assert_eq!(row["dir"], "out", "{name}");
+                let m = &row["msg"];
+                match (m.get("method").and_then(|x| x.as_str()), m.get("id")) {
+                    (Some(method), Some(_)) => {
+                        let _ = run.ask_for(method, m.get("params").unwrap_or(&Value::Null));
+                    }
+                    (Some(method), None) => {
+                        let _ = run.notification(method, m.get("params").unwrap_or(&Value::Null));
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(run.unknown, 0, "{name}: a notification this driver does not know");
+        }
+        assert!(files >= 20, "the recordings are there ({files})");
+    }
+
+    /// `PRF-1`: a new file is all added lines, an update's `+` and `-` lines are read, the
+    /// headers before the first `@@` are not content, and a call reported twice counts once.
+    #[test]
+    fn a_file_change_gives_the_lines_it_added_and_removed() {
+        let (_, events, _, _) = replay(include_str!("../../../fixtures/engines/codex-0.163.0.jsonl"), false);
+        let edits: Vec<_> = events.iter().filter_map(|e| if let Ev::Edit(x) = e { Some(x.clone()) } else { None }).collect();
+        assert_eq!(edits.len(), 1, "{edits:?}");
+        assert!(edits[0].path.ends_with("hello.txt"));
+        assert_eq!((edits[0].added.as_slice(), edits[0].removed.len()), (&["hi".to_string()][..], 0));
+
+        let mut run = Run::new(Path::new(CWD));
+        let item = json!({"type": "fileChange", "id": "f1", "status": "inProgress", "changes": [
+            {"path": "C:\\proj\\calc.py", "kind": {"type": "update", "move_path": null},
+             "diff": "--- a/calc.py\n+++ b/calc.py\n@@ -6 +6,5 @@\n     return a - b\n-old\n+\n+def mul(a, b):\n+    return a * b\n"},
+            {"path": "C:\\proj\\gone.txt", "kind": {"type": "delete"}, "diff": "x\ny\n"},
+        ]});
+        let ev = run.item_started(&item);
+        let seen: Vec<_> = ev.iter().filter_map(|e| if let Ev::Edit(x) = e { Some(x) } else { None }).collect();
+        assert_eq!(seen.len(), 2);
+        assert_eq!((seen[0].added.len(), seen[0].removed.as_slice()), (3, &["old".to_string()][..]));
+        assert_eq!((seen[1].added.len(), seen[1].removed.len()), (0, 0), "a deleted file counts, with no lines");
+        // The same item again (started, then completed without a new start) gives nothing more.
+        assert!(run.item_started(&item).is_empty());
+    }
+
     fn steps(events: &[Ev]) -> Vec<(String, String)> {
         events
             .iter()
@@ -1120,6 +1249,10 @@ mod tests {
         assert!(out.notional_cost_usd.is_none(), "Codex reports tokens, never a price");
         assert_eq!(out.unknown_events, 0);
         assert_eq!(out.self_allowed, 0, "every step was asked about");
+        // `XA-9`: the plan it reported is kept, the last of its notifications.
+        let plan = out.plan_usage.clone().expect("the recording has rate limit notifications");
+        assert_eq!(plan.windows.len(), 1);
+        assert_eq!(plan.windows[0].name, "month");
         assert_eq!(
             steps(&events),
             vec![
@@ -1284,7 +1417,7 @@ mod tests {
     /// timeout longer than a question waits; no `config` without the switch.
     #[test]
     fn our_server_is_mounted_in_the_thread_config_only_when_asked_for() {
-        let launch = Launch { program: "codex".into(), base_args: vec![], extra_args: vec![], env: vec![], auto_env: vec![], model: None };
+        let launch = Launch { program: "codex".into(), base_args: vec![], extra_args: vec![], env: vec![], auto_env: vec![], model: None, expect_name: None };
         let turn = ExternalTurn { launch: &launch, task: String::new(), cwd: PathBuf::from(CWD), tool_free: false, cancel: CancelFlag::new(), timeout: Duration::from_secs(5), job: None };
         let with = thread_params(&turn, Some(Trust::Confirm), Some("http://127.0.0.1:9/tok/mcp"));
         assert_eq!(with["config"]["mcp_servers"]["poiesis"]["url"], "http://127.0.0.1:9/tok/mcp");

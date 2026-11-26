@@ -4,11 +4,9 @@
    whole main column, so there is no edge to align to and the width is simply
    whatever the row has left. A path finally fits in a tab.
 
-   Tabs sit on the recessed `--canvas` the header inherits from `html`
-   (global.css) — the same ground the Rail's rows sit on. The *active* tab
-   lifts onto `--paper`, the same surface as the column it fills, so a focused
-   tab reads as a physical extension of what is under it rather than a
-   separately coloured label pointing at it. */
+   Tabs are small pills floating on the recessed `--canvas` the header inherits
+   from `html` (global.css), the same shape as the session title's hover. Hover
+   and the *active* tab share that same ink tint; active is also set bolder. */
 
 /* `ScrollZone` (TabStrip.tsx): an outer flex row — `[left chevron?, the
    scrollable strip itself, right chevron?]` — sized by `.ts-zone-items`. The
@@ -16,25 +14,28 @@
    somewhere to scroll to, gone otherwise, so nothing decorates the common
    case where every open tab already fits. */
 .ts-scrollzone {
+  /* The Rail's row height; the chevrons share it. */
+  --ts-pill-h: 30px;
   display: flex;
   align-items: stretch;
   min-width: 0;
+  /* The header's bottom line, unbroken under chevrons, pills and empty space. */
+  border-bottom: 1px solid var(--paper-edge-2);
 }
 
 .ts-zone {
   display: flex;
-  align-items: stretch;
+  align-items: center;
+  gap: 2px;
   flex: 1;
   min-width: 0;
+  padding: 0 6px;
+  scroll-padding-inline: 6px;
   overflow-x: auto;
   overflow-y: hidden;
   /* No visible scrollbar — the chevrons are the affordance. Wheel scroll and
      scroll-into-view on focus (TabStrip.tsx) still work without one. */
   scrollbar-width: none;
-  /* Continues the header's bottom edge across any empty space past the last
-     tab — each tab then paints over its own share with its own border,
-     erased when active, so the line reads as unbroken everywhere else. */
-  border-bottom: 1px solid var(--paper-edge-2);
 }
 .ts-zone::-webkit-scrollbar {
   display: none;
@@ -42,13 +43,16 @@
 
 .ts-nav {
   flex-shrink: 0;
+  align-self: center;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  background: var(--canvas);
+  width: 20px;
+  height: var(--ts-pill-h);
+  padding: 0;
+  background: none;
   border: none;
-  border-bottom: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius);
   color: var(--ink-faint);
   cursor: pointer;
 }
@@ -56,11 +60,14 @@
   color: var(--ink);
   background: var(--fill-hover);
 }
+.ts-nav:active {
+  background: var(--fill-press);
+}
 .ts-nav-left {
-  border-right: 1px solid var(--paper-edge-2);
+  margin-left: 4px;
 }
 .ts-nav-right {
-  border-left: 1px solid var(--paper-edge-2);
+  margin-right: 4px;
 }
 
 /* Holds the conversation and its open items. Sans is the default; a file or a
@@ -73,30 +80,28 @@
 
 .ts-tab {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   flex-shrink: 0;
+  height: var(--ts-pill-h);
   /* Room for a real file name. It was 170px when the strip was confined to the
      pane's width and every tab was fighting the same shortage. */
   max-width: 220px;
   min-width: 0;
-  border-right: 1px solid var(--paper-edge-2);
-  color: var(--ink-faint);
+  /* The close button's inset: equal above, below and beside it. */
+  padding-right: 5px;
+  border-radius: var(--radius);
+  color: var(--ink-muted);
   cursor: pointer;
-  /* No border-bottom of its own — `.ts-zone` already draws that line the
-     full width of the strip, and a second one here on top of it was what
-     doubled/thickened the line under every ordinary tab. Only the active
-     tab (below) needs to touch it at all: to erase its own share of it. */
 }
+.ts-tab:hover,
 .ts-tab.active {
-  background: var(--paper);
-  border-bottom: 1px solid var(--paper);
+  background: var(--fill-hover);
   color: var(--ink);
 }
 /* `SHL-19`: the tab is the focusable element now, so it needs the focus ring
    the label's button used to carry. The global `:focus-visible` (global.css)
-   already draws it — only the offset is overridden, since an outline sitting
-   2px *outside* a tab in a 42px-tall strip is clipped by the header's bounds
-   and by the neighbouring tab. Drawn inside, it stays whole. */
+   already draws it — only the offset is overridden: drawn inside the pill, it
+   isn't clipped by the scrolling strip and doesn't run into its neighbour. */
 .ts-tab:focus-visible {
   outline-offset: -2px;
 }
@@ -109,15 +114,11 @@
   gap: 6px;
   min-width: 0;
   flex: 1;
-  padding: 0 4px 0 10px;
+  padding: 0 5px 0 8px;
   font-size: var(--fs-footnote);
   color: inherit;
 }
-.ts-tab:hover .ts-tab-main {
-  color: var(--ink-muted);
-}
 .ts-tab.active .ts-tab-main {
-  color: var(--ink);
   font-weight: 500;
 }
 .ts-tab-label {
@@ -149,21 +150,36 @@
 /* `SHL-27`: the session tab. It is the same label as the header's lone
    `.topbar-where-label` (TopBar.css) once the strip appears, so it takes that
    label's voice — sans, 13px, medium, tight — and the chat's name doesn't
-   change character when a tab opens beside it. It is also the one tab with no
-   ×, so it keeps the close button's 22px as padding and doesn't sit tighter
-   than its neighbours. */
+   change character when a tab opens beside it. */
 .ts-session {
+  position: relative;
   max-width: 260px;
-  /* A firmer edge than the hairline between two item tabs: everything right of
-     it is something taken *out* of the chat named to its left. */
-  border-right: 1px solid var(--paper-edge-2);
+  /* Room for the divider below. */
+  margin-right: 9px;
+}
+/* Everything right of this short rule is something taken *out* of the chat
+   named to its left. */
+.ts-session::after {
+  content: "";
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  right: -6px;
+  width: 1px;
+  background: var(--paper-edge-2);
 }
 .ts-session .ts-tab-main {
   font-family: var(--font-sans);
   font-size: var(--fs-ui);
   font-weight: 500;
   letter-spacing: var(--tracking-tight);
-  padding-right: 12px;
+}
+/* The chat menu sits inside the pill, so it is one step smaller than it. */
+.ts-session .session-more {
+  width: 20px;
+  height: 20px;
+  margin-right: -5px;
+  border-radius: var(--radius-sm);
 }
 
 /* A file changed this session — the same dot the tree's own rows carry. */
@@ -172,9 +188,10 @@
    pressing the dot shows the patch instead of closing anything. */
 .ts-dirty {
   flex-shrink: 0;
-  width: 22px;
-  align-self: stretch;
+  width: 20px;
+  height: 20px;
   border: none;
+  border-radius: var(--radius-sm);
   padding: 0;
   cursor: pointer;
   background: radial-gradient(circle, var(--ink) 3px, transparent 3.5px);
@@ -252,13 +269,17 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
   background: none;
   border: none;
+  border-radius: var(--radius-sm);
   color: var(--ink-faint);
   cursor: pointer;
 }
 .ts-tab-close:hover {
   color: var(--ink);
+  background: var(--fill-press);
 }
 

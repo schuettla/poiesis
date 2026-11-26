@@ -16,7 +16,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::db::engines::{EngineRow, EngineRule};
-use crate::db::Db;
+use crate::db::{now_ms, Db};
 use crate::permissions::Trust;
 
 use super::EngineKind;
@@ -338,6 +338,8 @@ pub enum Block {
     Mode,
     /// The per-chat limit.
     Limit(u32),
+    /// `XA-11`: the agent hit the person's plan limit. `until_ms` is when it lifts, if it said.
+    PlanLimit { until_ms: Option<i64> },
 }
 
 impl Block {
@@ -356,6 +358,8 @@ impl Block {
             Block::Project => "Off in this project".into(),
             Block::Mode => "Only when you ask".into(),
             Block::Limit(_) => "Used up in this chat".into(),
+            Block::PlanLimit { until_ms: Some(t) } => format!("It hit its plan limit, back at {}", super::limits::when(*t)),
+            Block::PlanLimit { until_ms: None } => "It hit its plan limit".into(),
         }
     }
 
@@ -381,6 +385,10 @@ impl Block {
             Block::Limit(n) => format!(
                 "{name} has already been handed {n} jobs in this chat, which is its limit. Do the rest yourself."
             ),
+            Block::PlanLimit { until_ms } => {
+                let back = until_ms.map(|t| format!(", back at {}", super::limits::when(t))).unwrap_or_default();
+                format!("{name} hit its plan limit{back}. Do not hand it more work before then. Hand the task to another helper or do it yourself.")
+            }
         }
     }
 }
@@ -431,6 +439,19 @@ pub fn blocked(row: &EngineRow, guards: &Guards, place: &Place, headless: bool) 
     None
 }
 
+/// [`blocked`], and whether the agent has hit its plan limit (`XA-11`). The one place
+/// that feeds the lead's list of agents and the `/delegate` picker.
+pub fn blocked_now(db: &Db, row: &EngineRow, guards: &Guards, place: &Place, headless: bool) -> Option<Block> {
+    blocked(row, guards, place, headless).or_else(|| plan_limit(db, &row.id))
+}
+
+/// `PlanLimit` when the agent's last word about its plan says it is shut out now:
+/// reached, and the reset time is ahead (or unknown and the record is under 5 hours old).
+pub fn plan_limit(db: &Db, engine_id: &str) -> Option<Block> {
+    let usage = super::limits::load(db, engine_id)?;
+    usage.holds(now_ms()).then(|| Block::PlanLimit { until_ms: usage.resets_at_ms })
+}
+
 /// Can Poiesis drive this agent for a delegated job yet? See
 /// [`super::driver::delegate_ready`]. The others are found, configurable and
 /// testable, and join as their drivers do.
@@ -459,7 +480,7 @@ pub fn offered(db: &Db, ctx: &RouteCtx<'_>) -> (Vec<Offered>, Vec<(String, Block
         let row = db.get_engine(&row.id).ok().flatten().unwrap_or(row);
         let guards = Guards::resolve(&row.guards_json, &row.kind);
         let asked = ctx.delegate_to.is_some_and(|d| matches_name(&row, d));
-        if let Some(b) = blocked(&row, &guards, &place, ctx.headless) {
+        if let Some(b) = blocked_now(db, &row, &guards, &place, ctx.headless) {
             no.push((row.display_name.clone(), b));
             continue;
         }
@@ -676,6 +697,19 @@ fn preview_of(o: &Offered, label: &str, rule: &EngineRule, place: &Place) -> Pre
     }
 }
 
+/// `XA-11`: **Try a request** says so when the agent it would hand the task to has hit
+/// its plan limit, as the lead's list and the `/delegate` picker do.
+pub fn with_plan_limit(db: &Db, candidates: &[Offered], p: Preview) -> Preview {
+    if p.blocked.is_some() {
+        return p;
+    }
+    let Some(o) = p.agent.as_deref().and_then(|a| candidates.iter().find(|o| o.row.display_name == a)) else { return p };
+    match plan_limit(db, &o.row.id) {
+        Some(b) => Preview { blocked: Some(b.message(&o.row.display_name)), ..p },
+        None => p,
+    }
+}
+
 /// The two options of a routing question that name no agent.
 pub const ROUTE_NONE: &str = "none";
 pub const ROUTE_UNSURE: &str = "unsure";
@@ -852,11 +886,53 @@ mod tests {
         db.save_engine_probe("claude-code", Some("C:\\x\\claude.exe"), Some("2.1.301"), Some(false), None, None).unwrap();
         assert_eq!(offered(&db, &ctx(&conv)).1[0].1, Block::SignedOut);
 
-        // An ACP agent added by hand is found and configurable, but nothing makes
-        // it ask before it acts, so it is not offered for jobs.
+        // An ACP agent added by hand takes work too (`XA-4`): it asks as far as its
+        // own settings say, and the questions come to the person.
         engine(&db, "acp:custom-1", "acp", "Mine");
         let (_, no) = offered(&db, &ctx(&conv));
-        assert!(no.iter().any(|(n, b)| n == "Mine" && *b == Block::NotReady));
+        assert!(!no.iter().any(|(n, b)| n == "Mine" && *b == Block::NotReady));
+    }
+
+    /// `XA-11`: an agent that hit its plan limit is not offered until it is back, and
+    /// the reason names the time. One place feeds the lead's list and the `/delegate` picker.
+    #[test]
+    fn an_agent_at_its_plan_limit_is_not_offered_until_it_is_back() {
+        use super::super::limits::{self, PlanUsage};
+        let db = Db::open_in_memory().unwrap();
+        let code = code_folder();
+        let row = engine(&db, "claude-code", "claude-code", "Claude Code");
+        let g = Guards::resolve(&row.guards_json, &row.kind);
+        let conv = chat(&db, Some(code.path()), "confirm");
+        let place = Place::of(&db, &conv);
+        let now = now_ms();
+        assert_eq!(blocked_now(&db, &row, &g, &place, false), None);
+
+        // Fresh and reached, with a time ahead.
+        let until = now + 3_600_000;
+        limits::save(&db, "claude-code", &PlanUsage { at_ms: now, windows: vec![], reached: true, resets_at_ms: Some(until) });
+        let b = blocked_now(&db, &row, &g, &place, false);
+        assert_eq!(b, Some(Block::PlanLimit { until_ms: Some(until) }));
+        let b = b.unwrap();
+        assert!(b.short().starts_with("It hit its plan limit, back at "), "{}", b.short());
+        assert!(b.message("Claude Code").contains("Do not hand it more work before then"));
+        assert!(offered(&db, &ctx(&conv)).0.is_empty(), "the lead is not offered it");
+        assert_eq!(offered(&db, &ctx(&conv)).1[0].1, b);
+
+        // Old: the reset time has passed.
+        limits::save(&db, "claude-code", &PlanUsage { at_ms: now - 7_200_000, windows: vec![], reached: true, resets_at_ms: Some(now - 1000) });
+        assert_eq!(blocked_now(&db, &row, &g, &place, false), None);
+        // Reached with no time: held while the record is young, not after five hours.
+        limits::save(&db, "claude-code", &PlanUsage { at_ms: now - 1000, windows: vec![], reached: true, resets_at_ms: None });
+        let b = blocked_now(&db, &row, &g, &place, false).unwrap();
+        assert_eq!(b, Block::PlanLimit { until_ms: None });
+        assert_eq!(b.short(), "It hit its plan limit");
+        limits::save(&db, "claude-code", &PlanUsage { at_ms: now - 6 * 3_600_000, windows: vec![], reached: true, resets_at_ms: None });
+        assert_eq!(blocked_now(&db, &row, &g, &place, false), None);
+        // Only that agent.
+        let other = engine(&db, "codex", "codex", "Codex");
+        let og = Guards::resolve(&other.guards_json, &other.kind);
+        limits::save(&db, "claude-code", &PlanUsage { at_ms: now, windows: vec![], reached: true, resets_at_ms: Some(until) });
+        assert_eq!(blocked_now(&db, &other, &og, &place, false), None);
     }
 
     /// `RTE-T-2`: each guard, refused with a reason the lead can read.
@@ -1083,6 +1159,20 @@ mod tests {
         let conv = chat(&db, Some(plain.path()), "confirm");
         let blocked = preview_from_option(&cands, "claude-code:U2", &Place::of(&db, &conv)).unwrap();
         assert!(blocked.blocked.unwrap().contains("only works in code projects"));
+
+        // `XA-11`: so is the plan limit, once the agent hit it; a guard named first stays.
+        let free = || preview_from_option(&cands, "claude-code:U2", &place).unwrap();
+        assert!(with_plan_limit(&db, &cands, free()).blocked.is_none());
+        let until = now_ms() + 3_600_000;
+        super::super::limits::save(
+            &db,
+            "claude-code",
+            &super::super::limits::PlanUsage { at_ms: now_ms(), windows: vec![], reached: true, resets_at_ms: Some(until) },
+        );
+        let held = with_plan_limit(&db, &cands, free()).blocked.unwrap();
+        assert!(held.starts_with("Claude Code hit its plan limit, back at "), "{held}");
+        let guarded = preview_from_option(&cands, "claude-code:U2", &Place::of(&db, &conv)).unwrap();
+        assert!(with_plan_limit(&db, &cands, guarded).blocked.unwrap().contains("only works in code projects"));
 
         // The mode still decides the consequence.
         row.use_mode = "auto".into();

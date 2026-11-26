@@ -112,6 +112,17 @@ const finish = (text, extra = {}) => {
   });
 };
 
+// The shape of our recording (`claude-2.1.301.jsonl`), the reset two hours ahead.
+const planInfo = (status, fiveHour, sevenDay) => {
+  const in2h = Math.floor(Date.now() / 1000) + 2 * 3600;
+  return {
+    status,
+    resetsAt: in2h,
+    rateLimitType: "five_hour",
+    unifiedWindows: { five_hour: { utilization: fiveHour, resetsAt: in2h }, seven_day: { utilization: sevenDay, resetsAt: in2h + 86400 } },
+  };
+};
+
 async function useTool(name, input) {
   const id = toolUse(name, input);
   const v = await approve(name, input, id);
@@ -236,6 +247,34 @@ async function main() {
       fs.writeFileSync(path.join(cwd, "grandchild.pid"), String(g.pid));
       toolUse("Bash", { command: "sleep forever" });
       await sleep(600000);
+      return;
+    }
+    case "plan": {
+      // What the real one says about the plan while it works (`XA-9`).
+      out({ type: "rate_limit_event", rate_limit_info: planInfo("allowed", 0.11, 0.59) });
+      return finish("did it, with the plan seen");
+    }
+    case "limit": {
+      // A job that ends on the plan limit (`XA-11`): the event says it, so does the text.
+      out({ type: "rate_limit_event", rate_limit_info: planInfo("rejected", 1, 0.59) });
+      out({
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        result: "You've hit your session limit · resets 6:10pm",
+        session_id: session,
+      });
+      return;
+    }
+    case "limit-words": {
+      // Only the words, no event: the oh-my-hermes case.
+      out({
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        result: "Claude AI usage limit reached",
+        session_id: session,
+      });
       return;
     }
     case "fail": {

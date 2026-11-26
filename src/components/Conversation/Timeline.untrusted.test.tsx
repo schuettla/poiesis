@@ -46,17 +46,23 @@ const chip = () => container.querySelector<HTMLButtonElement>(".untrusted-chip")
 describe("the from-outside chip", () => {
   it("is the quiet marker when nothing was found", () => {
     act(() => root.render(<Timeline steps={[stepWith(page())]} live />));
+    // `UI-4`: a live timeline is closed until it is opened.
+    act(() => container.querySelector<HTMLButtonElement>(".timeline-head")!.click());
     expect(chip().textContent).toBe("◇ from outside");
     expect(chip().className).toContain("risk-0");
   });
 
   it("says it ignored the instructions when the pattern scan found some", () => {
     act(() => root.render(<Timeline steps={[stepWith(page({ risk: 2, flags: ["override-instructions"] }))]} live />));
+    // `UI-4`: a live timeline is closed until it is opened.
+    act(() => container.querySelector<HTMLButtonElement>(".timeline-head")!.click());
     expect(chip().textContent).toBe("◇ from outside: I ignored its instructions");
   });
 
   it("says the text reads like orders when only the quick check found that", () => {
     act(() => root.render(<Timeline steps={[stepWith(page({ readsAsInstructions: 0.83 }))]} live />));
+    // `UI-4`: a live timeline is closed until it is opened.
+    act(() => container.querySelector<HTMLButtonElement>(".timeline-head")!.click());
     expect(chip().textContent).toBe("◇ from outside: it reads like orders to me");
     // Drawn like a scan of risk 2, because it is the same kind of warning.
     expect(chip().className).toContain("risk-2");
@@ -65,6 +71,8 @@ describe("the from-outside chip", () => {
   it("keeps the scan's words when both found something", () => {
     const both = page({ risk: 3, flags: ["exfiltrate"], readsAsInstructions: 0.9 });
     act(() => root.render(<Timeline steps={[stepWith(both)]} live />));
+    // `UI-4`: a live timeline is closed until it is opened.
+    act(() => container.querySelector<HTMLButtonElement>(".timeline-head")!.click());
     expect(chip().textContent).toBe("◇ from outside: I ignored its instructions");
     expect(chip().getAttribute("aria-label")).toContain("exfiltrate");
   });
@@ -72,6 +80,8 @@ describe("the from-outside chip", () => {
   it("says it in words in the disclosure with the number on the hover, and no empty box for a report with no text", () => {
     const report = page({ label: "report from claude-code", text: "", readsAsInstructions: 0.74 });
     act(() => root.render(<Timeline steps={[stepWith(report)]} live />));
+    // `UI-4`: a live timeline is closed until it is opened.
+    act(() => container.querySelector<HTMLButtonElement>(".timeline-head")!.click());
     act(() => chip().click());
     const label = container.querySelector(".untrusted-source-label")!;
     expect(label.textContent).toBe("report from claude-code · reads like orders to the assistant");
@@ -81,6 +91,8 @@ describe("the from-outside chip", () => {
 
   it("shows the text of a source the check did not flag, with no number", () => {
     act(() => root.render(<Timeline steps={[stepWith(page())]} live />));
+    // `UI-4`: a live timeline is closed until it is opened.
+    act(() => container.querySelector<HTMLButtonElement>(".timeline-head")!.click());
     act(() => chip().click());
     expect(container.querySelector(".untrusted-source-label")!.textContent).toBe("page at example.com");
     expect(container.querySelector(".untrusted-source-text")!.textContent).toBe("Some ordinary text.");

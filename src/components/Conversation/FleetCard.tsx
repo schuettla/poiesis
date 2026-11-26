@@ -3,8 +3,10 @@ import type { SubRun } from "../../lib/types";
 import { stillWorking } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import { runLabel } from "../../lib/teamLive";
+import { agentLogoUrl, evidenceLeft, evidenceLine, evidenceWarns } from "../../lib/engines";
 import { useLedTeam } from "../../lib/useLedTeam";
 import { usePersonaAppsLine } from "../Apps/personaAppsLine";
+import AppLogo from "../Apps/AppLogo";
 import BlockRenderer from "../Blocks/BlockRenderer";
 import { ChevronIcon, SettingsIcon } from "../Icons/Icons";
 import { ContinueThere, EngineChips, UndoHandover } from "./EngineChips";
@@ -42,6 +44,8 @@ export function nowDoing(run: SubRun): string {
   // `SUB-12`: a queued child has taken no step and written no prose. Falling
   // through to "getting started" would claim it had begun.
   // `TEAM-14`: a team member waits in the team's queue the same way.
+  // `PRF-5`: one that waits for a place another helper is changing says which.
+  if (run.status === "queued" && run.queuedBecause) return run.queuedBecause;
   if (run.status === "queued" || run.waiting) return "waiting its turn";
   const step =
     [...run.steps].reverse().find((s) => s.status === "running") ??
@@ -71,9 +75,23 @@ export function endedLine(run: SubRun): string {
       return `was not getting anywhere, this is what it had${stepPart}${took}`;
     case "error":
       return `it failed${stepPart}${took}`;
+    case "plan_limit":
+      return `hit its plan limit${stepPart}${took}`;
     default:
       return `done${stepPart}${took}`;
   }
+}
+
+function EvidenceLine({ run }: { run: SubRun }) {
+  const e = run.evidence;
+  if (!e) return null;
+  const left = evidenceLeft(e);
+  return (
+    <p className={`fleet-evidence${evidenceWarns(e) ? " fleet-evidence-warn" : ""}`} title={left?.full}>
+      {evidenceLine(e)}
+      {left && ` ${left.text}`}
+    </p>
+  );
 }
 
 function FleetRow({ run, label }: { run: SubRun; label: string }) {
@@ -118,6 +136,7 @@ function FleetRow({ run, label }: { run: SubRun; label: string }) {
         )}
       </span>
       <span className="fleet-who">
+        {run.engine && <AppLogo slug={run.engine.id} name={run.engine.name} src={agentLogoUrl(run.engine.logo)} />}
         <span className="fleet-agent" title={appsLine ? `${run.task}
 ${appsLine}` : run.task}>
           {label}
@@ -203,6 +222,8 @@ ${appsLine}` : run.task}>
           ))}
         </div>
       )}
+      {/* `PRF-2`, `PRF-4`: what the job changed, whether the check ran after it, what it left open. */}
+      {run.evidence && !running && <EvidenceLine run={run} />}
       {open && !running && <pre className="fleet-report">{run.text}</pre>}
       {!running && run.engine && (
         <div className="engine-after">

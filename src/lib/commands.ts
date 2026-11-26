@@ -14,6 +14,7 @@ import { cloudTarget, useAppStore, type AppState } from "./store";
 import * as api from "./api";
 import { ranked } from "./fuzzy";
 import { leaderOf } from "./leaders";
+import { sessionAge } from "./engines";
 import { addressableMembers, ledTeamOf, matchMember, membersWithoutLine } from "./members";
 import { EFFORTS } from "./effort";
 import { proposedDraft, scheduleDraft } from "./when";
@@ -43,6 +44,7 @@ export type ArgSource =
   | "onoff"
   | "apps"
   | "agents"
+  | "outside"
   | "styles";
 export type Need = "conv" | "run" | "norun" | "folder" | "changes" | "interrupted" | "turn" | "engines";
 
@@ -97,7 +99,7 @@ export type CommandResult =
   | { kind: "modifier"; send?: string }
   /** A skill command: send this as the user's message. `delegateTo` is the agent
    * `/delegate` named. */
-  | { kind: "send"; text: string; skill?: string; skillArgs?: string; delegateTo?: string }
+  | { kind: "send"; text: string; skill?: string; skillArgs?: string; delegateTo?: string; resumeSession?: string }
   /** The command needs an argument the user has not given: back to the argument
    * phase, with `keep` (an agent already named) left in the box. */
   | { kind: "needsArg"; message?: string; keep?: string }
@@ -492,6 +494,18 @@ export function argChoices(
           engineId: a.engine_id ?? undefined,
         }))
         .filter((c) => !t || c.value.includes(t) || c.label.toLowerCase().includes(t));
+    }
+    case "outside": {
+      // `/resume`: the sessions made outside Poiesis in this folder, newest first. Typed
+      // words only narrow the list, as for agents: a task's first word is not a session.
+      const t = typed.trim().toLowerCase();
+      return s.outsideSessions
+        .map((o) => ({
+          value: o.token,
+          label: `${o.name} · ${o.title}`,
+          hint: sessionAge(o.last_at_ms),
+        }))
+        .filter((c) => !t || c.value.toLowerCase().includes(t) || c.label.toLowerCase().includes(t));
     }
     case "skills":
       return filter(
@@ -1330,6 +1344,18 @@ export function splitLead(
   return agent && m ? { agent, task: (m[2] ?? "").trim() } : { agent: null, task: text };
 }
 
+/** `cc-1a2b3c4d fix the tests` → the session its first word picks, and the task after it.
+ * The first word is a token or it is nothing: `session` is `null` for anything else. */
+export function splitOutside(
+  args: string,
+  sessions: api.OutsideSession[]
+): { session: api.OutsideSession | null; task: string } {
+  const text = args.trim();
+  const m = /^(\S+)(?:\s+([\s\S]*))?$/.exec(text);
+  const session = m ? sessions.find((o) => o.token === m[1].toLowerCase()) : undefined;
+  return session && m ? { session, task: (m[2] ?? "").trim() } : { session: null, task: text };
+}
+
 /** The message a skill command goes out as: just the words after it, or
  * `Run /name` when there are none. The skill body itself is loaded by the
  * backend before the first token, from `skill` and `skillArgs`. */
@@ -1344,6 +1370,17 @@ async function skillSend(cmd: ParsedCommand, s: AppState): Promise<CommandResult
       if (!task) return { kind: "needsArg", message: `What should ${agent.name} do?`, keep: agent.slug };
       return { kind: "send", text: task, skill: cmd.name, skillArgs: task, delegateTo: agent.slug };
     }
+  }
+  // `/resume [session] task`: the first word must be a session of this folder. It goes
+  // out as `/delegate` to that session's agent, which continues the session (`XA-13`).
+  if (cmd.spec.args.lead === "outside") {
+    const { session, task } = splitOutside(args, await s.loadOutsideSessions());
+    if (!session) return fail("I don't know that session. Type /resume and pick one from the list.");
+    if (!task) return { kind: "needsArg", message: `What should ${session.name} do next in "${session.title}"?`, keep: session.token };
+    // The agent may have been switched off or have hit its limit since the list was read.
+    const target = (await s.loadDelegateTargets()).find((t) => t.slug === session.agent);
+    if (target?.disabled_reason) return fail(`${target.name} can't take this: ${target.disabled_reason.toLowerCase()}.`);
+    return { kind: "send", text: task, skill: "delegate", skillArgs: task, delegateTo: session.agent, resumeSession: session.session_id };
   }
   return {
     kind: "send",

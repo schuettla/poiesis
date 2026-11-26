@@ -196,6 +196,18 @@ pub fn list_all_artifacts_cmd(db: State<'_, Db>) -> Cmd<Vec<Artifact>> {
     db.list_all_artifacts().map_err(err)
 }
 
+/// What the Rail's hover card shows for a session, read when the pointer rests on its row.
+#[tauri::command]
+pub fn session_card_cmd(db: State<'_, Db>, conversation_id: String) -> Cmd<crate::db::SessionCard> {
+    db.session_card(&conversation_id).map_err(err)
+}
+
+/// Per chat, how many artifacts it made and files it changed: the Rail's "Has output" filter.
+#[tauri::command]
+pub fn session_outputs_cmd(db: State<'_, Db>) -> Cmd<std::collections::HashMap<String, (u32, u32)>> {
+    db.session_outputs().map_err(err)
+}
+
 #[tauri::command]
 pub fn list_blocks_cmd(db: State<'_, Db>, conversation_id: String) -> Cmd<Vec<Block>> {
     db.list_blocks(&conversation_id).map_err(err)

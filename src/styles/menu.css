@@ -69,9 +69,8 @@
   background: color-mix(in srgb, var(--danger) 9%, transparent);
 }
 
-/* An item that folds a list of destinations open under itself (the session
-   menus' "Add to project…"). The list hangs off a hairline, the way a
-   project's chats hang off theirs in the rail, and scrolls past a handful. */
+/* An item that opens a second menu beside itself (the session menus' "Add to
+   project…", the rail filter's choices). The second menu is `.rail-flyout`. */
 .row-menu {
   max-width: 260px;
 }
@@ -81,36 +80,6 @@
 .row-menu-caret {
   flex: none;
   color: var(--ink-faint);
-  transition: transform var(--t-fast);
-}
-.row-menu-caret.open {
-  transform: rotate(90deg);
-}
-.row-menu-sub {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-height: 220px;
-  overflow-y: auto;
-  padding-left: 14px;
-}
-.row-menu-sub::before {
-  content: "";
-  position: absolute;
-  left: 10px;
-  top: 4px;
-  bottom: 4px;
-  width: 1px;
-  background: var(--paper-edge-2);
-}
-.row-menu-sub .row-menu-item {
-  min-height: 28px;
-  padding: 6px 9px;
-  color: var(--ink-muted);
-}
-.row-menu-sub .row-menu-item:hover {
-  color: var(--ink);
 }
 /* A hairline between the kinds of thing a row menu does — organising the chat
    above, removing it below. */

@@ -118,3 +118,65 @@ describe("the board (TEAM-15)", () => {
     expect(runs().a.text).toBe("");
   });
 });
+
+describe("a helper waiting for a place to change, and the proof of a job (PRF-5, PRF-2)", () => {
+  it("shows why it waits, and is working again when it has its place", async () => {
+    script = (emit) => {
+      emit(started);
+      emit(spawned("a"));
+      emit({ type: "sub_waiting", run_id: "a", because: "Waiting: Codex is changing src/a.rs." });
+    };
+    await useAppStore.getState().resumeLastRun();
+    expect(runs().a).toMatchObject({ status: "queued", queuedBecause: "Waiting: Codex is changing src/a.rs." });
+
+    script = (emit) => {
+      emit(started);
+      emit(spawned("b"));
+      emit({ type: "sub_waiting", run_id: "b", because: "Waiting: Codex is changing this folder." });
+      emit({ type: "sub_waiting", run_id: "b" });
+    };
+    await useAppStore.getState().resumeLastRun();
+    expect(runs().b.status).toBe("running");
+    expect(runs().b.queuedBecause).toBeUndefined();
+  });
+
+  it("an agent app that has its place still waits for a free slot, so it is not called working here", async () => {
+    script = (emit) => {
+      emit(started);
+      emit({
+        type: "sub_spawned",
+        run_id: "e",
+        conversation_id: "child-e",
+        agent: "Codex",
+        task: "do it",
+        index: 0,
+        engine: { id: "codex", name: "Codex", paid_by: "plan", because: "U1", because_text: null, can_steer: false },
+      });
+      emit({ type: "sub_waiting", run_id: "e", because: "Waiting: Claude Code is changing this folder." });
+      emit({ type: "sub_waiting", run_id: "e" });
+    };
+    await useAppStore.getState().resumeLastRun();
+    expect(runs().e.status).toBe("queued");
+    expect(runs().e.queuedBecause).toBeUndefined();
+  });
+
+  it("keeps what the job changed when it ends", async () => {
+    script = (emit) => {
+      emit(started);
+      emit(spawned("a"));
+      emit({
+        type: "sub_ended",
+        run_id: "a",
+        status: "done",
+        stop_reason: "completed",
+        summary: "ok",
+        steps: 3,
+        ms: 5,
+        evidence: { changed: 2, check: "cargo test", state: "failed", left: ["a stub in x.rs"] },
+      });
+    };
+    await useAppStore.getState().resumeLastRun();
+    expect(runs().a.evidence).toEqual({ changed: 2, check: "cargo test", state: "failed", left: ["a stub in x.rs"] });
+    expect(runs().a.queuedBecause).toBeUndefined();
+  });
+});

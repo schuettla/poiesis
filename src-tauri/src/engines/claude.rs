@@ -32,7 +32,7 @@ use super::approve;
 use super::driver::{
     Approvals, Capabilities, DriverError, EngineDriver, ExternalOutcome, ExternalTurn, Job, Launch, ModelChoice,
 };
-use super::play::{clip, flush, keep_tail, play, steer_text, Asks, Ev};
+use super::play::{clip, edit_events, flush, keep_plan, keep_tail, play, steer_text, Asks, Ev};
 use super::tools;
 use super::process::{self, Wait, Wire};
 use super::{EngineKind, PaidBy};
@@ -217,6 +217,7 @@ async fn attempt(turn: &ExternalTurn<'_>, resume: Option<&str>) -> Result<Extern
                 Some(Wait::TimedOut) => {
                     out.stderr_tail = wire.tail.text();
                     keep_tail(job, &out.stderr_tail);
+                    keep_plan(job, out.plan_usage.as_ref());
                     flush(&mut asks).await;
                     wire.finish().await;
                     return Err(DriverError::TimedOut);
@@ -231,6 +232,7 @@ async fn attempt(turn: &ExternalTurn<'_>, resume: Option<&str>) -> Result<Extern
     out.unknown_events += wire.unknown + wire.dropped_lines();
     out.stderr_tail = wire.tail.text();
     keep_tail(job, &out.stderr_tail);
+    keep_plan(job, out.plan_usage.as_ref());
     out.self_allowed = live.self_allowed;
     let code = wire.finish().await;
 
@@ -345,7 +347,9 @@ pub fn handle_event(m: &Value, out: &mut ExternalOutcome, live: &mut Live) -> (b
                         let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
                         let (verb, target) = approve::describe_tool(name, block.get("input").unwrap_or(&Value::Null), &live.cwd);
                         live.tools.insert(id.clone(), name.to_string());
+                        let edit = edit_events(&id, name, block.get("input").unwrap_or(&Value::Null), &live.cwd);
                         ev.push(Ev::StepStart { id, verb, target });
+                        ev.extend(edit);
                     }
                     _ => {}
                 }
@@ -376,7 +380,18 @@ pub fn handle_event(m: &Value, out: &mut ExternalOutcome, live: &mut Live) -> (b
                 }
             }
         }
-        Some("rate_limit_event") | Some("stream_event") | Some("control_response") => {}
+        // `control_request` and `control_cancel_request` are how Claude Code asks for a
+        // permission over the stream. We hand it `--permission-prompt-tool` (an MCP
+        // tool of ours) instead, so they never come in a job of ours. They are in the
+        // oh-my-hermes recordings, which use the stream way (`XA-6`).
+        Some("rate_limit_event") => {
+            // Kept (`XA-9`); a value that is not an object is ignored.
+            if let Some(u) = super::limits::from_claude(m) {
+                out.plan_usage = Some(u);
+            }
+        }
+        Some("stream_event") | Some("control_response") | Some("control_request")
+        | Some("control_cancel_request") => {}
         Some("result") => return (true, ev),
         _ => out.unknown_events += 1,
     }
@@ -448,6 +463,72 @@ mod tests {
         (finish(result.expect("the recording has a result"), out), events)
     }
 
+    /// `XA-6`: the 24 Claude Code sessions oh-my-hermes recorded (2.1.322 and 2.1.323:
+    /// rewind, thinking, a model change mid-turn, helpers, late questions, background
+    /// work, plan mode, errors) all fold without a panic and without an event this
+    /// version of the driver does not know. A file may end without a `result` line.
+    #[test]
+    fn every_omher_recording_replays() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/engines/omher/real");
+        let mut files = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if !name.starts_with("claude-") || !name.ends_with(".jsonl") {
+                continue;
+            }
+            files += 1;
+            let mut out = ExternalOutcome::default();
+            let mut live = Live::new(Path::new(r"C:\proj"));
+            for line in std::fs::read_to_string(&path).unwrap().lines().filter(|l| !l.trim().is_empty()) {
+                let row: Value = serde_json::from_str(line).unwrap();
+                assert_eq!(row["dir"], "out", "{name}");
+                handle_event(&row["msg"], &mut out, &mut live);
+            }
+            assert_eq!(out.unknown_events, 0, "{name}: an event this driver does not know");
+        }
+        assert!(files >= 20, "the recordings are there ({files})");
+    }
+
+    /// `PRF-1`: the lines an edit added and removed come from the call, not from the disk.
+    #[test]
+    fn a_write_and_an_edit_in_a_recording_give_the_lines_they_changed() {
+        let edits = |events: Vec<Ev>| -> Vec<crate::engines::driver::EditSeen> {
+            events.into_iter().filter_map(|e| if let Ev::Edit(x) = e { Some(x) } else { None }).collect()
+        };
+        let (_, events) = replay(include_str!("../../../fixtures/engines/claude-2.1.301.jsonl"));
+        let seen = edits(events);
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert!(seen[0].path.ends_with("hello.txt"), "{}", seen[0].path);
+        assert_eq!((seen[0].added.len(), seen[0].removed.len()), (1, 0), "a new file is all added lines");
+
+        // oh-my-hermes's `claude-3-edit`: an Edit (`# tiny` becomes `# tiny project`) and a Write.
+        let file = include_str!("../../../fixtures/engines/omher/real/claude-3-edit.jsonl");
+        let mut out = ExternalOutcome::default();
+        let mut live = Live::new(Path::new(r"/w/proj"));
+        let mut events = Vec::new();
+        for line in file.lines().filter(|l| !l.trim().is_empty()) {
+            let row: Value = serde_json::from_str(line).unwrap();
+            events.extend(handle_event(&row["msg"], &mut out, &mut live).1);
+        }
+        let seen = edits(events);
+        let readme = seen.iter().find(|e| e.path == "README.md").expect("the Edit of README.md");
+        assert_eq!((readme.added.as_slice(), readme.removed.as_slice()), (&["# tiny project".to_string()][..], &["# tiny".to_string()][..]));
+        assert!(seen.len() >= 2, "the Write is there too: {seen:?}");
+    }
+
+    #[test]
+    fn a_multi_edit_adds_up_all_its_edits_and_another_tool_makes_none() {
+        let input = json!({"file_path": "/w/a.rs", "edits": [
+            {"old_string": "one", "new_string": "two"},
+            {"old_string": "x\ny", "new_string": "x\ny\nz"},
+        ]});
+        let ev = edit_events("t1", "MultiEdit", &input, Path::new("/w"));
+        let [Ev::Edit(e)] = &ev[..] else { panic!("{ev:?}") };
+        assert_eq!((e.path.as_str(), e.added.as_slice(), e.removed.as_slice()), ("a.rs", &["two".to_string(), "z".to_string()][..], &["one".to_string()][..]));
+        assert!(edit_events("t2", "Bash", &json!({"command": "ls"}), Path::new("/w")).is_empty());
+    }
+
     #[test]
     fn the_recorded_session_ends_with_a_report_cost_usage_and_the_refused_tool() {
         let (out, _) = replay(include_str!("../../../fixtures/engines/claude-2.1.301.jsonl"));
@@ -458,6 +539,10 @@ mod tests {
         assert!(out.notional_cost_usd.unwrap() > 0.0);
         let usage = out.usage.unwrap();
         assert!(usage.prompt_tokens > 0 && usage.output_tokens > 0);
+        // `XA-9`: what it said about the plan is kept, not dropped.
+        let plan = out.plan_usage.expect("the recording has a rate_limit_event");
+        assert_eq!(plan.windows.len(), 2);
+        assert!(!plan.reached);
         assert_eq!(out.denials, vec!["Bash"], "the denied mkdir");
         assert_eq!(out.stop_reason, "end_turn");
         assert_eq!(out.unknown_events, 0, "hooks, rate limits and tool events are all known");

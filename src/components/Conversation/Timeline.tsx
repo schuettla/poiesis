@@ -1,5 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { OrbState } from "thinking-orbs";
 import type { AgentStep } from "../../lib/types";
+import { clockText, liveActivity, stepsDuration, stepTime } from "../../lib/liveWords";
+import Orb from "../Orb/Orb";
+import Ticker from "../Ticker/Ticker";
 import { saveKeptResult, type SearchHit } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import DiagnosticsList, { locateDiagnostic } from "./Diagnostics";
@@ -287,6 +291,11 @@ function Step({ step }: { step: AgentStep }) {
               {stamp(step.result)}
             </span>
           )}
+          {step.status !== "running" && step.startedAt !== undefined && step.endedAt !== undefined && (
+            <span className="step-time" aria-hidden="true">
+              {stepTime(step.endedAt - step.startedAt)}
+            </span>
+          )}
           {expandable && (
             <button
               className="step-expand"
@@ -387,12 +396,6 @@ export function summarize(steps: AgentStep[]): string {
  * steps of scrolling history would push the part that is moving out of view. */
 const LIVE_TAIL = 6;
 
-/**
- * What the agent did, as one panel that opens while the work is happening and
- * folds to a single line once it is done — the answer is what you came for,
- * and the steps are how it was got. Your own choice wins either way: open a
- * finished run and it stays open, fold a live one and it stays folded.
- */
 /** `WRK-2`/`WRK-5`: a line where an item ended or the run started fresh. The
  * fresh start carries the note it wrote itself, which a click opens. */
 function Divider({ step }: { step: AgentStep }) {
@@ -414,7 +417,60 @@ function Divider({ step }: { step: AgentStep }) {
   );
 }
 
-export default function Timeline({ steps, live = false }: { steps: AgentStep[]; live?: boolean }) {
+/** Do these steps make a timeline? The same test `Timeline` uses to draw nothing, so the
+ * turn can tell whether it has one (`UI-4`). */
+export function hasVisibleSteps(steps: AgentStep[] | undefined): boolean {
+  return !!steps && steps.some((s) => !isPlanNote(s) && !s.divider);
+}
+
+/** `UI-4`: the head of a live timeline: the orb, "Working", what it does now and the clock. One
+ * moving line for the whole turn. The words change in place (`Ticker`). */
+function LiveHead({ steps, orb }: { steps: AgentStep[]; orb: OrbState | null }) {
+  const run = useAppStore((s) => s.activeRun);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!run) return;
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [run]);
+  return (
+    <>
+      <span className="timeline-orb">{orb && <Orb state={orb} />}</span>
+      <span className="timeline-title">Working</span>
+      <span className="timeline-sep" aria-hidden="true">
+        ·
+      </span>
+      <span className="timeline-activity">
+        <Ticker text={liveActivity(steps, run)} />
+      </span>
+      {run && (
+        <>
+          <span className="timeline-sep" aria-hidden="true">
+            ·
+          </span>
+          <span className="timeline-clock">{clockText(Date.now() - run.startedAt)}</span>
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * What the agent did, as one line that opens into its steps. While the work runs the line says
+ * what is happening now (`UI-4`); once it is done it says how many steps and how long. Closed
+ * either way: the answer is what you came for, and the steps are how it was got. Your own
+ * choice wins: open it and it stays open.
+ */
+export default function Timeline({
+  steps,
+  live = false,
+  orb = null,
+}: {
+  steps: AgentStep[];
+  live?: boolean;
+  /** The orb that goes with the live head, or none. There is only ever one orb in a turn. */
+  orb?: OrbState | null;
+}) {
   const [chosen, setChosen] = useState<boolean | null>(null);
   const [showAll, setShowAll] = useState(false);
   // `WRK-2`: a divider is where an item ended, not a step. It is drawn between
@@ -423,12 +479,14 @@ export default function Timeline({ steps, live = false }: { steps: AgentStep[]; 
   const visible = noted.filter((s) => !s.divider);
   if (!visible.length) return null;
 
-  const open = chosen ?? live;
+  // `UI-4`: closed while live. The head says what is happening; the rows are one click away.
+  const open = chosen ?? false;
   const failed = visible.filter((s) => s.status === "error").length;
   const hidden = live && !showAll ? Math.max(0, visible.length - LIVE_TAIL) : 0;
   const first = hidden ? noted.findIndex((s) => s.id === visible[hidden].id) : 0;
   const rows = noted.slice(Math.max(0, first));
   const count = `${visible.length} ${visible.length === 1 ? "step" : "steps"}`;
+  const took = live ? null : stepsDuration(visible);
 
   return (
     <div className={`timeline ${live ? "live" : "settled"}${open ? " open" : ""}`}>
@@ -440,8 +498,16 @@ export default function Timeline({ steps, live = false }: { steps: AgentStep[]; 
         <span className="timeline-twisty" aria-hidden="true">
           <ChevronIcon dir="right" size={12} strokeWidth={1.6} />
         </span>
-        <span className="timeline-title">{live ? "Working" : count}</span>
-        <span className="timeline-summary">{live ? count : summarize(visible)}</span>
+        {live ? (
+          <LiveHead steps={visible} orb={orb} />
+        ) : (
+          <>
+            <span className="timeline-title">{count}</span>
+            <span className="timeline-summary">
+              {[took === null ? "" : stepTime(took), summarize(visible)].filter(Boolean).join(" · ")}
+            </span>
+          </>
+        )}
         {failed > 0 && <span className="timeline-failed">{failed} failed</span>}
       </button>
       {open && (

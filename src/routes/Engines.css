@@ -86,6 +86,21 @@
 .engines-row-main.static:hover {
   background: none;
 }
+.engines-install {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px 12px 46px;
+}
+.engines-install code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
 .engines-row-actions {
   display: flex;
   align-items: center;

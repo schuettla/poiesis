@@ -7,6 +7,9 @@ import {
   cannotEnable,
   engineStatus,
   envToMap,
+  evidenceLeft,
+  evidenceLine,
+  evidenceWarns,
   linesToArgs,
   matchCounter,
   matchedTitle,
@@ -16,8 +19,11 @@ import {
   previewLine,
   ruleLine,
   ruleLooksWrong,
+  planLine,
+  planWhen,
   tryLine,
 } from "./engines";
+import type { PlanUsageView, RunEvidence } from "./api";
 
 const base = {
   found: true,
@@ -45,6 +51,59 @@ describe("engine wording", () => {
       "2.1.301 · free model",
     );
     expect(engineStatus({ ...base, payment: "api-key" }).text).toContain("with your API key");
+  });
+
+  it("adds how much of the plan is used, the highest window, or that the limit is reached (XA-10)", () => {
+    const now = Date.now();
+    const plan = (over: Partial<PlanUsageView> = {}): PlanUsageView => ({
+      windows: [
+        { name: "5 hours", used: 0.12, resets_at_ms: now + 3_600_000 },
+        { name: "week", used: 0.59, resets_at_ms: now + 86_400_000 },
+      ],
+      reached: false,
+      resets_at_ms: now + 3_600_000,
+      at_ms: now,
+      ...over,
+    });
+    expect(engineStatus({ ...base, plan: plan() })).toEqual({
+      text: "2.1.301 · signed in · on your plan · 59% of plan used",
+      tone: "plain",
+    });
+    expect(engineStatus({ ...base, plan: plan({ reached: true }) })).toEqual({
+      text: "2.1.301 · signed in · on your plan · plan limit reached",
+      tone: "warn",
+    });
+    // A figure from days ago says nothing about now.
+    expect(engineStatus({ ...base, plan: plan({ at_ms: now - 3 * 86_400_000 }) }).text).toBe("2.1.301 · signed in · on your plan");
+    expect(engineStatus({ ...base, plan: null }).text).toBe("2.1.301 · signed in · on your plan");
+  });
+
+  it("writes the plan line of the Usage page (XA-10)", () => {
+    const now = new Date(2026, 10, 24, 10, 0).getTime();
+    const at = (h: number, m = 0, day = 24) => new Date(2026, 10, day, h, m).getTime();
+    const plan: PlanUsageView = {
+      windows: [
+        { name: "5 hours", used: 0.11, resets_at_ms: at(14, 30) },
+        { name: "week", used: 0.59, resets_at_ms: at(10, 0, 27) },
+      ],
+      reached: false,
+      resets_at_ms: at(14, 30),
+      at_ms: now - 60_000,
+    };
+    expect(planLine(plan, now)).toEqual({ text: "Plan: 11% of 5 hours, 59% of the week. Resets 14:30.", tone: "plain" });
+    expect(planLine({ ...plan, reached: true }, now)).toEqual({ text: "Plan limit reached. Back at 14:30.", tone: "warn" });
+    // Another day says which.
+    expect(planWhen(at(9, 5, 27), now)).toMatch(/\S+ 09:05$/);
+    expect(planWhen(at(9, 5), now)).toBe("09:05");
+    // Old: said so. A reset that has passed is not repeated.
+    expect(planLine({ ...plan, at_ms: now - 30 * 3_600_000 }, now)!.text).toMatch(/\(seen yesterday\)$/);
+    expect(planLine({ ...plan, at_ms: now - 3 * 86_400_000 }, now)!.text).toMatch(/\(seen 3 days ago\)$/);
+    expect(planLine({ ...plan, windows: [{ name: "month", used: 0.06, resets_at_ms: now - 1 }], resets_at_ms: null }, now)!.text).toBe(
+      "Plan: 6% of the month.",
+    );
+    // No window and not reached: nothing to say.
+    expect(planLine({ ...plan, windows: [] }, now)).toBeNull();
+    expect(planLine({ ...plan, reached: true, resets_at_ms: null, windows: [] }, now)!.text).toBe("Plan limit reached.");
   });
 
   it("tells a never-found agent from one that went away", () => {
@@ -140,5 +199,29 @@ describe("the handover pre-match (USE-UI-10)", () => {
     expect(matchCounter({ matched: 12, declined: 1 })).toBe("matched early 12\u00d7 \u00b7 you said do it yourself 1\u00d7");
     expect(matchCounter({ matched: 3, declined: 0 })).toBe("matched early 3\u00d7");
     expect(matchCounter({ matched: 0, declined: 2 })).toBe("you said do it yourself 2\u00d7");
+  });
+});
+
+describe("evidence of an agent app's job (PRF-2, PRF-4)", () => {
+  const e = (state: RunEvidence["state"], over: Partial<RunEvidence> = {}): RunEvidence => ({ changed: 3, check: "cargo test", state, ...over });
+
+  it("words each case of the table the same way the report does", () => {
+    expect(evidenceLine(e("none", { check: null }))).toBe("Changed 3 files.");
+    expect(evidenceLine(e("passed"))).toBe("Changed 3 files. Ran cargo test after the last change: passed.");
+    expect(evidenceLine(e("failed"))).toBe("Changed 3 files. Ran cargo test after the last change: failed.");
+    expect(evidenceLine(e("before-last"))).toBe("Changed 3 files. Ran cargo test, but not after its last change.");
+    expect(evidenceLine(e("not-run"))).toBe("Changed 3 files. It did not run the project's check (cargo test).");
+    expect(evidenceLine(e("none", { changed: 1, check: null }))).toBe("Changed 1 file.");
+  });
+
+  it("warns for the failed and not-run cases only", () => {
+    expect(["none", "passed", "failed", "before-last", "not-run"].map((s) => evidenceWarns(e(s as RunEvidence["state"])))).toEqual([false, false, true, false, true]);
+  });
+
+  it("lists at most two left-open items, then how many more; the tooltip has all", () => {
+    expect(evidenceLeft(e("none"))).toBeNull();
+    expect(evidenceLeft(e("none", { left: [] }))).toBeNull();
+    expect(evidenceLeft(e("none", { left: ["a stub in a.rs"] }))).toEqual({ text: "Left: a stub in a.rs.", full: "a stub in a.rs" });
+    expect(evidenceLeft(e("none", { left: ["x", "y", "z"] }))).toEqual({ text: "Left: x, y and 1 more.", full: "x\ny\nz" });
   });
 });

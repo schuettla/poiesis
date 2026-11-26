@@ -77,6 +77,24 @@ describe("a Fleet row for an agent app", () => {
     expect(useAppStore.getState().engineFocus).toBe("claude-code");
   });
 
+  it("says 'Plan limit' next to who paid when the job ended on the plan limit, and in its end line", () => {
+    show(run({ status: "error", stopReason: "plan_limit", text: "Claude Code hit its plan limit, back at 14:30." }));
+    const chips = Array.from(container.querySelectorAll(".fleet-chip")).map((c) => c.textContent);
+    expect(chips).toEqual(["on your plan", "Plan limit", "because U1"]);
+    expect(container.querySelector(".fleet-chip-warn")).not.toBeNull();
+    expect(container.textContent).toContain("hit its plan limit");
+    show(run());
+    expect(container.querySelector(".fleet-chip-warn")).toBeNull();
+  });
+
+  it("shows the agent's mark before its name, or its first letter when it has none", () => {
+    show(run({ engine: { id: "acp:gemini", name: "Gemini CLI", logo: "gemini.svg", paid_by: "plan", because: "U1", because_text: null, can_steer: false } }));
+    expect(container.querySelector(".fleet-who .app-logo img")?.getAttribute("src")).toMatch(/agent-logos\/gemini\.svg$/);
+    show(run({ engine: { id: "acp:kimi", name: "Kimi Code", paid_by: "plan", because: "U1", because_text: null, can_steer: false } }));
+    expect(container.querySelector(".fleet-who .app-logo img")).toBeNull();
+    expect(container.querySelector(".fleet-who .app-logo")?.textContent).toBe("K");
+  });
+
   it("says 'you asked' when the user named the agent, and offers no take-back", () => {
     show(run({ engine: { ...run().engine!, because: "asked", because_text: null } }));
     expect(container.textContent).toContain("you asked");
@@ -108,6 +126,25 @@ describe("a Fleet row for an agent app", () => {
     expect(container.textContent).toContain("Copied: claude --resume sess-1");
   });
 
+  it("Continue here puts /resume and the session's word in the composer, for Claude Code and Codex", () => {
+    const asked = vi.fn();
+    useAppStore.setState({ requestComposer: asked } as never);
+    show(run({ engineSession: "11111111-2222-4333-8444-555555555555" }));
+    act(() => button("Continue here").click());
+    expect(asked).toHaveBeenCalledWith("/resume cc-55555555 ");
+    show(run({ runId: "run-2", engine: { ...run().engine!, id: "codex", name: "Codex" }, engineSession: "01a1d060-4ab7-72b2-b02b-1dbee1d5f52c" }));
+    act(() => button("Continue here").click());
+    expect(asked).toHaveBeenLastCalledWith("/resume cx-e1d5f52c ");
+  });
+
+  it("has no Continue here for another agent app, nor while it is still working", () => {
+    show(run({ runId: "run-3", engine: { ...run().engine!, id: "acp:opencode", name: "OpenCode" }, engineSession: "ses_1" }));
+    expect(button("Continue here")).toBeUndefined();
+    expect(button("Continue there")).toBeDefined();
+    show(run({ runId: "run-4", status: "running", engineSession: "11111111-2222-4333-8444-555555555555" }));
+    expect(button("Continue here")).toBeUndefined();
+  });
+
   it("has no Continue there before the agent has a session", () => {
     show(run({ engineSession: undefined }));
     expect(button("Continue there")).toBeUndefined();
@@ -135,6 +172,51 @@ describe("a Fleet row for an agent app", () => {
   it("an agent app waiting for a free slot looks like any child that is waiting its turn", () => {
     show(run({ status: "queued", text: "", startedAt: 0 }));
     expect(container.textContent).toContain("waiting its turn");
+  });
+
+  it("says what the job changed and whether the check ran after it (PRF-2), in each of the five cases", () => {
+    const line = (e: NonNullable<SubRun["evidence"]>) => {
+      show(run({ evidence: e }));
+      return container.querySelector(".fleet-evidence");
+    };
+    expect(line({ changed: 3, check: null, state: "none" })?.textContent).toBe("Changed 3 files.");
+    expect(line({ changed: 3, check: "cargo test", state: "passed" })?.textContent).toBe(
+      "Changed 3 files. Ran cargo test after the last change: passed.",
+    );
+    expect(container.querySelector(".fleet-evidence-warn")).toBeNull();
+    const failed = line({ changed: 3, check: "cargo test", state: "failed" });
+    expect(failed?.textContent).toBe("Changed 3 files. Ran cargo test after the last change: failed.");
+    expect(failed?.classList.contains("fleet-evidence-warn")).toBe(true);
+    expect(line({ changed: 1, check: "cargo test", state: "before-last" })?.textContent).toBe(
+      "Changed 1 file. Ran cargo test, but not after its last change.",
+    );
+    const never = line({ changed: 3, check: "cargo test", state: "not-run" });
+    expect(never?.textContent).toBe("Changed 3 files. It did not run the project's check (cargo test).");
+    expect(never?.classList.contains("fleet-evidence-warn")).toBe(true);
+  });
+
+  it("says nothing when no file changed, and not while the job still works", () => {
+    show(run());
+    expect(container.querySelector(".fleet-evidence")).toBeNull();
+    show(run({ status: "running", evidence: { changed: 1, check: null, state: "none" } }));
+    expect(container.querySelector(".fleet-evidence")).toBeNull();
+  });
+
+  it("adds what the change left open: two items, then 'and N more', all of them in the tooltip (PRF-4)", () => {
+    show(run({ evidence: { changed: 1, check: null, state: "none", left: ["a new TODO in src/a.rs"] } }));
+    expect(container.querySelector(".fleet-evidence")?.textContent).toBe("Changed 1 file. Left: a new TODO in src/a.rs.");
+    const left = ["a new TODO in a.rs", "a stub in b.rs", "a test switched off in c.ts", "a stub in d.rs"];
+    show(run({ evidence: { changed: 4, check: null, state: "none", left } }));
+    const el = container.querySelector(".fleet-evidence")!;
+    expect(el.textContent).toBe("Changed 4 files. Left: a new TODO in a.rs, a stub in b.rs and 2 more.");
+    expect(el.getAttribute("title")).toBe(left.join("\n"));
+  });
+
+  it("a helper waiting for a place another helper is changing says which (PRF-5)", () => {
+    show(run({ status: "queued", text: "", queuedBecause: "Waiting: Codex is changing src/a.rs." }));
+    expect(container.querySelector(".fleet-doing")?.textContent).toBe("Waiting: Codex is changing src/a.rs.");
+    show(run({ status: "queued", text: "" }));
+    expect(container.querySelector(".fleet-doing")?.textContent).toBe("waiting its turn");
   });
 
   it("says who paid for a persona's job on a free model", () => {

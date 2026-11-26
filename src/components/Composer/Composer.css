@@ -21,6 +21,10 @@
      if the last turn ends flush; bottom stays tight to keep the box low. */
   padding: 10px 24px 14px;
 }
+/* Docked under the message stream the box takes the smaller corner (lg, not xl). */
+.composer-wrap.in-stream .composer {
+  border-radius: var(--radius-lg);
+}
 /* A file is over the window: the box itself becomes the place to let go — same
    shape and surface as the composer, lit with the focus ring's indigo. */
 .composer {
@@ -53,26 +57,8 @@
   max-width: var(--chat-width);
   margin: 0 auto;
 }
-/* Keeps the composer's right edge on the stream's when the narrow-column
-   rule in Chat.css gives the session menu its own lane (same threshold: this
-   box is the chat column minus its 24px side padding). */
 .composer-wrap {
   container-type: inline-size;
-}
-@container (max-width: 752px) {
-  .composer-col {
-    margin-right: 32px;
-  }
-}
-@container (max-width: 912px) {
-  :root[data-chat-width="medium"] .composer-col {
-    margin-right: 32px;
-  }
-}
-@container (max-width: 1092px) {
-  :root[data-chat-width="wide"] .composer-col {
-    margin-right: 32px;
-  }
 }
 
 .composer {

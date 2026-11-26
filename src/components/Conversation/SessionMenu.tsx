@@ -3,10 +3,11 @@ import * as api from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import { workspaceAvailable } from "../../lib/experiments";
 import ConfirmDialog from "../Confirm/ConfirmDialog";
+import { ChevronIcon } from "../Icons/Icons";
 import ProjectMenuItems from "./ProjectMenuItems";
 
 /**
- * The session's own actions, top-right of the chat. Mirrors the rail row's
+ * The session's own actions, a chevron beside the chat's name in the header. Mirrors the rail row's
  * context menu so a chat can be scheduled or removed from wherever you happen
  * to be looking at it — and asks the same question before removing it.
  */
@@ -22,6 +23,8 @@ export default function SessionMenu() {
   const setEnginesOff = useAppStore((s) => s.setEnginesOff);
   const anyEngine = useAppStore((s) => s.engines.some((e) => e.enabled && e.delegate_ready));
   const [open, setOpen] = useState(false);
+  // Fixed, from the chevron's own box: the header strip scrolls sideways and would clip a menu hung inside it.
+  const [at, setAt] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [confirming, setConfirming] = useState(false);
   // `TEAM-22`: after a session that used two or more helpers, they can be kept as a team. Asked of
   // the backend when the menu opens, never offered unasked.
@@ -40,24 +43,40 @@ export default function SessionMenu() {
     };
   }, [open, conversationId]);
 
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
   if (!conversation) return null;
 
   return (
-    <div className="session-menu-wrap">
+    // Inside the session tab this is a child of it: its clicks and keys are the menu's, not the tab's.
+    <div className="session-menu-wrap" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
       <button
         className="session-more"
         aria-label="Session actions"
         aria-haspopup="menu"
         aria-expanded={open}
         title="Session actions"
-        onClick={() => setOpen((v) => !v)}
+        onClick={(e) => {
+          // Inside a tab: pressing the chevron must not also mean "show the chat".
+          e.stopPropagation();
+          const r = e.currentTarget.getBoundingClientRect();
+          setAt({ top: r.bottom + 4, left: Math.max(8, Math.min(r.left, window.innerWidth - 268)) });
+          setOpen((v) => !v);
+        }}
       >
-        ⋯
+        <ChevronIcon dir="down" size={12} />
       </button>
       {open && (
         <>
-          <div className="row-menu-backdrop" onClick={() => setOpen(false)} />
-          <div className="row-menu" role="menu">
+          {/* `data-no-drag`: the header is the window's drag surface, and a press on this backdrop would
+              bubble up to it and start dragging the window instead of closing the menu. */}
+          <div className="row-menu-backdrop" data-no-drag onClick={() => setOpen(false)} />
+          <div className="row-menu session-menu" role="menu" style={at}>
             {/* The mode is the chat's own, so it is changed from the chat's own
                 menu as well as by `/workspace`. An experiment (`EXP-3`): not
                 offered until it has been turned on in Settings. */}

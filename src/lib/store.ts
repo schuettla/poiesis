@@ -50,6 +50,7 @@ import { workspaceAvailable } from "./experiments";
 import type { VerifyEntry } from "./verify";
 import { emptyThought, type TurnThought } from "./thought";
 import { leaderOf } from "./leaders";
+import { NO_RAIL_FILTERS, RAIL_GROUPS, type RailFilters, type RailGroup } from "./railView";
 import { getSpeechBridge } from "./voice/bridge";
 import {
   EMPTY_PREFS,
@@ -80,6 +81,8 @@ const SELF_BORN_KEY = "self.born";
 const SELF_INTRODUCED_KEY = "self.introduced";
 const DOCK_OPEN_KEY = "workbench.open";
 const DOCK_WIDTH_KEY = "workbench.width";
+const RAIL_WIDTH_KEY = "rail.width";
+const RAIL_GROUP_KEY = "rail.group";
 /** `SHL-17`: the header strip's open tabs, one set for the whole app. */
 const TAB_SET_KEY = "shell.tabs";
 const EXPERT_KEY = "ui.expert";
@@ -99,6 +102,11 @@ const FIRST_TIME_KEYS = ["recall", "retrieval", "digest", "proposal", "koryphaio
 const EXPLAIN_DWELL_MS = 6000;
 /** Matches the `--dock-w` initial value in App.css. */
 const DEFAULT_DOCK_WIDTH = 340;
+/** Matches the `--rail-w` initial value in App.css. */
+const DEFAULT_RAIL_WIDTH = 232;
+const RAIL_MIN = 200;
+const RAIL_MAX = 420;
+const clampRail = (px: number) => Math.round(Math.min(RAIL_MAX, Math.max(RAIL_MIN, px)));
 /** Below this, a conversation is too slight to have taught anything (REF-3). */
 const REFLECT_MIN_MESSAGES = 8;
 /** PRO-4: last calendar date the daily rebuild tick ran, so it fires at most
@@ -288,6 +296,8 @@ export interface AppState {
   lastChatModelId: string;
   modelFilter: ModelFilter;
   engineReady: boolean;
+  /** HEAL-1: the runtime died and self-repair did not bring it back. */
+  engineFailed: boolean;
   /** Which library model the running engine currently holds (null = none). */
   loadedModelId: string | null;
   /** `TIER-UI-3`: the window the loaded model was meant to start with, so its
@@ -395,6 +405,10 @@ export interface AppState {
    * one cannot be used. Read when the menu opens and when the command is sent. */
   delegateTargets: api.DelegateTarget[];
   loadDelegateTargets: () => Promise<api.DelegateTarget[]>;
+  /** `XA-13`: the Claude Code and Codex sessions made outside Poiesis in the active
+   * chat's folder, for `/resume`. Read when its menu opens and when it is sent. */
+  outsideSessions: api.OutsideSession[];
+  loadOutsideSessions: () => Promise<api.OutsideSession[]>;
 
   /** Catalog downloads in flight, keyed by catalog entry id — percent
    * complete, or "done" briefly while the library refreshes. Lives in the
@@ -457,6 +471,11 @@ export interface AppState {
   steerSubRun: (runId: string, text: string) => Promise<boolean>;
   /** `SUB-7`: stop a child, keeping what it already has. */
   stopSubRun: (runId: string) => Promise<void>;
+  /** `UI-3`: open the chat a helper's job came from and bring the turn that started it into view.
+   * `revealMessageId` is what the stream scrolls to; it clears the message once it has. */
+  openTurnOf: (runId: string) => Promise<void>;
+  revealMessageId: string | null;
+  clearReveal: () => void;
   /** `SUB-UI-4`: which agent asked for a pending permission, by request id.
    * Absent means the lead asked. */
   permissionAgents: Record<string, string>;
@@ -1077,6 +1096,20 @@ export interface AppState {
   /** True while the divider is being dragged, so the shell drops its easing. */
   dockDragging: boolean;
   setDockDragging: (dragging: boolean) => void;
+  /** The left rail's width in px, set by dragging its edge. Persisted across restarts. */
+  railWidth: number;
+  setRailWidth: (px: number) => void;
+  /** True while the rail's edge is dragged, so the shell drops its easing. */
+  railDragging: boolean;
+  setRailDragging: (dragging: boolean) => void;
+  /** What the Rail's chats are grouped by; kept across restarts. */
+  railGroup: RailGroup;
+  setRailGroup: (group: RailGroup) => void;
+  /** The funnel's filters besides "Led by" (`leaderFilter`); not kept across restarts. */
+  railFilters: RailFilters;
+  setRailFilters: (patch: Partial<RailFilters>) => void;
+  /** Every filter off, "Led by" included. */
+  clearRailFilters: () => void;
   /** `SHL-27`: show the conversation again without closing anything — what the
    * session tab does. Distinct from `closeItem`: the tabs stay, and coming
    * back to one costs a click rather than reopening it. */
@@ -1264,9 +1297,6 @@ function applyChatWidth(id: string) {
   const w = CHAT_WIDTHS.find((c) => c.id === id) ?? CHAT_WIDTHS[0];
   const root = document.documentElement;
   root.style.setProperty("--chat-width", `${w.px}px`);
-  // The container-query rules that make room for the session menu cannot read
-  // a variable, so they key off this attribute instead.
-  root.setAttribute("data-chat-width", w.id);
 }
 
 function applyReadingScale(scale: number) {
@@ -1742,6 +1772,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedModelId: mockModels[0].id,
   modelFilter: "all",
   engineReady: false,
+  engineFailed: false,
   loadedModelId: null,
   loadedWindow: null,
   loadingModel: null,
@@ -1920,7 +1951,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const entry = get().libraryModels.find((e) => e.id === id);
     if (!entry) return;
     const promise = (async () => {
-      set({ loadingModel: { id, label: "Starting the runtime…" }, engineReady: false });
+      set({ loadingModel: { id, label: "Starting the runtime…" }, engineReady: false, engineFailed: false });
       try {
         await api.loadModel({ modelPath: entry.path }, (p) => {
           const pct = p.total ? ` ${Math.round((p.received / p.total) * 100)}%` : "";
@@ -1928,6 +1959,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         });
         set({
           engineReady: true,
+          // The old engine may have died while this one was downloading.
+          engineFailed: false,
           selectedModelId: id,
           loadedModelId: id,
           loadedWindow: entry.window ?? null,
@@ -1948,7 +1981,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   stopEngine: async () => {
     if (api.inTauri()) await api.stopEngine().catch(() => {});
-    set({ engineReady: false, loadedModelId: null, loadedWindow: null, loadingModel: null });
+    set({ engineReady: false, engineFailed: false, loadedModelId: null, loadedWindow: null, loadingModel: null });
     get().refreshLibrary().catch(() => {});
   },
 
@@ -2122,6 +2155,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       return list;
     } catch {
       return get().delegateTargets;
+    }
+  },
+  outsideSessions: [],
+  loadOutsideSessions: async () => {
+    const conv = get().activeConversationId;
+    if (!api.inTauri()) return get().outsideSessions;
+    // Another chat's folder has other sessions: a failed read is an empty list, not the last one.
+    try {
+      const list = conv ? await api.listOutsideSessions(conv) : [];
+      set({ outsideSessions: list });
+      return list;
+    } catch {
+      set({ outsideSessions: [] });
+      return [];
     }
   },
 
@@ -3617,6 +3664,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       autoReflectRaw,
       dockOpenRaw,
       dockWidthRaw,
+      railWidthRaw,
+      railGroupRaw,
       recallDeclinedRaw,
       indexExplainedRaw,
       tabSetRaw,
@@ -3638,6 +3687,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       api.getSetting(REFLECT_AUTO_KEY),
       api.getSetting(DOCK_OPEN_KEY),
       api.getSetting(DOCK_WIDTH_KEY),
+      api.getSetting(RAIL_WIDTH_KEY),
+      api.getSetting(RAIL_GROUP_KEY),
       api.getSetting(RECALL_DECLINED_KEY),
       api.getSetting(INDEX_EXPLAINED_KEY),
       api.getSetting(TAB_SET_KEY),
@@ -3719,6 +3770,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       // The Workbench is open unless the user closed it last time.
       dockOpen: dockOpenRaw !== "0",
       dockWidth: Math.min(720, Math.max(260, Number(dockWidthRaw) || DEFAULT_DOCK_WIDTH)),
+      railWidth: clampRail(Number(railWidthRaw) || DEFAULT_RAIL_WIDTH),
+      railGroup: RAIL_GROUPS.some((g) => g.id === railGroupRaw) ? (railGroupRaw as RailGroup) : "date",
       itemTabs,
       activeItemId,
       selected: itemToSelection(itemTabs.find((t) => itemKey(t) === activeItemId)),
@@ -4727,6 +4780,8 @@ export const useAppStore = create<AppState>((set, get) => ({
                 ...(row.engine_session ? { engineSession: row.engine_session } : {}),
               }
             : {}),
+          ...(row.evidence ? { evidence: row.evidence } : {}),
+          ...(row.queued_because ? { queuedBecause: row.queued_because } : {}),
         };
       }
       return { subRuns };
@@ -4754,6 +4809,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     const delivered = await api.steerSubagent(runId, body).catch(() => false);
     if (delivered) patchSubRun(set, runId, { steerPending: true });
     return delivered;
+  },
+
+  revealMessageId: null,
+  clearReveal: () => set({ revealMessageId: null }),
+  openTurnOf: async (runId) => {
+    const run = get().subRuns[runId];
+    if (!run) return;
+    await get().openSession(run.parentConversationId);
+    const turn = get()
+      .conversations.find((c) => c.id === run.parentConversationId)
+      ?.messages.find((m) => m.subRunIds?.includes(runId));
+    set({ revealMessageId: turn?.id ?? null });
   },
 
   stopSubRun: async (runId) => {
@@ -4904,6 +4971,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ dockDragging });
     if (!dockDragging && api.inTauri()) {
       api.setSetting(DOCK_WIDTH_KEY, String(get().dockWidth)).catch(() => {});
+    }
+  },
+  railWidth: DEFAULT_RAIL_WIDTH,
+  setRailWidth: (px) => {
+    const railWidth = clampRail(px);
+    if (get().railWidth === railWidth) return;
+    set({ railWidth });
+    if (!get().railDragging && api.inTauri()) {
+      api.setSetting(RAIL_WIDTH_KEY, String(railWidth)).catch(() => {});
+    }
+  },
+  railGroup: "date",
+  setRailGroup: (railGroup) => {
+    set({ railGroup });
+    if (api.inTauri()) api.setSetting(RAIL_GROUP_KEY, railGroup).catch(() => {});
+  },
+  railFilters: NO_RAIL_FILTERS,
+  setRailFilters: (patch) => set((s) => ({ railFilters: { ...s.railFilters, ...patch } })),
+  clearRailFilters: () => set({ railFilters: NO_RAIL_FILTERS, leaderFilter: null }),
+  railDragging: false,
+  setRailDragging: (railDragging) => {
+    set({ railDragging });
+    if (!railDragging && api.inTauri()) {
+      api.setSetting(RAIL_WIDTH_KEY, String(get().railWidth)).catch(() => {});
     }
   },
   showConversation: () => {
@@ -5981,6 +6072,14 @@ export async function chimeIn(get: () => AppState, convId: string): Promise<void
   await get().startUnaskedReply(convId, next.role, next.nudge);
 }
 
+/** `PRF-5`: what a helper's card shows while it waits for a place to change, and once it has it.
+ * An agent app takes its own place in line next (`run_started`), so only a helper of Poiesis's
+ * own goes back to working here. */
+function waitingPatch(run: SubRun | undefined, because: string | undefined): Partial<SubRun> {
+  if (because) return { status: "queued", queuedBecause: because };
+  return { queuedBecause: undefined, ...(run && !run.engine ? { status: "running" as const } : {}) };
+}
+
 function patchSubRun(set: StoreSet, runId: string, patch: Partial<SubRun>) {
   set((s) =>
     s.subRuns[runId]
@@ -6063,6 +6162,7 @@ export function applySubEvent(set: StoreSet, runId: string, event: api.AgentEven
               verb: event.verb,
               target: event.target,
               status: "running" as const,
+              startedAt: Date.now(),
               ...(group ? { parallelGroup: group } : {}),
               ...(event.parent ? { nestedUnder: event.parent } : {}),
             },
@@ -6090,7 +6190,7 @@ export function applySubEvent(set: StoreSet, runId: string, event: api.AgentEven
           ...run,
           steps: steps.map((st) =>
             st.id === event.id
-              ? { ...st, status: "done" as const, result: event.result ?? undefined }
+              ? { ...st, status: "done" as const, result: event.result ?? undefined, endedAt: Date.now() }
               : st
           ),
         };
@@ -6100,7 +6200,7 @@ export function applySubEvent(set: StoreSet, runId: string, event: api.AgentEven
           ...run,
           steps: steps.map((st) =>
             st.id === event.id
-              ? { ...st, status: "error" as const, result: `— ${event.error}` }
+              ? { ...st, status: "error" as const, result: `— ${event.error}`, endedAt: Date.now() }
               : st
           ),
         };
@@ -6461,6 +6561,21 @@ export function applyReflecting(s: AppState, e: api.ReflectingEvent): Partial<Ap
 }
 
 /** `SLP-1`: the tidy-up started or ended. A running turn keeps the mark `active`. */
+export function applyHealed(e: api.HealedEvent): Partial<AppState> {
+  const said = { presence: "healing" as const };
+  if (e.ok) return { ...said, healToast: "↻ My engine stalled — I restarted it." };
+  // Nothing is serving any more. Forgetting the loaded model is what lets the
+  // next message, or picking it again, start it afresh.
+  return {
+    ...said,
+    healToast: "↻ I couldn't keep my runtime alive — I've stopped trying. Check the Runtime page.",
+    engineReady: false,
+    engineFailed: true,
+    loadedModelId: null,
+    loadedWindow: null,
+  };
+}
+
 export function applyTending(s: AppState, on: boolean): Partial<AppState> {
   if (on) return s.busy ? {} : { presence: "tending" as const };
   if (s.presence !== "tending") return {};
@@ -6582,6 +6697,7 @@ export function turnRunOptions(
     if (sendOpts.skillArgs) turn.skillArgs = sendOpts.skillArgs;
   }
   if (sendOpts?.delegateTo) turn.delegateTo = sendOpts.delegateTo;
+  if (sendOpts?.resumeSession) turn.resumeSession = sendOpts.resumeSession;
   // `SEE-3`: what the composer's hint was taken up on, for this message alone.
   if (mods.web) turn.web = true;
   if (mods.noHandover) turn.noHandover = true;
@@ -7084,7 +7200,12 @@ async function streamAssistantTurn(
               ms: e.ms,
               steerPending: false,
               waiting: false,
+              queuedBecause: undefined,
+              ...(e.evidence ? { evidence: e.evidence } : {}),
             });
+            break;
+          case "sub_waiting":
+            patchSubRun(set, e.run_id, waitingPatch(get().subRuns[e.run_id], e.because));
             break;
           case "steps_parallel":
             // `HRN-4`: these are about to start together. The batch is named
@@ -7098,6 +7219,7 @@ async function streamAssistantTurn(
               verb: e.verb,
               target: e.target,
               status: "running",
+              startedAt: Date.now(),
               ...(parallelOf[e.id] ? { parallelGroup: parallelOf[e.id] } : {}),
               ...(e.parent ? { nestedUnder: e.parent } : {}),
             });
@@ -7127,6 +7249,7 @@ async function streamAssistantTurn(
             if (s) {
               s.status = "done";
               s.result = e.result ?? undefined;
+              s.endedAt = Date.now();
             }
             patchAssistant(set, convId, assistantId, { steps: [...steps] });
             break;
@@ -7136,6 +7259,7 @@ async function streamAssistantTurn(
             if (s) {
               s.status = "error";
               s.result = `— ${e.error}`;
+              s.endedAt = Date.now();
             }
             patchAssistant(set, convId, assistantId, { steps: [...steps] });
             break;
@@ -7691,6 +7815,11 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
       patchSubRun(set, e.run_id, { waiting: false });
       return;
     }
+    // `PRF-5`: a background helper waits for a place another helper is changing.
+    if (e.type === "sub_waiting") {
+      patchSubRun(set, e.run_id, waitingPatch(get().subRuns[e.run_id], e.because));
+      return;
+    }
     if (e.type !== "sub_ended") return;
     patchSubRun(set, e.run_id, {
       status: e.status,
@@ -7699,6 +7828,8 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
       endedAt: Date.now(),
       ms: e.ms,
       steerPending: false,
+      queuedBecause: undefined,
+      ...(e.evidence ? { evidence: e.evidence } : {}),
     });
     // Say so. An agent finishing quietly, minutes after the reply that started
     // it, is work the person never learns happened.
@@ -7725,12 +7856,7 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
     if (e.collection === "facts") get().noteGlobalFactChange();
   });
   api.onAppEvent<api.HealedEvent>("poiesis-healed", (e) => {
-    set(() => ({
-      presence: "healing" as const,
-      healToast: e.ok
-        ? "↻ My engine stalled — I restarted it."
-        : "↻ I couldn't keep my runtime alive — I've stopped trying. Check the Runtime page.",
-    }));
+    set(() => applyHealed(e));
     // The healing state is a moment, not a mode.
     setTimeout(() => {
       set((s) => (s.presence === "healing" ? { presence: "idle" } : {}));

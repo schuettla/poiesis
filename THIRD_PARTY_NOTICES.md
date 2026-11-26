@@ -70,3 +70,21 @@ under CC BY need attribution to the dataset authors named in that card.
 
 Piper voices are fine-tuned from a base voice; the license of the base data is
 linked in each voice's model card (`MODEL_CARD` in its folder).
+
+## Agent apps (plans/AGENT_APPS_AND_PROOF_PLAN.md)
+
+- **oh-my-hermes** (rlaope and contributors). MIT.
+  https://github.com/rlaope/oh-my-hermes .
+  Recorded agent sessions in `fixtures/engines/omher/`; the logic of
+  `src-tauri/src/engines/past.rs` is ported from
+  `apps/omher/src-tauri/src/past_chats.rs`; the plan-limit words in
+  `src-tauri/src/engines/limits.rs` and the categories in
+  `src-tauri/src/agent/integrity.rs` follow its `fanout_dispatch.py` and
+  `completion_integrity.py`. `src/lib/linkKinds.ts` (how a link is read) and
+  `src/components/Composer/promptHistory.ts` (earlier prompts with the arrow
+  keys) are ported from `apps/omher/src/chat/parts/linkKinds.ts` and
+  `promptHistory.ts`, with their tests. The licence text is in
+  `fixtures/engines/omher/README.md`.
+- **Lobe Icons** (LobeHub). MIT. https://github.com/lobehub/lobe-icons .
+  The agent marks in `public/agent-logos/`, taken from oh-my-hermes, unedited.
+  Each mark belongs to its owner and only names that tool in the app.

@@ -107,6 +107,24 @@ describe("the command palette", () => {
     expect(chat.querySelector(".palette-meta")?.textContent).toBe("Harness");
   });
 
+  it("finds a helper by its title (UI-3) and names the chat it came from, but does not list it as recent", () => {
+    act(() =>
+      useAppStore.setState({
+        conversations: [
+          conv("c1", "Cache invalidation bug", "p1"),
+          { ...conv("h1", "Parse the logs"), parentConversationId: "c1" },
+        ],
+      })
+    );
+    press("k", { ctrlKey: true });
+    expect(container.querySelectorAll('[role="option"] .palette-label').length).toBeGreaterThan(0);
+    expect(Array.from(container.querySelectorAll('[role="option"] .palette-label')).map((l) => l.textContent)).not.toContain("Parse the logs");
+    type("parse");
+    const hit = container.querySelector('[role="option"]')!;
+    expect(hit.querySelector(".palette-label")?.textContent).toBe("Parse the logs");
+    expect(hit.querySelector(".palette-meta")?.textContent).toBe("Cache invalidation bug");
+  });
+
   it("moves with the arrows and opens the selection on Enter", () => {
     press("k", { ctrlKey: true });
     type("e");

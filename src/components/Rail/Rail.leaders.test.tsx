@@ -63,9 +63,9 @@ const row = (title: string) =>
 const click = (el: Element | null | undefined) => act(() => (el as HTMLElement).click());
 const openMenu = () => click(container.querySelector('[aria-label="More chat options"]'));
 const leaderItem = (name: string) =>
-  Array.from(container.querySelectorAll<HTMLButtonElement>(".rail-leader-item")).find((b) => b.querySelector(".row-menu-label")?.textContent === name)!;
+  Array.from(document.querySelectorAll<HTMLButtonElement>(".rail-leader-item")).find((b) => b.querySelector(".row-menu-label")?.textContent === name)!;
 const item = (text: string) =>
-  Array.from(container.querySelectorAll<HTMLButtonElement>(".rail-filter-menu button")).find((b) => b.textContent?.startsWith(text));
+  Array.from(document.querySelectorAll<HTMLButtonElement>(".rail-popup button")).find((b) => b.textContent?.startsWith(text));
 
 describe("the marker", () => {
   it("shows the persona's face and says who leads, on a chat a persona leads", () => {
@@ -92,7 +92,8 @@ describe("the marker", () => {
   it("comes before the title, and the workspace mark after it", () => {
     setup([mira], [conv("w", { leader: "persona:p1", personaId: "p1", workspace: true })]);
     render();
-    const kids = Array.from(row("w").children).map((c) => c.className.split(" ")[0]);
+    // Nothing before the leader: no row is indented for a mark it does not have.
+    const kids = Array.from(row("w").querySelector(".chat-line")!.children).map((c) => c.className.split(" ")[0]);
     expect(kids.slice(0, 3)).toEqual(["chat-leader", "chat-title", "chat-workspace"]);
   });
 });
@@ -105,11 +106,12 @@ describe("the filter", () => {
     conv("plain", { leader: null }),
   ];
 
-  it("has no ⋯ for the list until there is a persona", () => {
+  it("offers no leaders to pick from until there is a persona", () => {
     setup([], chats());
     render();
-    expect(container.querySelector('[aria-label="More chat options"]')).toBeNull();
-    expect(container.querySelector(".rail-filter")).toBeNull();
+    openMenu();
+    expect(item("Show chats led by")).toBeUndefined();
+    expect(item("Status")).toBeDefined();
   });
 
   it("lists the leaders with how many chats each leads", () => {
@@ -117,7 +119,7 @@ describe("the filter", () => {
     render();
     openMenu();
     click(item("Show chats led by"));
-    const rows = Array.from(container.querySelectorAll(".rail-leader-item")).map(
+    const rows = Array.from(document.querySelectorAll(".rail-leader-item")).map(
       (b) => `${b.querySelector(".row-menu-label")?.textContent} ${b.querySelector(".row-stamp")?.textContent}`
     );
     expect(rows).toEqual(["Poiesis 1", "Mira 2", "Atlas 1"]);
@@ -169,6 +171,49 @@ describe("the filter", () => {
     render();
     expect(container.querySelector(".project-row")).toBeNull();
     expect(titles()).toEqual(["with Mira"]);
+  });
+
+  it("opens each choice as a flyout beside the menu, not as a list inside it", () => {
+    setup([mira], chats());
+    render();
+    openMenu();
+    const menu = document.querySelector(".rail-filter-popup")!;
+    expect(document.querySelector(".rail-flyout")).toBeNull();
+    click(item("Show chats led by"));
+    const fly = document.querySelector(".rail-flyout")!;
+    expect(fly.getAttribute("aria-label")).toBe("Leaders");
+    expect(menu.contains(fly)).toBe(false);
+    // Another choice takes the flyout over.
+    click(item("Status"));
+    expect(document.querySelector(".rail-flyout")?.getAttribute("aria-label")).toBe("Status");
+  });
+
+  it("takes Escape back one level: the flyout, then the menu", () => {
+    setup([mira], chats());
+    render();
+    openMenu();
+    click(item("Status"));
+    const esc = () => act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    esc();
+    expect(document.querySelector(".rail-flyout")).toBeNull();
+    expect(document.querySelector(".rail-filter-popup")).not.toBeNull();
+    esc();
+    expect(document.querySelector(".rail-filter-popup")).toBeNull();
+  });
+
+  it("filters by project, and the chip says so", () => {
+    setup([mira], [conv("in shop", { projectId: "s" }), conv("loose")], {
+      projects: [{ id: "s", name: "Shop", rootPath: null }],
+      expandedProjects: ["s"],
+    });
+    render();
+    openMenu();
+    click(item("Project"));
+    click(Array.from(document.querySelectorAll<HTMLButtonElement>(".rail-flyout button")).find((b) => b.textContent?.startsWith("No project")));
+    expect(titles()).toEqual(["loose"]);
+    expect(container.querySelector(".rail-filter-chip")?.textContent).toContain("No project");
+    click(container.querySelector(".rail-filter-chip"));
+    expect(titles().sort()).toEqual(["in shop", "loose"]);
   });
 
   it("is what a persona's link sets, and opens a collapsed sidebar", () => {

@@ -99,6 +99,8 @@ pub struct ExternalOutcome {
     pub resume_failed: bool,
     /// Its sandbox was not set up, so it was made to ask about every step.
     pub sandbox_off: bool,
+    /// What it last said about the person's plan (`XA-9`). Claude Code and Codex only.
+    pub plan_usage: Option<super::limits::PlanUsage>,
 }
 
 /// How to start one app, resolved from its row and the catalog.
@@ -115,6 +117,9 @@ pub struct Launch {
     /// freely (an ACP agent's own permission setting). Empty = nothing changes.
     pub auto_env: Vec<(String, String)>,
     pub model: Option<String>,
+    /// The `agentInfo.name` the program must send in its ACP `initialize` reply
+    /// (the catalog's `agent_name`). `None` for an agent added by hand.
+    pub expect_name: Option<String>,
 }
 
 /// One turn. **Try it** (`CLI-13`) is the narrow form: a task in a folder, no
@@ -178,17 +183,37 @@ pub struct Trace {
     pub steps: std::sync::Mutex<Vec<StepRecord>>,
     pub said: std::sync::Mutex<String>,
     pub stderr: std::sync::Mutex<String>,
+    /// What it last said about the plan, kept when the turn ends in an error:
+    /// a limit is how some turns end (`XA-11`).
+    pub plan_usage: std::sync::Mutex<Option<super::limits::PlanUsage>>,
+    /// The lines each file edit added and removed, as the agent reported them
+    /// (`PRF-1`). Never read from the disk.
+    pub edits: std::sync::Mutex<Vec<EditSeen>>,
 }
 
-/// Can Poiesis drive this agent for a delegated job yet? Claude Code and Codex, and
-/// an ACP agent whose way of being made to ask first is recorded in the catalog (an
-/// ACP agent added by hand is not: we cannot know it asks before it acts).
-pub fn delegate_ready(kind: EngineKind, id: &str) -> bool {
-    match kind {
-        EngineKind::ClaudeCode => true,
-        EngineKind::Acp => catalog::find(id).is_some_and(|e| !e.ask_everything_env.is_empty()),
-        EngineKind::Codex => true,
-    }
+/// One file edit an agent app made, as the lines it added and removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditSeen {
+    /// The agent's tool call (and the file in it), so a call reported twice counts once.
+    pub id: String,
+    /// Relative to the working folder when it is inside it, with `/` between parts.
+    pub path: String,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+}
+
+/// Can Poiesis drive this agent for a delegated job yet? Every agent can take work.
+/// An ACP agent asks before it acts as far as its own settings say, and each question
+/// reaches the person as an approval card. OpenCode is the one agent we make ask
+/// everything (`ask_everything_env`), because it never asks by default.
+pub fn delegate_ready(_kind: EngineKind, _id: &str) -> bool {
+    true
+}
+
+/// Do we make this agent ask before it acts? Only where the catalog says how
+/// (`ask_everything_env`): OpenCode. Any other ACP agent follows its own settings.
+pub fn forced_asking(id: &str) -> bool {
+    catalog::find(id).is_some_and(|e| !e.ask_everything_env.is_empty())
 }
 
 /// Can this agent be given Poiesis's own tools (`MCPS-2`)? Only where the way to
@@ -261,6 +286,7 @@ pub fn launch_for(row: &EngineRow) -> Result<Launch, DriverError> {
         env,
         auto_env: entry.map(|e| e.auto_edits_env.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default(),
         model: row.model.clone(),
+        expect_name: entry.and_then(|e| e.agent_name.clone()),
     })
 }
 
@@ -309,6 +335,15 @@ mod tests {
         row.program = Some("C:\\x\\mine.exe".into());
         row.args_json = r#"["--serve","acp"]"#.into();
         assert_eq!(launch_for(&row).unwrap().base_args, vec!["--serve", "acp"]);
+    }
+
+    #[test]
+    fn every_kind_of_agent_can_take_work_but_only_opencode_is_made_to_ask() {
+        assert!(delegate_ready(EngineKind::ClaudeCode, "claude-code"));
+        assert!(delegate_ready(EngineKind::Acp, "acp:gemini"), "a catalog ACP agent");
+        assert!(delegate_ready(EngineKind::Acp, "acp:custom-1"), "an ACP agent added by hand");
+        assert!(forced_asking("acp:opencode"));
+        assert!(!forced_asking("acp:gemini") && !forced_asking("acp:custom-1"));
     }
 
     #[test]

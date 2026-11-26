@@ -9,7 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import Composer from "./Composer";
 import { useAppStore } from "../../lib/store";
-import type { DelegateTarget } from "../../lib/api";
+import type { DelegateTarget, OutsideSession } from "../../lib/api";
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 Element.prototype.scrollTo = () => {};
@@ -171,5 +171,63 @@ describe("the chip for a chat that keeps agent apps out", () => {
       });
     });
     expect(chip()).not.toContain("External agents off");
+  });
+});
+
+describe("/resume names a session made outside Poiesis in the same menu (XA-14)", () => {
+  const SESSIONS: OutsideSession[] = [
+    {
+      engine_id: "claude-code",
+      agent: "claude-code",
+      name: "Claude Code",
+      session_id: "11111111-2222-4333-8444-555555555555",
+      title: "Fix the login",
+      last_at_ms: Date.now() - 2 * 3_600_000,
+      token: "cc-55555555",
+    },
+  ];
+  const note = () => container.querySelector(".command-menu-note")?.textContent ?? "";
+
+  beforeEach(async () => {
+    await act(async () => {
+      useAppStore.setState({
+        outsideSessions: SESSIONS,
+        conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [], folderPath: "C:\work\app" } as never],
+      });
+    });
+  });
+
+  it("lists the sessions with their agent, title and age while the first word is being typed", () => {
+    type("/resume ");
+    expect(choices()).toEqual(["Claude Code · Fix the login"]);
+    expect(rows()[0].textContent).toContain("2 h ago");
+    expect(note()).toContain("Pick a session");
+  });
+
+  it("Enter on a session takes its word into the box, and the task then goes out resuming it", async () => {
+    type("/resume ");
+    await press("ArrowDown");
+    await press("Enter");
+    expect(input().value).toBe("/resume cc-55555555 ");
+    expect(sent).toHaveLength(0);
+    type("/resume cc-55555555 add tests");
+    await press("Enter");
+    expect(sent).toHaveLength(1);
+    expect(sent[0].text).toBe("add tests");
+    expect(sent[0].extras).toMatchObject({
+      skill: "delegate",
+      skillArgs: "add tests",
+      delegateTo: "claude-code",
+      resumeSession: "11111111-2222-4333-8444-555555555555",
+    });
+  });
+
+  it("says so when the folder has none, in place of the task hint", async () => {
+    await act(async () => {
+      useAppStore.setState({ outsideSessions: [] });
+    });
+    type("/resume ");
+    expect(choices()).toEqual([]);
+    expect(note()).toBe("No Claude Code or Codex sessions in this folder yet.");
   });
 });

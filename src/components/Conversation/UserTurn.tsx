@@ -30,7 +30,7 @@ export default function UserTurn({ message, focus = false }: { message: Message;
   const answerSteerStop = useAppStore((s) => s.answerSteerStop);
   const steer = message.steer;
   return (
-    <div className="turn-user">
+    <div className="turn-user" data-message-id={message.id}>
       {/* `HRN-UI-1`: this went to a run that was already working, so it is
           not waiting for a next turn. Saying which of the two it is matters:
           "sending" still could be missed, "sent mid-run" was read. Rendered

@@ -136,12 +136,12 @@ describe("the sidebar", () => {
     expect(other.classList.contains("waiting")).toBe(false);
   });
 
-  it("puts a dot on a chat a run changed while nobody watched, and none on the others", () => {
+  it("puts a check on a chat a run changed while nobody watched, and none on the others", () => {
     setup([], { unreadIds: ["c2"] });
     render();
     const rows = Array.from(container.querySelectorAll<HTMLElement>(".chat-row"));
-    expect(rows.find((r) => r.querySelector(".chat-title")?.textContent === "Other chat")!.querySelector(".chat-unread")).not.toBeNull();
-    expect(rows.find((r) => r.querySelector(".chat-title")?.textContent === "Morning run")!.querySelector(".chat-unread")).toBeNull();
+    expect(rows.find((r) => r.querySelector(".chat-title")?.textContent === "Other chat")!.querySelector('[aria-label="Finished while you were away"]')).not.toBeNull();
+    expect(rows.find((r) => r.querySelector(".chat-title")?.textContent === "Morning run")!.querySelector('[aria-label="Finished while you were away"]')).toBeNull();
   });
 });
 

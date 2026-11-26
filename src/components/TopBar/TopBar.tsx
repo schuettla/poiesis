@@ -2,6 +2,8 @@ import { useActiveConversation, useAppStore, useLiveItems } from "../../lib/stor
 import { HUB_SECTIONS } from "../../lib/types";
 import { MessageIcon, SidebarIcon } from "../Icons/Icons";
 import PoiesisMark from "../Mark/PoiesisMark";
+import SessionMenu from "../Conversation/SessionMenu";
+import SessionTitle from "../Conversation/SessionTitle";
 import MicIndicator from "../Voice/MicIndicator";
 import WorkspaceSwitch from "../Workspace/WorkspaceSwitch";
 import TabStrip from "./TabStrip";
@@ -84,13 +86,21 @@ function Location() {
           : (HUB_SECTIONS.find((s) => s.view === view)?.label ?? "Settings");
 
   return (
-    <div className={`topbar-where ${chat ? "is-chat" : "is-route"}`} title={label}>
+    <div className={`topbar-where ${chat ? "is-chat" : "is-route"}`} title={chat ? undefined : label}>
       {chat && (
         <span className="topbar-where-icon" aria-hidden="true">
           <MessageIcon size={12} />
         </span>
       )}
-      <span className="topbar-where-label">{label}</span>
+      {/* A chat's name is the one thing here that is yours to change, and the menu of what can be done to the chat sits beside it. */}
+      {chat ? (
+        <>
+          <SessionTitle className="topbar-where-label" activate="click" fallback="New chat" />
+          <SessionMenu />
+        </>
+      ) : (
+        <span className="topbar-where-label">{label}</span>
+      )}
     </div>
   );
 }

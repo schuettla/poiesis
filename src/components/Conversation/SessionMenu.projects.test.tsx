@@ -41,12 +41,13 @@ function setup(c: Conversation, projects: Project[]) {
   act(() => container.querySelector<HTMLButtonElement>(".session-more")!.click());
 }
 
-const labels = () => Array.from(container.querySelectorAll(".row-menu-item")).map((b) => b.textContent);
+// The destinations open as a second menu in the document body, beside the first.
+const items = (scope: ParentNode = document) => Array.from(scope.querySelectorAll<HTMLButtonElement>(".row-menu-item"));
+const labels = () => items(container).map((b) => b.textContent);
+const flyout = () => document.querySelector(".rail-flyout");
 const click = (label: string) =>
   act(() => {
-    Array.from(container.querySelectorAll<HTMLButtonElement>(".row-menu-item"))
-      .find((b) => b.textContent === label)!
-      .click();
+    items().find((b) => b.textContent === label)!.click();
   });
 
 describe("the session menu's project items", () => {
@@ -54,10 +55,29 @@ describe("the session menu's project items", () => {
     setup(conv(), [project("p1", "The book"), project("p2", "Job hunt")]);
     expect(labels()).toContain("Add to project…");
     expect(labels()).not.toContain("The book");
+    expect(flyout(), "nothing is out until asked").toBeNull();
     click("Add to project…");
+    expect(items(flyout()!).map((b) => b.textContent)).toEqual(["The book", "Job hunt"]);
+    expect(container.contains(flyout()), "it is not drawn inside the clipped header").toBe(false);
     click("Job hunt");
     expect(useAppStore.getState().conversations[0].projectId).toBe("p2");
-    expect(container.querySelector(".row-menu"), "the menu closes").toBeNull();
+    expect(document.querySelector(".row-menu"), "both menus close").toBeNull();
+  });
+
+  it("opens on hover, closes on another line, and Escape takes back one level", () => {
+    setup(conv(), [project("p1", "The book")]);
+    const parent = items(container).find((b) => b.textContent === "Add to project…")!;
+    act(() => void parent.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    act(() => void parent.dispatchEvent(new PointerEvent("pointerenter")));
+    expect(flyout()).not.toBeNull();
+    act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(flyout(), "Escape closes the flyout first").toBeNull();
+    expect(container.querySelector(".row-menu"), "and leaves the menu").not.toBeNull();
+    act(() => void parent.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    expect(flyout()).not.toBeNull();
+    const other = items(container).find((b) => b.textContent === "Schedule this…")!;
+    act(() => void other.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    expect(flyout(), "pointing at another line puts it away").toBeNull();
   });
 
   it("moves a chat between projects, offering only the others", () => {

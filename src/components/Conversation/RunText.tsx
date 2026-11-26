@@ -2,6 +2,7 @@ import { useMemo, type ComponentProps } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { remarkClaimMarks, type Mark } from "../../lib/verify";
+import LinkChip from "./LinkChip";
 import "./Verify.css";
 
 /** `USE-UI-7`: the claims of a checked answer to underline, and what a click on one does. */
@@ -31,8 +32,10 @@ export default function RunText({
     [marks],
   );
   const components = useMemo(() => {
-    if (!onPick) return undefined;
+    // `UI-7`: a link to a service the app knows is a chip, in every answer.
+    if (!onPick) return { a: LinkChip };
     return {
+      a: LinkChip,
       // The only `mark` element in an answer is one this check drew, so it can
       // be a button for the claim it carries.
       mark: ({ node: _node, children, className, ...props }: MarkProps) => {

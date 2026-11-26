@@ -19,7 +19,7 @@ import WorkspaceOffBanner from "../components/Workspace/WorkspaceOffBanner";
 import MemoryToast from "../components/Memory/MemoryToast";
 import RecallOffer from "../components/RecallRuntime/RecallOffer";
 import SessionStrip from "../components/Blocks/SessionStrip";
-import SessionMenu from "../components/Conversation/SessionMenu";
+import { AskedLine, LatestButton, useStreamNav } from "../components/Conversation/StreamNav";
 import Workspace from "./Workspace";
 import "../components/Conversation/Conversation.css";
 import "./Chat.css";
@@ -72,9 +72,28 @@ export default function Chat() {
   const lastMessage = msgs.length ? msgs[msgs.length - 1] : undefined;
   const messageIndex = new Map(msgs.map((m, i) => [m.id, i]));
 
+  // `UI-5`: the stream follows what is written only while the person is at the bottom; a
+  // question they just sent always brings them there. Scrolled up, the Latest button is the way back.
+  const nav = useStreamNav(scrollRef, msgs, conversation?.id);
   useEffect(() => {
+    if (!nav.follow.current && lastMessage?.role !== "user") return;
+    nav.follow.current = true;
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation?.messages.length, lastMessage?.text]);
+
+  // `UI-3`: "Open the chat it came from" brings the turn that started a helper into view.
+  const revealId = useAppStore((s) => s.revealMessageId);
+  const clearReveal = useAppStore((s) => s.clearReveal);
+  useEffect(() => {
+    if (!revealId) return;
+    const el = scrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(revealId)}"]`);
+    if (!el) return;
+    nav.follow.current = false;
+    el.scrollIntoView?.({ block: "start" });
+    clearReveal();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealId, conversation?.id, conversation?.messages.length]);
 
   // Coming back from the canvas remounts the stream at the top. Land on the
   // latest message instead, which is what "Open in chat" is asking to read.
@@ -112,9 +131,9 @@ export default function Chat() {
   return (
     <>
       <div className="chat-body">
-        <SessionMenu />
-        <div className="main" ref={scrollRef}>
+        <div className="main" ref={scrollRef} {...nav.handlers}>
           <div className="conversation">
+            {!isEmpty && <AskedLine nav={nav} />}
             {!isEmpty && !focus && <SessionStrip />}
             {isEmpty ? (
               <div className="empty-state">
@@ -200,6 +219,7 @@ export default function Chat() {
                 )}
               </div>
             )}
+            {!isEmpty && <LatestButton nav={nav} />}
           </div>
         </div>
         {/* Interface changes the user has not seen, offered while out of the canvas. */}
@@ -208,7 +228,7 @@ export default function Chat() {
         {voiceShown && <VoiceMode />}
       </div>
       {/* The voice surface has its own bar, so the box is not shown under it. */}
-      {!voiceShown && <Composer onSend={sendMessage} busy={busy} onStop={stopGenerating} />}
+      {!voiceShown && <Composer onSend={sendMessage} busy={busy} onStop={stopGenerating} inStream />}
       <RewindDialog />
       <MemoryToast />
       <RecallOffer />

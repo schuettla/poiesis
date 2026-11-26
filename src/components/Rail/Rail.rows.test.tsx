@@ -64,6 +64,45 @@ describe("chat rows", () => {
     expect(row("fresh").querySelector(".row-slot .chat-more")).not.toBeNull();
   });
 
+  it("open a hover card after a short rest, and close it on leaving", async () => {
+    vi.useFakeTimers();
+    try {
+      render();
+      const el = row("fresh");
+      act(() => {
+        // React derives enter and leave from over and out.
+        el.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, relatedTarget: document.body }));
+      });
+      expect(document.querySelector(".session-card")).toBeNull();
+      // Outside the app the counts cannot be read; the card still opens with what the list knows.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      const card = document.querySelector(".session-card");
+      expect(card?.getAttribute("role")).toBe("tooltip");
+      // The title leads, even when there are no counts to read, and it still says when.
+      expect(card?.querySelector(".session-card-title")?.textContent).toBe("fresh");
+      expect(card?.querySelector(".session-card-foot")?.textContent).toContain("active 5 min ago");
+      act(() => {
+        el.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }));
+      });
+      expect(document.querySelector(".session-card")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("have a draggable edge that sets the rail's width", () => {
+    render();
+    const edge = container.querySelector<HTMLElement>(".rail-resizer")!;
+    expect(edge.getAttribute("role")).toBe("separator");
+    act(() => {
+      edge.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    });
+    expect(useAppStore.getState().railWidth).toBe(256);
+    act(() => useAppStore.setState({ railWidth: 232 }));
+  });
+
   it("hold no reflect button in the row; reflecting is a menu item", () => {
     const reflect = vi.fn().mockResolvedValue({ learned: 0, proposed: 0 });
     act(() => useAppStore.setState({ reflectConversation: reflect }));

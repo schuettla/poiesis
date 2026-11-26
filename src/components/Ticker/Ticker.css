@@ -1,0 +1,33 @@
+/* `UI-2`/`UI-4`: words that change in place. See Ticker.tsx. */
+.tick {
+  position: relative;
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+}
+.tick-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tick-text.in {
+  animation: tick-in var(--dur) var(--ease-out);
+}
+.tick-text.out {
+  position: absolute;
+  inset: 0 0 auto 0;
+  animation: tick-out var(--dur) var(--ease-out) forwards;
+}
+@keyframes tick-in {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+}
+@keyframes tick-out {
+  to {
+    opacity: 0;
+    transform: translateY(-100%);
+  }
+}

@@ -69,12 +69,15 @@ describe("AgentRun — is it still working?", () => {
     // The regression: steps exist and none is running, so nothing on screen
     // moves — this is the model thinking about its next move.
     render(message({ streaming: true, steps: [step(), step({ id: "s2", verb: "clicked" })] }));
-    expect(working(), "a finished step must not switch the indicator off").not.toBeNull();
+    // `UI-4`: with steps on screen the live head of the timeline is the indicator, orb included,
+    // so the bare one is not drawn a second time.
+    expect(container.querySelector(".timeline.live .timeline-orb")?.childElementCount, "a finished step must not switch the indicator off").toBeGreaterThan(0);
+    expect(working()).toBeNull();
   });
 
   it("names what it's waiting on once a run is under way", () => {
     render(message({ streaming: true, steps: [step()] }));
-    expect(container.textContent).toContain("still working");
+    expect(container.querySelector(".timeline-head")!.textContent).toContain("waiting for the model");
   });
 
   it("stays quiet while a step is in flight — that step already pulses", () => {

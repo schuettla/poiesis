@@ -47,6 +47,21 @@ fn price(bucket: UsageBucket, by_model: bool) -> PricedBucket {
     PricedBucket { bucket, cost_usd }
 }
 
+/// `XA-10`: what each agent app last said about the plan, read as of now. The bucket is
+/// keyed by the app's display name, so the engine row with that name is the one.
+fn with_plans(db: &Db, mut apps: Vec<AgentAppBucket>) -> Vec<AgentAppBucket> {
+    let rows = db.list_engines().unwrap_or_default();
+    let now = crate::db::now_ms();
+    for app in &mut apps {
+        app.plan = rows
+            .iter()
+            .find(|r| r.display_name == app.name)
+            .and_then(|r| crate::engines::limits::load(db, &r.id))
+            .map(|u| u.view(now));
+    }
+    apps
+}
+
 #[tauri::command]
 pub fn usage_summary_cmd(db: State<'_, Db>, days: Option<i64>) -> Result<PricedUsage, PoiesisError> {
     let days = days.unwrap_or(30).clamp(1, 365);
@@ -72,7 +87,36 @@ pub fn usage_summary_cmd(db: State<'_, Db>, days: Option<i64>) -> Result<PricedU
         by_day: by_day.into_iter().map(|b| price(b, false)).collect(),
         by_model,
         by_conversation: by_conversation.into_iter().map(|b| price(b, false)).collect(),
-        agent_apps,
+        agent_apps: with_plans(&db, agent_apps),
         some_prices_unknown,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::engines::EngineRow;
+    use crate::engines::limits::{self, PlanUsage};
+
+    fn bucket(name: &str) -> AgentAppBucket {
+        AgentAppBucket { name: name.into(), runs: 1, ..Default::default() }
+    }
+
+    /// `XA-10`: the bucket of an agent app carries what that app last said about the
+    /// plan, found by its display name; a reached record whose time has passed reads as not reached.
+    #[test]
+    fn an_agent_app_row_carries_its_plan_read_as_of_now() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_engine_if_absent(&EngineRow::new("claude-code", "claude-code", "Claude Code")).unwrap();
+        db.insert_engine_if_absent(&EngineRow::new("codex", "codex", "Codex")).unwrap();
+        let now = crate::db::now_ms();
+        let w = vec![limits::Window { name: "5 hours".into(), used: 0.5, resets_at_ms: Some(now + 1000) }];
+        limits::save(&db, "claude-code", &PlanUsage { at_ms: now, windows: w, reached: false, resets_at_ms: Some(now + 1000) });
+        limits::save(&db, "codex", &PlanUsage { at_ms: now - 10_000, windows: vec![], reached: true, resets_at_ms: Some(now - 1) });
+
+        let apps = with_plans(&db, vec![bucket("Claude Code"), bucket("Codex"), bucket("Unknown app")]);
+        assert_eq!(apps[0].plan.as_ref().unwrap().windows[0].used, 0.5);
+        assert!(!apps[1].plan.as_ref().unwrap().reached, "its time has passed, so it is back");
+        assert!(apps[2].plan.is_none(), "nothing was said");
+    }
 }

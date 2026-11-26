@@ -36,6 +36,8 @@ describe("a lesson that fired", () => {
       fired: [{ lesson: "check-header", line: "Checked the header row. You showed me on 4 Oct." }],
     };
     act(() => root.render(<Timeline steps={[step]} live />));
+    // `UI-4`: a live timeline is closed until it is opened.
+    act(() => container.querySelector<HTMLButtonElement>(".timeline-head")!.click());
     expect(container.textContent).not.toContain("You showed me on 4 Oct");
     const open = container.querySelector<HTMLButtonElement>("button[aria-label='Show what I checked here']");
     expect(open).not.toBeNull();
@@ -48,6 +50,8 @@ describe("a lesson that fired", () => {
   it("adds no row of its own to a step that fired nothing", () => {
     const step: AgentStep = { id: "s2", verb: "read", target: "a.md", status: "done" };
     act(() => root.render(<Timeline steps={[step]} live />));
+    // `UI-4`: a live timeline is closed until it is opened.
+    act(() => container.querySelector<HTMLButtonElement>(".timeline-head")!.click());
     expect(container.querySelector(".fired-disclosure")).toBeNull();
     expect(container.querySelector(".step-expand")).toBeNull();
   });

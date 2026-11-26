@@ -276,7 +276,8 @@ function handle(m) {
           protocolVersion: 1,
           agentCapabilities: { loadSession: true, mcpCapabilities: { http: true, sse: false }, promptCapabilities: {} },
           authMethods: [{ id: "fake-login", name: "Login with the fake agent", description: "Run the fake login in a terminal" }],
-          agentInfo: { name: "Fake", version: "0.0.0" },
+          // OpenCode's name by default, as recorded: the driver refuses a program that names another agent (XA-3).
+          agentInfo: { name: process.env.FAKE_ACP_NAME || "OpenCode", version: "0.0.0" },
         },
       });
     case "session/new":

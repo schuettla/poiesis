@@ -38,6 +38,9 @@
 .engine-status.ready .engine-dot {
   background: var(--ok);
 }
+.engine-status.stopped .engine-dot {
+  background: var(--danger);
+}
 .engine-status.starting .engine-dot {
   background: var(--local);
   animation: engine-pulse 1.2s ease-in-out infinite;

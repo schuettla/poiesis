@@ -17,6 +17,8 @@
 //! - **The child cannot see the conversation.** It gets its task and nothing
 //!   else. That is the entire point: context that does not grow with the job.
 
+use std::path::{Path, PathBuf};
+
 use futures_util::future::join_all;
 
 use crate::agent::decide::handover;
@@ -82,6 +84,11 @@ pub fn tool_specs() -> serde_json::Value {
                                 "output": {
                                     "type": "string",
                                     "description": "The shape of the answer you want back, e.g. 'a bullet per file with its purpose'."
+                                },
+                                "writes": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "description": "Files or folders this task may change, relative to the working folder. Two tasks that may change the same place never run at the same time. Leave it out for a task that only reads."
                                 }
                             },
                             "required": ["task"]
@@ -195,6 +202,10 @@ pub struct TaskSpec {
     pub style: Option<String>,
     /// `TEAM-10`: which item of the plan this task is (from 1), when the lead said.
     pub item: Option<usize>,
+    /// `PRF-5`: the files or folders this task may change, relative to the working folder.
+    /// Two tasks that may change the same place never run at the same time. Empty for a
+    /// task that only reads (an agent app that is not read-only claims the whole folder).
+    pub writes: Vec<String>,
     /// `TEAM-11`: the loop handed this over itself (a review, a send-back). It needs no line from
     /// the coordinator and does not count against the turn's cap. Never read from a model's arguments.
     pub by_loop: bool,
@@ -236,6 +247,7 @@ pub fn parse_tasks(args: &serde_json::Value) -> Result<Vec<TaskSpec>, String> {
                 because: None,
                 style: None,
                 item: None,
+                writes: Vec::new(),
                 by_loop: false,
             },
             serde_json::Value::Object(_) => {
@@ -276,6 +288,7 @@ pub fn parse_tasks(args: &serde_json::Value) -> Result<Vec<TaskSpec>, String> {
                         .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
                         .map(|n| n as usize)
                         .filter(|n| *n > 0),
+                    writes: paths_of(entry.get("writes").or_else(|| entry.get("write"))),
                     by_loop: false,
                 }
             }
@@ -297,6 +310,194 @@ pub fn parse_tasks(args: &serde_json::Value) -> Result<Vec<TaskSpec>, String> {
         );
     }
     Ok(out)
+}
+
+/// `writes` as a list of paths. A small model sends one path as a bare string, and that
+/// means the same thing as a list of one.
+fn paths_of(v: Option<&serde_json::Value>) -> Vec<String> {
+    let one = |s: &str| Some(s.trim().to_string()).filter(|s| !s.is_empty());
+    match v {
+        Some(serde_json::Value::String(s)) => one(s).into_iter().collect(),
+        Some(serde_json::Value::Array(items)) => items.iter().filter_map(|i| i.as_str().and_then(one)).collect(),
+        _ => Vec::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `PRF-5`: helpers that run at once never change the same place
+// ---------------------------------------------------------------------------
+
+/// One helper's hold on a place in a folder.
+struct Claim {
+    run_id: String,
+    /// What the other helpers read: the agent's name as the Fleet card shows it.
+    name: String,
+    folder: PathBuf,
+    /// Relative to the folder, split by components, and lower case on Windows. Empty is the whole folder.
+    paths: Vec<PathBuf>,
+    /// The places as the lead wrote them, for the sentence that says why a helper waits.
+    shown: Vec<String>,
+}
+
+/// The places helpers hold now. One for the whole app, so a helper started in the
+/// background and one started in a turn meet at the same list.
+pub struct Scopes {
+    held: std::sync::Mutex<Vec<Claim>>,
+    freed: tokio::sync::Notify,
+}
+
+/// What a helper holds until it is dropped.
+pub struct ClaimGuard<'a> {
+    scopes: &'a Scopes,
+    run_id: Option<String>,
+}
+
+impl Drop for ClaimGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(id) = &self.run_id {
+            self.scopes.held.lock().unwrap().retain(|c| &c.run_id != id);
+            self.scopes.freed.notify_waiters();
+        }
+    }
+}
+
+static SCOPES: std::sync::OnceLock<Scopes> = std::sync::OnceLock::new();
+
+pub fn scopes() -> &'static Scopes {
+    SCOPES.get_or_init(Scopes::new)
+}
+
+/// A place relative to the folder: `./` and a closing `/` dropped, parts split by `/` or `\`,
+/// a path inside the folder made relative, and lower case on Windows (where a name has no case).
+fn relative(path: &str, folder: &Path) -> PathBuf {
+    let p = path.trim().replace('\\', "/");
+    let f = folder.to_string_lossy().replace('\\', "/");
+    let f = f.trim_end_matches('/');
+    let inside = match (p.get(..f.len()), p.get(f.len() + 1..)) {
+        (Some(head), Some(tail)) if !f.is_empty() && head.eq_ignore_ascii_case(f) && p.as_bytes()[f.len()] == b'/' => tail,
+        _ => &p[..],
+    };
+    let parts: PathBuf = inside.split('/').filter(|c| !c.is_empty() && *c != ".").collect();
+    if cfg!(windows) {
+        PathBuf::from(parts.to_string_lossy().to_lowercase())
+    } else {
+        parts
+    }
+}
+
+/// A folder as claims compare it: `/` for `\`, no closing `/`, and lower case on Windows, so
+/// one folder written two ways is still one place.
+fn folder_key(folder: &Path) -> PathBuf {
+    let f = folder.to_string_lossy().replace('\\', "/");
+    let f = f.trim_end_matches('/');
+    PathBuf::from(if cfg!(windows) { f.to_lowercase() } else { f.to_string() })
+}
+
+/// The runs above `run`: its lead, that lead's lead, and so on (`Scopes::claim`).
+pub fn leads_of(fleet: &crate::agent::fleet::Fleet, run: &crate::agent::fleet::RunHandle) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut next = run.parent.clone();
+    while let Some(id) = next {
+        if out.contains(&id) {
+            break;
+        }
+        next = fleet.get(&id).and_then(|r| r.parent.clone());
+        out.push(id);
+    }
+    out
+}
+
+/// Is one of `a` the other or a parent of the other? An empty list is the whole folder.
+fn overlap(a: &[PathBuf], b: &[PathBuf]) -> bool {
+    a.is_empty() || b.is_empty() || a.iter().any(|x| b.iter().any(|y| x.starts_with(y) || y.starts_with(x)))
+}
+
+impl Scopes {
+    pub fn new() -> Self {
+        Scopes { held: std::sync::Mutex::new(Vec::new()), freed: tokio::sync::Notify::new() }
+    }
+
+    /// Hold `paths` of `folder` for `run_id`, waiting while another helper holds a place that
+    /// overlaps. `leads` are the runs above this one (`leads_of`): a place one of them holds is
+    /// never waited for, since that lead is waiting for this run and both would wait forever.
+    /// `waiting` is told why (`Some`) the moment it has to wait, again if the reason changes,
+    /// and `None` once it holds its place. Stop ends the wait: the run then goes on to find
+    /// itself stopped, holding nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn claim<'a>(
+        &'a self,
+        run_id: &str,
+        leads: &[String],
+        name: &str,
+        folder: &Path,
+        paths: &[String],
+        cancel: &CancelFlag,
+        mut waiting: impl FnMut(Option<&str>),
+    ) -> ClaimGuard<'a> {
+        let wanted: Vec<PathBuf> = paths.iter().map(|p| relative(p, folder)).collect();
+        let folder_key = folder_key(folder);
+        let mut told: Option<String> = None;
+        loop {
+            {
+                let mut held = self.held.lock().unwrap();
+                let blocker = held
+                    .iter()
+                    .find(|c| c.folder == folder_key && !leads.contains(&c.run_id) && overlap(&wanted, &c.paths));
+                match blocker {
+                    None => {
+                        held.push(Claim {
+                            run_id: run_id.to_string(),
+                            name: name.to_string(),
+                            folder: folder_key.clone(),
+                            paths: wanted,
+                            shown: paths.to_vec(),
+                        });
+                        break;
+                    }
+                    Some(c) => {
+                        let place = match c.shown.as_slice() {
+                            [] => "this folder".to_string(),
+                            [one] => one.clone(),
+                            [one, rest @ ..] => format!("{one} and {} more", rest.len()),
+                        };
+                        let why = format!("Waiting: {} is changing {place}.", c.name);
+                        if told.as_deref() != Some(why.as_str()) {
+                            waiting(Some(&why));
+                            told = Some(why);
+                        }
+                    }
+                }
+            }
+            if cancel.is_cancelled() {
+                return ClaimGuard { scopes: self, run_id: None };
+            }
+            // A missed wake-up costs a quarter of a second, not the run.
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(250), self.freed.notified()).await;
+        }
+        if told.is_some() {
+            waiting(None);
+        }
+        ClaimGuard { scopes: self, run_id: Some(run_id.to_string()) }
+    }
+}
+
+impl Default for Scopes {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The places a child holds while it works, or `None` when it holds none (`PRF-5`): the
+/// places its task named; else the whole folder for an agent app (it can change any file);
+/// else none, since the loop's own helpers cannot overwrite what another changed after they
+/// read it (`ledger::check_before_edit`). Nothing below a read-only run changes anything.
+fn places_for(writes: &[String], agent_app: bool, read_only: bool) -> Option<Vec<String>> {
+    match (read_only, writes.is_empty(), agent_app) {
+        (true, _, _) => None,
+        (false, false, _) => Some(writes.to_vec()),
+        (false, true, true) => Some(Vec::new()),
+        (false, true, false) => None,
+    }
 }
 
 /// An agent type the lead may hand a job to.
@@ -388,9 +589,9 @@ pub fn delegate_targets(db: &Db, conversation_id: Option<&str>) -> Vec<Target> {
     for row in db.list_engines().unwrap_or_default().into_iter().filter(|r| r.found_path.is_some()) {
         let guards = rules::Guards::resolve(&row.guards_json, &row.kind);
         let disabled_reason = match &place {
-            Some(p) => rules::blocked(&row, &guards, p, false).map(|b| b.short()),
+            Some(p) => rules::blocked_now(db, &row, &guards, p, false).map(|b| b.short()),
             // No chat to judge by: only what is true of the agent itself.
-            None => rules::blocked(&row, &guards, &rules::Place::assumed(), false).map(|b| b.short()),
+            None => rules::blocked_now(db, &row, &guards, &rules::Place::assumed(), false).map(|b| b.short()),
         };
         out.push(Target {
             slug: slug_of(row.id.trim_start_matches("acp:")),
@@ -505,6 +706,15 @@ enum Via {
 fn same_agent(db: &Db, a: &str, b: &str) -> bool {
     rules::same_name(a, b)
         || db.list_engines().unwrap_or_default().iter().any(|r| rules::matches_name(r, a) && rules::matches_name(r, b))
+}
+
+/// `XA-13`: the outside session a child continues. Only the first agent-app child for the agent the user
+/// named takes it (`left` is then empty); a child for any other agent starts fresh.
+fn take_resume(left: &mut Option<String>, row: &crate::db::engines::EngineRow, named: Option<&str>) -> Option<String> {
+    if !named.is_some_and(|x| rules::matches_name(row, x)) {
+        return None;
+    }
+    left.take()
 }
 
 /// `RTE-4`: the checks an agent-app task passes before a child is opened: a
@@ -729,6 +939,7 @@ fn badge(pick: &EnginePick) -> EngineBadge {
     EngineBadge {
         id: row.id.clone(),
         name: row.display_name.clone(),
+        logo: crate::engines::catalog::find(&row.id).and_then(|e| e.logo.clone()),
         paid_by,
         because: Some(pick.label.clone()),
         because_text: pick.rule.as_ref().map(|r| r.text.clone()),
@@ -1049,9 +1260,13 @@ pub async fn run_delegation(
         sink: crate::agent::run::AgentEventSink,
         /// `CLI-4`: an agent app does this one, and this is what it needs.
         engine: Option<(Offered, String)>,
+        /// `XA-13`: the outside session this agent-app child continues.
+        resume: Option<String>,
         temperature: f32,
         /// `TEAM-10`: set for a team member.
         seat: Option<team::Seat>,
+        /// `PRF-5`: where it works and which places it holds while it works (`None`: none).
+        claim: Option<(std::path::PathBuf, Vec<String>)>,
     }
 
     let mut children = Vec::new();
@@ -1236,7 +1451,16 @@ pub async fn run_delegation(
 
         // A continued chat starts from everything its last run saw, then the new task.
         let continued = earlier.as_ref().and_then(|r| team::continued(db, r, &user));
+        // `XA-13`: a session picked in `/resume` goes to the first task of the turn for the agent it belongs to.
+        let resume = pick.as_ref().and_then(|p| take_resume(&mut del.resume_session.lock().unwrap(), &p.offered.row, named));
+        // `PRF-5`: an agent app works in the lead's folder, a helper in its own (a copy, or the same).
+        let claim = places_for(&spec.writes, pick.is_some(), del.read_only).and_then(|paths| {
+            let at = if pick.is_some() { folder.clone() } else { child_folder.clone() };
+            at.map(|f| (std::path::PathBuf::from(f), paths))
+        });
         children.push(Child {
+            claim,
+            resume,
             sink: ctx.sink.child(&run.id),
             run,
             agent,
@@ -1296,10 +1520,12 @@ pub async fn run_delegation(
                     engine: child.engine.map(|(offered, task)| crate::agent::background::EngineSpawn {
                         offered,
                         task,
+                        resume: child.resume,
                         folder: std::path::PathBuf::from(folder.clone().unwrap_or_default()),
                         folder_trust: if del.read_only { Trust::ReadOnly } else { Trust::parse(&trust) },
                     }),
                     seat: child.seat,
+                    claim: child.claim,
                 }
             })
             .collect();
@@ -1322,14 +1548,18 @@ pub async fn run_delegation(
     }
 
     // --- run them together.
+    // The clock of each child starts when it does (below): time spent waiting for a free slot
+    // or for a place another helper is changing (`PRF-5`) is not its working time. The
+    // background pool does the same.
     let limits = RunLimits {
         max_iterations: max_steps,
-        deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64)),
+        deadline: None,
         max_depth: usize::from(nested),
         plan_ceiling: None,
         // `TEAM-12`: members of a team task run under its allowance.
         allowance: team.as_ref().and_then(|_| team::allowance_of(ctx.conversation_id)),
     };
+    let limits = &limits;
     let started = std::time::Instant::now();
     // For an agent-app child: where it works, and the most the folder allows.
     let engine_folder = std::path::PathBuf::from(folder.clone().unwrap_or_default());
@@ -1341,29 +1571,47 @@ pub async fn run_delegation(
     let gate = tokio::sync::Semaphore::new(team.as_ref().map_or(children.len(), |t| t.limits.at_once as usize).max(1));
     let gate = &gate;
     let outcomes = join_all(children.iter().map(|child| {
-        let rc = RunContext {
-            run: &child.run,
-            limits: &limits,
-            fleet: Some(del.fleet),
-            ceiling: Some(&del.toolsets),
-            provenance: del.provenance,
-            context_window: del.context_window,
-            // `PLN`: one plan per run. A child may write its own; it never
-            // touches its lead's.
-            plan: None,
-            options: Default::default(),
-            // `PLF-2`: below a plan-first run, nothing changes either.
-            read_only: del.read_only,
-            // Only a Full run can hand work out (`TIER-5`), so a child is Full.
-            tier: crate::agent::tier::ModelTier::Full,
-            // `REM-4`: below a remote run, everything is remote.
-            remote: del.remote,
-        };
         // Boxed because this is `run_agent` calling itself through a tool call:
         // without it the future's size is defined in terms of itself.
         Box::pin(async move {
             // Fair: whoever asked first starts first.
             let _place = gate.acquire().await;
+            // `PRF-5`: and never in a place another helper is changing.
+            let _claim = match &child.claim {
+                Some((at, paths)) => Some(
+                    scopes()
+                        .claim(&child.run.id, &leads_of(del.fleet, &child.run), &child.agent, at, paths, &child.run.cancel, |because| {
+                            let _ = db.set_subagent_queued_because(&child.run.id, because);
+                            let _ = db.set_subagent_status(&child.run.id, if because.is_some() { "queued" } else { "running" });
+                            ctx.sink.emit(AgentEvent::SubWaiting { run_id: child.run.id.clone(), because: because.map(String::from) });
+                        })
+                        .await,
+                ),
+                None => None,
+            };
+            // Its clock starts now, not when the lead handed the work out.
+            let own_limits = RunLimits {
+                deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64)),
+                ..limits.clone()
+            };
+            let rc = RunContext {
+                run: &child.run,
+                limits: &own_limits,
+                fleet: Some(del.fleet),
+                ceiling: Some(&del.toolsets),
+                provenance: del.provenance,
+                context_window: del.context_window,
+                // `PLN`: one plan per run. A child may write its own; it never
+                // touches its lead's.
+                plan: None,
+                options: Default::default(),
+                // `PLF-2`: below a plan-first run, nothing changes either.
+                read_only: del.read_only,
+                // Only a Full run can hand work out (`TIER-5`), so a child is Full.
+                tier: crate::agent::tier::ModelTier::Full,
+                // `REM-4`: below a remote run, everything is remote.
+                remote: del.remote,
+            };
             // `TEAM-15`: nobody can answer a member's question while the coordinator waits for it here.
             let _in_foreground = child.seat.as_ref().map(|_| team::in_foreground(&child.run.id));
             if let Some(seat) = &child.seat {
@@ -1384,7 +1632,7 @@ pub async fn run_delegation(
                     // A foreground child can ask, unless its lead cannot.
                     headless: ctx.headless,
                     remote: del.remote,
-                    resume: None,
+                    resume: child.resume.clone(),
                 })
                 .await
             } else {
@@ -1430,7 +1678,7 @@ pub async fn run_delegation(
         let status = match outcome.stop_reason {
             crate::agent::fleet::StopReason::Completed => "done",
             crate::agent::fleet::StopReason::Aborted | crate::agent::fleet::StopReason::Budget => "stopped",
-            crate::agent::fleet::StopReason::Error => "error",
+            crate::agent::fleet::StopReason::Error | crate::agent::fleet::StopReason::PlanLimit => "error",
             _ => "done",
         };
         let headline = headline(outcome.stop_reason.as_str(), outcome.steps, secs);
@@ -1462,6 +1710,7 @@ pub async fn run_delegation(
             summary: text.to_string(),
             steps: outcome.steps,
             ms: child.run.elapsed_ms(),
+            evidence: db.get_subagent_run(&child.run.id).ok().flatten().and_then(|r| r.evidence),
         });
         del.fleet.close(&child.run.id);
 
@@ -1551,6 +1800,7 @@ fn headline(stop_reason: &str, steps: usize, secs: u64) -> String {
         "budget" => format!("was stopped when the team's limit was reached ({steps} steps) — this is what it had"),
         "stuck" => format!("was not getting anywhere ({steps} steps) — this is what it had"),
         "error" => format!("failed after {steps} steps"),
+        "plan_limit" => format!("hit its plan limit after {steps} steps"),
         _ => format!("finished after {steps} steps"),
     }
 }
@@ -1574,7 +1824,7 @@ fn check_agents(ctx: &ToolContext<'_>) -> Result<String, String> {
         let line = match row.status.as_str() {
             "queued" => {
                 live += 1;
-                "queued, waiting for a free slot".to_string()
+                row.queued_because.clone().map(|why| format!("queued. {why}")).unwrap_or_else(|| "queued, waiting for a free slot".to_string())
             }
             "running" => {
                 live += 1;
@@ -1753,6 +2003,184 @@ async fn collect_agents(
 /// Kept so `Toolset::Subagents` and this module can't drift on the id.
 #[allow(dead_code)]
 const TOOLSET: Toolset = Toolset::Subagents;
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    fn folder() -> PathBuf {
+        PathBuf::from(if cfg!(windows) { r"C:\proj" } else { "/proj" })
+    }
+
+    fn strings(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A claim that must be granted at once.
+    async fn now<'a>(s: &'a Scopes, id: &str, folder: &Path, paths: &[&str]) -> ClaimGuard<'a> {
+        let cancel = CancelFlag::new();
+        tokio::time::timeout(std::time::Duration::from_millis(500), s.claim(id, &[], id, folder, &strings(paths), &cancel, |_| {}))
+            .await
+            .unwrap_or_else(|_| panic!("{id} had to wait for {paths:?}"))
+    }
+
+    /// Does a claim have to wait while `held` is held?
+    async fn waits(s: &Scopes, folder: &Path, paths: &[&str]) -> bool {
+        let cancel = CancelFlag::new();
+        tokio::time::timeout(std::time::Duration::from_millis(400), s.claim("w", &[], "w", folder, &strings(paths), &cancel, |_| {}))
+            .await
+            .is_err()
+    }
+
+    #[tokio::test]
+    async fn a_file_and_its_folder_wait_for_each_other_but_not_for_another_folder() {
+        let s = Scopes::new();
+        let _a = now(&s, "a", &folder(), &["src/a.rs"]).await;
+        assert!(waits(&s, &folder(), &["src/"]).await, "src/ holds src/a.rs");
+        assert!(waits(&s, &folder(), &["./src/a.rs"]).await, "the same file, written another way");
+        assert!(!waits(&s, &folder(), &["docs/"]).await, "src/a.rs and docs/ do not meet");
+        assert!(!waits(&s, &folder(), &["src/b.rs"]).await, "a neighbour file is another place");
+        let _b = now(&s, "b", &folder(), &["docs"]).await;
+        // The other way round: the folder is held, its file waits.
+        let t = Scopes::new();
+        let _c = now(&t, "c", &folder(), &["src"]).await;
+        assert!(waits(&t, &folder(), &["src/a.rs"]).await);
+    }
+
+    #[tokio::test]
+    async fn an_empty_claim_waits_for_everything_in_its_folder_and_for_nothing_in_another() {
+        let s = Scopes::new();
+        let _whole = now(&s, "whole", &folder(), &[]).await;
+        assert!(waits(&s, &folder(), &["anything.rs"]).await);
+        assert!(waits(&s, &folder(), &[]).await);
+        assert!(!waits(&s, Path::new(if cfg!(windows) { r"C:\other" } else { "/other" }), &[]).await, "another folder");
+        let t = Scopes::new();
+        let _file = now(&t, "file", &folder(), &["a.rs"]).await;
+        assert!(waits(&t, &folder(), &[]).await, "the whole folder includes that file");
+        // One folder written another way is the same place.
+        let other_spelling = if cfg!(windows) { r"c:/PROJ/" } else { "/proj/" };
+        assert!(waits(&t, Path::new(other_spelling), &["a.rs"]).await);
+    }
+
+    /// A nested helper never waits for its own lead's place: the lead waits for it, so both
+    /// would wait forever. Anyone else's place it still waits for.
+    #[tokio::test]
+    async fn a_helper_never_waits_for_a_place_its_lead_holds() {
+        let s = Scopes::new();
+        let _lead = now(&s, "lead", &folder(), &["src"]).await;
+        let cancel = CancelFlag::new();
+        let (place, leads, file) = (folder(), strings(&["lead"]), strings(&["src/a.rs"]));
+        let child = s.claim("child", &leads, "child", &place, &[], &cancel, |_| {});
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(500), child).await.is_ok(), "the child waited for its lead");
+        let stranger = strings(&["someone-else"]);
+        let other = s.claim("other", &stranger, "other", &place, &file, &cancel, |_| {});
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(400), other).await.is_err(), "not its lead: it waits");
+    }
+
+    #[test]
+    fn the_leads_of_a_run_are_its_whole_line_up() {
+        let fleet = crate::agent::fleet::Fleet::new();
+        let top = fleet.open("c0", CancelFlag::new(), None, 0);
+        let mid = fleet.open("c1", CancelFlag::new(), Some(top.id.clone()), 1);
+        let low = fleet.open("c2", CancelFlag::new(), Some(mid.id.clone()), 2);
+        assert_eq!(leads_of(&fleet, &low), vec![mid.id.clone(), top.id.clone()]);
+        assert!(leads_of(&fleet, &top).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_waiting_helper_is_told_why_and_goes_on_when_the_other_ends() {
+        let s = Arc::new(Scopes::new());
+        let first = now(&s, "first", &folder(), &["src/a.rs"]).await;
+        let told: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+        let (s2, told2) = (s.clone(), told.clone());
+        let second = tokio::spawn(async move {
+            let cancel = CancelFlag::new();
+            let _held = s2
+                .claim("second", &[], "second", &folder(), &strings(&["src"]), &cancel, |why| told2.lock().unwrap().push(why.map(String::from)))
+                .await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(!second.is_finished(), "it waits while the first holds src/a.rs");
+        assert_eq!(told.lock().unwrap().as_slice(), [Some("Waiting: first is changing src/a.rs.".to_string())]);
+        drop(first);
+        tokio::time::timeout(std::time::Duration::from_secs(3), second).await.expect("it goes on").unwrap();
+        assert_eq!(told.lock().unwrap().last(), Some(&None), "and is told it has its place");
+        // The whole folder is told as "this folder".
+        let _whole = now(&s, "w", &folder(), &[]).await;
+        let said = Arc::new(Mutex::new(None));
+        let said2 = said.clone();
+        let cancel = CancelFlag::new();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            s.claim("x", &[], "x", &folder(), &strings(&["a"]), &cancel, |why| *said2.lock().unwrap() = why.map(String::from)),
+        )
+        .await;
+        assert_eq!(said.lock().unwrap().as_deref(), Some("Waiting: w is changing this folder."));
+    }
+
+    #[tokio::test]
+    async fn stop_ends_the_wait_and_holds_nothing() {
+        let s = Scopes::new();
+        let _held = now(&s, "held", &folder(), &[]).await;
+        let cancel = CancelFlag::new();
+        let stopped = AtomicBool::new(false);
+        let c2 = cancel.clone();
+        let stopper = async {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            c2.cancel();
+            stopped.store(true, Ordering::Relaxed);
+        };
+        let place = folder();
+        let claim = s.claim("late", &[], "late", &place, &[], &cancel, |_| {});
+        let (guard, _) = tokio::join!(tokio::time::timeout(std::time::Duration::from_secs(3), claim), stopper);
+        let guard = guard.expect("Stop ends the wait");
+        assert!(stopped.load(Ordering::Relaxed));
+        drop(guard);
+        // Dropping the guard of a claim that was never held releases nothing of the others'.
+        assert!(waits(&s, &folder(), &[]).await, "the first claim is still held");
+    }
+
+    #[test]
+    fn who_claims_what() {
+        // Its own places, whatever kind it is.
+        assert_eq!(places_for(&strings(&["src/a.rs"]), false, false), Some(strings(&["src/a.rs"])));
+        assert_eq!(places_for(&strings(&["src/a.rs"]), true, false), Some(strings(&["src/a.rs"])));
+        // An agent app with no `writes` can change any file: the whole folder.
+        assert_eq!(places_for(&[], true, false), Some(Vec::new()));
+        // The loop's own helper that only reads claims nothing.
+        assert_eq!(places_for(&[], false, false), None);
+        // A read-only run changes nothing, so nothing is claimed.
+        assert_eq!(places_for(&[], true, true), None);
+        assert_eq!(places_for(&strings(&["a"]), false, true), None);
+    }
+
+    #[test]
+    fn a_path_inside_the_folder_is_the_same_place_as_its_relative_form() {
+        let f = folder();
+        let inside = format!("{}/src/a.rs", f.to_string_lossy());
+        assert_eq!(relative(&inside, &f), relative("src/a.rs", &f));
+        assert_eq!(relative("src\\a.rs", &f), relative("./src/a.rs/", &f));
+        assert_ne!(relative("src/a.rs", &f), relative("src/b.rs", &f));
+    }
+
+    #[test]
+    fn writes_is_read_as_a_list_or_as_one_string_and_is_in_the_schema() {
+        let list = parse_tasks(&serde_json::json!({"tasks": [{"task": "fix", "writes": ["src/a.rs", " docs/ ", ""]}]})).unwrap();
+        assert_eq!(list[0].writes, strings(&["src/a.rs", "docs/"]));
+        let one = parse_tasks(&serde_json::json!({"tasks": [{"task": "fix", "writes": "src/a.rs"}]})).unwrap();
+        assert_eq!(one[0].writes, strings(&["src/a.rs"]));
+        let none = parse_tasks(&serde_json::json!({"tasks": [{"task": "just read"}]})).unwrap();
+        assert!(none[0].writes.is_empty());
+        let spec = tool_specs();
+        let writes = spec.pointer("/0/function/parameters/properties/tasks/items/properties/writes").expect("writes is in the schema");
+        assert_eq!(writes["type"], "array");
+        assert_eq!(writes["items"]["type"], "string");
+        // Not required.
+        assert_eq!(spec.pointer("/0/function/parameters/properties/tasks/items/required").unwrap(), &serde_json::json!(["task"]));
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -2006,6 +2434,23 @@ mod tests {
         db.insert_engine_if_absent(&row).unwrap();
         assert!(same_agent(&db, "acp:opencode", "opencode"), "an id and a name");
         assert!(same_agent(&db, "general", "General"));
+    }
+
+    /// `XA-13`: a session picked in `/resume` goes to the first child for the
+    /// agent that was named, and to nobody else.
+    #[test]
+    fn an_outside_session_goes_to_the_first_child_for_the_named_agent_only() {
+        let claude = crate::db::engines::EngineRow::new("claude-code", "claude-code", "Claude Code");
+        let codex = crate::db::engines::EngineRow::new("codex", "codex", "Codex");
+        let mut left = Some("11111111-2222-4333-8444-555555555555".to_string());
+        // another agent, or no agent named: nothing is taken
+        assert_eq!(take_resume(&mut left, &codex, Some("claude-code")), None);
+        assert_eq!(take_resume(&mut left, &claude, None), None);
+        assert!(left.is_some());
+        // the first child for the named agent continues it, the second starts fresh
+        assert_eq!(take_resume(&mut left, &claude, Some("claude-code")).as_deref(), Some("11111111-2222-4333-8444-555555555555"));
+        assert_eq!(take_resume(&mut left, &claude, Some("Claude Code")), None);
+        assert!(left.is_none());
     }
 
     /// `RTE-T-1`/`CLI-T-6`: the lead sees the agent apps and the user's rules

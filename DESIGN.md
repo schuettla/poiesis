@@ -237,6 +237,11 @@ Controls are restrained: nothing colored at rest, an ink-derived fill under the 
 ### Segmented control
 The one way to pick one of a few (`.segmented`, and the legacy names `.model-tabs`, `.filter-chip`, `.usage-range`, `.self-segment`, `.wb-segment`, `.memory-scope-segment`, `.setting-actions[role=group]`, all drawn in `global.css`): a `--fill-press` track with the chosen segment lifted out as a small paper tile with `--shadow-xs`. Never an inverted ink block.
 
+### Topbar tabs
+- **Style:** 30px pills, the rail's row height (`--radius`, never full-height cells) floating on the topbar's `--canvas`, 2px apart; the header's bottom hairline stays unbroken under them.
+- **States:** rest is bare `--ink-muted` text; hover and active share `--fill-hover` (the session title's hover tint) + `--ink`, with no border, shadow or paper; active adds `font-weight: 500`.
+- **Inside a pill:** close, changed-dot and chat menu are 20px `--radius-sm` buttons. A short rule separates the session tab from the items taken out of it.
+
 ### Chips
 - **Style:** `--fill-quiet` background, `--ink-muted` text, 1px `--hairline` border, `--radius` (attachments) or `--radius-sm` (user-message attachments). Artifact chips are small paper tiles instead: `--paper` face, `--shadow-xs`, lifting 1px on hover.
 

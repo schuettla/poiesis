@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { SubRun } from "../../lib/types";
 import * as api from "../../lib/api";
-import { becauseChip, matchedTitle, payChip } from "../../lib/engines";
+import { becauseChip, matchedTitle, outsideToken, payChip } from "../../lib/engines";
 import { useAppStore } from "../../lib/store";
 
 /**
@@ -24,6 +24,11 @@ export function EngineChips({ run }: { run: SubRun }) {
   return (
     <>
       {pay && <span className="fleet-chip">{pay}</span>}
+      {run.stopReason === "plan_limit" && (
+        <span className="fleet-chip fleet-chip-warn" title="It hit your plan's limit. I won't give it more work until it is back.">
+          Plan limit
+        </span>
+      )}
       {why && (
         <button
           className="fleet-chip fleet-chip-why"
@@ -68,6 +73,7 @@ export function UndoHandover({ run }: { run: SubRun }) {
  * agent's own session and opens a terminal in the folder. The command is copied
  * even when the terminal cannot be opened. */
 export function ContinueThere({ run }: { run: SubRun }) {
+  const requestComposer = useAppStore((s) => s.requestComposer);
   const [session, setSession] = useState<string | undefined>(run.engineSession);
   const [note, setNote] = useState<string | null>(null);
   const ended = !api.stillWorking(run.status);
@@ -87,6 +93,8 @@ export function ContinueThere({ run }: { run: SubRun }) {
 
   if (!run.engine || !session) return null;
   const name = run.engine.name;
+  // `XA-14`: for Claude Code and Codex, the session can go on here in the chat too.
+  const token = ended ? outsideToken(run.engine.id, session) : null;
 
   const go = async () => {
     try {
@@ -105,6 +113,11 @@ export function ContinueThere({ run }: { run: SubRun }) {
   return (
     <div className="engine-continue">
       <span>I handed this to {name}.</span>
+      {token && (
+        <button className="fleet-action" onClick={() => requestComposer(`/resume ${token} `)}>
+          Continue here
+        </button>
+      )}
       <button className="fleet-action" onClick={() => void go()}>
         Continue there
       </button>

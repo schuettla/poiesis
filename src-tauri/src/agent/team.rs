@@ -1105,6 +1105,7 @@ pub fn settle<'a>(
             because: None,
             style: None,
             item,
+            writes: Vec::new(),
             by_loop: true,
         };
         loop {
@@ -1649,6 +1650,7 @@ pub async fn wake(ctx: &crate::agent::toolsets::ToolContext<'_>, team: &Team) {
             because: None,
             style: None,
             item: post.item,
+            writes: Vec::new(),
             by_loop: true,
         };
         if let Err(why) = run_delegation(ctx, vec![task], true, None).await {

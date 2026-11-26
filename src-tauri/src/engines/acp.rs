@@ -48,7 +48,7 @@ use crate::runtime::proxy::{CancelFlag, Usage};
 
 use super::approve::{self, Port, Verdict};
 use super::driver::{Approvals, Capabilities, DriverError, EngineDriver, ExternalOutcome, ExternalTurn, Job, Launch, ModelChoice};
-use super::play::{clip, flush, keep_tail, play, steer_text, Asks, Ev};
+use super::play::{clip, edit_events, flush, keep_tail, play, steer_text, Asks, Ev};
 use super::process::{self, Wait, Wire};
 use super::tools;
 use super::{EngineKind, PaidBy};
@@ -328,6 +328,10 @@ async fn run(turn: &ExternalTurn<'_>, resume: Option<String>) -> Result<External
                             match entry {
                                 Pending::Init => {
                                     run.learn(&result);
+                                    let said = result.pointer("/agentInfo/name").and_then(|n| n.as_str());
+                                    if let Some(want) = launch.expect_name.as_deref().filter(|w| !is_expected_agent(w, said)) {
+                                        break Some(DriverError::Start(wrong_program(&launch.program, said.unwrap_or_default(), want)));
+                                    }
                                     let (method, params, what) = match resume.clone().filter(|_| run.load_session) {
                                         Some(sid) => (
                                             "session/load",
@@ -562,11 +566,29 @@ fn options_of(params: &Value) -> Options {
     Options { once: find("allow_once"), reject: find("reject_once") }
 }
 
+/// `XA-3`: does the program say it is the agent we meant? A reply with no name
+/// passes: only a name that is there and different is refused. Homebrew's `grok`
+/// (a search tool) was once started as an agent because it had the right file name.
+fn is_expected_agent(expected: &str, said: Option<&str>) -> bool {
+    said.is_none_or(|s| s.eq_ignore_ascii_case(expected))
+}
+
+fn wrong_program(path: &Path, got: &str, expected: &str) -> String {
+    format!(
+        "The program at {} says it is {got}, not {expected}. Pick the right program under External agents, Connection.",
+        path.display()
+    )
+}
+
 fn rpc_error(err: &Value, before_prompt: bool) -> DriverError {
     let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("The agent returned an error.").to_string();
     let lower = msg.to_ascii_lowercase();
     let auth = lower.contains("auth") || lower.contains("log in") || lower.contains("login") || lower.contains("sign in");
-    if auth && before_prompt {
+    // Five agents were recorded signed out (`fixtures/engines/omher/acp/`). Each
+    // answers `session/new` with code -32000, and Gemini CLI's text has none of
+    // the words above ("Gemini API key is missing or not configured.").
+    let signed_out = err.get("code").and_then(|c| c.as_i64()) == Some(-32000);
+    if (auth || signed_out) && before_prompt {
         DriverError::NeedsSignIn(msg)
     } else {
         DriverError::Failed(msg)
@@ -836,7 +858,10 @@ impl Run {
         tool.started = true;
         let (name, input, _) = tool_of(&tool.call, &self.cwd);
         let (verb, target) = approve::describe_tool(&name, &input, &self.cwd);
-        vec![Ev::StepStart { id: id.to_string(), verb, target }]
+        let mut ev = vec![Ev::StepStart { id: id.to_string(), verb, target }];
+        // `PRF-1`: `tool_of` words a file edit as Claude Code's `Edit` or `Write`.
+        ev.extend(edit_events(id, &name, &input, &self.cwd));
+        ev
     }
 
     /// A step that began and never ended when the turn did: shown as stopped.
@@ -1006,6 +1031,30 @@ mod tests {
         assert!(events.iter().any(|e| matches!(e, Ev::Thinking(_))));
     }
 
+    /// `PRF-1`: the `hello.txt` OpenCode wrote is one added line, `hi`.
+    #[test]
+    fn the_recorded_write_gives_one_added_line() {
+        let (_, events) = replay(include_str!("../../../fixtures/engines/opencode-2.1.0.jsonl"));
+        let edits: Vec<_> = events.iter().filter_map(|e| if let Ev::Edit(x) = e { Some(x) } else { None }).collect();
+        assert_eq!(edits.len(), 1, "{edits:?}");
+        assert!(edits[0].path.ends_with("hello.txt"), "{}", edits[0].path);
+        assert_eq!((edits[0].added.as_slice(), edits[0].removed.len()), (&["hi".to_string()][..], 0));
+    }
+
+    #[test]
+    fn a_diff_with_old_text_gives_what_changed() {
+        let mut run = Run::new(Path::new("C:\\proj"));
+        let ev = run.notification(
+            "session/update",
+            &json!({"update": {"sessionUpdate": "tool_call", "toolCallId": "e1", "status": "in_progress", "kind": "edit", "title": "a.rs",
+                "content": [{"type": "diff", "path": "C:\\proj\\src\\a.rs", "oldText": "a\nb", "newText": "a\nc\nd"}]}}),
+            true,
+        );
+        let edit = ev.iter().find_map(|e| if let Ev::Edit(x) = e { Some(x) } else { None }).expect("an edit");
+        assert_eq!((edit.added.as_slice(), edit.removed.as_slice()), (&["c".to_string(), "d".to_string()][..], &["b".to_string()][..]));
+        assert!(edit.path.ends_with("src/a.rs"), "{}", edit.path);
+    }
+
     #[test]
     fn a_model_the_agent_calls_free_is_called_free() {
         let mut run = Run::new(Path::new("C:\\proj"));
@@ -1082,6 +1131,65 @@ mod tests {
         let e = json!({"code": -32000, "message": "Authentication required"});
         assert!(matches!(rpc_error(&e, true), DriverError::NeedsSignIn(_)));
         assert!(matches!(rpc_error(&e, false), DriverError::Failed(_)));
+    }
+
+    /// Every signed-out start recorded by oh-my-hermes is told as a sign-in problem.
+    #[test]
+    fn every_signed_out_recording_is_a_sign_in_problem() {
+        for (id, file) in omher_acp() {
+            let error = file
+                .lines()
+                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                .find_map(|r| r["msg"].get("error").cloned())
+                .unwrap_or_else(|| panic!("{id}: the recording has no error line"));
+            assert!(matches!(rpc_error(&error, true), DriverError::NeedsSignIn(_)), "{id}: {error}");
+        }
+    }
+
+    /// The five recordings and OpenCode's all name the agent as the catalog says.
+    #[test]
+    fn the_recordings_name_the_agent_we_expect() {
+        let mut files = omher_acp();
+        files.push(("acp:opencode", include_str!("../../../fixtures/engines/opencode-2.1.0.jsonl").to_string()));
+        for (id, file) in files {
+            let said = file
+                .lines()
+                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                .find_map(|r| r["msg"].pointer("/result/agentInfo/name").and_then(|n| n.as_str()).map(String::from))
+                .unwrap_or_else(|| panic!("{id}: no initialize reply"));
+            let want = super::super::catalog::find(id).and_then(|e| e.agent_name.as_deref());
+            assert_eq!(want, Some(said.as_str()), "{id}");
+        }
+    }
+
+    #[test]
+    fn a_program_with_another_name_is_refused() {
+        assert!(is_expected_agent("gemini-cli", Some("gemini-cli")));
+        assert!(is_expected_agent("gemini-cli", Some("Gemini-CLI")), "case does not matter");
+        assert!(!is_expected_agent("gemini-cli", Some("grok")));
+        assert!(is_expected_agent("gemini-cli", None), "a reply with no name does not fail");
+        let text = wrong_program(Path::new(r"C:\bin\gemini.exe"), "grok", "gemini-cli");
+        assert_eq!(
+            text,
+            r"The program at C:\bin\gemini.exe says it is grok, not gemini-cli. Pick the right program under External agents, Connection."
+        );
+    }
+
+    fn omher_acp() -> Vec<(&'static str, String)> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/engines/omher/acp");
+        ["gemini", "qwen", "kimi", "copilot", "cline"]
+            .into_iter()
+            .map(|a| {
+                let id: &'static str = match a {
+                    "gemini" => "acp:gemini",
+                    "qwen" => "acp:qwen",
+                    "kimi" => "acp:kimi",
+                    "copilot" => "acp:copilot",
+                    _ => "acp:cline",
+                };
+                (id, std::fs::read_to_string(dir.join(format!("{a}-signed-out.jsonl"))).unwrap())
+            })
+            .collect()
     }
 
     /// Words said between steps are kept apart, and the report is what it said

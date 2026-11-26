@@ -74,7 +74,18 @@ impl Rig {
         Rig::make(Fake::Codex).await
     }
 
+    /// The fake ACP agent behind some other row than OpenCode's: a catalog row
+    /// (`acp:gemini`) or one added by hand (no catalog entry). `says` is the name
+    /// it gives in `initialize`, which the driver checks against the catalog.
+    async fn acp_as(id: &'static str, name: &'static str, says: &str) -> Option<Rig> {
+        Rig::make_as(Fake::Acp, Some((id, name, says))).await
+    }
+
     async fn make(which: Fake) -> Option<Rig> {
+        Rig::make_as(which, None).await
+    }
+
+    async fn make_as(which: Fake, other: Option<(&'static str, &'static str, &str)>) -> Option<Rig> {
         let guard = SERIAL.lock().await;
         if !have_node() {
             eprintln!("skipped: Node is not installed");
@@ -92,12 +103,16 @@ impl Rig {
         std::fs::write(&shim, format!("@echo off\r\nnode \"%~dp0{file}\" %*\r\n")).unwrap();
 
         let db = Db::open_in_memory().unwrap();
-        let (id, kind, name) = match which {
-            Fake::Acp => ("acp:opencode", "acp", "OpenCode"),
-            Fake::Claude => ("claude-code", "claude-code", "Claude Code"),
-            Fake::Codex => ("codex", "codex", "Codex"),
+        let (id, kind, name) = match (which, other) {
+            (Fake::Acp, Some((id, name, _))) => (id, "acp", name),
+            (Fake::Acp, None) => ("acp:opencode", "acp", "OpenCode"),
+            (Fake::Claude, _) => ("claude-code", "claude-code", "Claude Code"),
+            (Fake::Codex, _) => ("codex", "codex", "Codex"),
         };
         let mut row = EngineRow::new(id, kind, name);
+        if let Some((_, _, says)) = other {
+            row.env_json = serde_json::json!({ "FAKE_ACP_NAME": says }).to_string();
+        }
         row.found_path = Some(shim.to_string_lossy().to_string());
         row.enabled = true;
         row.signed_in = Some(true);
@@ -292,6 +307,25 @@ async fn an_edit_shows_what_it_would_write() {
     assert_eq!(req["tool"], "Write");
     assert_eq!(req["diff"], "+ hello");
     assert!(req["summary"].as_str().unwrap().contains("create note.txt"), "{req}");
+}
+
+/// `PRF-2`: a job that wrote a file says so in the report and keeps it with the run; a
+/// write that was refused changed nothing and leaves no line.
+#[tokio::test]
+async fn a_job_that_wrote_a_file_keeps_what_was_seen() {
+    let Some(rig) = Rig::new().await else { return };
+    let _a = rig.answer(|_| Some(Decision::Once));
+    let (run, conv) = rig.child("SCENARIO:edit");
+    let out = rig.run_in(&run, &conv, "SCENARIO:edit", Trust::Confirm, false, None).await;
+    assert!(out.text.starts_with("Seen by Poiesis: Changed 1 file. Claude Code took"), "{}", out.text);
+    let saved = rig.db.get_subagent_run(&run.id).unwrap().unwrap().evidence.expect("kept with the run");
+    assert_eq!((saved["changed"].as_u64(), saved["state"].as_str()), (Some(1), Some("none")), "{saved}");
+    assert_eq!(saved["left"], serde_json::json!([]));
+
+    let (run, conv) = rig.child("SCENARIO:edit");
+    let out = rig.run_in(&run, &conv, "SCENARIO:edit", Trust::ReadOnly, false, None).await;
+    assert!(!out.text.contains("Changed"), "{}", out.text);
+    assert!(rig.db.get_subagent_run(&run.id).unwrap().unwrap().evidence.is_none());
 }
 
 /// A step Claude's own settings let through is counted, never hidden (`CLI-6`).
@@ -496,6 +530,57 @@ async fn a_failed_run_keeps_the_agents_last_words_for_diagnostics() {
     assert!(errors.iter().any(|e| e["error"].as_str().unwrap().contains("something broke")), "{errors:?}");
     let s = super::diag::summary("claude-code");
     assert!(s.failed >= 1 && s.last_stderr.contains("second line"), "{s:?}");
+    // An ordinary failure is only a failure: the agent is still offered (`XA-11`).
+    assert!(super::rules::plan_limit(&rig.db, "claude-code").is_none());
+}
+
+/// `XA-9`: what the agent says about the plan while it works is kept, per agent.
+#[tokio::test]
+async fn what_claude_says_about_the_plan_is_kept() {
+    let Some(rig) = Rig::new().await else { return };
+    assert!(super::limits::load(&rig.db, "claude-code").is_none());
+    let out = rig.run("SCENARIO:plan", Trust::Confirm, false).await;
+    assert_eq!(out.stop_reason, StopReason::Completed, "{}", out.text);
+    let u = super::limits::load(&rig.db, "claude-code").expect("kept after the job");
+    assert_eq!(u.windows.len(), 2);
+    assert!(!u.reached);
+    assert!(super::rules::plan_limit(&rig.db, "claude-code").is_none(), "allowed is not a limit");
+}
+
+/// `XA-11`: a job that ends on the plan limit is a plan limit, not a crash. The lead
+/// is told not to hand it more work and to do it another way; the agent is not offered
+/// again until it is back; the Fleet row says so.
+#[tokio::test]
+async fn a_job_that_ends_on_the_plan_limit_says_so_and_shuts_the_agent_out_until_it_is_back() {
+    let Some(rig) = Rig::new().await else { return };
+    let out = rig.run("SCENARIO:limit", Trust::Confirm, false).await;
+    assert_eq!(out.stop_reason, StopReason::PlanLimit, "{}", out.text);
+    assert!(out.text.starts_with("Claude Code hit its plan limit, back at "), "{}", out.text);
+    assert!(out.text.contains("Do not hand it more work before then"), "{}", out.text);
+    assert!(out.text.contains("hit your session limit"), "what it said stays: {}", out.text);
+    let u = super::limits::load(&rig.db, "claude-code").unwrap();
+    assert!(u.reached && u.resets_at_ms.is_some());
+    let ended = rig.of_type("run_ended");
+    assert!(ended.iter().any(|e| e["stop_reason"] == "plan_limit"), "{ended:?}");
+    // Not offered until it is back, and the reason is the one `/delegate` shows.
+    let route = RouteCtx { conversation_id: &rig.parent, headless: false, delegate_to: None };
+    let (yes, no) = offered(&rig.db, &route);
+    assert!(yes.is_empty());
+    assert!(matches!(no[0].1, super::rules::Block::PlanLimit { until_ms: Some(_) }), "{no:?}");
+    let targets = crate::agent::subagents::delegate_targets(&rig.db, Some(&rig.parent));
+    let t = targets.iter().find(|t| t.engine_id.as_deref() == Some("claude-code")).unwrap();
+    assert!(t.disabled_reason.as_deref().unwrap_or("").starts_with("It hit its plan limit, back at "), "{:?}", t.disabled_reason);
+}
+
+/// `XA-11`: an agent that says only words (no event) is read by the words, with no time.
+#[tokio::test]
+async fn a_limit_told_only_in_words_is_still_a_plan_limit_without_a_time() {
+    let Some(rig) = Rig::new().await else { return };
+    let out = rig.run("SCENARIO:limit-words", Trust::Confirm, false).await;
+    assert_eq!(out.stop_reason, StopReason::PlanLimit, "{}", out.text);
+    assert!(out.text.starts_with("Claude Code hit its plan limit. Do not hand it more work"), "{}", out.text);
+    let u = super::limits::load(&rig.db, "claude-code").unwrap();
+    assert!(u.reached && u.resets_at_ms.is_none());
 }
 
 impl Rig {
@@ -931,6 +1016,61 @@ async fn acp_an_edit_shows_what_it_would_write() {
     assert_eq!(req["tool"], "Write");
     assert_eq!(req["diff"], "+ hello");
     assert!(req["summary"].as_str().unwrap().contains("create note.txt"), "{req}");
+}
+
+/// `XA-7`: one job, the way `/delegate` hands it over, to an ACP agent that is not
+/// OpenCode. It is not made to ask (`forced_asking` is false), so its own questions
+/// are what reach the person: the question shows on the panel under its name, an
+/// allow lets the edit happen, and the report comes back.
+async fn an_acp_agent_takes_one_job(rig: Rig, shown_as: &str) {
+    let kind = super::EngineKind::parse(&rig.offered.row.kind).unwrap();
+    assert!(super::driver::delegate_ready(kind, &rig.offered.row.id));
+    assert!(!super::driver::forced_asking(&rig.offered.row.id), "this one follows its own settings");
+    let _a = rig.answer(|_| Some(Decision::Once));
+    let out = rig.run("SCENARIO:edit", Trust::Confirm, false).await;
+    assert_eq!(out.stop_reason, StopReason::Completed, "{}", out.text);
+    assert!(out.text.contains("wrote note.txt"), "{}", out.text);
+    // `PRF-2`: the file it wrote is the first thing the report says it saw.
+    assert!(out.text.starts_with(&format!("Seen by Poiesis: Changed 1 file. {shown_as} took 1 step")), "{}", out.text);
+    assert_eq!(std::fs::read_to_string(rig.folder.path().join("note.txt")).unwrap(), "hello");
+
+    let asks = rig.of_type("permission");
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    let req = &asks[0]["request"];
+    assert_eq!(req["capability"], "engine");
+    assert_eq!(req["engine"], shown_as);
+    assert_eq!(req["tool"], "Write");
+    assert_eq!(req["diff"], "+ hello");
+    assert!(rig.of_type("step_error").is_empty(), "{:?}", rig.of_type("step_error"));
+}
+
+/// `XA-7`, a catalog row (Gemini CLI) with no `ask_everything_env`. It says its own
+/// name in `initialize`, which the driver checks.
+#[tokio::test]
+async fn acp_gemini_takes_a_job_and_its_question_reaches_the_person() {
+    let Some(rig) = Rig::acp_as("acp:gemini", "Gemini CLI", "gemini-cli").await else { return };
+    an_acp_agent_takes_one_job(rig, "Gemini CLI").await;
+}
+
+/// `XA-7`, an agent added by hand: no catalog entry, so no name to check and no
+/// forced asking. Same result.
+#[tokio::test]
+async fn acp_an_agent_added_by_hand_takes_a_job_the_same_way() {
+    assert!(super::catalog::find("acp:mine").is_none());
+    let Some(rig) = Rig::acp_as("acp:mine", "My agent", "anything").await else { return };
+    an_acp_agent_takes_one_job(rig, "My agent").await;
+}
+
+/// `XA-3`: a program that says it is another agent than the row names is refused
+/// before any job reaches it.
+#[tokio::test]
+async fn acp_a_program_with_another_name_is_refused_before_it_gets_the_job() {
+    let Some(rig) = Rig::acp_as("acp:gemini", "Gemini CLI", "some-other-tool").await else { return };
+    let _a = rig.answer(|_| Some(Decision::Once));
+    let out = rig.run("SCENARIO:edit", Trust::Confirm, false).await;
+    assert!(out.text.contains("says it is some-other-tool, not gemini-cli"), "{}", out.text);
+    assert!(!rig.folder.path().join("note.txt").exists(), "{}", out.text);
+    assert!(rig.of_type("permission").is_empty());
 }
 
 /// `CLI-T-5`, `CLI-T-9` and the trust table: the agent is made to ask (its own

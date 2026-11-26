@@ -254,6 +254,33 @@ export function CloseIcon(props: IconProps) {
   );
 }
 
+/** `UI-1`: a chat that is working. A 2px arc of about 110 degrees at 12px; the row turns it. */
+export function ArcIcon({ strokeWidth = 3.3, ...props }: IconProps) {
+  return (
+    <Glyph strokeWidth={strokeWidth} {...props}>
+      <path d="M10 3A7 7 0 0 1 16.58 12.39" strokeLinecap="round" />
+    </Glyph>
+  );
+}
+
+/** `UI-1`: a chat that waits for you. A 6px dot at 12px. */
+export function DotIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <circle cx="10" cy="10" r="5" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** `UI-1`: a chat that finished while you were away. A 1.6px stroke at 12px. */
+export function CheckIcon({ strokeWidth = 2.7, ...props }: IconProps) {
+  return (
+    <Glyph strokeWidth={strokeWidth} {...props}>
+      <path d="M4.5 10.5 8.5 14.5 15.5 6" strokeLinecap="round" strokeLinejoin="round" />
+    </Glyph>
+  );
+}
+
 /* The window's caption buttons (TopBar/WindowControls). They were drawn on a
  * 10px grid so they land on whole pixels at the 10px Windows 11 uses; on this
  * module's 20-unit grid that is every coordinate doubled, which means they must
@@ -325,6 +352,19 @@ export function KebabIcon(props: IconProps) {
       <circle cx="4.5" cy="10" r="1.4" fill="currentColor" stroke="none" />
       <circle cx="10" cy="10" r="1.4" fill="currentColor" stroke="none" />
       <circle cx="15.5" cy="10" r="1.4" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** A funnel: narrows a list. Three bars would read as "sort" and a kebab as "more". */
+export function FilterIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path
+        d="M3.5 4.5h13l-5 6v4.7l-3 1.6v-6.3z"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </Glyph>
   );
 }

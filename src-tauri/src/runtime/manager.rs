@@ -184,12 +184,16 @@ impl RuntimeManager {
         let generation = self.generation();
         let attempt = {
             let mut history = self.restarts.lock().unwrap();
-            if !watchdog::may_restart(&mut history, Instant::now()) {
-                self.gave_up.store(true, Ordering::Relaxed);
-                return HealResult::GaveUp;
-            }
-            history.push_back(Instant::now());
-            history.len()
+            watchdog::may_restart(&mut history, Instant::now()).then(|| {
+                history.push_back(Instant::now());
+                history.len()
+            })
+        };
+        let Some(attempt) = attempt else {
+            self.gave_up.store(true, Ordering::Relaxed);
+            // The dead engine goes, so nothing reports it as running.
+            *self.engine.lock().await = None;
+            return HealResult::GaveUp;
         };
         let Some(config) = self.last_config.lock().unwrap().clone() else {
             return HealResult::GaveUp;
@@ -205,23 +209,24 @@ impl RuntimeManager {
         *self.engine.lock().await = None;
         let session = self.restarts_session.fetch_add(1, Ordering::Relaxed) + 1;
 
-        let Ok(mut engine) = spawn_engine(&config) else {
-            return HealResult::Failed { attempt: session };
+        let healed = match spawn_engine(&config) {
+            Ok(mut engine) => wait_until_healthy(&self.client, &mut engine, Duration::from_secs(120))
+                .await
+                .map(|_| engine),
+            Err(e) => Err(e),
         };
-        if wait_until_healthy(&self.client, &mut engine, Duration::from_secs(120))
-            .await
-            .is_err()
-        {
-            return HealResult::Failed { attempt: session };
-        }
 
         // Last check, holding the lock: from here to the assignment nothing can
         // interleave, so a stop either lands before this (and we drop the fresh
-        // engine) or after it (and stops the engine we just installed).
+        // engine) or after it (and stops the engine we just installed). A failed
+        // restart of a replaced engine is not news either.
         let mut guard = self.engine.lock().await;
         if self.generation() != generation {
-            return HealResult::Superseded; // `engine` drops here, killing the child
+            return HealResult::Superseded; // `healed` drops here, killing the child
         }
+        let Ok(engine) = healed else {
+            return HealResult::Failed { attempt: session };
+        };
         *guard = Some(engine);
         HealResult::Restarted { attempt: session }
     }

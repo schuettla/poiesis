@@ -1545,6 +1545,10 @@ pub struct RunOptions {
     /// mode and rules (never the guards, nor `/external off`).
     #[serde(default)]
     pub delegate_to: Option<String>,
+    /// `XA-13` (`/resume`): the id of a Claude Code or Codex session made outside Poiesis.
+    /// The first task handed to `delegate_to` in this turn continues it.
+    #[serde(default)]
+    pub resume_session: Option<String>,
     /// `SEE-3`: Web search is on for this message alone, whatever the setting says.
     #[serde(default)]
     pub web: bool,
@@ -1735,6 +1739,10 @@ pub struct DelegationContext<'a> {
     pub read_only: bool,
     /// `CLI-UI-6`: the agent the user named for this turn, if they did.
     pub delegate_to: Option<String>,
+    /// `XA-13`: the outside session the first task for `delegate_to` continues. Taken out by
+    /// that task, so a second `delegate` call in the same turn (or one beside it) starts fresh
+    /// rather than run the same session twice.
+    pub resume_session: std::sync::Mutex<Option<String>>,
     /// `REM-4`: a child of a remote run is remote too.
     pub remote: bool,
 }
@@ -1932,6 +1940,8 @@ struct TurnCtx<'a> {
     request: String,
     /// `HAB-1`: the lessons that fire at a tool call, read once when the run starts.
     firing: Vec<crate::memory::Fact>,
+    /// `PRF-4`: the run was told once what its changes left open.
+    integrity_asked: std::sync::atomic::AtomicBool,
 }
 
 /// `HRN-6`: everything that changes from one turn to the next.
@@ -2224,6 +2234,20 @@ impl TurnCtx<'_> {
         }
     }
 
+    /// `PRF-4`: the run changed files and left something open (a new TODO, a test
+    /// switched off, a stub, a removed check). Said once; never a gate. A helper's
+    /// run gets it too, and so reports it to its lead.
+    fn integrity_note(&self) -> Option<String> {
+        use std::sync::atomic::Ordering;
+        if self.integrity_asked.load(Ordering::Relaxed) || self.read_only {
+            return None;
+        }
+        let set = super::changes::change_set(self.db, self.conversation_id, self.started_at_ms);
+        let note = super::integrity::note(&super::integrity::items(&super::integrity::of_change_set(&set)))?;
+        self.integrity_asked.store(true, Ordering::Relaxed);
+        Some(note)
+    }
+
     async fn unverified_note(&self, answer: &str) -> Option<String> {
         if self.ledger.edited_count() == 0 {
             return None;
@@ -2463,6 +2487,9 @@ async fn run_agent_inner(
             context_window: rc.context_window,
             read_only,
             delegate_to: rc.options.delegate_to.clone(),
+            resume_session: std::sync::Mutex::new(
+                rc.options.resume_session.clone().filter(|s| crate::engines::past::is_uuid(s)),
+            ),
             remote: rc.remote,
         }),
         registry,
@@ -2500,6 +2527,7 @@ async fn run_agent_inner(
         compact_asked: Default::default(),
         waiting_on_person: Default::default(),
         request: super::decide::tools::last_exchange(&messages).0,
+        integrity_asked: Default::default(),
         // `TEAM-5`: a lesson that fires at a tool is still some persona's own.
         firing: super::habit::firing({
             let persona = super::leader::memory_persona(db, conversation_id);
@@ -3316,6 +3344,12 @@ fn apply_switch(&self, slug: &str) {
                         return Next::Again;
                     }
 
+                    // `PRF-4`: and what the changes left open.
+                    if let Some(note) = self.integrity_note() {
+                        st.push_nudge(&text, note);
+                        return Next::Again;
+                    }
+
                     // `WRK-10`: what the person agreed done means is checked against what
                     // was actually said and done, by someone who never saw the path. Last,
                     // so it looks at the answer that would really go out.
@@ -3957,6 +3991,7 @@ async fn try_two_ways(&self, st: &mut RunState, item: usize, what: &str) {
         // cost a call the comparison makes anyway.
         style: Some(crate::memory::ways::AD_HOC.to_string()),
         item: None,
+        writes: Vec::new(),
         by_loop: false,
     };
     let tasks = vec![

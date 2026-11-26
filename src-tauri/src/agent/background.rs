@@ -107,6 +107,9 @@ pub struct Spawn {
     /// `limits.at_once` at a time) instead of one of the pool's, and announces when it starts
     /// and ends.
     pub seat: Option<Seat>,
+    /// `PRF-5`: the folder it works in and the places in it it holds while it works (empty: all
+    /// of it). `None` holds nothing.
+    pub claim: Option<(std::path::PathBuf, Vec<String>)>,
 }
 
 /// What an agent-app child needs that cannot be borrowed.
@@ -116,6 +119,8 @@ pub struct EngineSpawn {
     pub task: String,
     pub folder: std::path::PathBuf,
     pub folder_trust: crate::permissions::Trust,
+    /// `XA-13`: an outside session this child continues (`/resume`).
+    pub resume: Option<String>,
 }
 
 #[derive(Default)]
@@ -256,6 +261,19 @@ async fn run_one(spawn: Spawn) {
         return;
     }
 
+    // `PRF-5`: not in a place another helper is changing. Held until the child ends.
+    let _claim = match &spawn.claim {
+        Some((at, paths)) => Some(
+            crate::agent::subagents::scopes()
+                .claim(&spawn.run_id, &crate::agent::subagents::leads_of(&fleet, &run), &spawn.agent, at, paths, &run.cancel, |because| {
+                    let _ = db.set_subagent_queued_because(&spawn.run_id, because);
+                    let _ = db.set_subagent_status(&spawn.run_id, if because.is_some() { "queued" } else { "running" });
+                    announce_waiting(app, &spawn.run_id, because);
+                })
+                .await,
+        ),
+        None => None,
+    };
     let _ = db.set_subagent_status(&spawn.run_id, "running");
 
     let mgr = app.state::<RuntimeManager>();
@@ -317,7 +335,7 @@ async fn run_one(spawn: Spawn) {
             folder_trust: e.folder_trust,
             headless: false,
             remote: spawn.remote,
-            resume: None,
+            resume: e.resume.clone(),
         })
         .await
     } else {
@@ -352,7 +370,7 @@ async fn run_one(spawn: Spawn) {
     let status = match outcome.stop_reason {
         StopReason::Completed => "done",
         StopReason::Aborted | StopReason::Budget => "stopped",
-        StopReason::Error => "error",
+        StopReason::Error | StopReason::PlanLimit => "error",
         _ => "done",
     };
     let _ = db.finish_subagent_run(
@@ -372,6 +390,7 @@ async fn run_one(spawn: Spawn) {
         summary: text.to_string(),
         steps: outcome.steps,
         ms: run.elapsed_ms(),
+        evidence: db.get_subagent_run(&spawn.run_id).ok().flatten().and_then(|r| r.evidence),
     });
     fleet.close(&spawn.run_id);
     if let Some(seat) = &spawn.seat {
@@ -382,6 +401,14 @@ async fn run_one(spawn: Spawn) {
         "subagent",
         &format!("the {} agent finished in the background", spawn.agent),
     );
+}
+
+/// Tell the screen why a child waits (`PRF-5`), on the app bus: no turn is listening.
+fn announce_waiting(app: &AppHandle, run_id: &str, because: Option<&str>) {
+    let event = AgentEvent::SubWaiting { run_id: run_id.to_string(), because: because.map(String::from) };
+    if let Ok(value) = serde_json::to_value(&event) {
+        let _ = app.emit("poiesis-agent-sub", value);
+    }
 }
 
 /// Report a child that ended before it ever ran. There is no sink for it —
@@ -395,6 +422,7 @@ fn announce_end(app: &AppHandle, db: &Db, run_id: &str) {
         summary: row.result.unwrap_or_default(),
         steps: row.steps,
         ms: 0,
+        evidence: row.evidence,
     };
     if let Ok(value) = serde_json::to_value(&event) {
         let _ = app.emit("poiesis-agent-sub", value);
@@ -440,6 +468,7 @@ mod tests {
             timeout_secs: 1,
             engine: None,
             seat,
+            claim: None,
         }
     }
 

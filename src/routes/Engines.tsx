@@ -19,13 +19,14 @@ import {
   type EngineTryResult,
   type EngineTrust,
 } from "../lib/api";
-import { cannotEnable, engineStatus, envToMap, linesToArgs, tryLine } from "../lib/engines";
+import { agentLogoUrl, cannotEnable, engineStatus, envToMap, linesToArgs, tryLine } from "../lib/engines";
 import { useAppStore } from "../lib/store";
 import Select from "../components/Select/Select";
 import Toggle from "../components/Toggle/Toggle";
 import { ChevronIcon } from "../components/Icons/Icons";
 import ConfirmDialog from "../components/Confirm/ConfirmDialog";
 import Opt from "../components/Engines/Opt";
+import AppLogo from "../components/Apps/AppLogo";
 import RuleList, { RecentJobs, TryRequest } from "../components/Engines/RuleList";
 import "./Surface.css";
 import "./Settings.css";
@@ -179,7 +180,18 @@ function Glyph({ on }: { on: boolean }) {
 function MissingRow({ engine: e }: { engine: EngineInfo }) {
   const updateEngine = useAppStore((s) => s.updateEngine);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const status = engineStatus(e);
+
+  async function copyLine() {
+    try {
+      await navigator.clipboard.writeText(e.install_line!);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      setError(errText(err));
+    }
+  }
 
   async function setPath() {
     setError(null);
@@ -196,13 +208,14 @@ function MissingRow({ engine: e }: { engine: EngineInfo }) {
       <div className="engines-row-head">
         <div className="engines-row-main static">
           <Glyph on={false} />
+          <AppLogo slug={e.id} name={e.name} src={agentLogoUrl(e.logo)} />
           <span className="engines-name">{e.name}</span>
           <span className="engines-status">{status.text}</span>
         </div>
         <div className="engines-row-actions">
           {e.install_url && (
             <button className="link-button" onClick={() => openUrl(e.install_url!)}>
-              How to install
+              Install page
             </button>
           )}
           <button className="btn-secondary" onClick={setPath}>
@@ -210,6 +223,14 @@ function MissingRow({ engine: e }: { engine: EngineInfo }) {
           </button>
         </div>
       </div>
+      {e.install_line && (
+        <div className="engines-install">
+          <code>{e.install_line}</code>
+          <button className="btn-secondary sm" onClick={() => void copyLine()}>
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+      )}
       {error && (
         <p className="engines-error" role="alert">
           {error}
@@ -283,6 +304,7 @@ function EngineRow({ engine: e, open, onToggle }: { engine: EngineInfo; open: bo
             <ChevronIcon dir={open ? "down" : "right"} size={12} strokeWidth={1.8} />
           </span>
           <Glyph on={e.enabled} />
+          <AppLogo slug={e.id} name={e.name} src={agentLogoUrl(e.logo)} />
           <span className="engines-ident">
             <span className="engines-name">{e.name}</span>
             <span className={`engines-status ${status.tone}`}>{status.text}</span>

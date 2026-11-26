@@ -86,7 +86,10 @@ describe("the timeline", () => {
 
   it("draws a thin line where an item ended, and does not count it as a step", () => {
     act(() => root.render(<Timeline steps={steps} live />));
-    expect(container.querySelector(".timeline-summary")?.textContent).toBe("2 steps");
+    // `UI-4`: a live timeline is closed until it is opened.
+    act(() => container.querySelector<HTMLButtonElement>(".timeline-head")!.click());
+    act(() => root.render(<Timeline steps={steps} />));
+    expect(container.querySelector(".timeline-title")?.textContent).toBe("2 steps");
     const rows = [...container.querySelectorAll(".timeline-rows > *")];
     expect(rows.map((r) => r.className.split(" ")[0])).toEqual(["step", "item-divider", "step"]);
     expect(container.querySelector(".item-divider")?.textContent).toBe("Done: Export function");

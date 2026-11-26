@@ -31,6 +31,8 @@ export default function App() {
   const toggleDock = useAppStore((s) => s.toggleDock);
   const dockWidth = useAppStore((s) => s.dockWidth);
   const dockDragging = useAppStore((s) => s.dockDragging);
+  const railWidth = useAppStore((s) => s.railWidth);
+  const railDragging = useAppStore((s) => s.railDragging);
   // `SHL-27`: the open item, in the conversation's own column.
   const { activeKey } = useLiveItems();
 
@@ -145,12 +147,19 @@ export default function App() {
         railCollapsed ? "rail-collapsed" : "",
         showDock ? "" : "no-dock",
         showDock && !dockOpen ? "dock-collapsed" : "",
-        dockDragging ? "dock-dragging" : "",
+        dockDragging || railDragging ? "dock-dragging" : "",
         showItem ? "item-open" : "",
       ]
         .filter(Boolean)
         .join(" ")}
-      style={{ "--dock-w": `${width}px` } as React.CSSProperties}
+      // The collapsed rail keeps its CSS width; only the open one follows the drag. Capped
+      // at 40vw so a narrow window is never mostly rail.
+      style={
+        {
+          "--dock-w": `${width}px`,
+          ...(railCollapsed ? {} : { "--rail-w": `min(${railWidth}px, 40vw)` }),
+        } as React.CSSProperties
+      }
     >
       <TopBar />
       <Rail />

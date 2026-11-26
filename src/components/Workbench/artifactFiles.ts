@@ -4,7 +4,7 @@ import type { ComponentType } from "react";
 import { CodeIcon, DocumentIcon, FileIcon, GlobeIcon, ImageIcon, VideoIcon, type IconProps } from "../Icons/Icons";
 
 /** Best-guess file extension for an artifact, by kind. */
-export function extFor(artifact: Artifact): string {
+export function extFor(artifact: Pick<Artifact, "kind" | "content">): string {
   // `ART-3`: a video artifact's `content` is a path too, same as an image's —
   // the real extension is already sitting right there.
   if (artifact.kind === "image") return artifact.content.split(".").pop()?.toLowerCase() || "png";

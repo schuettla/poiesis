@@ -387,6 +387,14 @@ pub fn engines_continue_cmd(db: State<'_, Db>, run_id: String) -> Cmd<ContinueRe
     Ok(ContinueResult { command: shown, opened: opened.is_ok(), error: opened.err() })
 }
 
+/// `XA-13` (`/resume`): the Claude Code and Codex sessions made outside Poiesis in this chat's folder.
+#[tauri::command]
+pub fn outside_sessions_cmd(db: State<'_, Db>, conversation_id: String) -> Cmd<Vec<engines::past::OutsideSession>> {
+    let (folder, _) = db.conversation_folder(&conversation_id).map_err(msg)?;
+    let Some(home) = engines::past::home_dir() else { return Ok(Vec::new()) };
+    Ok(engines::past::outside_sessions(&db, folder.as_deref(), &home, &|k| std::env::var(k).ok()))
+}
+
 #[cfg(windows)]
 fn open_terminal_in(title: &str, folder: &str, program: &str, args: &[String]) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
@@ -448,7 +456,7 @@ pub async fn engines_route_preview_cmd(
                 match routed {
                     Route::Agent(option) => {
                         if let Some(p) = engines::rules::preview_from_option(&candidates, &option, &engines::rules::Place::assumed()) {
-                            return Ok(engines::rules::Preview { quick_ms, ..p });
+                            return Ok(engines::rules::with_plan_limit(&db, &candidates, engines::rules::Preview { quick_ms, ..p }));
                         }
                     }
                     Route::Nobody => return Ok(engines::rules::Preview { quick_ms, ..Default::default() }),
@@ -474,7 +482,8 @@ pub async fn engines_route_preview_cmd(
     let crate::runtime::proxy::TurnOutcome::Final { content, .. } = outcome else {
         return Ok(engines::rules::Preview::default());
     };
-    Ok(engines::rules::read_preview(&candidates, &content, &engines::rules::Place::assumed()))
+    let p = engines::rules::read_preview(&candidates, &content, &engines::rules::Place::assumed());
+    Ok(engines::rules::with_plan_limit(&db, &candidates, p))
 }
 
 /// `CLI-2`: look for installed agents once at start, in the background. Never

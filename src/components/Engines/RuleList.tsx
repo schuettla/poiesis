@@ -124,6 +124,11 @@ export default function RuleList({ engine: e }: { engine: EngineInfo }) {
   return (
     <section className="engines-group" aria-label="When I use it">
       <h3 className="engines-group-title">When I use it</h3>
+      {e.kind === "acp" && !e.forced_asking && (
+        <p className="engines-muted">
+          {e.name} asks before it acts as far as its own settings say. What it asks comes to you.
+        </p>
+      )}
 
       {suggested.map((p) => (
         <ProposalCard key={p.id} id={p.id} />

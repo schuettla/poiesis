@@ -30,7 +30,7 @@ pub mod episodes;
 mod episodes_tools;
 
 const SCHEMA: &str = include_str!("schema.sql");
-pub const SCHEMA_VERSION: i64 = 54;
+pub const SCHEMA_VERSION: i64 = 55;
 
 /// The rationale a skill-revision proposal is written with (`OUT-2`). Only
 /// display text — the proposal is *identified* by its `skill-revision` target,
@@ -62,6 +62,32 @@ pub struct Db {
 pub struct MessageHit {
     pub conversation_id: String,
     pub snippet: String,
+}
+
+/// One artifact as the hover card names it: enough to write its file name, never its content.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionArtifact {
+    pub title: String,
+    pub kind: String,
+    /// Where the person saved it in the working folder, if they did.
+    pub saved_path: Option<String>,
+    /// For an image or a video, the file itself (`content` holds a path); else `None`.
+    pub path: Option<String>,
+}
+
+/// What the Rail's hover card says about one session. Counts only, read on demand when the
+/// pointer rests on a row: the chat list loads on every launch and none of this belongs in it.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct SessionCard {
+    pub created_at: i64,
+    pub user_messages: u32,
+    pub assistant_messages: u32,
+    /// The newest artifacts and media this chat made (at most 20), and how many there are in all.
+    pub artifacts: Vec<SessionArtifact>,
+    pub artifact_count: u32,
+    /// Files the agent changed in the working folder and kept.
+    pub files_changed: u32,
+    pub helpers: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -252,6 +278,10 @@ pub struct SubagentRun {
     /// The app's own session id, so the user can pick the work up in a terminal
     /// (`CLI-UI-5`). Read from the child's conversation.
     pub engine_session: Option<String>,
+    /// `PRF-2`: what the job changed and how the project's check went, as the screen reads it.
+    pub evidence: Option<serde_json::Value>,
+    /// `PRF-5`: why it waits ("Waiting: Codex is changing src/a.rs."), while it does.
+    pub queued_because: Option<String>,
 }
 
 /// `TEAM-15`: one thing that passed between the people of a team in a session (Part I.6).
@@ -353,6 +383,9 @@ pub struct AgentAppBucket {
     /// Who paid, when every job agrees (`plan` | `api-key` | `own` | `free`);
     /// `mixed` when they differ.
     pub paid_by: Option<String>,
+    /// `XA-10`: what the app last said about the person's plan. Filled in by the
+    /// command that reads the usage, not by the database.
+    pub plan: Option<crate::engines::limits::PlanUsage>,
 }
 
 /// What was spent over a window, grouped three ways (`OBS-2`), and what agent
@@ -1504,6 +1537,12 @@ impl Db {
             Self::add_column(&conn, "conversations", "away_at", "INTEGER")?;
             Self::add_column(&conn, "conversations", "seen_at", "INTEGER")?;
         }
+        if current < 55 {
+            // v55 (`PRF-2`, `PRF-5`): what an agent app's job changed and whether the check ran
+            // after it (JSON), and why a helper waits for a place to change (text).
+            Self::add_column(&conn, "subagent_runs", "evidence_json", "TEXT")?;
+            Self::add_column(&conn, "subagent_runs", "queued_because", "TEXT")?;
+        }
         //
         // v24 (`OBS-2`): `run_usage` is created by SCHEMA above and has no
         // columns to add to an existing table, so there is nothing to do here
@@ -2464,6 +2503,8 @@ impl Db {
             member: None,
             item: None,
             engine_session: None,
+            evidence: None,
+            queued_because: None,
         })
     }
 
@@ -2484,6 +2525,20 @@ impl Db {
             "UPDATE subagent_runs SET member = ?2, item = ?3 WHERE id = ?1",
             params![id, member, item.map(|n| n as i64)],
         )?;
+        Ok(())
+    }
+
+    /// `PRF-2`: keep what a job changed and how the check went (JSON, as the screen reads it).
+    pub fn set_subagent_evidence(&self, id: &str, evidence_json: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE subagent_runs SET evidence_json = ?2 WHERE id = ?1", params![id, evidence_json])?;
+        Ok(())
+    }
+
+    /// `PRF-5`: say why a helper waits, or clear it (`None`) once it has its place.
+    pub fn set_subagent_queued_because(&self, id: &str, because: Option<&str>) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE subagent_runs SET queued_because = ?2 WHERE id = ?1", params![id, because])?;
         Ok(())
     }
 
@@ -2604,7 +2659,8 @@ impl Db {
             "SELECT id, parent_conversation_id, parent_message_id, child_conversation_id,
                     agent, task, status, stop_reason, result, steps, started_at, ended_at,
                     engine_id, because, paid_by, member, item,
-                    (SELECT engine_session FROM conversations c WHERE c.id = child_conversation_id)
+                    (SELECT engine_session FROM conversations c WHERE c.id = child_conversation_id),
+                    evidence_json, queued_because
              FROM subagent_runs WHERE parent_conversation_id = ?1
              ORDER BY started_at ASC, rowid ASC",
         )?;
@@ -2621,7 +2677,8 @@ impl Db {
                 "SELECT id, parent_conversation_id, parent_message_id, child_conversation_id,
                         agent, task, status, stop_reason, result, steps, started_at, ended_at,
                         engine_id, because, paid_by, member, item,
-                        (SELECT engine_session FROM conversations c WHERE c.id = child_conversation_id)
+                        (SELECT engine_session FROM conversations c WHERE c.id = child_conversation_id),
+                        evidence_json, queued_because
                  FROM subagent_runs WHERE id = ?1",
                 [id],
                 Self::map_subagent_run,
@@ -2745,6 +2802,8 @@ impl Db {
             member: row.get(15)?,
             item: row.get::<_, Option<i64>>(16)?.map(|n| n as usize),
             engine_session: row.get(17)?,
+            evidence: row.get::<_, Option<String>>(18)?.and_then(|j| serde_json::from_str(&j).ok()),
+            queued_because: row.get(19)?,
         })
     }
 
@@ -5156,6 +5215,55 @@ impl Db {
         Ok(rows)
     }
 
+    /// `SessionCard` for one conversation: a handful of COUNTs, no message bodies loaded.
+    pub fn session_card(&self, conversation_id: &str) -> Result<SessionCard, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let count = |sql: &str| -> u32 {
+            conn.query_row(sql, [conversation_id], |r| r.get::<_, i64>(0)).unwrap_or(0).max(0) as u32
+        };
+        let mut card = SessionCard {
+            created_at: conn
+                .query_row("SELECT created_at FROM conversations WHERE id = ?1", [conversation_id], |r| r.get(0))
+                .unwrap_or(0),
+            user_messages: count("SELECT COUNT(*) FROM messages WHERE conversation_id = ?1 AND role = 'user'"),
+            assistant_messages: count("SELECT COUNT(*) FROM messages WHERE conversation_id = ?1 AND role = 'assistant'"),
+            artifact_count: count("SELECT COUNT(*) FROM artifacts WHERE conversation_id = ?1"),
+            files_changed: count("SELECT COUNT(*) FROM file_trash WHERE conversation_id = ?1 AND undone = 0"),
+            helpers: count("SELECT COUNT(*) FROM subagent_runs WHERE parent_conversation_id = ?1"),
+            ..SessionCard::default()
+        };
+        let mut made = conn.prepare(
+            "SELECT title, kind, saved_path, CASE WHEN kind IN ('image', 'video') THEN content END
+             FROM artifacts WHERE conversation_id = ?1 ORDER BY created_at DESC LIMIT 20",
+        )?;
+        card.artifacts = made
+            .query_map([conversation_id], |r| {
+                Ok(SessionArtifact { title: r.get(0)?, kind: r.get(1)?, saved_path: r.get(2)?, path: r.get(3)? })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(card)
+    }
+
+    /// What every chat has made, for the Rail's "Has output" filter: `id -> (artifacts, files
+    /// changed)`. Two grouped counts over the whole table, so one read answers every row.
+    pub fn session_outputs(&self) -> Result<std::collections::HashMap<String, (u32, u32)>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut out: std::collections::HashMap<String, (u32, u32)> = std::collections::HashMap::new();
+        let mut a = conn.prepare(
+            "SELECT conversation_id, COUNT(*) FROM artifacts WHERE conversation_id IS NOT NULL GROUP BY conversation_id",
+        )?;
+        for row in a.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u32)))? {
+            let (id, n) = row?;
+            out.entry(id).or_default().0 = n;
+        }
+        let mut f = conn.prepare("SELECT conversation_id, COUNT(*) FROM file_trash WHERE undone = 0 GROUP BY conversation_id")?;
+        for row in f.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u32)))? {
+            let (id, n) = row?;
+            out.entry(id).or_default().1 = n;
+        }
+        Ok(out)
+    }
+
     pub fn list_all_artifacts(&self) -> Result<Vec<Artifact>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -6836,6 +6944,26 @@ mod tests {
         // Deleting the turn's conversation takes its children's records with it.
         db.delete_conversation(&parent.id).unwrap();
         assert!(db.list_subagent_runs(&parent.id).unwrap().is_empty());
+    }
+
+    /// `PRF-2`, `PRF-5`: what a job changed and why a helper waits are kept with its row.
+    #[test]
+    fn a_runs_evidence_and_the_reason_it_waits_are_kept_with_its_row() {
+        let db = Db::open_in_memory().unwrap();
+        let parent = db.create_conversation("lead", None, false).unwrap();
+        let child = db.create_conversation("child", None, false).unwrap();
+        let run = db.create_subagent_run("run1", &parent.id, None, &child.id, "Codex", "fix").unwrap();
+        assert!(run.evidence.is_none() && run.queued_because.is_none());
+
+        db.set_subagent_queued_because("run1", Some("Waiting: Claude Code is changing src/a.rs.")).unwrap();
+        db.set_subagent_evidence("run1", r#"{"changed":3,"check":"cargo test","state":"passed","left":[]}"#).unwrap();
+        let got = &db.list_subagent_runs(&parent.id).unwrap()[0];
+        assert_eq!(got.queued_because.as_deref(), Some("Waiting: Claude Code is changing src/a.rs."));
+        assert_eq!(got.evidence.as_ref().unwrap()["changed"], 3);
+        assert_eq!(db.get_subagent_run("run1").unwrap().unwrap().evidence.unwrap()["state"], "passed");
+
+        db.set_subagent_queued_because("run1", None).unwrap();
+        assert!(db.get_subagent_run("run1").unwrap().unwrap().queued_because.is_none());
     }
 
     /// `SUB-12`: a background child waits in a queue before it runs, and the

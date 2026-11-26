@@ -142,6 +142,9 @@ function Palette({ onClose }: { onClose: () => void }) {
     const chats = conversations
       .filter((c) => !c.parentConversationId)
       .sort((a, b) => b.updatedAt - a.updatedAt);
+    // `UI-3`: a search also finds a helper by its title; the rail shows it under its chat.
+    const everyChat = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt);
+    const titleOf = new Map(conversations.map((c) => [c.id, c.title]));
     const snippets = new Map(hits.map((h) => [h.conversation_id, h.snippet]));
     const now = Date.now();
 
@@ -149,7 +152,7 @@ function Palette({ onClose }: { onClose: () => void }) {
       key: `chat:${c.id}`,
       icon: <MessageIcon />,
       label: c.title,
-      meta: c.projectId ? projectName.get(c.projectId) : undefined,
+      meta: c.parentConversationId ? titleOf.get(c.parentConversationId) : c.projectId ? projectName.get(c.projectId) : undefined,
       time: shortTime(c.updatedAt, now),
       snippet: snippets.get(c.id),
       run: () => openSession(c.id),
@@ -189,10 +192,10 @@ function Palette({ onClose }: { onClose: () => void }) {
       ].filter((g) => g.items.length > 0);
     }
 
-    const byTitle = ranked(chats, (c) => c.title, words, 8);
+    const byTitle = ranked(everyChat, (c) => c.title, words, 8);
     const titled = new Set(byTitle.map((c) => c.id));
     const byBody = hits
-      .map((h) => chats.find((c) => c.id === h.conversation_id))
+      .map((h) => everyChat.find((c) => c.id === h.conversation_id))
       .filter((c): c is (typeof chats)[number] => !!c && !titled.has(c.id))
       .slice(0, 12 - byTitle.length);
 

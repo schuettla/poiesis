@@ -114,6 +114,9 @@ pub enum StopReason {
     Error,
     /// `TEAM-12`: the team's task spent what it was given, in money or in minutes.
     Budget,
+    /// `XA-11`: an agent app ran into the person's plan limit. It works again after a
+    /// known time, so this is not a crash.
+    PlanLimit,
 }
 
 impl StopReason {
@@ -126,6 +129,7 @@ impl StopReason {
             StopReason::Stuck => "stuck",
             StopReason::Error => "error",
             StopReason::Budget => "budget",
+            StopReason::PlanLimit => "plan_limit",
         }
     }
 
@@ -627,7 +631,7 @@ mod tests {
     #[test]
     fn a_partial_stop_reason_is_never_completed() {
         assert!(!StopReason::Completed.is_partial());
-        for reason in [StopReason::Aborted, StopReason::Timeout, StopReason::MaxSteps, StopReason::Error, StopReason::Budget] {
+        for reason in [StopReason::Aborted, StopReason::Timeout, StopReason::MaxSteps, StopReason::Error, StopReason::Budget, StopReason::PlanLimit] {
             assert!(reason.is_partial(), "{} should read as partial", reason.as_str());
         }
     }

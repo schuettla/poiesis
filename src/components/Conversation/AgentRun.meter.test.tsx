@@ -58,10 +58,30 @@ function meter(m: Message): string {
   act(() => {
     root.render(<AgentRun message={m} />);
   });
-  return container.querySelector(".run-meter")?.textContent ?? "";
+  // `UI-4`: a turn with steps says it in the head of its timeline; the meter is for a turn
+  // that has none yet. Either way it is the one live line.
+  return (container.querySelector(".run-meter") ?? container.querySelector(".timeline-head"))?.textContent ?? "";
 }
 
 describe("the run meter", () => {
+  it("is not drawn beside a timeline: one live line per turn, with one orb (UI-4)", () => {
+    activeRun();
+    meter(message([{ id: "s1", verb: "searched", target: "job market", status: "running" }] as AgentStep[]));
+    expect(container.querySelector(".run-meter")).toBeNull();
+    expect(container.querySelectorAll(".timeline-head .timeline-orb")).toHaveLength(1);
+    expect(container.querySelector(".thinking")).toBeNull();
+    // Closed while live; the head carries the words and the clock.
+    expect(container.querySelector(".timeline-rows")).toBeNull();
+    expect(container.querySelector(".timeline-head")!.textContent).toMatch(/^Working·searched job market·\d+:\d\d$/);
+  });
+
+  it("is still drawn for a turn that has no steps yet", () => {
+    activeRun();
+    meter(message());
+    expect(container.querySelector(".run-meter")).not.toBeNull();
+    expect(container.querySelector(".timeline")).toBeNull();
+  });
+
   it("never shows the step budget, which is a setting and not a status", () => {
     activeRun();
     const text = meter(message());

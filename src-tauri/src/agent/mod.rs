@@ -35,6 +35,7 @@ pub mod habit;
 pub mod imagegen;
 pub mod index;
 pub mod leader;
+pub mod integrity;
 pub mod ledger;
 pub mod log;
 pub mod mail;
@@ -90,6 +91,9 @@ pub struct EngineBadge {
     pub id: String,
     /// "Claude Code".
     pub name: String,
+    /// `XA-5`: the file in `public/agent-logos/`. Absent: the UI shows a letter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
     /// `plan` | `api-key` | `own`.
     pub paid_by: Option<String>,
     /// The rule it cited (`U2`), or `asked`.
@@ -337,6 +341,16 @@ pub enum AgentEvent {
         summary: String,
         steps: usize,
         ms: u64,
+        /// `PRF-2`: what an agent app's job changed and how the check went, when it changed files.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        evidence: Option<serde_json::Value>,
+    },
+    /// `PRF-5`: a helper waits for another to finish changing the same place (`because` says
+    /// which), or has its place now (`None`).
+    SubWaiting {
+        run_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        because: Option<String>,
     },
     /// `TEAM-10`: a team member's run began (it left the queue). `member` is its role in the
     /// team and `item` the plan item it was handed, when it was handed one.

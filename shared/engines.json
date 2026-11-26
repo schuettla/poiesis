@@ -1,5 +1,5 @@
 {
-  "_note": "The agent apps Poiesis knows how to drive (CLI-2). An agent that is not listed here is never found automatically: the user adds it by hand. Every entry was recorded against a real session (fixtures/engines/) before it was written. `tested_from` is the version that was recorded, `tested_below` is the first one nobody has looked at. Never add a command here that prints secrets (OpenCode's `auth export` is the example).",
+  "_note": "The agent apps Poiesis knows how to drive (CLI-2). An agent that is not listed here is never found automatically: the user adds it by hand. Every entry was recorded against a real session (fixtures/engines/) before it was written; Gemini CLI, Qwen Code, Kimi Code, Copilot CLI and Cline were recorded signed out by oh-my-hermes (fixtures/engines/omher/). `tested_from` is the version that was recorded, `tested_below` is the first one nobody has looked at. Never add a command here that prints secrets (OpenCode's `auth export` is the example).",
   "engines": [
     {
       "id": "claude-code",
@@ -10,6 +10,7 @@
       "login_args": ["auth", "login"],
       "status": { "args": ["auth", "status"], "reads": "stdout", "format": "claude-json" },
       "api_key_env": "ANTHROPIC_API_KEY",
+      "logo": "claude-code.svg",
       "tested_from": "2.1.301",
       "tested_below": "2.3.0"
     },
@@ -21,6 +22,7 @@
       "install_url": "https://github.com/openai/codex",
       "login_args": ["login"],
       "status": { "args": ["login", "status"], "reads": "stderr", "format": "codex-text" },
+      "logo": "codex.svg",
       "tested_from": "0.163.0",
       "tested_below": "0.170.0"
     },
@@ -32,6 +34,8 @@
       "install_url": "https://github.com/anomalyco/opencode",
       "login_args": ["auth", "login"],
       "acp_args": ["acp"],
+      "agent_name": "OpenCode",
+      "logo": "opencode.svg",
       "paid_by": "own",
       "ask_everything_env": {
         "OPENCODE_CONFIG_CONTENT": "{\"permission\":{\"edit\":\"ask\",\"bash\":\"ask\"}}"
@@ -42,6 +46,77 @@
       "strip_env_prefixes": ["OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "OPENROUTER_", "GROQ_", "MISTRAL_", "XAI_", "DEEPSEEK_", "AZURE_", "AWS_"],
       "tested_from": "2.1.0",
       "tested_below": "3.0.0"
+    },
+    {
+      "id": "acp:gemini",
+      "kind": "acp",
+      "name": "Gemini CLI",
+      "binaries": ["gemini"],
+      "install_url": "https://www.npmjs.com/package/@google/gemini-cli",
+      "install_line": "npm install -g @google/gemini-cli",
+      "login_args": [],
+      "acp_args": ["--acp"],
+      "api_key_env": "GEMINI_API_KEY",
+      "agent_name": "gemini-cli",
+      "logo": "gemini.svg",
+      "tested_from": "0.68.0",
+      "tested_below": "0.70.0"
+    },
+    {
+      "id": "acp:qwen",
+      "kind": "acp",
+      "name": "Qwen Code",
+      "binaries": ["qwen"],
+      "install_url": "https://www.npmjs.com/package/@qwen-code/qwen-code",
+      "install_line": "npm install -g @qwen-code/qwen-code@latest",
+      "login_args": [],
+      "acp_args": ["--acp"],
+      "api_key_env": "OPENAI_API_KEY",
+      "agent_name": "qwen-code",
+      "logo": "qwen.svg",
+      "tested_from": "0.27.2",
+      "tested_below": "0.29.0"
+    },
+    {
+      "id": "acp:kimi",
+      "kind": "acp",
+      "name": "Kimi Code",
+      "binaries": ["kimi"],
+      "install_url": "https://www.npmjs.com/package/@moonshot-ai/kimi-code",
+      "install_line": "npm install -g @moonshot-ai/kimi-code",
+      "login_args": ["login"],
+      "acp_args": ["acp"],
+      "agent_name": "Kimi Code CLI",
+      "tested_from": "2.6.0",
+      "tested_below": "3.0.0"
+    },
+    {
+      "id": "acp:copilot",
+      "kind": "acp",
+      "name": "Copilot CLI",
+      "binaries": ["copilot"],
+      "install_url": "https://www.npmjs.com/package/@github/copilot",
+      "install_line": "npm install -g @github/copilot",
+      "login_args": ["login"],
+      "acp_args": ["--acp"],
+      "agent_name": "Copilot",
+      "logo": "copilot.svg",
+      "tested_from": "1.0.110",
+      "tested_below": "1.1.0"
+    },
+    {
+      "id": "acp:cline",
+      "kind": "acp",
+      "name": "Cline",
+      "binaries": ["cline"],
+      "install_url": "https://www.npmjs.com/package/cline",
+      "install_line": "npm install -g cline",
+      "login_args": ["auth"],
+      "acp_args": ["--acp"],
+      "agent_name": "cline",
+      "logo": "cline.svg",
+      "tested_from": "3.0.74",
+      "tested_below": "3.1.0"
     }
   ]
 }

@@ -8,7 +8,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PricedUsage, UsageBucket } from "../lib/api";
+import type { PlanUsageView, PricedUsage, UsageBucket } from "../lib/api";
 
 const usageSummary = vi.fn();
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
@@ -106,6 +106,43 @@ describe("Usage: agent apps", () => {
     expect(tips[1]).toContain("billed to the API key you gave it");
     expect(tips[2]).toBe("OpenCode doesn't report a price.");
     expect(container.querySelector(".usage-notional")).not.toBeNull();
+  });
+
+  it("says how much of the plan is used under the app, and when it is back once the limit is reached (XA-10)", async () => {
+    const now = Date.now();
+    const row = (name: string, plan: PlanUsageView) => ({
+      name,
+      runs: 1,
+      prompt_tokens: 1,
+      output_tokens: 1,
+      duration_ms: 1000,
+      notional_usd: null,
+      paid_by: "plan" as const,
+      plan,
+    });
+    await show(
+      usage({
+        agent_apps: [
+          row("Claude Code", {
+            windows: [
+              { name: "5 hours", used: 0.12, resets_at_ms: now + 3_600_000 },
+              { name: "week", used: 0.59, resets_at_ms: now + 90_000_000 },
+            ],
+            reached: false,
+            resets_at_ms: now + 3_600_000,
+            at_ms: now,
+          }),
+          row("Codex", { windows: [], reached: true, resets_at_ms: now + 7_200_000, at_ms: now - 3 * 86_400_000 }),
+          { name: "OpenCode", runs: 1, prompt_tokens: 1, output_tokens: 1, duration_ms: 1000, notional_usd: null, paid_by: "own" },
+        ],
+      }),
+    );
+    const plans = [...container.querySelectorAll(".usage-app .usage-plan")];
+    expect(plans).toHaveLength(2);
+    expect(plans[0].textContent).toMatch(/^Plan: 12% of 5 hours, 59% of the week\. Resets \d\d:\d\d\.$/);
+    expect(plans[0].classList.contains("warn")).toBe(false);
+    expect(plans[1].textContent).toMatch(/^Plan limit reached\. Back at .+\. \(seen 3 days ago\)$/);
+    expect(plans[1].classList.contains("warn")).toBe(true);
   });
 
   it("shows the group even when the only jobs in the range were agent apps' ", async () => {

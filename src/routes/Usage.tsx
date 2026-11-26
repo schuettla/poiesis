@@ -3,7 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import * as api from "../lib/api";
 import { inTauri } from "../lib/api";
 import { decisionCostText, decisionCountText, decisionSummary, decisionTotals } from "../lib/decideUsage";
-import { paidByLabel } from "../lib/engines";
+import { paidByLabel, planLine } from "../lib/engines";
 import { useAppStore } from "../lib/store";
 import "./Usage.css";
 
@@ -309,6 +309,7 @@ export default function Usage() {
             <div className="usage-rows">
               {agentApps.map((row) => {
                 const cost = appCost(row);
+                const plan = row.plan ? planLine(row.plan) : null;
                 return (
                   <div className="usage-row usage-app" key={row.name}>
                     <span className="usage-name">{row.name}</span>
@@ -320,6 +321,7 @@ export default function Usage() {
                       {cost.paid}
                       {cost.list && <span className="usage-notional"> · {cost.list}</span>}
                     </span>
+                    {plan && <span className={`usage-plan ${plan.tone === "warn" ? "warn" : ""}`}>{plan.text}</span>}
                   </div>
                 );
               })}

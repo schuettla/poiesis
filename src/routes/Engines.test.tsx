@@ -64,11 +64,14 @@ const engine = (over: Partial<EngineInfo> = {}): EngineInfo => ({
   supports_api_key: true,
   can_pick_model: true,
   install_url: "https://example.test/install",
+  logo: null,
+  install_line: null,
   is_new: false,
   use_mode: "suggest",
   guards: { code_projects_only: true, min_trust: "confirm", max_per_conversation: 5, not_in_projects: [] },
   rules: [],
   delegate_ready: true,
+  forced_asking: false,
   memory_ready: true,
   diagnostics: { runs: 0, failed: 0, unknown_events: 0, last_error: null, last_stderr: "" },
   ...over,
@@ -119,7 +122,48 @@ describe("External agents", () => {
     expect(text()).toContain("I didn't find any agent apps on this computer");
     expect(text()).toContain("I didn't find it on this computer.");
     expect(text()).toContain("Set path…");
-    expect(text()).toContain("How to install");
+    expect(text()).toContain("Install page");
+  });
+
+  it("shows an agent's mark before its name, and a letter when it has none", async () => {
+    show([
+      engine({ id: "acp:gemini", kind: "acp", name: "Gemini CLI", logo: "gemini.svg" }),
+      engine({ id: "acp:kimi", kind: "acp", name: "Kimi Code", logo: null, found: false, found_path: null, version: null, signed_in: null, paid_by: null }),
+    ]);
+    await settle();
+    const img = container.querySelector<HTMLImageElement>(".engines-row .app-logo img");
+    expect(img?.getAttribute("src")).toMatch(/agent-logos\/gemini\.svg$/);
+    const missing = container.querySelector(".engines-row.missing .app-logo");
+    expect(missing?.querySelector("img")).toBeNull();
+    expect(missing?.textContent).toBe("K");
+  });
+
+  it("a not-found agent shows its install line with a Copy button that says Copied for a moment", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    show([
+      engine({
+        id: "acp:gemini",
+        kind: "acp",
+        name: "Gemini CLI",
+        found: false,
+        found_path: null,
+        version: null,
+        signed_in: null,
+        paid_by: null,
+        install_line: "npm install -g @google/gemini-cli",
+      }),
+    ]);
+    await settle();
+    expect(text()).toContain("npm install -g @google/gemini-cli");
+    const copy = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Copy")!;
+    await act(async () => copy.click());
+    expect(writeText).toHaveBeenCalledWith("npm install -g @google/gemini-cli");
+    expect(text()).toContain("Copied");
+    await act(async () => void vi.advanceTimersByTime(2100));
+    expect(text()).not.toContain("Copied");
+    vi.useRealTimers();
   });
 
   it("marks a version nobody has tested in amber words, and still lets it be used", async () => {

@@ -16,7 +16,9 @@ pub mod driver;
 #[cfg(all(test, windows))]
 mod e2e;
 pub mod learn;
+pub mod limits;
 pub mod locate;
+pub mod past;
 pub mod play;
 pub mod probe;
 pub mod process;
@@ -234,8 +236,14 @@ pub struct EngineInfo {
     pub supports_api_key: bool,
     pub can_pick_model: bool,
     pub install_url: Option<String>,
+    /// `XA-2`: the file in `public/agent-logos/`. `None`: the UI shows a letter.
+    pub logo: Option<String>,
+    /// `XA-2`: what a person types to install it. Shown, never run.
+    pub install_line: Option<String>,
     /// Found for the first time since the section was last opened.
     pub is_new: bool,
+    /// `XA-10`: what it last said about the person's plan, read as of now.
+    pub plan: Option<limits::PlanUsage>,
     /// `RTE-1`: `on_request` | `suggest` | `auto`.
     pub use_mode: String,
     /// `RTE-3`.
@@ -245,6 +253,9 @@ pub struct EngineInfo {
     /// Poiesis can hand this kind of agent a job today. Found, configurable and
     /// testable agents whose driver is not wired for jobs yet say so.
     pub delegate_ready: bool,
+    /// `XA-4`: we make it ask before it acts (OpenCode). False for the other ACP
+    /// agents: they follow their own settings, and what they ask comes to the person.
+    pub forced_asking: bool,
     /// This kind of agent can be given Poiesis's own tools (`MCPS-2`). The switch
     /// *Let it use my memory* is shown only for those.
     pub memory_ready: bool,
@@ -271,6 +282,7 @@ fn info(row: &EngineRow, unseen: &[String], rule_rows: &[crate::db::engines::Eng
             .map(|(label, r)| RuleView { rule: r.clone(), label })
             .collect(),
         delegate_ready: driver::delegate_ready(kind, &row.id),
+        forced_asking: driver::forced_asking(&row.id),
         memory_ready: driver::memory_ready(kind, &row.id),
         diagnostics: diag::summary(&row.id),
         id: row.id.clone(),
@@ -304,7 +316,10 @@ fn info(row: &EngineRow, unseen: &[String], rule_rows: &[crate::db::engines::Eng
         supports_api_key: entry.is_some_and(|e| e.api_key_env.is_some()),
         can_pick_model: matches!(kind, EngineKind::ClaudeCode | EngineKind::Codex | EngineKind::Acp),
         install_url: entry.map(|e| e.install_url.clone()),
+        logo: entry.and_then(|e| e.logo.clone()),
+        install_line: entry.and_then(|e| e.install_line.clone()),
         is_new: unseen.contains(&row.id),
+        plan: None,
     }
 }
 
@@ -317,9 +332,14 @@ pub fn list_infos(db: &Db) -> Result<Vec<EngineInfo>, String> {
     }
     let rows = db.list_engines().map_err(|e| e.to_string())?;
     let unseen = unseen(db);
+    let now = now_ms();
     let mut out: Vec<EngineInfo> = rows
         .iter()
-        .map(|r| info(r, &unseen, &db.list_engine_rules(&r.id).unwrap_or_default()))
+        .map(|r| {
+            let mut i = info(r, &unseen, &db.list_engine_rules(&r.id).unwrap_or_default());
+            i.plan = limits::load(db, &r.id).map(|u| u.view(now));
+            i
+        })
         .collect();
     for e in catalog::all() {
         if !rows.iter().any(|r| r.id == e.id) {

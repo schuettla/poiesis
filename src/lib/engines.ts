@@ -2,7 +2,7 @@
 // Kept apart from the screen so each sentence can be tested on its own and the
 // copy stays in one place (Part VII of the plan).
 
-import type { EngineInfo, EnginePaidBy, EngineRoutePreview, EngineTryResult, EngineUseMode } from "./api";
+import type { EngineInfo, EnginePaidBy, EngineRoutePreview, EngineTryResult, EngineUseMode, PlanUsageView, RunEvidence } from "./api";
 import { sureWord } from "./decisions";
 
 /** The wording for who pays. */
@@ -19,6 +19,110 @@ export function paidByLabel(p: EnginePaidBy | null, model?: string | null): stri
     default:
       return null;
   }
+}
+
+/** Where an agent's mark is (`XA-5`), built with the base path so it works when the
+ * app is served from a subfolder. `null`: `AppLogo` shows the first letter. */
+export function agentLogoUrl(logo: string | null | undefined): string | null {
+  return logo ? `${import.meta.env.BASE_URL}agent-logos/${logo}` : null;
+}
+
+const DAY = 24 * 3600 * 1000;
+
+/** `14:30` today, `Tue 14:30` another day. Local time. */
+export function planWhen(ms: number, now: number = Date.now()): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const clock = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return d.toDateString() === new Date(now).toDateString()
+    ? clock
+    : `${d.toLocaleDateString(undefined, { weekday: "short" })} ${clock}`;
+}
+
+/** `PRF-2`: the one line under a finished agent-app job that changed files. Built here from
+ * `state`, `changed` and `check`, so it reads the same as the report the lead was given. */
+export function evidenceLine(e: RunEvidence): string {
+  const files = `Changed ${e.changed} file${e.changed === 1 ? "" : "s"}.`;
+  const check = e.check ?? "the check";
+  switch (e.state) {
+    case "passed":
+      return `${files} Ran ${check} after the last change: passed.`;
+    case "failed":
+      return `${files} Ran ${check} after the last change: failed.`;
+    case "before-last":
+      return `${files} Ran ${check}, but not after its last change.`;
+    case "not-run":
+      return `${files} It did not run the project's check (${check}).`;
+    default:
+      return files;
+  }
+}
+
+/** `PRF-2`: the failed and not-run cases read in a warning tone. */
+export function evidenceWarns(e: RunEvidence): boolean {
+  return e.state === "failed" || e.state === "not-run";
+}
+
+/** `PRF-4`: what the change left open, for the line under the evidence: at most two items, then
+ * "and N more"; `full` is every item, for the tooltip. `null` when nothing was left. */
+export function evidenceLeft(e: RunEvidence): { text: string; full: string } | null {
+  const left = e.left ?? [];
+  if (left.length === 0) return null;
+  const shown = left.slice(0, 2).join(", ");
+  const more = left.length > 2 ? ` and ${left.length - 2} more` : "";
+  return { text: `Left: ${shown}${more}.`, full: left.join("\n") };
+}
+
+/** `XA-13`/`XA-14`: the one word that picks a Claude Code (`cc-`) or Codex (`cx-`) session in
+ * `/resume`: the last 8 characters of its id. Built the same way in the backend (`past::token`).
+ * `null` for any other agent. */
+export function outsideToken(engineId: string, session: string): string | null {
+  const prefix = engineId === "claude-code" ? "cc" : engineId === "codex" ? "cx" : null;
+  return prefix && session ? `${prefix}-${session.slice(-8)}` : null;
+}
+
+/** `XA-14`: how long ago a session was last worked in: "just now", "5 min ago", "2 h ago",
+ * "yesterday", "3 days ago". */
+export function sessionAge(ms: number, now: number = Date.now()): string {
+  const min = Math.floor((now - ms) / 60_000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} h ago`;
+  const d = Math.floor(h / 24);
+  return d === 1 ? "yesterday" : `${d} days ago`;
+}
+
+/** "(seen yesterday)" once what it said is more than a day old, else "". */
+export function planSeen(plan: PlanUsageView, now: number = Date.now()): string {
+  const days = Math.floor((now - plan.at_ms) / DAY);
+  if (days < 1) return "";
+  return days === 1 ? "(seen yesterday)" : `(seen ${days} days ago)`;
+}
+
+/** The next reset that is still ahead, if the app said one. */
+function nextReset(plan: PlanUsageView, now: number): number | null {
+  const times = [...plan.windows.map((w) => w.resets_at_ms), plan.resets_at_ms].filter(
+    (t): t is number => t != null && t > now,
+  );
+  return times.length ? Math.min(...times) : null;
+}
+
+/** `XA-10`: the line under an agent app on the Usage page. */
+export function planLine(plan: PlanUsageView, now: number = Date.now()): { text: string; tone: "plain" | "warn" } | null {
+  const seen = planSeen(plan, now);
+  const end = seen ? ` ${seen}` : "";
+  if (plan.reached) {
+    const back = plan.resets_at_ms != null && plan.resets_at_ms > now ? ` Back at ${planWhen(plan.resets_at_ms, now)}.` : "";
+    return { text: `Plan limit reached.${back}${end}`, tone: "warn" };
+  }
+  if (plan.windows.length === 0) return null;
+  const parts = plan.windows.map((w) => {
+    const of = w.name === "week" || w.name === "month" ? `the ${w.name}` : w.name;
+    return `${Math.round(w.used * 100)}% of ${of}`;
+  });
+  const reset = nextReset(plan, now);
+  return { text: `Plan: ${parts.join(", ")}.${reset != null ? ` Resets ${planWhen(reset, now)}.` : ""}${end}`, tone: "plain" };
 }
 
 export interface EngineStatus {
@@ -42,10 +146,17 @@ export function engineStatus(e: EngineInfo): EngineStatus {
   const pay =
     e.payment === "api-key" ? "with your API key" : paidByLabel(e.paid_by, e.model);
   if (pay && e.signed_in !== false) parts.push(pay);
+  // `XA-10`: the plan, when it was said today. A day-old figure says nothing about now.
+  const plan = e.plan && Date.now() - e.plan.at_ms < DAY ? e.plan : null;
+  if (plan?.reached) parts.push("plan limit reached");
+  else if (plan && plan.windows.length > 0) {
+    parts.push(`${Math.round(Math.max(...plan.windows.map((w) => w.used)) * 100)}% of plan used`);
+  }
   if (e.tested === "newer") parts.push("newer than I've been tested with");
   if (e.tested === "older") parts.push("older than I've been tested with");
   if (parts.length === 0 && e.last_error) return { text: e.last_error, tone: "bad" };
-  const tone = e.signed_in === false ? "bad" : e.tested === "newer" || e.tested === "older" ? "warn" : "plain";
+  const tone =
+    e.signed_in === false ? "bad" : e.tested === "newer" || e.tested === "older" || plan?.reached ? "warn" : "plain";
   return { text: parts.join(" · "), tone };
 }
 

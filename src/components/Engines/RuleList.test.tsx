@@ -65,6 +65,7 @@ const engine = (over: Partial<EngineInfo> = {}): EngineInfo =>
       rule({ id: "r3", kind: "avoid", text: "Quick questions", position: 2, label: "A1" }),
     ],
     delegate_ready: true,
+    forced_asking: false,
     memory_ready: true,
     diagnostics: { runs: 0, failed: 0, unknown_events: 0, last_error: null, last_stderr: "" },
     ...over,
@@ -148,6 +149,16 @@ describe("When I use it", () => {
     show(engine({ delegate_ready: false, name: "Codex" }));
     expect(text()).toContain("I can't hand work to Codex yet. It is set up and testable here.");
     expect(container.querySelector("[role=radio]")).toBeNull();
+  });
+
+  it("an ACP agent that follows its own approval settings says so; OpenCode, which we make ask, does not", () => {
+    const line = "asks before it acts as far as its own settings say. What it asks comes to you.";
+    show(engine({ id: "acp:gemini", kind: "acp", name: "Gemini CLI", forced_asking: false }));
+    expect(text()).toContain(`Gemini CLI ${line}`);
+    show(engine({ id: "acp:opencode", kind: "acp", name: "OpenCode", forced_asking: true }));
+    expect(text()).not.toContain(line);
+    show(engine({ kind: "claude-code", name: "Claude Code" }));
+    expect(text()).not.toContain(line);
   });
 
   it("Enter saves an edit, with a counter that stops at 140", async () => {

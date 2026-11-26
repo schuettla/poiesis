@@ -416,6 +416,10 @@
   font-size: var(--fs-timeline);
   color: var(--ink-faint);
 }
+/* Under a timeline there is no meter line to hang from, so it starts at the column's edge. */
+.run-thinking.solo {
+  margin-left: 0;
+}
 .run-thinking > summary {
   display: inline-flex;
   align-items: center;
@@ -962,8 +966,32 @@
   font-weight: 500;
   color: var(--ink);
 }
-.timeline.live .timeline-title {
-  animation: step-running 1.6s ease-in-out infinite;
+/* `UI-4`: the live head is the turn's one moving line: the orb, "Working", what it does now
+   (its words change in place) and the clock. The orb's slot keeps its width orb or not, so the
+   words do not slide sideways when a step starts or ends. */
+.timeline-orb {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-left: -2px;
+}
+.timeline-sep {
+  flex: none;
+  color: var(--ink-faint);
+}
+.timeline-activity {
+  flex: 0 1 auto;
+  min-width: 0;
+  line-height: 18px;
+  font-size: var(--fs-footnote);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+.timeline-clock {
+  flex: none;
+  font-size: var(--fs-footnote);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
 }
 .timeline-summary {
   min-width: 0;
@@ -1123,6 +1151,15 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+/* `UI-4`: how long the step took, at the right of its row. */
+.step .step-time {
+  flex: none;
+  min-width: 4ch;
+  text-align: right;
+  font-size: var(--fs-footnote);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
 }
 .step .result {
   font-family: var(--font-sans);
@@ -1750,6 +1787,14 @@
   text-overflow: ellipsis;
   max-width: 12ch;
 }
+/* An agent app's mark, the size of the cell the orb and the dot sit in. */
+.fleet-who .app-logo {
+  width: 20px;
+  height: 20px;
+  padding: 3px;
+  border: 0;
+  background: none;
+}
 /* The agent's name with what an agent app adds to it (who paid, which rule). */
 .fleet-who {
   display: flex;
@@ -1767,6 +1812,11 @@
   font: inherit;
   font-size: var(--fs-timeline);
   white-space: nowrap;
+}
+/* `XA-11`: an agent app ran into the person's plan limit. */
+.fleet-chip-warn {
+  color: var(--cloud);
+  border-color: currentColor;
 }
 .fleet-chip-why {
   cursor: pointer;
@@ -1857,6 +1907,15 @@
   border-radius: var(--radius);
   background: var(--canvas);
   color: var(--ink);
+}
+.fleet-evidence {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  font-size: var(--fs-timeline);
+  color: var(--ink-muted);
+}
+.fleet-evidence-warn {
+  color: var(--cloud);
 }
 .fleet-note,
 .fleet-report {

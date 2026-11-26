@@ -435,6 +435,18 @@
     "trace": true
   },
   {
+    "name": "resume",
+    "title": "Continue an agent app's session",
+    "aliases": [],
+    "section": "agents",
+    "kind": "skill",
+    "args": { "type": "text", "hint": "[session] task", "required": true, "lead": "outside" },
+    "summary": "Pick up a Claude Code or Codex session in this folder and tell it what to do next",
+    "who": "user",
+    "needs": ["conv", "norun", "folder", "engines"],
+    "trace": true
+  },
+  {
     "name": "agents",
     "title": "See my helpers",
     "aliases": [],

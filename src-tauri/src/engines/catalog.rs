@@ -29,7 +29,21 @@ pub struct CatalogEntry {
     pub binaries: Vec<String>,
     pub install_url: String,
     /// What **Sign in** runs in a terminal. The agent's own flow, never ours (TRM-2).
+    /// Empty: **Sign in** starts the program itself, which asks the person to
+    /// sign in on its first start.
     pub login_args: Vec<String>,
+    /// File name of the agent's mark in `public/agent-logos/`. Absent: the UI
+    /// shows the first letter of the name.
+    #[serde(default)]
+    pub logo: Option<String>,
+    /// The command a person types to install it. Shown in Settings, never run.
+    #[serde(default)]
+    pub install_line: Option<String>,
+    /// The `agentInfo.name` the agent sends in its `initialize` reply. The ACP
+    /// driver compares it with the program it started, to catch a wrong
+    /// program that happens to have the same file name (`XA-3`).
+    #[serde(default)]
+    pub agent_name: Option<String>,
     /// The argv an ACP agent starts its protocol with.
     #[serde(default)]
     pub acp_args: Vec<String>,
@@ -96,10 +110,14 @@ impl EngineKind {
 mod tests {
     use super::*;
 
+    fn logos_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../public/agent-logos")
+    }
+
     #[test]
     fn the_bundled_catalog_parses_and_is_consistent() {
         let all = all();
-        assert!(all.len() >= 3);
+        assert!(all.len() >= 8);
         let mut ids: Vec<&str> = all.iter().map(|e| e.id.as_str()).collect();
         ids.sort();
         ids.dedup();
@@ -107,9 +125,16 @@ mod tests {
         for e in all {
             assert!(!e.binaries.is_empty(), "{} names a binary", e.id);
             assert!(e.install_url.starts_with("https://"), "{}", e.id);
-            assert!(!e.login_args.is_empty(), "{} has a sign-in flow", e.id);
             if e.kind == EngineKind::Acp {
                 assert!(!e.acp_args.is_empty(), "{} says how to start ACP", e.id);
+                assert!(e.agent_name.is_some(), "{} names itself in `initialize`", e.id);
+            }
+            if let Some(logo) = &e.logo {
+                let file = logos_dir().join(logo);
+                assert!(file.is_file(), "{}: no logo file {}", e.id, file.display());
+            }
+            if let Some(line) = &e.install_line {
+                assert!(line.starts_with("npm install -g "), "{}: {line}", e.id);
             }
             // Parseable on both ends, so `Tested` never has to guess.
             assert!(super::super::probe::parse_version(&e.tested_from).is_some());
