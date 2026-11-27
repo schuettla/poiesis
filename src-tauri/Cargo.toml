@@ -1,6 +1,6 @@
 [package]
 name = "poiesis"
-version = "0.1.0"
+version = "0.1.1"
 description = "Poiesis — a local-first, agentic desktop LLM application"
 authors = ["Poiesis contributors"]
 edition = "2021"
