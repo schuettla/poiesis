@@ -36,7 +36,7 @@ beforeEach(() => {
     conversations, subRuns, personas: [], teams: [], projects: [], expandedProjects: [], activeConversationId: null,
     view: "chat", railCollapsed: false, changeProposals: [], reflectingIds: [], digestedIds: [], runningJob: null,
     paletteOpen: false, leaderFilter: null, waiting: [], pendingQuestion: null, queuedQuestions: [], runSummaries: {},
-    unreadIds: [], activeRun: null,
+    unreadIds: [], liveRuns: {},
   } as never);
 });
 afterEach(() => {
@@ -51,7 +51,7 @@ describe("the rail over a long history", () => {
     const first = performance.now() - t0;
     expect(container.querySelectorAll(".chat-row")).toHaveLength(CHATS);
     const t1 = performance.now();
-    for (let i = 0; i < 20; i++) act(() => useAppStore.setState({ busy: i % 2 === 0 } as never));
+    for (let i = 0; i < 20; i++) act(() => useAppStore.setState({ busyChats: i % 2 === 0 ? { other: "other" } : {} } as never));
     const updates = performance.now() - t1;
     console.log(`first render ${first.toFixed(0)}ms, 20 updates ${updates.toFixed(0)}ms`);
     expect(first).toBeLessThan(3000);

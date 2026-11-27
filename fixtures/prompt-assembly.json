@@ -10,6 +10,7 @@
   "tools_enabled": true,
   "memory_enabled": true,
   "plan_mode": "auto",
+  "today_line": "Today is Friday, 27 November 2026.",
   "skills": [
     {
       "name": "pdf-forms",

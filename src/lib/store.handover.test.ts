@@ -53,7 +53,7 @@ beforeEach(() => {
     harnessProposals: [],
     commandNotes: {},
     personas: [{ id: "p1", name: "Mira" }],
-    busy: false,
+    busyChats: {},
     presence: "idle",
   } as never);
 });

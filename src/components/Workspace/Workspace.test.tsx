@@ -46,7 +46,7 @@ function reset(messages: Message[] = []) {
     pendingActions: {},
     pendingQuestion: null,
     harnessProposals: [],
-    busy: false,
+    busyChats: {},
     toolsEnabled: true,
   });
 }
@@ -199,7 +199,7 @@ describe("the workspace view", () => {
   it("shows the question a paused run is waiting on, and answering it is possible here", () => {
     reset([user("book it"), agent({ streaming: true })]);
     useAppStore.setState({
-      busy: true,
+      busyChats: { c1: "other" },
       pendingQuestion: {
         runId: "r1",
         id: "q1",
@@ -239,7 +239,7 @@ describe("the workspace view", () => {
         steps: [{ id: "s1", verb: "searched", target: "the web", status: "running" } as never],
       }),
     ]);
-    useAppStore.setState({ busy: true });
+    useAppStore.setState({ busyChats: { c1: "other" } });
     mount(<Workspace />);
     expect(container.querySelector(".run-meter")?.textContent).toContain("searched the web");
   });

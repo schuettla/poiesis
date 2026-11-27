@@ -37,7 +37,7 @@ beforeEach(() => {
   useAppStore.setState({
     conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [] }],
     activeConversationId: "c1",
-    activeRun: {
+    liveRuns: { c1: {
       runId: "r1",
       convId: "c1",
       step: 1,
@@ -46,9 +46,9 @@ beforeEach(() => {
       contextTokens: 0,
       contextWindow: null,
       thinking: "",
-    },
+    } },
     pendingQuestion: null,
-    busy: true,
+    busyChats: { c1: "other" },
   });
 });
 

@@ -19,7 +19,7 @@ use serde::Deserialize;
 use tauri::ipc::Channel;
 
 use crate::agent::context::{self, GatherOpts, KEEP_RECENT, KEEP_RECENT_WORKSPACE};
-use crate::agent::fleet::StopReason;
+use crate::agent::fleet::{ChatGuard, StopReason};
 use crate::agent::plan::Plan;
 use crate::agent::run::{AgentEventSink, RunOptions};
 use crate::agent::tier;
@@ -35,6 +35,10 @@ const PDF_TEXT_CAP: usize = 20_000;
 
 /// Said as the answer when a resume finds nothing to pick up.
 pub const NOTHING_TO_RESUME: &str = "I have no record of that run to pick up \u{2014} it finished before I started keeping one. Ask me again and I will start it fresh.";
+
+/// `PAR-3`: said by a turn that finds its chat already working. The window and the phone steer a
+/// chat that works, so this is only for the moment both send to it at once.
+pub const CHAT_BUSY: &str = "This chat is already working. What you type now goes to it.";
 
 /// Temperature when neither the conversation nor its persona says.
 const DEFAULT_TEMPERATURE: f32 = 0.7;
@@ -648,7 +652,20 @@ fn lend_to_a_member(
 /// the place to run is resolved; the model's copy of the message and the system
 /// prompt are built; what recall brought in is announced; the run happens; the
 /// assistant row is finished.
-pub async fn run_turn(env: &TurnEnv<'_>, input: TurnInput, on_event: Channel<AgentEvent>) {
+///
+/// Not an `async fn` around `run_turn_held`: that would be one more copy of a very large future
+/// on a stack that is already deep when a member's work runs inside the coordinator's call.
+pub fn run_turn<'a>(
+    env: &'a TurnEnv<'a>,
+    input: TurnInput,
+    on_event: Channel<AgentEvent>,
+) -> impl std::future::Future<Output = ()> + 'a {
+    run_turn_held(env, input, on_event, None)
+}
+
+/// `run_turn` for a caller that holds the chat already (`PAR-3`): the remote gateway takes it
+/// before it works out which model to use, so a second message in that gap is told to wait.
+pub async fn run_turn_held(env: &TurnEnv<'_>, input: TurnInput, on_event: Channel<AgentEvent>, held: Option<ChatGuard>) {
     let db = env.db;
     let conversation_id = input.conversation_id.as_str();
     let (sink, fold) = folding_sink(on_event);
@@ -669,6 +686,13 @@ pub async fn run_turn(env: &TurnEnv<'_>, input: TurnInput, on_event: Channel<Age
         user_message_id: (!unasked).then(|| user_id.clone()),
         assistant_message_id: assistant_id.clone(),
     });
+
+    // `PAR-3`: one turn per chat. Before anything below changes who leads it.
+    let Some(chat) = held.or_else(|| env.fleet.enter_chat(conversation_id, input.options.remote)) else {
+        sink.emit(AgentEvent::Error { message: CHAT_BUSY.to_string() });
+        finalize(env, &sink, &assistant_id, &fold, None, None);
+        return;
+    };
 
     // `TEAM-1`: a chat nobody led yet takes the leader where it starts says, before
     // anything below reads its persona.
@@ -783,6 +807,8 @@ pub async fn run_turn(env: &TurnEnv<'_>, input: TurnInput, on_event: Channel<Age
         refs.fired = fold.fired.clone();
     }
     let context_json = serde_json::to_string(&refs).ok();
+    // Free before the last word goes out, so what the window sends next is not refused.
+    drop(chat);
     finalize(env, &sink, &assistant_id, &fold, context_json.as_deref(), Some(outcome.stop_reason));
 }
 
@@ -807,8 +833,13 @@ pub async fn resume_turn(
 ) -> bool {
     let db = env.db;
     let (sink, fold) = folding_sink(on_event);
+    // `PAR-3`: one turn per chat.
+    let chat = env.fleet.enter_chat(conversation_id, options.remote);
     // `TEAM-1`: a one-message lead the app closed during ends here, before the run goes on.
-    crate::agent::leader::give_back_left(db, conversation_id);
+    // Not while another turn works: the lead it lent is in use.
+    if chat.is_some() {
+        crate::agent::leader::give_back_left(db, conversation_id);
+    }
 
     let row = match db.append_message(
         conversation_id,
@@ -828,6 +859,11 @@ pub async fn resume_turn(
         }
     };
     sink.emit(AgentEvent::TurnSaved { user_message_id: None, assistant_message_id: row.id.clone() });
+    let Some(chat) = chat else {
+        sink.emit(AgentEvent::Error { message: CHAT_BUSY.to_string() });
+        finalize(env, &sink, &row.id, &fold, None, None);
+        return false;
+    };
 
     let nothing = |text: &str| {
         sink.emit(AgentEvent::Token { text: text.to_string() });
@@ -848,9 +884,10 @@ pub async fn resume_turn(
     if let Some(what) = crate::agent::log::outward_done(db, &run_id) {
         return nothing(&crate::agent::log::cut_off_after(&what));
     }
+    // The replayed prompt carries the date of the day it was written.
     msgs.push(serde_json::json!({
         "role": "system",
-        "content": crate::agent::log::RESUME_PROMPT,
+        "content": format!("{} {}", crate::agent::log::RESUME_PROMPT, context::today_line()),
     }));
 
     let setup = match resolve_turn(env.mgr, db, &target).await {
@@ -884,6 +921,7 @@ pub async fn resume_turn(
         &sink,
     )
     .await;
+    drop(chat);
     finalize(env, &sink, &row.id, &fold, None, Some(outcome.stop_reason));
     true
 }
@@ -1352,6 +1390,97 @@ mod tests {
         assert_eq!(sent.first().unwrap()["role"], "system");
         let last = sent.last().unwrap();
         assert_eq!((last["role"].as_str(), last["content"].as_str()), (Some("user"), Some("Say hi")));
+    }
+
+    /// `PAR-3`: a chat that works takes no second turn. The second one says so on its own row,
+    /// and another chat is not held up.
+    #[tokio::test]
+    async fn a_second_turn_in_a_working_chat_is_refused_and_its_row_finished() {
+        let rig = Rig::new();
+        let (url, _) = fake_model("Hello there").await;
+        let (conv, target) = rig.conversation_on(&url);
+        let (other, _) = rig.conversation_on(&url);
+        let working = rig.fleet.enter_chat(&conv, false).expect("free");
+
+        let (channel, events) = recording_channel();
+        run_turn(&rig.env(), typed(&conv, target.clone(), "Me too"), channel).await;
+        let rows = rig.db.list_messages(&conv).unwrap();
+        assert_eq!(rows.len(), 2, "the message is kept");
+        assert_eq!(rows[1].content, format!("That didn't work: {CHAT_BUSY}"));
+        {
+            let events = events.lock().unwrap();
+            assert!(events.iter().any(|e| e["type"] == "error" && e["message"] == CHAT_BUSY), "{events:?}");
+            assert_eq!(events.last().unwrap()["type"], "turn_finalized");
+            assert!(!events.iter().any(|e| e["type"] == "run_started"), "no run");
+        }
+
+        let (channel, _) = recording_channel();
+        run_turn(&rig.env(), typed(&other, target.clone(), "Say hi"), channel).await;
+        assert_eq!(rig.db.list_messages(&other).unwrap()[1].content, "Hello there");
+
+        drop(working);
+        let (channel, _) = recording_channel();
+        run_turn(&rig.env(), typed(&conv, target, "Now"), channel).await;
+        assert_eq!(rig.db.list_messages(&conv).unwrap()[3].content, "Hello there");
+        assert!(!rig.fleet.chat_busy(&conv), "free again once the turn ends");
+    }
+
+    /// `PAR-5`: while one chat holds a folder, another chat's write waits and says why, and its
+    /// reads do not wait. When the first run ends, the write is made.
+    #[tokio::test]
+    async fn a_write_waits_while_another_chat_holds_the_folder() {
+        use crate::agent::toolsets::Toolset;
+        let rig = Rig::new();
+        Toolset::FileSystem.set_enabled(&rig.db, true);
+        let folder = rig.tmp.path().join("project");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("notes.txt"), "old").unwrap();
+        let at = folder.to_string_lossy().to_string();
+        let (url, _) = scripted_model(vec![
+            call("read_file", serde_json::json!({ "path": "notes.txt" })),
+            call("write_file", serde_json::json!({ "path": "notes.txt", "content": "new" })),
+            serde_json::json!({ "content": "Done." }),
+        ])
+        .await;
+        let (conv, target) = rig.full_conversation_on(&url);
+        rig.db.set_conversation_folder(&conv, Some(&at)).unwrap();
+        rig.db.set_conversation_trust(&conv, "auto").unwrap();
+
+        // The other chat has changed something here and is still working.
+        let first = rig.db.create_conversation("Fix the login", None, false).unwrap().id;
+        let holder = rig.fleet.open(&first, crate::runtime::proxy::CancelFlag::new(), None, 0, false);
+        let quiet = AgentEventSink::new(recording_channel().0);
+        let held = crate::permissions::canonicalize_lenient(&folder);
+        assert!(crate::agent::subagents::hold_folder(&rig.db, Some(&rig.fleet), &holder, &held, &holder.cancel, &quiet, "c").await);
+
+        let (channel, events) = recording_channel();
+        let mut turn = typed(&conv, target, "Rewrite the notes");
+        turn.tools_enabled = true;
+        let release = async {
+            // Until the turn says it waits.
+            for _ in 0..200 {
+                if events.lock().unwrap().iter().any(|e| e["type"] == "held") {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            assert_eq!(std::fs::read_to_string(folder.join("notes.txt")).unwrap(), "old", "the write waits");
+            rig.fleet.close(&holder.id);
+        };
+        let env = rig.env();
+        let both = async { tokio::join!(run_turn(&env, turn, channel), release) };
+        tokio::time::timeout(std::time::Duration::from_secs(30), both).await.expect("the turn finished");
+
+        assert_eq!(std::fs::read_to_string(folder.join("notes.txt")).unwrap(), "new");
+        let events = events.lock().unwrap();
+        let waits: Vec<&serde_json::Value> = events.iter().filter(|e| e["type"] == "held").collect();
+        assert_eq!(waits.len(), 2, "told once that it waits and once that it goes on: {waits:?}");
+        assert_eq!(waits[0]["reason"], "Waiting: \"Fix the login\" is changing files in this folder.");
+        assert!(waits[1].get("reason").is_none());
+        let read_done = events.iter().position(|e| e["type"] == "step_done" && e["id"] == "call_read_file");
+        let first_wait = events.iter().position(|e| e["type"] == "held");
+        assert!(read_done.is_some() && read_done < first_wait, "reading never waits: {events:?}");
     }
 
     /// `TIER-T-4`: the whole turn, on servers whose windows put them on each tier.
@@ -2523,7 +2652,8 @@ REASON: fine".to_string()])],
         let sent = first_chat(&bodies);
         let told = sent.last().unwrap();
         assert_eq!(told["role"], "system");
-        assert_eq!(told["content"], crate::agent::log::RESUME_PROMPT);
+        let note = format!("{} {}", crate::agent::log::RESUME_PROMPT, context::today_line());
+        assert_eq!(told["content"], note.as_str());
         assert!(
             sent.iter().any(|m| m["role"] == "user" && m["content"] == "Start the job"),
             "the interrupted run's own transcript came back: {sent:?}"

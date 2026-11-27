@@ -4,6 +4,7 @@ import { itemDot, orgWords } from "../../lib/orgState";
 import { useAppStore } from "../../lib/store";
 import StyleGlyph from "../Mark/StyleGlyph";
 import TeamDiagram, { asButton, type TeamChartProps } from "./TeamDiagram";
+import { questionOf } from "../../lib/runs";
 import "./OrgDiagram.css";
 
 /**
@@ -132,7 +133,7 @@ function StyleDiagram({ conversationId }: { conversationId: string }) {
   const lastPlan = useLastPlan(conversationId);
   const presets = useAppStore((s) => s.presets);
   const subRuns = useAppStore((s) => s.subRuns);
-  const asking = useAppStore((s) => !!s.pendingQuestion && s.pendingQuestion.convId === conversationId);
+  const asking = useAppStore((s) => !!questionOf(s, conversationId));
   const openItem = useAppStore((s) => s.openItem);
   const [gateNote, setGateNote] = useState<string | null>(null);
   const arrowId = `org-arrow-${useId().replace(/:/g, "")}`;

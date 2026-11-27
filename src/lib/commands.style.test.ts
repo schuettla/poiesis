@@ -48,8 +48,8 @@ beforeEach(() => {
     conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [], style: null }],
     turnModifiers: {},
     skills: [],
-    busy: false,
-    activeRun: null,
+    busyChats: {},
+    liveRuns: {},
   });
 });
 

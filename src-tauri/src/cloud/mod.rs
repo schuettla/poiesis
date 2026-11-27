@@ -532,9 +532,11 @@ async fn discover_openrouter(client: &reqwest::Client) -> Result<Vec<CloudModel>
 /// current flagship models (CLD-4).
 fn curated_anthropic() -> Vec<CloudModel> {
     let entries = [
-        ("claude-3-5-sonnet-latest", "Claude 3.5 Sonnet", true),
-        ("claude-3-5-haiku-latest", "Claude 3.5 Haiku", false),
-        ("claude-3-opus-latest", "Claude 3 Opus", true),
+        // The Claude 3 models that were here are retired, so this fallback
+        // offered only models that fail. These are the current ones.
+        ("claude-opus-5-5", "Claude Opus 5.5", true),
+        ("claude-sonnet-5-5", "Claude Sonnet 5.5", true),
+        ("claude-haiku-5-5", "Claude Haiku 5.5", true),
     ];
     entries
         .into_iter()

@@ -23,7 +23,7 @@ import {
 } from "../Icons/Icons";
 import { updateIsWaiting } from "../../lib/updates";
 import { sessionOutputs, stillWorking } from "../../lib/api";
-import { chatNow, chatState, runOfChat, type ChatState } from "../../lib/chatState";
+import { chatNow, chatSince, chatState, runOfChat } from "../../lib/chatState";
 import {
   folderName,
   folderOf,
@@ -37,6 +37,13 @@ import {
   RAIL_GROUPS,
   STATUS_ORDER,
   STATUS_WORD,
+  LIVE_STATUSES,
+  LIVE_WORDS,
+  isLiveSet,
+  noChatsWords,
+  railStatus,
+  statusChipWords,
+  type RailStatus,
   type OutputKind,
   type RailContext,
   type RailFilters,
@@ -329,6 +336,7 @@ function HelperRow({ c, now }: { c: Conversation; now: number }) {
   const openItem = useAppStore((s) => s.openItem);
   const stopSubRun = useAppStore((s) => s.stopSubRun);
   const openTurnOf = useAppStore((s) => s.openTurnOf);
+  const setSessionDetails = useAppStore((s) => s.setSessionDetails);
   const state = useAppStore((s) => chatState(s, c.id));
   const doing = useAppStore((s) => chatNow(s, c.id));
   const run = useAppStore((s) => runOfChat(s, c.id));
@@ -408,11 +416,21 @@ function HelperRow({ c, now }: { c: Conversation; now: number }) {
               >
                 Open the chat it came from
               </button>
+              <button
+                className="row-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setSessionDetails(c.id);
+                }}
+              >
+                Session details…
+              </button>
             </RowMenu>
           )}
         </span>
       </div>
-      <ChatNow text={doing} indent={run?.engine || persona ? 20 : 0} />
+      <ChatNow text={doing} indent={run?.engine || persona ? 20 : 0} live={state === "running"} />
       {hover.cardPortal}
     </li>
   );
@@ -454,6 +472,7 @@ function ChatRow({ c, active, now }: { c: Conversation; active: boolean; now: nu
   const digested = useAppStore((s) => s.digestedIds.includes(c.id));
   const deleteConversation = useAppStore((s) => s.deleteConversation);
   const scheduleConversation = useAppStore((s) => s.scheduleConversation);
+  const setSessionDetails = useAppStore((s) => s.setSessionDetails);
   const leaderId = leaderOf(c);
   const leader = useAppStore((s) =>
     leaderId.startsWith("persona:") ? s.personas.find((p) => `persona:${p.id}` === leaderId) : undefined
@@ -465,10 +484,13 @@ function ChatRow({ c, active, now }: { c: Conversation; active: boolean; now: nu
   const state = useAppStore((s) => chatState(s, c.id));
   const doing = useAppStore((s) => chatNow(s, c.id));
   const waiting = useAppStore((s) => s.waiting.some((p) => p.session_id === c.id));
+  // `PAR-9`: a working chat says how long it has worked.
+  const since = useAppStore((s) => (chatState(s, c.id) === "running" ? chatSince(s, c.id) : null));
   const tree = useContext(RailTree);
   const kids = tree.kids.get(c.id);
   const kidActive = useAppStore((s) => !!kids && s.view === "chat" && kids.some((k) => k.id === s.activeConversationId));
-  const helpersOpen = tree.open[c.id] ?? (state === "running" || state === "needs-you" || active || kidActive);
+  const helpersOpen =
+    tree.open[c.id] ?? (state === "running" || state === "needs-you" || state === "held" || active || kidActive);
   // Removing a chat takes two steps: the menu, then a confirmation.
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -589,6 +611,17 @@ function ChatRow({ c, active, now }: { c: Conversation; active: boolean; now: nu
                 Schedule this…
               </button>
               <ProjectMenuItems conversationId={c.id} onDone={() => setMenuOpen(false)} />
+              {/* `DBG-3`: ids, runs and the log of this chat, for finding a fault. */}
+              <button
+                className="row-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setSessionDetails(c.id);
+                }}
+              >
+                Session details…
+              </button>
               <hr className="row-menu-sep" />
               <button
                 className="row-menu-item danger"
@@ -603,7 +636,7 @@ function ChatRow({ c, active, now }: { c: Conversation; active: boolean; now: nu
             </RowMenu>
           </span>
         </div>
-        <ChatNow text={doing} indent={indent} />
+        <ChatNow text={doing} indent={indent} live={state === "running"} since={since} />
 
         {confirming && (
           // Rendered inside the row, so its clicks must not reach the row.
@@ -731,7 +764,7 @@ function RailFilter({
   const projectName = (id: string) => (id === NO_PROJECT ? "No project" : (stats.projects.find((p) => p.id === id)?.name ?? ""));
   const active = [
     filter ? `Led by ${filterName}` : null,
-    filters.status ? STATUS_WORD[filters.status] : null,
+    statusChipWords(filters.status),
     filters.output ? OUTPUT_WORD[filters.output] : null,
     filters.folder ? `In ${folderName(filters.folder)}` : null,
     filters.project ? projectName(filters.project) : null,
@@ -753,15 +786,15 @@ function RailFilter({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [open, fly]);
   // Picking what is already picked takes it off.
-  const pick = <K extends keyof RailFilters>(key: K, value: RailFilters[K]) => {
+  const pick = <K extends "output" | "folder" | "project">(key: K, value: RailFilters[K]) => {
     close();
     setRailFilters({ [key]: filters[key] === value ? null : value } as Partial<RailFilters>);
   };
-  const opt = (o: { key: string; label: string; checked: boolean; count?: number; glyph?: ReactNode; cls?: string; onPick: () => void }) => (
+  const opt = (o: { key: string; label: string; checked: boolean; many?: boolean; count?: number; glyph?: ReactNode; cls?: string; onPick: () => void }) => (
     <button
       key={o.key}
       className={`row-menu-item rail-opt ${o.cls ?? ""} ${o.checked ? "active" : ""}`}
-      role="menuitemradio"
+      role={o.many ? "menuitemcheckbox" : "menuitemradio"}
       aria-checked={o.checked}
       disabled={o.count === 0 && !o.checked}
       onClick={o.onPick}
@@ -772,6 +805,21 @@ function RailFilter({
     </button>
   );
 
+  // `PAR-11`: states add up, so the flyout stays open while they are picked.
+  const toggleStatus = (s: RailStatus) =>
+    setRailFilters({
+      status: filters.status.includes(s) ? filters.status.filter((x) => x !== s) : [...filters.status, s],
+    });
+  const liveCount = LIVE_STATUSES.reduce((n, s) => n + (stats.status.get(s) ?? 0), 0);
+  const statusRow = (s: RailStatus) =>
+    opt({
+      key: s,
+      label: STATUS_WORD[s],
+      checked: filters.status.includes(s),
+      many: true,
+      count: stats.status.get(s) ?? 0,
+      onPick: () => toggleStatus(s),
+    });
   // The flyouts, by id: what each parent opens.
   const subs: Record<string, { label: string; items: ReactNode[] }> = {
     group: {
@@ -807,9 +855,19 @@ function RailFilter({
     },
     status: {
       label: "Status",
-      items: STATUS_ORDER.map((s) =>
-        opt({ key: s, label: STATUS_WORD[s], checked: filters.status === s, count: stats.status.get(s) ?? 0, onPick: () => pick("status", s) })
-      ),
+      items: [
+        opt({
+          key: "live",
+          label: LIVE_WORDS,
+          checked: isLiveSet(filters.status),
+          many: true,
+          count: liveCount,
+          onPick: () => setRailFilters({ status: isLiveSet(filters.status) ? [] : [...LIVE_STATUSES] }),
+        }),
+        <hr key="sep" className="row-menu-sep" />,
+        ...STATUS_ORDER.map(statusRow),
+        statusRow("idle"),
+      ],
     },
     output: {
       label: "Has output",
@@ -862,7 +920,7 @@ function RailFilter({
   );
 
   return (
-    <div className="rail-filter">
+    <div className={`rail-filter${active.length > 0 ? " chipped" : ""}`}>
       {active.length > 0 && (
         <button
           className="rail-filter-chip"
@@ -994,24 +1052,34 @@ export default function Rail() {
   }, [topLevel]);
   const projects = useAppStore((s) => s.projects);
   const newProject = useAppStore((s) => s.newProject);
+  const activeId = useAppStore((s) => s.activeConversationId);
   // The funnel's other filters and the grouping (`railView`). What each chat is doing is read once
   // as a string, so the Rail re-renders when a state changes and not on every store update.
   const group = useAppStore((s) => s.railGroup);
   const railFilters = useAppStore((s) => s.railFilters);
-  const statusKey = useAppStore((s) =>
-    s.conversations
+  const clearRailFilters = useAppStore((s) => s.clearRailFilters);
+  const statusKey = useAppStore((s) => {
+    const unread = new Set(s.unreadIds);
+    return s.conversations
       .filter((c) => !c.parentConversationId)
-      .map((c) => `${c.id}\t${chatState(s, c.id)}`)
-      .join("\n")
-  );
+      .map((c) => `${c.id}\t${railStatus(chatState(s, c.id), s.outcomes[c.id] ?? null, unread.has(c.id))}`)
+      .join("\n");
+  });
   const statusOf = useMemo(() => {
-    const byChat = new Map<string, ChatState>();
+    const byChat = new Map<string, RailStatus>();
     for (const line of statusKey ? statusKey.split("\n") : []) {
-      const [id, state] = line.split("\t");
-      byChat.set(id, state as ChatState);
+      const [id, status] = line.split("\t");
+      byChat.set(id, status as RailStatus);
     }
-    return (id: string): ChatState => byChat.get(id) ?? "idle";
+    return (id: string): RailStatus => byChat.get(id) ?? "idle";
   }, [statusKey]);
+  // `PAR-11`: the chat on screen stays in the list once the status filter has shown it,
+  // until another chat is opened or the filter changes.
+  const stayKey = `${railFilters.status.join(",")}\t${activeId ?? ""}`;
+  const stay = useRef({ key: "", shown: false });
+  if (stay.current.key !== stayKey) stay.current = { key: stayKey, shown: false };
+  if (activeId && railFilters.status.includes(statusOf(activeId))) stay.current.shown = true;
+  const keep = stay.current.shown ? activeId : null;
   // What each chat made is read from the database, and only once someone asks for it.
   const [outputs, setOutputs] = useState<Record<string, [number, number]>>({});
   const refreshOutputs = useCallback(() => {
@@ -1022,8 +1090,8 @@ export default function Rail() {
     if (outputFilterOn) refreshOutputs();
   }, [outputFilterOn, allConversations, refreshOutputs]);
   const ctx = useMemo<RailContext>(
-    () => ({ projects, status: statusOf, outputs, withHelpers: (id) => kids.has(id) }),
-    [projects, statusOf, outputs, kids]
+    () => ({ projects, status: statusOf, keep, outputs, withHelpers: (id) => kids.has(id) }),
+    [projects, statusOf, keep, outputs, kids]
   );
   // A folder or project that is gone leaves its filter off, as a leader that is gone does.
   const folderCounts = useMemo(() => {
@@ -1106,7 +1174,6 @@ export default function Rail() {
   }, [conversations]);
   // With a filter on, a project with none of the chats it matches is left out.
   const shownProjects = !byDate ? [] : anyFilter ? projects.filter((p) => sessionsByProject.has(p.id)) : projects;
-  const activeId = useAppStore((s) => s.activeConversationId);
   const activeProjectId = useAppStore((s) => s.activeProjectId);
   const view = useAppStore((s) => s.view);
   const setView = useAppStore((s) => s.setView);
@@ -1291,9 +1358,18 @@ export default function Rail() {
           />
         )}
         {anyFilter && conversations.length === 0 && (
-          <p className="rail-filter-empty">
-            {filter && !hasRailFilters(filters) ? `No chats led by ${filterName}.` : "No chats match."}
-          </p>
+          <div className="rail-filter-none">
+            <p className="rail-filter-empty">
+              {filter && !hasRailFilters(filters)
+                ? `No chats led by ${filterName}.`
+                : !filter && !filters.output && !filters.folder && !filters.project
+                  ? noChatsWords(filters.status)
+                  : "No chats match."}
+            </p>
+            <button className="btn-text rail-filter-all" onClick={clearRailFilters}>
+              Show every chat
+            </button>
+          </div>
         )}
 
         {/* `PRJ-UI-1`: a group above the date-grouped chats. Absent entirely

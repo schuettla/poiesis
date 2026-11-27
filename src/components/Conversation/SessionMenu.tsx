@@ -22,6 +22,7 @@ export default function SessionMenu() {
   const workspaceOffered = useAppStore((s) => workspaceAvailable(s));
   const setEnginesOff = useAppStore((s) => s.setEnginesOff);
   const anyEngine = useAppStore((s) => s.engines.some((e) => e.enabled && e.delegate_ready));
+  const setSessionDetails = useAppStore((s) => s.setSessionDetails);
   const [open, setOpen] = useState(false);
   // Fixed, from the chevron's own box: the header strip scrolls sideways and would clip a menu hung inside it.
   const [at, setAt] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
@@ -136,6 +137,17 @@ export default function SessionMenu() {
                 {conversation.enginesOff ? "Use external agents in this chat" : "Keep external agents out of this chat"}
               </button>
             )}
+            {/* `DBG-3`: ids, runs and the log of this chat, for finding a fault. */}
+            <button
+              className="row-menu-item"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                setSessionDetails(conversation.id);
+              }}
+            >
+              Session details…
+            </button>
             <hr className="row-menu-sep" />
             <button
               className="row-menu-item danger"

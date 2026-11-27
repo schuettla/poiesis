@@ -34,14 +34,10 @@ export function ChatMediaPending({
   // "16:9" is a CSS aspect-ratio once the colon becomes a slash; video with no
   // stated ratio is 16:9 rather than square, which is what every model returns.
   const ratio = aspectRatio?.replace(":", " / ") ?? (modality === "video" ? "16 / 9" : "1 / 1");
+  const words = modality === "video" ? "Generating a video" : "Generating an image";
 
   return (
-    <div
-      className="chat-media-skeleton"
-      style={{ aspectRatio: ratio }}
-      role="img"
-      aria-label={modality === "video" ? "Generating a video…" : "Generating an image…"}
-    >
+    <div className="chat-media-skeleton" style={{ aspectRatio: ratio }} role="img" aria-label={`${words}…`}>
       {/* `STR-4`: once partials are arriving, the picture resolving in place
           is a better progress indicator than any animation, so the shimmer
           gives way to it. */}
@@ -52,6 +48,9 @@ export function ChatMediaPending({
           <div className="chat-media-shimmer" aria-hidden="true" />
           <div className="chat-media-orb">
             <Orb state="composing" size={64} />
+            <span className="chat-media-words">
+              <span className="live-words">{words}</span>
+            </span>
           </div>
         </>
       )}

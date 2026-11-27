@@ -409,6 +409,25 @@ export function ToolKinds({ tools }: { tools: AppTool[] }) {
   );
 }
 
+/** `PAR-10`: a request from a chat that is not on screen says which one, and opens it. */
+function AskingChat({ id }: { id: string }) {
+  const chat = useAppStore((s) => {
+    const convId = s.permissionChats[id];
+    if (!convId || (convId === s.activeConversationId && s.view === "chat")) return undefined;
+    return s.conversations.find((c) => c.id === convId);
+  });
+  const openSession = useAppStore((s) => s.openSession);
+  if (!chat) return null;
+  return (
+    <p className="permission-chat">
+      <span className="permission-chat-from">From “{chat.title}”</span>
+      <button className="btn-text" onClick={() => void openSession(chat.id)}>
+        Open chat
+      </button>
+    </p>
+  );
+}
+
 /** Calm side-panel consent prompt (PRD §5.4.4). Shows the oldest pending
  *  request; the agent loop is paused awaiting the answer. */
 export default function PermissionPanel() {
@@ -439,6 +458,7 @@ export default function PermissionPanel() {
     return (
       <div className="side-panel" role="dialog" aria-label="Permission request">
         <div className="side-panel-inner">
+          <AskingChat id={request.id} />
           <Prompt key={request.id} request={request} onResolve={(d) => resolve(request.id, d)} />
           {pending.length > 1 && (
             <p className="permission-queue">{pending.length - 1} more request(s) waiting</p>
@@ -452,6 +472,7 @@ export default function PermissionPanel() {
     return (
       <div className="side-panel" role="dialog" aria-label="Permission request">
         <div className="side-panel-inner">
+          <AskingChat id={request.id} />
           {/* Keyed by request, so "always allow" never carries over from the
               prompt before it. */}
           <ExecutionPrompt
@@ -473,6 +494,7 @@ export default function PermissionPanel() {
     return (
       <div className={`side-panel ${send ? "outbound" : ""}`} role="dialog" aria-label="Permission request">
         <div className="side-panel-inner">
+          <AskingChat id={request.id} />
           <p className="permission-eyebrow">
             {agent
               ? `The ${agent} agent I started is asking`
@@ -515,6 +537,7 @@ export default function PermissionPanel() {
   return (
     <div className="side-panel" role="dialog" aria-label="Permission request">
       <div className="side-panel-inner">
+        <AskingChat id={request.id} />
         <p className="permission-eyebrow">
           {!capability && inFolder
             ? "Review this change"

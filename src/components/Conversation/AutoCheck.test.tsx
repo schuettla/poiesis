@@ -85,7 +85,7 @@ beforeEach(() => {
   webOn = true;
   for (const f of [verifyMessage, cancelVerify, markClaim, reviewClaim, reviseFromVerification, loadVerifications]) f.mockClear();
   useAppStore.setState({
-    busy: false,
+    busyChats: {},
     activeConversationId: "c1",
     experiments: [experiment({ id: "fast-slow", on: true })],
     verifications: {},

@@ -53,6 +53,17 @@ import { leaderOf } from "./leaders";
 import { NO_RAIL_FILTERS, RAIL_GROUPS, type RailFilters, type RailGroup } from "./railView";
 import { getSpeechBridge } from "./voice/bridge";
 import {
+  anyBusy,
+  busyIn,
+  localModelNotice,
+  openQuestions,
+  questionOf,
+  runOf,
+  seatOf,
+  type LiveRun,
+  type Seat,
+} from "./runs";
+import {
   EMPTY_PREFS,
   PREF_KEYS,
   moveFavorite,
@@ -68,6 +79,8 @@ import {
   type FavoriteTab,
   type ModelPrefs,
 } from "./modelPrefs";
+// The same file the backend builds into its prompt (`agent/context.rs`).
+import DEFAULT_SYSTEM_PROMPT from "../../shared/system-prompt.txt?raw";
 
 const SYSTEM_PROMPT_KEY = "system_prompt";
 const READING_SCALE_KEY = "reading_scale";
@@ -251,9 +264,6 @@ export interface PresetDialogRequest {
   add?: api.RuleRef[];
   onDone?: (slug: string) => void;
 }
-const DEFAULT_SYSTEM_PROMPT =
-  "You are Poiesis Agent, a local-first assistant that maintains itself: you keep durable memory, learn lessons from your own mistakes, and propose — never impose — changes to how you work. Be concise and clear.";
-
 export interface AppState {
   bootstrapped: boolean;
   /** True once the model lists (library, cloud, media) have actually come
@@ -422,34 +432,18 @@ export interface AppState {
   // conversations
   conversations: Conversation[];
   activeConversationId: string | null;
-  busy: boolean;
-  /** `HRN-1`: the run working right now, if any. Its id is what Stop and
-   * mid-run steering address. Cleared when the run ends, however it ends. */
-  activeRun: {
-    runId: string;
-    convId: string;
-    /** 1-based iteration, and the budget it is counted against (`HRN-UI-3`). */
-    step: number;
-    maxSteps: number;
-    startedAt: number;
-    /** `OBS-3`: an estimate of what the current turn is sending, and what the
-     * model can hold. `contextWindow` is null when the provider does not say,
-     * and the meter then shows no percentage rather than a made-up one. */
-    contextTokens: number;
-    contextWindow: number | null;
-    /** `TIER-4`: the tier this run really ran at. */
-    tier?: ModelTier;
-    /** What the model has been thinking since the last thing it said out loud.
-     * Cleared when prose starts arriving, so the indicator describes now and
-     * not the whole run. Shown as thinking, never as the answer. */
-    thinking: string;
-    /** `PLN-UI-2`: the plan this run is working to, once it has written one.
-     * The running item is a better label for the meter than the running tool,
-     * because it says what the work is *for*. */
-    plan?: api.PlanView;
-  } | null;
-  /** `HRN-UI-1`: say something to the run that is already working. Returns
-   * false when there was no live run to say it to. */
+  /** `PAR-6`: chats that are working, from the moment a send starts until its stream
+   * ends, and where each one's model runs. Read through `lib/runs`. */
+  busyChats: Record<string, Seat>;
+  /** `HRN-1`, per chat: the run working in each chat right now. Its id is what mid-run
+   * steering addresses. Cleared when the run ends, however it ends. */
+  liveRuns: Record<string, LiveRun>;
+  /** `PAR-11`: how each chat's last answer ended, when it did not finish. Read at start,
+   * then kept by the runs this window sees. */
+  outcomes: Record<string, api.StopReason>;
+  refreshOutcomes: () => Promise<void>;
+  /** `HRN-UI-1`: say something to the run that is already working in the chat on screen.
+   * Returns false when there was no live run to say it to. */
   steerActiveRun: (text: string, opts?: { asAddition?: boolean }) => Promise<boolean>;
   /** `USE-UI-2`: the answer to "Stop the run?" under a mid-run message a quick
    * decision held back as a sure stop. Stop is the ordinary Stop; Keep going sends
@@ -479,6 +473,8 @@ export interface AppState {
   /** `SUB-UI-4`: which agent asked for a pending permission, by request id.
    * Absent means the lead asked. */
   permissionAgents: Record<string, string>;
+  /** `PAR-10`: the chat each open request came from. */
+  permissionChats: Record<string, string>;
   systemPrompt: string;
   /** Whether built-in toolsets are offered to the model (TOOL-3, TOOL-6). */
   toolsEnabled: boolean;
@@ -539,7 +535,8 @@ export interface AppState {
   queuedQuestions: PendingQuestion[];
   /** Answer it with a choice, several, your own words, or a mix. `false` when
    * the run is gone, so the caller can send the words as a message instead. */
-  answerQuestion: (answer: api.QuestionAnswer) => Promise<boolean>;
+  /** `PAR-10`: answers the question named, else the one that has waited longest. */
+  answerQuestion: (answer: api.QuestionAnswer, id?: string) => Promise<boolean>;
   /** `AGC-2`: the one suggestion on screen. One at a time, never stacked. */
   activeSuggestion: ActiveSuggestion | null;
   acceptSuggestion: () => void;
@@ -559,12 +556,20 @@ export interface AppState {
   revisePlan: () => void;
   /** `RWD-UI-1`: the turn whose "go back to before this" dialog is open. */
   rewindRequest: string | null;
-  requestRewind: (messageId: string | null) => void;
+  /** The dialog is asking for "Try again" and not for Rewind. */
+  rewindRetry: boolean;
+  /** The dialog is about an edited message: these are the new words. */
+  rewindText: string | null;
+  requestRewind: (messageId: string | null, retry?: boolean, text?: string) => void;
   /** `RWD-UI-2`: a receipt for going back. */
   rewindToast: string | null;
   dismissRewindToast: () => void;
-  /** `RWD-1`: go back to before one of your turns, on a branch. */
-  rewindTo: (messageId: string, opts: { undoFiles: boolean; putBack: boolean }) => Promise<void>;
+  /** `RWD-1`: go back to before one of your turns, in this chat. With `retry` the
+   * same message is then sent again, or `text` in its place. */
+  rewindTo: (
+    messageId: string,
+    opts: { undoFiles: boolean; putBack: boolean; retry?: boolean; text?: string }
+  ) => Promise<void>;
   /** `BTW-UI-1`: the side question on screen, if any. */
   sideAnswer: SideAnswer | null;
   askSide: (question: string) => Promise<void>;
@@ -702,7 +707,7 @@ export interface AppState {
   setConversationTemperature: (conversationId: string, temperature: number | null) => Promise<void>;
   /** What's shaping the current answer (WHY-1/4) — `undefined` when the panel
    * is closed. `messageId` unset means the live/composer view; set means the
-   * "why this answer?" view for one past message. */
+   * `/why` view of one past message. */
   contextPanelTarget: { conversationId: string; messageId?: string } | undefined;
   openContextPanel: (target: { conversationId: string; messageId?: string }) => void;
   closeContextPanel: () => void;
@@ -734,6 +739,9 @@ export interface AppState {
   waitingNotes: Record<string, { note: string; yes: boolean }[]>;
   waitingOpen: boolean;
   setWaitingOpen: (open: boolean) => void;
+  /** `DBG-3`: the chat whose session details are open, if any. */
+  sessionDetailsId: string | null;
+  setSessionDetails: (conversationId: string | null) => void;
   refreshWaiting: () => Promise<void>;
   /** Answer one entry. When it was the session's last, the session goes on with the answers. */
   answerWaiting: (id: string, accept: boolean, text?: string) => Promise<void>;
@@ -971,9 +979,16 @@ export interface AppState {
    * goes there rather than adding to a list. Any item open over the sidebar
    * loses focus, since what you pressed was the conversation. */
   openSession: (id: string) => Promise<void>;
-  /** `HRN-UI-5`: branch this chat just before one assistant turn and ask the
-   * question again, leaving the original exactly as it was. */
-  forkFromMessage: (messageId: string) => Promise<void>;
+  /** `HRN-UI-5`: "Try again". Replaces an answer: your message and what followed
+   * are removed and the message is sent again. Asks first when files changed. */
+  retryAnswer: (messageId: string) => Promise<void>;
+  /** `HRN-UI-5`: **Try again** and **Edit** on one of your messages. It and what
+   * followed are removed from this chat, then it is sent again, as `text` when
+   * you changed it. Asks first when more than the one answer would be lost, or
+   * files changed. */
+  retryTurn: (messageId: string, text?: string) => Promise<void>;
+  /** `UCM-2`: **Fork** on an answer: a new chat holding this one up to it. */
+  forkAt: (messageId: string) => Promise<void>;
   /** `HRN-UI-5`: continue the last run instead of starting over, with its tool
    * results intact. */
   resumeLastRun: () => Promise<void>;
@@ -1018,7 +1033,8 @@ export interface AppState {
   /** A surface `action` node was activated: send a turn carrying the action,
    * its payload, and all bound state. */
   sendSurfaceAction: (humanText: string, payload: Record<string, unknown>) => Promise<void>;
-  stopGenerating: () => void;
+  /** `PAR-7`: stops one chat's run: the one named, else the one on screen. */
+  stopGenerating: (convId?: string) => void;
   setSystemPrompt: (prompt: string) => Promise<void>;
 
   /** Durable per-conversation session state (Generative UI, Phase C). */
@@ -1498,6 +1514,15 @@ export function keepThoughts(before: Message[], loaded: Message[]): Message[] {
   return loaded.map((m) => (thoughts.has(m.id) && !m.thought ? { ...m, thought: thoughts.get(m.id) } : m));
 }
 
+/** A turn that is still running is whole only in memory: Rust writes its row's text, steps
+ * and plan when the run ends. A chat read again meanwhile keeps the turn as it is on
+ * screen, so it does not look finished and empty. */
+export function keepLive(before: Message[], loaded: Message[]): Message[] {
+  const live = new Map(before.filter((m) => m.streaming).map((m) => [m.id, m]));
+  if (live.size === 0) return loaded;
+  return loaded.map((m) => live.get(m.id) ?? m);
+}
+
 function toMessage(m: api.DbMessage): Message {
   return {
     id: m.id,
@@ -1806,6 +1831,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       const s = get();
       // Already running (or starting) this exact model — nothing to do.
       if (s.loadedModelId === id || s.loadingModel?.id === id) return;
+      // `PAR-8`: a chat works on the local model, so it is not swapped now. The pick is
+      // kept and the load happens on send, where the notice says why it waits.
+      if (Object.values(s.busyChats).includes("local")) return;
       get().loadModelById(id).catch(() => {
         /* surfaced via engine status; chat send will retry + report */
       });
@@ -1951,6 +1979,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const entry = get().libraryModels.find((e) => e.id === id);
     if (!entry) return;
     const promise = (async () => {
+      const { engineReady, loadedModelId, loadedWindow } = get();
       set({ loadingModel: { id, label: "Starting the runtime…" }, engineReady: false, engineFailed: false });
       try {
         await api.loadModel({ modelPath: entry.path }, (p) => {
@@ -1969,7 +1998,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         // The loaded model's tier follows the window it really started with.
         get().refreshLibrary().catch(() => {});
       } catch (e) {
-        set({ loadingModel: null, engineReady: false, loadedModelId: null, loadedWindow: null });
+        // `PAR-4`: a load is refused while a run works on the engine, which then still has the
+        // model it had. A load that failed has stopped it.
+        let running = false;
+        try {
+          running = (await api.runtimeStatus()).running;
+        } catch {
+          /* unknown reads as stopped */
+        }
+        set({
+          loadingModel: null,
+          ...(running ? { engineReady, loadedModelId, loadedWindow } : { engineReady: false, loadedModelId: null, loadedWindow: null }),
+        });
         throw e;
       } finally {
         inflightLoad = null;
@@ -1980,7 +2020,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   stopEngine: async () => {
-    if (api.inTauri()) await api.stopEngine().catch(() => {});
+    // `PAR-4`: refused while a run works on the engine; it is then still running, so it throws.
+    if (api.inTauri()) await api.stopEngine();
     set({ engineReady: false, engineFailed: false, loadedModelId: null, loadedWindow: null, loadingModel: null });
     get().refreshLibrary().catch(() => {});
   },
@@ -2174,11 +2215,23 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   conversations: [],
   activeConversationId: null,
-  busy: false,
-  activeRun: null,
+  busyChats: {},
+  liveRuns: {},
+  outcomes: {},
+  refreshOutcomes: async () => {
+    if (!api.inTauri()) return;
+    try {
+      const saved = await api.sessionOutcomes();
+      // A chat that is working has no outcome yet, whatever its last row says.
+      set((s) => ({ outcomes: Object.fromEntries(Object.entries(saved).filter(([id]) => !s.busyChats[id])) }));
+    } catch {
+      /* non-fatal */
+    }
+  },
   subRuns: {},
   posts: {},
   permissionAgents: {},
+  permissionChats: {},
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   // Tools default ON: without them the model can't reach render_ui/present, yet
   // the conversation history may reference them — it would emit tool-call JSON
@@ -2317,8 +2370,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   commandRequest: null,
   pendingQuestion: null,
   queuedQuestions: [],
-  answerQuestion: async (answer) => {
-    const q = get().pendingQuestion;
+  answerQuestion: async (answer, id) => {
+    const q = id ? openQuestions(get()).find((x) => x.id === id) : get().pendingQuestion;
     if (!q) return false;
     // Off the screen first: the card is a question, not a receipt. The step row
     // keeps what you chose.
@@ -2412,21 +2465,36 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().requestComposer("");
   },
   rewindRequest: null,
-  requestRewind: (messageId) => set({ rewindRequest: messageId }),
+  rewindRetry: false,
+  rewindText: null,
+  requestRewind: (messageId, retry = false, text) =>
+    set({ rewindRequest: messageId, rewindRetry: retry, rewindText: text ?? null }),
   rewindToast: null,
   dismissRewindToast: () => set({ rewindToast: null }),
-  rewindTo: async (messageId, { undoFiles, putBack }) => {
-    const convId = get().activeConversationId;
+  rewindTo: async (messageId, { undoFiles, putBack, retry = false, text }) => {
+    const state = get();
+    const convId = state.activeConversationId;
     if (!convId || !api.inTauri()) return;
-    tendBriefly(set);
-    const out = await api.rewindConversation(convId, messageId, undoFiles);
-    await get().openSessionFromFork(out.conversation);
-    if (putBack) get().requestComposer(out.prompt);
-    if (out.files_undone > 0) {
-      get().refreshChanges(convId).catch(() => {});
-      get().refreshTree().catch(() => {});
+    const list = state.conversations.find((c) => c.id === convId)?.messages ?? [];
+    const at = list.findIndex((m) => m.id === messageId);
+    if (at < 0) return;
+    // "Try again" and an edit: all the send needs is gathered before anything is removed.
+    const again = retry ? await sameSend(get, convId, list[at], text) : null;
+    if (typeof again === "string") {
+      set({ rewindToast: `◆ ${again}` });
+      return;
     }
-    const shown = previewOf(out.prompt);
+    tendBriefly(set);
+    let out: Awaited<ReturnType<typeof api.rewindConversation>>;
+    try {
+      out = await api.rewindConversation(convId, messageId, undoFiles, retry);
+    } catch (e) {
+      // `PAR-5`: refused while something is still working. Nothing was touched.
+      set({ rewindToast: `◆ ${String(e)}` });
+      return;
+    }
+    dropTurns(set, convId, list.slice(at));
+    await get().setActiveConversation(convId);
     const files =
       out.files_undone > 0
         ? ` I took back my changes to ${out.files_undone} file${out.files_undone === 1 ? "" : "s"}.`
@@ -2434,7 +2502,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     const failed = out.files_failed?.length
       ? ` I couldn't put back ${out.files_failed.join(", ")}.`
       : "";
-    set({ rewindToast: `◆ I went back to before “${shown}”. The original is still in your list.${files}${failed}` });
+    if (again) {
+      if (files || failed) set({ rewindToast: `◆${files}${failed}` });
+      const addressed = list[at].addressed;
+      if (addressed) set((s) => ({ turnModifiers: { ...s.turnModifiers, addressed } }));
+      await get().sendMessage(...again);
+      return;
+    }
+    if (putBack) get().requestComposer(out.prompt);
+    set({ rewindToast: `◆ I went back to before “${previewOf(out.prompt)}”.${files}${failed}` });
   },
   restoreHeldTools: (conversationId, units) => {
     const summary = get().runSummaries[conversationId];
@@ -2586,7 +2662,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     } finally {
       set((s) => ({
         checkupRunning: false,
-        presence: s.presence === "tending" ? (s.busy ? "active" : s.reflectingIds.length ? "reflecting" : "idle") : s.presence,
+        presence: s.presence === "tending" ? (anyBusy(s) ? "active" : s.reflectingIds.length ? "reflecting" : "idle") : s.presence,
       }));
     }
   },
@@ -2938,6 +3014,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   waitingNotes: {},
   waitingOpen: false,
   setWaitingOpen: (waitingOpen) => set({ waitingOpen }),
+  sessionDetailsId: null,
+  setSessionDetails: (sessionDetailsId) => set({ sessionDetailsId }),
   refreshWaiting: async () => {
     if (!api.inTauri()) return;
     try {
@@ -2960,7 +3038,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({ waitingNotes: withoutKey(s.waitingNotes, session) }));
     // Everything this session waited on is answered. When something was approved or answered, the
     // session goes on, with the answers as the person's next message.
-    if (!session || !notes.some((n) => n.yes) || get().busy) return;
+    if (!session || !notes.some((n) => n.yes) || busyIn(get(), session)) return;
     await get().openSession(session);
     await get().sendMessage(waitingAnswersMessage(notes.map((n) => n.note)));
   },
@@ -3809,6 +3887,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().refreshScheduler();
     void get().refreshWaiting();
     void get().refreshUnread();
+    void get().refreshOutcomes();
     get().refreshMcpPrompts();
     get().refreshApps();
     void refreshAppsFromComposio(get);
@@ -3986,7 +4065,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     set((s) => ({
       conversations: s.conversations.map((c) =>
-        c.id === id ? { ...c, messages: withSubRuns(keepThoughts(c.messages, messages), s.subRuns) } : c
+        c.id === id
+          ? { ...c, messages: withSubRuns(keepLive(c.messages, keepThoughts(c.messages, messages)), s.subRuns) }
+          : c
       ),
       commandNotes: {
         ...s.commandNotes,
@@ -4068,23 +4149,49 @@ export const useAppStore = create<AppState>((set, get) => ({
     persistTabSet(get());
   },
 
-  forkFromMessage: async (messageId) => {
+  retryAnswer: async (messageId) => {
+    const state = get();
+    const convId = state.activeConversationId;
+    if (!convId || !api.inTauri() || busyIn(state, convId)) return;
+    const list = state.conversations.find((c) => c.id === convId)?.messages ?? [];
+    const answer = list.findIndex((m) => m.id === messageId);
+    const turn = list.slice(0, Math.max(answer, 0)).reverse().find((m) => m.role === "user" && isPersistedId(m.id));
+    if (turn) await get().retryTurn(turn.id);
+  },
+
+  retryTurn: async (messageId, text) => {
+    const state = get();
+    const convId = state.activeConversationId;
+    if (!convId || !api.inTauri() || busyIn(state, convId) || !isPersistedId(messageId)) return;
+    const list = state.conversations.find((c) => c.id === convId)?.messages ?? [];
+    const at = list.findIndex((m) => m.id === messageId);
+    if (at < 0) return;
+    // What would be lost without having been said: later messages of yours (an edit
+    // box says that itself), and files changed since.
+    const later = text === undefined && list.slice(at + 1).some((m) => m.role === "user");
+    if (later || (await api.changesSince(convId, messageId).catch(() => 0)) > 0) {
+      get().requestRewind(messageId, true, text);
+      return;
+    }
+    await get().rewindTo(messageId, { undoFiles: false, putBack: false, retry: true, text });
+  },
+
+  forkAt: async (messageId) => {
     const convId = get().activeConversationId;
     if (!convId || !api.inTauri() || !isPersistedId(messageId)) return;
-    const { conversation, resend } = await api.forkConversation(convId, messageId);
-    set((s) => ({ conversations: [toConversation(conversation), ...s.conversations] }));
-    await get().setActiveConversation(conversation.id);
-    // Sending is what makes this a rerun rather than a copy: it builds a fresh
-    // prompt from the branch's own history, so the model meets the question
-    // without the answer it is being asked to replace.
-    if (resend) await get().sendMessage(resend);
+    await get().openSessionFromFork(await api.forkConversation(convId, messageId));
   },
 
   resumeLastRun: async () => {
     const state = get();
     const convId = state.activeConversationId;
     const model = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
-    if (!convId || !model || state.busy || !api.inTauri()) return;
+    if (!convId || !model || busyIn(state, convId) || !api.inTauri()) return;
+    const held = localModelNotice(state, convId, model);
+    if (held) {
+      set({ modelNotice: held });
+      return;
+    }
 
     const assistantId = `a-${Date.now()}`;
     const assistantMsg: Message = {
@@ -4096,9 +4203,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       streaming: true,
       createdAt: Date.now(),
     };
+    markBusy(set, convId, seatOf(model.provenance));
     set((s) => ({
-      busy: true,
-      presence: "active",
       conversations: s.conversations.map((c) =>
         c.id === convId
           ? { ...c, updatedAt: Date.now(), messages: [...c.messages, assistantMsg] }
@@ -4109,7 +4215,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const engineError = await ensureEngineForModel(get, model);
     if (engineError) {
       patchAssistant(set, convId, assistantId, { text: engineError, streaming: false });
-      set((st) => ({ busy: false, presence: st.reflectingIds.length ? "reflecting" : "idle" }));
+      markIdle(set, convId);
       return;
     }
 
@@ -4140,7 +4246,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     // like a resumed run's. The backend saves its one row and says who gave it.
     const state = get();
     const model = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
-    if (!model || state.busy || !api.inTauri()) return;
+    // Nobody asked for this reply, so a busy local model just means it is not given.
+    if (!model || busyIn(state, convId) || localModelNotice(state, convId, model) || !api.inTauri()) return;
     const assistantId = `a-${Date.now()}`;
     const assistantMsg: Message = {
       id: assistantId,
@@ -4151,9 +4258,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       streaming: true,
       createdAt: Date.now(),
     };
+    markBusy(set, convId, seatOf(model.provenance));
     set((s) => ({
-      busy: true,
-      presence: "active",
       conversations: s.conversations.map((c) =>
         c.id === convId ? { ...c, updatedAt: Date.now(), messages: [...c.messages, assistantMsg] } : c
       ),
@@ -4161,12 +4267,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     const engineError = await ensureEngineForModel(get, model);
     if (engineError) {
       set((s) => ({
-        busy: false,
-        presence: s.reflectingIds.length ? "reflecting" : "idle",
         conversations: s.conversations.map((c) =>
           c.id === convId ? { ...c, messages: c.messages.filter((m) => m.id !== assistantId) } : c
         ),
       }));
+      markIdle(set, convId);
       return;
     }
     await streamAssistantTurn(set, get, {
@@ -4255,7 +4360,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   sendMessage: async (text, attachments = [], sendOpts) => {
     const state = get();
     const convId = state.activeConversationId;
-    if (!convId || state.busy) return;
+    // A chat that works is steered, not sent to; other chats working say nothing here.
+    if (!convId || busyIn(state, convId)) return;
     // `PLF-4`: a plain yes typed under a plan that waits for one is the Go ahead.
     // Without this "go on" planned the whole task again from the start.
     if (!sendOpts?.approvedPlan && !state.planRevising && !attachments.length && isPlainYes(text)) {
@@ -4309,6 +4415,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
 
+    // `PAR-8`: one local run at a time. The composer asks this before it clears; this is
+    // for every other way a turn starts, and for a leader whose pinned model is local.
+    // Nothing awaits between here and `markBusy`, so two sends cannot both pass.
+    const held = localModelNotice(get(), convId, model);
+    if (held) {
+      set({ modelNotice: held });
+      if (sendOpts?.spoken) getSpeechBridge()?.fail(held);
+      else if (!sendOpts?.action && !sendOpts?.approvedPlan) {
+        set({ composerRequest: { text, nonce: Date.now() } });
+      }
+      return;
+    }
+
     // `CMP-6`: the chips are for this message and no other. Taken here, in the
     // one place every user turn passes through, so none can outlive its send.
     const turn = sendOpts?.action ? undefined : turnRunOptions(state.turnModifiers, sendOpts);
@@ -4343,9 +4462,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       spoken: spoken || undefined,
       createdAt: Date.now() + 1,
     };
+    markBusy(set, convId, seatOf(model.provenance));
     set((s) => ({
-      busy: true,
-      presence: "active",
       conversations: s.conversations.map((c) =>
         c.id === convId
           ? { ...c, updatedAt: Date.now(), messages: [...c.messages, userMsg, assistantMsg] }
@@ -4362,7 +4480,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           : s.lastMediaArtifact,
     }));
 
-    if (isFirstMessage && !sendOpts?.action) {
+    if (isFirstMessage && !sendOpts?.action && !sendOpts?.again) {
       get().renameConversation(convId, deriveTitle(text));
     }
 
@@ -4372,7 +4490,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         text: "_Run the desktop app with a model loaded to get a real response._",
         streaming: false,
       });
-      set({ busy: false });
+      markIdle(set, convId);
       return;
     }
 
@@ -4412,7 +4530,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const msg = `I couldn't save your message. ${String(e)}`;
       if (spoken) getSpeechBridge()?.fail(msg);
       patchAssistant(set, convId, assistantId, { text: msg, streaming: false });
-      set({ busy: false });
+      markIdle(set, convId);
       return;
     }
     patchAssistant(set, convId, userMsg.id, { id: saved.userMessageId });
@@ -4435,7 +4553,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const failTurn = async (msg: string) => {
       if (spoken) getSpeechBridge()?.fail(msg);
       patchAssistant(set, convId, saved.assistantMessageId, { text: msg, streaming: false });
-      set({ busy: false });
+      markIdle(set, convId);
       try {
         await api.finalizeMessage(saved.assistantMessageId, msg);
       } catch {
@@ -4490,7 +4608,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   sendBlockAction: async (blockId, humanText, payload) => {
     const state = get();
     const convId = state.activeConversationId;
-    if (!convId || state.busy) return;
+    if (!convId || busyIn(state, convId)) return;
     const conv = state.conversations.find((c) => c.id === convId);
     if (!state.models.find((m) => m.id === state.selectedModelId) && !state.models[0]) return;
 
@@ -4611,25 +4729,28 @@ export const useAppStore = create<AppState>((set, get) => ({
     applySessionPatch(set, get, convId, patch);
   },
 
-  stopGenerating: () => {
+  stopGenerating: (convId) => {
+    const target = convId ?? get().activeConversationId;
     // `VXP-2`: stop also silences a spoken reply, whether or not a run is still going.
-    getSpeechBridge()?.stopSpeaking();
-    if (api.inTauri()) api.stopChat().catch(() => {});
+    // Voice speaks only for the chat on screen.
+    if (target === get().activeConversationId) getSpeechBridge()?.stopSpeaking();
+    // `PAR-1`: Stop takes one chat. Other chats carry on.
+    if (api.inTauri()) api.stopChat(target ?? "").catch(() => {});
   },
 
   steerActiveRun: async (text, opts) => {
     const body = text.trim();
-    const run = get().activeRun;
     const convId = get().activeConversationId;
-    if (!body || !run || !convId || run.convId !== convId || !api.inTauri()) return false;
+    const run = runOf(get(), convId);
+    if (!body || !run || !convId || !api.inTauri()) return false;
 
     // `AGC-3`: a run that is waiting on a question hears the next thing typed as
     // its answer. This is the one place that decides that, so the composer never
     // has to know whether a question is open.
-    const waiting = get().pendingQuestion;
+    const waiting = questionOf(get(), convId);
     // `TEAM-12`: not the cost card: Start and Not now are buttons, and words are no answer to it.
-    if (waiting && waiting.convId === convId && waiting.runId === run.runId && !waiting.title) {
-      return get().answerQuestion({ choices: [], text: body });
+    if (waiting && waiting.runId === run.runId && !waiting.title) {
+      return get().answerQuestion({ choices: [], text: body }, waiting.id);
     }
 
     // The message goes on screen before the backend has seen it: the point of
@@ -4689,14 +4810,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     patchAssistant(set, convId, messageId, { midRun: stop ? undefined : "pending" });
     api.steerAnswer(msg.steer.decision, stop).catch(() => {});
     if (stop) {
-      get().stopGenerating();
+      get().stopGenerating(convId);
       return;
     }
-    const run = get().activeRun;
-    const outcome =
-      run && run.convId === convId
-        ? await api.steerRun(run.runId, msg.text, true).catch((): api.SteerOutcome => ({ status: "gone" }))
-        : ({ status: "gone" } as api.SteerOutcome);
+    const run = runOf(get(), convId);
+    const outcome = run
+      ? await api.steerRun(run.runId, msg.text, true).catch((): api.SteerOutcome => ({ status: "gone" }))
+      : ({ status: "gone" } as api.SteerOutcome);
     // The run ended while the question was open: the message stays as an
     // ordinary turn nobody answered, like a steer the run never got round to.
     if (outcome.status !== "queued") patchAssistant(set, convId, messageId, { midRun: undefined });
@@ -4838,15 +4958,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   resolvePermission: async (id, decision) => {
     const request = get().pendingPermissions.find((p) => p.id === id);
-    set((s) => {
-      const permissionAgents = { ...s.permissionAgents };
-      delete permissionAgents[id];
-      return { pendingPermissions: s.pendingPermissions.filter((p) => p.id !== id), permissionAgents };
-    });
+    // `PAR-10`: the chat that asked, which need not be the one on screen.
+    const asked = get().permissionChats[id];
+    set((s) => dropPermission(s, id));
     // "Don't ask again in this folder" raises the trust level backend-side —
     // mirror it so the header's segmented control matches what just happened.
     if (request?.in_folder && decision === "forever") {
-      const convId = get().activeConversationId;
+      const convId = asked ?? get().activeConversationId;
       if (convId) {
         set((s) => ({
           conversations: s.conversations.map((c) =>
@@ -5834,7 +5952,7 @@ async function startMediaTurn(
   const state = get();
   const convId = state.activeConversationId;
   const text = args.text.trim();
-  if (!convId || state.busy || !text) return;
+  if (!convId || busyIn(state, convId) || !text) return;
   const conv = state.conversations.find((c) => c.id === convId);
   const isFirstMessage = !conv || conv.messages.length === 0;
 
@@ -5872,7 +5990,7 @@ async function startMediaTurn(
     return;
   }
 
-  set(() => ({ busy: true, presence: "active" }));
+  markBusy(set, convId, "other");
 
   // Persist both turns before submitting: the worker attaches the finished
   // media to `messageId`, which has to be a row that already exists. These are
@@ -5950,8 +6068,64 @@ async function startMediaTurn(
       steps: [{ ...runningStep, status: "error", result: `— ${String(e)}` }],
     });
   } finally {
-    set(() => ({ busy: false }));
+    markIdle(set, convId);
   }
+}
+
+/** `PAR-5`: an Undo that was refused says why, wherever its button is. */
+export const sayRefused = (e: unknown) => useAppStore.setState({ rewindToast: `◆ ${String(e)}` });
+
+/** `PAR-6`: a chat starts to work. Its last outcome is old news from here on. */
+function markBusy(set: StoreSet, convId: string, seat: Seat) {
+  set((s) => ({
+    busyChats: { ...s.busyChats, [convId]: seat },
+    outcomes: withoutKey(s.outcomes, convId),
+    presence: "active",
+  }));
+}
+
+/** `PAR-6`: a chat's turn is over. Only that chat's entry goes. */
+function markIdle(set: StoreSet, convId: string) {
+  set((s) => {
+    const busyChats = withoutKey(s.busyChats, convId);
+    return {
+      busyChats,
+      liveRuns: withoutKey(s.liveRuns, convId),
+      presence: restingPresence({ ...s, busyChats }),
+    };
+  });
+}
+
+/** Patch one chat's live run: events of one chat never touch another's. A `runId` of
+ * `null` takes whatever run the chat has. */
+function patchRun(set: StoreSet, convId: string, runId: string | null, patch: (run: LiveRun) => Partial<LiveRun>) {
+  set((s) => {
+    const run = s.liveRuns[convId];
+    if (!run || (runId !== null && run.runId !== runId)) return {};
+    return { liveRuns: { ...s.liveRuns, [convId]: { ...run, ...patch(run) } } };
+  });
+}
+
+/** Take a permission request off the screen, with what was kept about who asked. */
+function dropPermission(
+  s: Pick<AppState, "pendingPermissions" | "permissionAgents" | "permissionChats">,
+  id: string,
+): Partial<AppState> {
+  return {
+    pendingPermissions: s.pendingPermissions.filter((p) => p.id !== id),
+    permissionAgents: withoutKey(s.permissionAgents, id),
+    permissionChats: withoutKey(s.permissionChats, id),
+  };
+}
+
+/** `PAR-10`: a question or a permission in a chat that is not on screen is said by the
+ * desktop too, once, when the person is in another window (the backend decides that). */
+function tellIfElsewhere(get: () => AppState, convId: string, id: string, line: string, agent?: string) {
+  if (!api.inTauri()) return;
+  const s = get();
+  const hidden = typeof document !== "undefined" && document.hidden;
+  if (s.activeConversationId === convId && s.view === "chat" && !hidden) return;
+  void Promise.resolve(api.tellWaiting(convId, id, line, agent)).catch(() => {});
 }
 
 /** The composed interface changed. If its canvas is not what the user is
@@ -6060,7 +6234,7 @@ export async function chimeIn(get: () => AppState, convId: string): Promise<void
   if (!api.inTauri()) return;
   const s = get();
   const conv = s.conversations.find((c) => c.id === convId);
-  if (!conv || !leaderOf(conv).startsWith("team:") || s.busy || s.activeConversationId !== convId) return;
+  if (!conv || !leaderOf(conv).startsWith("team:") || busyIn(s, convId) || s.activeConversationId !== convId) return;
   const last = conv.messages[conv.messages.length - 1];
   if (!last || last.role !== "assistant" || last.stopReason || !last.text.trim()) return;
   const model = s.models.find((m) => m.id === s.selectedModelId) ?? s.models[0];
@@ -6068,7 +6242,7 @@ export async function chimeIn(get: () => AppState, convId: string): Promise<void
   const next = await api.teamNextVoice(convId, targetFor(model)).catch(() => null);
   if (!next) return;
   // The person may have sent something while the choice was made.
-  if (get().busy || get().activeConversationId !== convId) return;
+  if (busyIn(get(), convId) || get().activeConversationId !== convId) return;
   await get().startUnaskedReply(convId, next.role, next.nudge);
 }
 
@@ -6113,17 +6287,20 @@ function dropQuestion(
   };
 }
 
-/** Every question one job still has open, gone with it. */
-function dropQuestionsOf(s: AppState, runId: string): Partial<AppState> {
+/** Every open question that `gone` picks, taken off the screen. */
+function dropQuestionsWhere(s: AppState, gone: (q: PendingQuestion) => boolean): Partial<AppState> {
   let out: Partial<AppState> = {};
   let cur = s;
-  for (const q of [s.pendingQuestion, ...s.queuedQuestions]) {
-    if (q?.runId !== runId) continue;
+  for (const q of openQuestions(s)) {
+    if (!gone(q)) continue;
     out = { ...out, ...dropQuestion(cur, q.id) };
     cur = { ...cur, ...out } as AppState;
   }
   return out;
 }
+
+/** Every question one job still has open, gone with it. */
+const dropQuestionsOf = (s: AppState, runId: string) => dropQuestionsWhere(s, (q) => q.runId === runId);
 
 export function applySubEvent(set: StoreSet, runId: string, event: api.AgentEvent) {
   set((s) => {
@@ -6272,11 +6449,16 @@ export function applySubEvent(set: StoreSet, runId: string, event: api.AgentEven
         return {
           pendingPermissions: [...s.pendingPermissions, event.request],
           permissionAgents: { ...s.permissionAgents, [event.request.id]: run.agent },
+          permissionChats: { ...s.permissionChats, [event.request.id]: run.parentConversationId },
         };
       case "permission_gone":
         // An agent app hung up or was stopped with a question open: the panel
         // drops it instead of asking about something that no longer matters.
-        return { pendingPermissions: s.pendingPermissions.filter((p) => p.id !== event.id) };
+        return dropPermission(s, event.id);
+      case "held":
+        // `PAR-5`: it waits for the folder another chat is changing, or has it now.
+        next = { ...run, ...waitingPatch(run, event.reason ?? undefined) };
+        break;
       default:
         return {};
     }
@@ -6529,10 +6711,94 @@ function previewOf(text: string): string {
   return first.length > 48 ? `${first.slice(0, 47).trimEnd()}…` : first;
 }
 
+/** `HRN-UI-5`: the send that repeats one of your turns: its words, what was
+ * attached and the `/skill` it went out with. `text` is what you changed the
+ * words to (for a `/skill` turn: what follows the name). A string says why it
+ * can't be done. */
+async function sameSend(
+  get: () => AppState,
+  convId: string,
+  turn: Message,
+  text?: string
+): Promise<Parameters<AppState["sendMessage"]> | string> {
+  const state = get();
+  const selected = state.models.find((m) => m.id === state.selectedModelId) ?? state.models[0];
+  const held = localModelNotice(state, convId, (await pinnedModel(state, convId))?.model ?? selected);
+  if (held) return held;
+
+  const attachments: Attachment[] = [];
+  for (const a of turn.attachments ?? []) {
+    let dataUri = a.dataUri;
+    // Read now: the saved row is what lets this path be read, and it is about to go.
+    if (!dataUri && a.kind === "image" && a.path) {
+      dataUri = await api.readImageDataUri(a.path, convId).catch(() => undefined);
+    }
+    if (!dataUri && (a.kind === "image" || !a.path)) {
+      return `I can't read “${a.name}” any more, so I left the chat as it is.`;
+    }
+    attachments.push({ ...a, dataUri });
+  }
+
+  const opts: SendOptions = { again: true };
+  let words = text ?? turn.text;
+  // A click in the interface goes out as one again: its sentence is the action.
+  const fence = turn.text.indexOf("```poiesis-action");
+  if (fence >= 0 && text === undefined) opts.action = turn.text.slice(0, fence).trim();
+  if (turn.command) {
+    const { name } = turn.command;
+    const args = text === undefined ? turn.command.args : text.trim();
+    opts.skill = name;
+    opts.skillArgs = args || undefined;
+    // `/delegate <agent> task` is kept as one line: the agent it names comes first.
+    if (name === "delegate") {
+      const word = args.split(/\s+/, 1)[0];
+      const agent = (await get().loadDelegateTargets()).find((t) => t.slug === word.toLowerCase());
+      if (agent) {
+        opts.delegateTo = agent.slug;
+        opts.skillArgs = args.slice(word.length).trim() || undefined;
+        if (!opts.skillArgs) return `Say what ${agent.name} should do. I left the chat as it is.`;
+      }
+    }
+    // The message of a skill turn is the words after the name, as the composer sends it.
+    if (text !== undefined) words = opts.skillArgs ?? `Run /${name}`;
+  }
+  return [words, attachments, opts];
+}
+
+/** `RWD-1`: forget, in the window, what was just removed from this chat. The chat is
+ * read again right after; these are the parts a read adds to and never takes from. */
+function dropTurns(set: StoreSet, convId: string, gone: Message[]) {
+  const ids = new Set(gone.map((m) => m.id));
+  set((s) => ({
+    conversations: s.conversations.map((c) => {
+      if (c.id !== convId) return c;
+      const summed = !!c.summaryUptoMessageId && ids.has(c.summaryUptoMessageId);
+      return {
+        ...c,
+        messages: c.messages.filter((m) => !ids.has(m.id)),
+        ...(summed ? { summary: null, summaryUptoMessageId: null } : {}),
+      };
+    }),
+    subRuns: Object.fromEntries(
+      Object.entries(s.subRuns).filter(([, r]) => !(r.parentMessageId && ids.has(r.parentMessageId)))
+    ),
+    posts: withoutKey(s.posts, convId),
+    runSummaries: withoutKey(s.runSummaries, convId),
+  }));
+}
+
 /** What the presence returns to when a question is answered or the run ends. */
 function afterListening(s: AppState): Presence {
   if (s.presence !== "listening") return s.presence;
-  return s.busy ? "active" : s.reflectingIds.length ? "reflecting" : "idle";
+  return anyBusy(s) ? "active" : s.reflectingIds.length ? "reflecting" : "idle";
+}
+
+/** The mark when one chat's turn ends: still listening while any question is open, still
+ * active while any chat works. It is the app's mark, not a chat's. */
+function restingPresence(s: Pick<AppState, "pendingQuestion" | "busyChats" | "reflectingIds">): Presence {
+  if (s.pendingQuestion) return "listening";
+  if (anyBusy(s)) return "active";
+  return s.reflectingIds.length ? "reflecting" : "idle";
 }
 
 /** `FIX-1`: one reflection started or ended, anywhere in the app. The single
@@ -6543,7 +6809,7 @@ export function applyReflecting(s: AppState, e: api.ReflectingEvent): Partial<Ap
     return {
       reflectingIds: s.reflectingIds.includes(id) ? s.reflectingIds : [...s.reflectingIds, id],
       // A reflection starting must not stop the mark breathing mid-generation.
-      presence: s.busy ? "active" : s.presence === "tending" ? "tending" : "reflecting",
+      presence: anyBusy(s) ? "active" : s.presence === "tending" ? "tending" : "reflecting",
     };
   }
   const stillReflecting = s.reflectingIds.filter((x) => x !== id);
@@ -6551,7 +6817,7 @@ export function applyReflecting(s: AppState, e: api.ReflectingEvent): Partial<Ap
     reflectingIds: stillReflecting,
     // Only step down to idle if nothing else is going on: a reflection
     // finishing must not stop the mark breathing mid-generation.
-    presence: stillReflecting.length ? s.presence : s.busy ? "active" : s.presence === "tending" ? "tending" : "idle",
+    presence: stillReflecting.length ? s.presence : anyBusy(s) ? "active" : s.presence === "tending" ? "tending" : "idle",
     // Only a lesson actually written is something learned. A proposal is
     // still a question, and the rail must not claim otherwise.
     digestedIds: e.learned > 0 && !s.digestedIds.includes(id) ? [...s.digestedIds, id] : s.digestedIds,
@@ -6577,9 +6843,9 @@ export function applyHealed(e: api.HealedEvent): Partial<AppState> {
 }
 
 export function applyTending(s: AppState, on: boolean): Partial<AppState> {
-  if (on) return s.busy ? {} : { presence: "tending" as const };
+  if (on) return anyBusy(s) ? {} : { presence: "tending" as const };
   if (s.presence !== "tending") return {};
-  return { presence: s.busy ? "active" : s.reflectingIds.length ? "reflecting" : "idle" };
+  return { presence: anyBusy(s) ? "active" : s.reflectingIds.length ? "reflecting" : "idle" };
 }
 
 /** `CPX-2`: tending to myself for a moment, then back to whatever was
@@ -6589,7 +6855,7 @@ function tendBriefly(set: StoreSet) {
   setTimeout(() => {
     set((s) =>
       s.presence === "tending"
-        ? { presence: s.busy ? "active" : s.reflectingIds.length ? "reflecting" : "idle" }
+        ? { presence: anyBusy(s) ? "active" : s.reflectingIds.length ? "reflecting" : "idle" }
         : {}
     );
   }, 1600);
@@ -6640,8 +6906,8 @@ function proposalNote(p: Pick<HarnessProposalView, "name" | "reason" | "payload"
  * item. The chip says so (`A → B`) until the run does. Nothing to do when no run is going,
  * or when it already works that way. */
 async function switchLiveRun(set: StoreSet, get: () => AppState, convId: string, slug: string): Promise<void> {
-  const run = get().activeRun;
-  if (!run || run.convId !== convId || !api.inTauri()) return;
+  const run = runOf(get(), convId);
+  if (!run || !api.inTauri()) return;
   const summary = get().runSummaries[convId];
   if (!summary?.live || summary.style?.preset === slug) return;
   const name = get().presets.find((p) => p.slug === slug)?.name ?? slug;
@@ -6808,36 +7074,45 @@ async function streamAssistantTurn(
             // The model has started speaking, so whatever it was thinking is
             // over. Clearing here keeps the indicator honest without needing a
             // second event to say "done thinking".
-            set((s) =>
-              s.activeRun && s.activeRun.thinking ? { activeRun: { ...s.activeRun, thinking: "" } } : {}
-            );
+            if (get().liveRuns[convId]?.thinking || get().liveRuns[convId]?.writing) {
+              patchRun(set, convId, null, () => ({ thinking: "", writing: undefined }));
+            }
             break;
           case "thinking":
-            set((s) =>
-              s.activeRun?.runId === e.run_id
-                ? { activeRun: { ...s.activeRun, thinking: s.activeRun.thinking + e.text } }
-                : {}
-            );
+            patchRun(set, convId, e.run_id, (run) => ({ thinking: run.thinking + e.text }));
+            break;
+          case "writing":
+            // The model has moved on from thinking to writing a tool call, so the
+            // thinking line goes, as it does when prose starts.
+            patchRun(set, convId, e.run_id, () => ({ thinking: "", writing: { label: e.label, words: e.words } }));
             break;
           case "run_started":
-            set(() => ({
-              activeRun: {
-                runId: e.run_id,
-                convId,
-                step: 0,
-                maxSteps: e.max_steps,
-                startedAt: Date.now(),
-                contextTokens: 0,
-                contextWindow: e.context_window,
-                tier: e.tier,
-                thinking: "",
-                // A resume announces the plan it is continuing right after
-                // this, so the card is never blank while the run is live.
-                plan,
+            set((s) => ({
+              liveRuns: {
+                ...s.liveRuns,
+                [convId]: {
+                  runId: e.run_id,
+                  convId,
+                  step: 0,
+                  maxSteps: e.max_steps,
+                  startedAt: Date.now(),
+                  contextTokens: 0,
+                  contextWindow: e.context_window,
+                  tier: e.tier,
+                  thinking: "",
+                  // A resume announces the plan it is continuing right after
+                  // this, so the card is never blank while the run is live.
+                  plan,
+                },
               },
+              // `PAR-8`: where it really runs. A phone's turn may be on another model
+              // than the one picked here.
+              busyChats:
+                e.local === undefined ? s.busyChats : { ...s.busyChats, [convId]: e.local ? "local" : "other" },
+              outcomes: withoutKey(s.outcomes, convId),
               // `RUN-3`: a new run replaces the last one's summary.
               runSummaries: {
-                ...get().runSummaries,
+                ...s.runSummaries,
                 [convId]: {
                   runId: e.run_id,
                   startedAt: Date.now(),
@@ -6851,27 +7126,27 @@ async function streamAssistantTurn(
             }));
             // `SEE-2`: the turn's quick decisions are read from the log when the
             // run ends, whether or not anything was said before the first word.
+            // A phone's turn is read from its saved row, which does not say it is live.
             patchAssistant(set, convId, assistantId, {
+              streaming: true,
               thought: { runId: e.run_id, from: Date.now(), back: [], thought: emptyThought() },
             });
             break;
           case "run_progress":
-            set((s) =>
-              s.activeRun?.runId === e.run_id
-                ? {
-                    activeRun: {
-                      ...s.activeRun,
-                      step: e.step,
-                      maxSteps: e.max_steps,
-                      contextTokens: e.context_tokens,
-                      // Each step thinks afresh. Without this the indicator
-                      // would read as one think growing across the whole run.
-                      thinking: "",
-                    },
-                  }
-                : {}
-            );
+            patchRun(set, convId, e.run_id, () => ({
+              step: e.step,
+              maxSteps: e.max_steps,
+              contextTokens: e.context_tokens,
+              // Each step thinks afresh. Without this the indicator
+              // would read as one think growing across the whole run.
+              thinking: "",
+              writing: undefined,
+            }));
             patchRunSummary(set, convId, () => ({ costUsd: e.cost_usd ?? null }));
+            break;
+          case "held":
+            // `PAR-5`: the run waits for a folder another chat is changing, or has it now.
+            patchRunSummary(set, convId, () => ({ waitingOn: e.reason ?? undefined }));
             break;
           case "run_ended":
             // `HRN-3`: keep the reason on the turn. A run that hit its step
@@ -6889,13 +7164,16 @@ async function streamAssistantTurn(
               plan = e.plan;
               patchAssistant(set, convId, assistantId, { plan: e.plan });
             }
-            set((s) => (s.activeRun?.runId === e.run_id ? { activeRun: null } : {}));
+            set((s) => ({
+              liveRuns: s.liveRuns[convId]?.runId === e.run_id ? withoutKey(s.liveRuns, convId) : s.liveRuns,
+              // `PAR-11`: how it ended, for the rail's Status filter.
+              outcomes:
+                e.stop_reason === "completed"
+                  ? withoutKey(s.outcomes, convId)
+                  : { ...s.outcomes, [convId]: e.stop_reason },
+            }));
             // A question nobody answered dies with its run (stopped, or ended).
-            set((s) =>
-              s.pendingQuestion?.runId === e.run_id
-                ? { pendingQuestion: null, presence: afterListening(s) }
-                : {}
-            );
+            set((s) => dropQuestionsOf(s, e.run_id));
             // `RUN-3`: the run is over, but what it did stays on the bar.
             patchRunSummary(set, convId, (cur) => ({
               live: false,
@@ -6904,6 +7182,7 @@ async function streamAssistantTurn(
               plan: e.plan ?? cur.plan,
               // A stopped line is a live state: a run that is over has none.
               stopped: undefined,
+              waitingOn: undefined,
               looking: undefined,
               branching: undefined,
               endedAt: Date.now(),
@@ -6929,11 +7208,7 @@ async function streamAssistantTurn(
             // run, so the meter can name the item being worked on.
             plan = e.plan;
             patchAssistant(set, convId, assistantId, { plan: e.plan });
-            set((s) =>
-              s.activeRun?.runId === e.run_id
-                ? { activeRun: { ...s.activeRun, plan: e.plan } }
-                : {}
-            );
+            patchRun(set, convId, e.run_id, () => ({ plan: e.plan }));
             patchRunSummary(set, convId, () => ({ plan: e.plan }));
             break;
           case "tools_held":
@@ -7124,24 +7399,29 @@ async function streamAssistantTurn(
               activeSuggestion: { convId, runId: e.run_id, command: e.command, reason: e.reason },
             }));
             break;
-          case "question":
+          case "question": {
             // `AGC-3`: the run is paused on this. The mark listens until it is
-            // answered, and the next thing typed answers it.
-            set(() => ({
-              pendingQuestion: {
-                runId: e.run_id,
-                id: e.id,
-                convId,
-                messageId: assistantId,
-                question: e.question,
-                options: e.options,
-                multi: e.multi,
-                title: e.title,
-                check: e.check,
-              },
-              presence: "listening" as const,
-            }));
+            // answered, and the next thing typed in this chat answers it.
+            const q: PendingQuestion = {
+              runId: e.run_id,
+              id: e.id,
+              convId,
+              messageId: assistantId,
+              question: e.question,
+              options: e.options,
+              multi: e.multi,
+              title: e.title,
+              check: e.check,
+            };
+            // `PAR-10`: another run's question keeps its place; this one waits behind it.
+            set((s) =>
+              s.pendingQuestion && s.pendingQuestion.runId !== q.runId
+                ? { queuedQuestions: [...s.queuedQuestions, q], presence: "listening" as const }
+                : { pendingQuestion: q, presence: "listening" as const }
+            );
+            tellIfElsewhere(get, convId, e.id, e.question);
             break;
+          }
           case "sub_spawned": {
             // A child started. The card exists from this moment, not from its
             // first token — an agent you cannot see is the failure this whole
@@ -7181,6 +7461,11 @@ async function streamAssistantTurn(
             break;
           case "sub":
             applySubEvent(set, e.run_id, e.event);
+            if (e.event.type === "permission") {
+              tellIfElsewhere(get, convId, e.event.request.id, e.event.request.summary, get().subRuns[e.run_id]?.agent);
+            } else if (e.event.type === "question") {
+              tellIfElsewhere(get, convId, e.event.id, e.event.question, get().subRuns[e.run_id]?.agent);
+            }
             // `MCPS-2`: a memory an agent app suggested is met in the turn that
             // handed it the job, as any other suggestion is.
             if (e.event.type === "proposal") {
@@ -7214,6 +7499,8 @@ async function streamAssistantTurn(
             break;
           case "step_start":
             speech?.step(speakGen, e.verb);
+            // The call that was being written is made: its step says what happens now.
+            if (get().liveRuns[convId]?.writing) patchRun(set, convId, null, () => ({ writing: undefined }));
             steps.push({
               id: e.id,
               verb: e.verb,
@@ -7423,7 +7710,11 @@ async function streamAssistantTurn(
             }));
             break;
           case "permission":
-            set((st) => ({ pendingPermissions: [...st.pendingPermissions, e.request] }));
+            set((st) => ({
+              pendingPermissions: [...st.pendingPermissions, e.request],
+              permissionChats: { ...st.permissionChats, [e.request.id]: convId },
+            }));
+            tellIfElsewhere(get, convId, e.request.id, e.request.summary);
             break;
           case "memory_write": {
             // The self changed mid-turn: refresh what gets injected, and show
@@ -7560,19 +7851,18 @@ async function streamAssistantTurn(
         heard = outcome.heard;
         stopReason = "interrupted";
         patchAssistant(set, convId, assistantId, { text: heard, unspoken: acc, stopReason, streaming: false });
+        // `PAR-11`: a reply cut off by the voice is not a run that stopped early.
+        set((s) => ({ outcomes: withoutKey(s.outcomes, convId) }));
       }
     }
-    // Back to resting unless a self-process is still working (PRES-1). The run
-    // is dropped here as well as on `run_ended`, so a stream that dies without
-    // a closing event can't leave the composer thinking it can still steer.
+    // A question the run asked is not waiting on a stream that has ended. A helper that
+    // carries on in the background keeps its own.
+    set((s) => dropQuestionsWhere(s, (q) => q.convId === convId && !q.agent));
+    // Nothing of this turn waits for a folder any more.
+    patchRunSummary(set, convId, () => ({ waitingOn: undefined }));
+    // A steer the run never got round to reading stops claiming to be in
+    // flight — it stays in the transcript as an ordinary unanswered turn.
     set((st) => ({
-      busy: false,
-      activeRun: null,
-      presence: st.reflectingIds.length ? "reflecting" : "idle",
-      // A question nobody answered is not waiting on a stream that has ended.
-      pendingQuestion: st.pendingQuestion?.convId === convId ? null : st.pendingQuestion,
-      // A steer the run never got round to reading stops claiming to be in
-      // flight — it stays in the transcript as an ordinary unanswered turn.
       conversations: st.conversations.map((c) =>
         c.id !== convId
           ? c
@@ -7584,6 +7874,10 @@ async function streamAssistantTurn(
             }
       ),
     }));
+    // This chat is at rest. The run is dropped here as well as on `run_ended`, so a
+    // stream that dies without a closing event can't leave its composer thinking it
+    // can still steer.
+    markIdle(set, convId);
     // Rust finished the row before the audio did; this is what the user heard.
     if (heard !== undefined && isPersistedId(assistantId)) {
       try {
@@ -7653,7 +7947,7 @@ const CATCH_UP_DELAY_MS = 30_000;
 function scheduleCatchUpReflection(get: () => AppState) {
   if (!api.inTauri()) return;
   setTimeout(async () => {
-    if (!get().autoReflect || get().busy) return;
+    if (!get().autoReflect || anyBusy(get())) return;
     try {
       const digested = await api.catchUpReflection(cloudTarget());
       if (digested > 0) {
@@ -7692,7 +7986,7 @@ export function listenForRemote(set: StoreSet, get: () => AppState) {
   api.onAppEvent<{ conversation_id: string; event: api.AgentEvent }>("poiesis-remote-turn", ({ conversation_id, event }) => {
     // The phone answered a question, or its time ran out: the card here is not wanted any more.
     if (event.type === "permission_gone") {
-      set((s) => ({ pendingPermissions: s.pendingPermissions.filter((p) => p.id !== event.id) }));
+      set((s) => dropPermission(s, event.id));
       return;
     }
     const feed = remoteFeeds.get(conversation_id);
@@ -7735,15 +8029,15 @@ async function showRemoteTurn(
 ) {
   const s = get();
   const model = s.models.find((m) => m.id === s.selectedModelId) ?? s.models[0];
-  if (!s.conversations.some((c) => c.id === convId) || !model || s.busy) return;
+  if (!s.conversations.some((c) => c.id === convId) || !model || busyIn(s, convId)) return;
   const queue: api.AgentEvent[] = [saved];
   let feed: ((e: api.AgentEvent) => void) | null = null;
   remoteFeeds.set(convId, (e) => (feed ? feed(e) : queue.push(e)));
   try {
     const rows = await api.listMessages(convId);
+    // `run_started` says where it really runs.
+    markBusy(set, convId, "other");
     set((st) => ({
-      busy: true,
-      presence: "active" as const,
       conversations: st.conversations.map((c) => {
         if (c.id !== convId) return c;
         const have = new Set(c.messages.map((m) => m.id));
@@ -7764,9 +8058,12 @@ async function showRemoteTurn(
           queue.splice(0).forEach(feed);
         }),
     });
+  } catch (e) {
+    // The stream never began (its own end marks the chat idle).
+    markIdle(set, convId);
+    throw e;
   } finally {
     remoteFeeds.delete(convId);
-    set(() => ({ busy: false }));
   }
 }
 
@@ -7783,6 +8080,7 @@ function listenForSelfEvents(set: StoreSet, get: () => AppState) {
   api.onAppEvent<string>("poiesis-away", () => {
     void get().refreshWaiting();
     void get().refreshUnread();
+    void get().refreshOutcomes();
   });
   listenForRemote(set, get);
   // `TEAM-21`: a click on the desktop notification opens the session it was about.

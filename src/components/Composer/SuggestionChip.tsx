@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useAppStore } from "../../lib/store";
 import { commandViews } from "../../lib/commands";
 import { SparkleIcon } from "../Icons/Icons";
+import { busyIn } from "../../lib/runs";
 import "./SuggestionChip.css";
 
 /**
@@ -20,7 +21,7 @@ export default function SuggestionChip() {
   const accept = useAppStore((s) => s.acceptSuggestion);
   const dismiss = useAppStore((s) => s.dismissSuggestion);
   const conversations = useAppStore((s) => s.conversations);
-  const busy = useAppStore((s) => s.busy);
+  const busy = useAppStore((s) => busyIn(s, s.activeConversationId));
   const changeSets = useAppStore((s) => s.changeSets);
 
   // A fresh array each time, so it lives in a memo over the slices it reads.

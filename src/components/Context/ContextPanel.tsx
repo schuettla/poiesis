@@ -22,7 +22,7 @@ const EDIT_LABEL: Record<string, string> = {
 
 /**
  * The shared "what I'm working from" panel (WHY-1/3): every entry point
- * (composer chip, "why this answer?", the Self row) opens the same dialog
+ * (composer chip, `/why`, the Self row) opens the same dialog
  * through `contextPanelTarget`, so there is exactly one place this ever
  * renders from.
  */

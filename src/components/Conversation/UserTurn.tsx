@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { SteerKind } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import type { Message } from "../../lib/types";
@@ -5,6 +6,8 @@ import ImageByPath from "./ImageByPath";
 import { FileIcon } from "../Icons/Icons";
 import { SpokenGlyph } from "./SpokenMark";
 import { splitQuote } from "../../lib/mdQuote";
+import { EditTurn, UserActions } from "./UserActions";
+import { fullTime, turnTime } from "../../lib/time";
 
 /** Split off a trailing ```poiesis-action …``` fence (Generative UI, Phase B) so
  * the transcript shows the human sentence plus a compact chip, never raw JSON. */
@@ -26,10 +29,24 @@ export default function UserTurn({ message, focus = false }: { message: Message;
   const { human, isAction } = splitAction(message.text);
   // A passage quoted from a document leads the message: shown as a quote, not as `>` lines.
   const { quote, rest } = splitQuote(human);
-  const viewArtifactByPath = useAppStore((s) => s.viewArtifactByPath);
   const answerSteerStop = useAppStore((s) => s.answerSteerStop);
   const steer = message.steer;
+  const [editing, setEditing] = useState(false);
+  // What you typed: a `/skill` line as you wrote it, without the interface's data.
+  const typed = message.command
+    ? `/${message.command.name} ${message.command.args}`.trim()
+    : human;
+  if (editing && !focus) {
+    return (
+      <div className="turn-user editing" data-message-id={message.id}>
+        <EditTurn message={message} onClose={() => setEditing(false)} />
+        <Attached message={message} />
+      </div>
+    );
+  }
+  // A fragment, not a wrapper: the card is sticky within its turn group.
   return (
+    <>
     <div className="turn-user" data-message-id={message.id}>
       {/* `HRN-UI-1`: this went to a run that was already working, so it is
           not waiting for a next turn. Saying which of the two it is matters:
@@ -95,41 +112,55 @@ export default function UserTurn({ message, focus = false }: { message: Message;
           </button>
         </div>
       )}
-      {/* The same reading the Rail puts at the end of a chat row: when. */}
-      {!focus && message.createdAt > 0 && (
-        <span className="turn-stamp" aria-hidden="true">
-          {message.spoken && <SpokenGlyph />}
-          {new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-        </span>
-      )}
       {isAction && !focus && (
         <span className="block-action-chip" aria-label="block action">
           ⌁ block action
         </span>
       )}
-      {message.attachments && message.attachments.length > 0 && (
-        <div className="user-attachments">
-          {message.attachments.map((a) =>
-            // `STR-3`: a dropped photo should look like the photo, not a
-            // filename — a PDF has no picture to show, so it keeps the glyph.
-            a.kind === "image" ? (
-              <button
-                key={a.id}
-                className="user-attachment-thumb"
-                onClick={() => viewArtifactByPath(a.path, a.dataUri)}
-                title={a.name}
-              >
-                <ImageByPath path={a.path} dataUri={a.dataUri} alt={a.name} className="user-attachment-img" />
-                <span className="user-attachment-name">{a.name}</span>
-              </button>
-            ) : (
-              <span className="user-attachment" key={a.id}>
-                <FileIcon size={13} />
-                {a.name}
-              </span>
-            )
-          )}
-        </div>
+      <Attached message={message} />
+    </div>
+    {/* After the card, on the right, as an answer's line is: what you can do,
+        on hover, then when. Outside it, so the card holds your words alone. */}
+    {!focus && (
+      <div className="turn-user-foot">
+        <UserActions message={message} copy={typed} onEdit={isAction ? undefined : () => setEditing(true)} />
+        {message.createdAt > 0 && (
+          <span className="turn-stamp" tabIndex={0} data-tip={fullTime(message.createdAt)}>
+            {message.spoken && <SpokenGlyph />}
+            {turnTime(message.createdAt)}
+          </span>
+        )}
+      </div>
+    )}
+    </>
+  );
+}
+
+/** What went with a message. */
+function Attached({ message }: { message: Message }) {
+  const viewArtifactByPath = useAppStore((s) => s.viewArtifactByPath);
+  if (!message.attachments?.length) return null;
+  return (
+    <div className="user-attachments">
+      {message.attachments.map((a) =>
+        // `STR-3`: a dropped photo should look like the photo, not a
+        // filename — a PDF has no picture to show, so it keeps the glyph.
+        a.kind === "image" ? (
+          <button
+            key={a.id}
+            className="user-attachment-thumb"
+            onClick={() => viewArtifactByPath(a.path, a.dataUri)}
+            title={a.name}
+          >
+            <ImageByPath path={a.path} dataUri={a.dataUri} alt={a.name} className="user-attachment-img" />
+            <span className="user-attachment-name">{a.name}</span>
+          </button>
+        ) : (
+          <span className="user-attachment" key={a.id}>
+            <FileIcon size={13} />
+            {a.name}
+          </span>
+        )
       )}
     </div>
   );

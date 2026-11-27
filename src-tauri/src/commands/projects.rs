@@ -259,6 +259,7 @@ pub fn conversation_changes_cmd(db: State<'_, Db>, conversation_id: String) -> C
 #[tauri::command]
 pub fn undo_changes_cmd(db: State<'_, Db>, conversation_id: String, path: Option<String>) -> Cmd<()> {
     use crate::agent::changes;
+    crate::agent::subagents::may_undo(&db, &conversation_id).map_err(PoiesisError::Message)?;
     let set = changes::change_set(&db, &conversation_id, changes::view_since(&db, &conversation_id));
     // Newest file first, so a file moved and then edited unwinds in order.
     let mut files: Vec<&changes::FileChange> =

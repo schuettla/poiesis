@@ -414,6 +414,9 @@
 .chat-state.failed .chat-state-glyph {
   color: var(--danger);
 }
+.chat-state.held .chat-state-glyph {
+  color: var(--ink-muted);
+}
 .chat-state.running .chat-state-glyph svg {
   animation: chat-state-turn 0.9s linear infinite;
 }
@@ -520,6 +523,25 @@
   font-variant-numeric: tabular-nums;
   color: var(--ink-muted);
   font-weight: 400;
+}
+/* `PAR-9`: the run's clock sits at the end of the same line, so the row keeps its height. */
+/* The clock ends where the row's own time does. */
+.chat-now:has(> .chat-now-clip > .timed) {
+  padding-right: 0;
+}
+.chat-now-line.timed {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.chat-now-line.timed > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+.chat-now-time {
+  flex: none;
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
 }
 @keyframes chat-now-grow {
   from {
@@ -650,12 +672,19 @@
 .rail-filter > * {
   margin-top: 3px;
 }
+/* `PAR-11`: with a filter on, the chip's words need a line: over the first group's label (or
+   the line that says nothing matches) they would hide it. */
+.rail-filter.chipped {
+  height: auto;
+  padding-bottom: 2px;
+  background: var(--canvas);
+}
 .rail-filter-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  max-width: 150px;
+  max-width: 180px;
   padding: 1px 8px;
   font: inherit;
   font-size: var(--fs-caption);
@@ -709,10 +738,13 @@
   cursor: default;
 }
 .rail-filter-empty {
-  margin: 4px 0 12px;
+  margin: 4px 0 2px;
   padding-left: 8px;
   font-size: var(--fs-ui);
   color: var(--ink-faint);
+}
+.rail-filter-all {
+  margin: 0 0 12px 2px;
 }
 
 /* The trailing slot: a reading at rest (when, or how many), the ⋯ on hover or

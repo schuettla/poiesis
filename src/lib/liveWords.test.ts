@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clockText, cutAtWord, liveActivity, stepsDuration, stepTime, stepWords } from "./liveWords";
+import { clockText, cutAtWord, liveActivity, stepsDuration, stepTime, stepWords, writingCount } from "./liveWords";
 
 describe("stepTime (UI-4)", () => {
   it("writes under a second as 0.4s, under a minute as 38s, else as 2m 41s", () => {
@@ -44,6 +44,17 @@ describe("stepWords and liveActivity", () => {
     expect(liveActivity([{ status: "done", verb: "read", target: "x" }], { thinking: "hm" })).toBe("thinking");
     expect(liveActivity([{ status: "done", verb: "read", target: "x" }], run)).toBe("waiting for the model");
     expect(liveActivity(undefined, null)).toBe("waiting for the model");
+  });
+
+  it("say a long tool call being written after a running tool and before thinking, with its count", () => {
+    const writing = { thinking: "hm", writing: { label: "AI in Marketing", words: 1240 } };
+    expect(liveActivity([], writing)).toBe("writing “AI in Marketing”");
+    expect(liveActivity([], { thinking: "", writing: { label: null } })).toBe("writing");
+    expect(writingCount([], writing)).toBe(1240);
+    const running = [{ status: "running" as const, verb: "created", target: "x" }];
+    expect(liveActivity(running, writing)).toBe("created x");
+    expect(writingCount(running, writing)).toBeNull();
+    expect(writingCount([], { thinking: "hm" } as never)).toBeNull();
   });
 
   it("puts the plan item being worked on in front", () => {

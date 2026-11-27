@@ -3,6 +3,7 @@
  * the funnel menu offers besides "Led by" (which lives in the store as `leaderFilter`). Pure,
  * so the Rail only has to ask.
  */
+import type { StopReason } from "./api";
 import type { ChatState } from "./chatState";
 import { leaderOf } from "./leaders";
 import type { Conversation, Project } from "./types";
@@ -18,26 +19,77 @@ export const RAIL_GROUPS: { id: RailGroup; label: string }[] = [
 
 export type OutputKind = "artifacts" | "files" | "helpers";
 
+/** `PAR-11`: one status per chat, as the funnel and the Status groups read it: what it does
+ * now, else how its last answer ended, else whether it changed while you were away. */
+export type RailStatus = "needs-you" | "running" | "held" | "stopped" | "failed" | "done-unseen" | "idle";
+
+/** First rule that is true wins: a live state, then the outcome, then unread. A stopped chat
+ * you continue is Running again, and a stopped chat you have read is still Stopped early. */
+export function railStatus(live: ChatState, outcome: StopReason | null, unread: boolean): RailStatus {
+  if (live === "needs-you" || live === "held" || live === "running") return live;
+  if (outcome === "error" || live === "failed") return "failed";
+  // A reply cut off by the voice (`interrupted`) was stopped by you speaking, not by a limit.
+  if (outcome && outcome !== "completed" && outcome !== "interrupted") return "stopped";
+  return unread || live === "done-unseen" ? "done-unseen" : "idle";
+}
+
 export interface RailFilters {
-  status: ChatState | null;
+  /** Any of these; empty means the filter is off. */
+  status: RailStatus[];
   output: OutputKind | null;
   /** A folder's path. */
   folder: string | null;
   /** A project's id, or `NO_PROJECT` for the loose chats. */
   project: string | null;
 }
-export const NO_RAIL_FILTERS: RailFilters = { status: null, output: null, folder: null, project: null };
+export const NO_RAIL_FILTERS: RailFilters = { status: [], output: null, folder: null, project: null };
 export const NO_PROJECT = "none";
 
 /** The states worth filtering for, in the order a person cares about them. */
-export const STATUS_ORDER: Exclude<ChatState, "idle">[] = ["needs-you", "running", "failed", "done-unseen"];
-export const STATUS_WORD: Record<ChatState, string> = {
-  "needs-you": "Waiting for you",
+export const STATUS_ORDER: Exclude<RailStatus, "idle">[] = [
+  "running",
+  "needs-you",
+  "held",
+  "stopped",
+  "failed",
+  "done-unseen",
+];
+export const STATUS_WORD: Record<RailStatus, string> = {
   running: "Running",
+  "needs-you": "Waiting for you",
+  held: "Waiting on something else",
+  stopped: "Stopped early",
   failed: "Failed",
   "done-unseen": "Changed while away",
-  idle: "Everything else",
+  idle: "Idle",
 };
+/** The three states of a chat that is not at rest, which one click picks together. */
+export const LIVE_STATUSES: RailStatus[] = ["running", "needs-you", "held"];
+export const LIVE_WORDS = "Working or waiting now";
+export const isLiveSet = (status: RailStatus[]): boolean =>
+  status.length === LIVE_STATUSES.length && LIVE_STATUSES.every((s) => status.includes(s));
+
+/** What the chip over the list says for the picked states, or null when none is. */
+export function statusChipWords(status: RailStatus[]): string | null {
+  if (!status.length) return null;
+  if (isLiveSet(status)) return LIVE_WORDS;
+  if (status.length > 2) return `${status.length} states`;
+  const order: RailStatus[] = [...STATUS_ORDER, "idle"];
+  return order.filter((s) => status.includes(s)).map((s) => STATUS_WORD[s]).join(" or ");
+}
+
+const NONE_WORDS: Record<RailStatus, string> = {
+  running: "No chats are running.",
+  "needs-you": "No chats wait for you.",
+  held: "No chats wait on anything.",
+  stopped: "No chats stopped early.",
+  failed: "No chats failed.",
+  "done-unseen": "No unread chats.",
+  idle: "No idle chats.",
+};
+/** What an empty list says when one state is all that is filtered for. */
+export const noChatsWords = (status: RailStatus[]): string =>
+  status.length === 1 ? NONE_WORDS[status[0]] : "No chats match.";
 export const OUTPUT_ORDER: OutputKind[] = ["artifacts", "files", "helpers"];
 export const OUTPUT_WORD: Record<OutputKind, string> = {
   artifacts: "Made artifacts",
@@ -46,7 +98,7 @@ export const OUTPUT_WORD: Record<OutputKind, string> = {
 };
 
 export function hasRailFilters(f: RailFilters): boolean {
-  return f.status !== null || f.output !== null || f.folder !== null || f.project !== null;
+  return f.status.length > 0 || f.output !== null || f.folder !== null || f.project !== null;
 }
 
 /** The folder a chat works in: its own, or its project's. */
@@ -60,7 +112,10 @@ export function folderName(path: string): string {
 /** What the filters and groups need to know about the world, gathered once by the Rail. */
 export interface RailContext {
   projects: Project[];
-  status: (id: string) => ChatState;
+  status: (id: string) => RailStatus;
+  /** The chat on screen, once the status filter has shown it: it stays in the list until
+   * you open another, even when its state no longer matches. */
+  keep?: string | null;
   /** `[artifacts made, files changed]` by chat. Empty until read. */
   outputs: Record<string, [number, number]>;
   /** Chats that have helpers under them. */
@@ -75,7 +130,7 @@ export function hasOutput(c: Conversation, kind: OutputKind, ctx: RailContext): 
 
 /** Every filter that is on must hold. */
 export function matchesRailFilters(c: Conversation, f: RailFilters, ctx: RailContext): boolean {
-  if (f.status && ctx.status(c.id) !== f.status) return false;
+  if (f.status.length && c.id !== ctx.keep && !f.status.includes(ctx.status(c.id))) return false;
   if (f.output && !hasOutput(c, f.output, ctx)) return false;
   if (f.folder && folderOf(c, ctx.projects) !== f.folder) return false;
   if (f.project && (f.project === NO_PROJECT ? !!c.projectId : c.projectId !== f.project)) return false;

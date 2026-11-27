@@ -19,6 +19,7 @@ import {
   type CommandView,
   type LiveControl,
 } from "../../lib/commands";
+import { busyIn, shownRun } from "../../lib/runs";
 
 /**
  * Everything the composer's `/` menu needs, held in one place (`CMP-1`): the
@@ -143,14 +144,14 @@ export function useCommandInput({ value, setValue, focus, sendSkill, sendText, b
   const skills = useAppStore((s) => s.skills);
   const conversations = useAppStore((s) => s.conversations);
   const activeConversationId = useAppStore((s) => s.activeConversationId);
-  const activeRun = useAppStore((s) => s.activeRun);
+  const activeRun = useAppStore(shownRun);
   const changeSets = useAppStore((s) => s.changeSets);
   const personas = useAppStore((s) => s.personas);
   const models = useAppStore((s) => s.models);
   const modelPrefs = useAppStore((s) => s.modelPrefs);
   const delegateTargets = useAppStore((s) => s.delegateTargets);
   const engines = useAppStore((s) => s.engines);
-  const storeBusy = useAppStore((s) => s.busy);
+  const storeBusy = useAppStore((s) => busyIn(s, s.activeConversationId));
   // What the rows with a switch or a choice on them show. Read when the lines
   // are built, so the menu has to rebuild when any of them moves.
   const workspaceMode = useAppStore((s) => s.workspaceMode);

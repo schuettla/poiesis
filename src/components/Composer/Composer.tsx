@@ -30,6 +30,7 @@ import VoiceControl from "../Voice/VoiceControl";
 import { ChevronIcon, CloseIcon, FileIcon, ImageIcon, MessageIcon, PlayIcon, QuoteIcon, SlashIcon } from "../Icons/Icons";
 import { quoteBlock, quoteLabel, quoteWhere, type DocQuote } from "../../lib/mdQuote";
 import { joinSpoken } from "../../lib/voice/dictation";
+import { localModelNotice, questionOf, shownRun } from "../../lib/runs";
 import "./Composer.css";
 
 const IMAGE_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
@@ -72,7 +73,12 @@ export default function Composer({
     if (value === "") setRecall(null);
   }, [value]);
   const walkChat = useAppStore((s) => s.activeConversationId);
-  useEffect(() => setRecall(null), [walkChat]);
+  // `PAR-8`: a send was kept back because another chat has the local model.
+  const [sendHeld, setSendHeld] = useState(false);
+  useEffect(() => {
+    setRecall(null);
+    setSendHeld(false);
+  }, [walkChat]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [dropNotice, setDropNotice] = useState<string | null>(null);
@@ -82,11 +88,11 @@ export default function Composer({
   // go out with the next message.
   const [refs, setRefs] = useState<ContextRef[]>([]);
   // `HRN-UI-1`: a live agent run is something you can talk to. Media jobs also
-  // set `busy` but register no run, so this is what tells the two apart.
+  // mark the chat busy but register no run, so this is what tells the two apart.
   const steerActiveRun = useAppStore((s) => s.steerActiveRun);
-  const canSteer = useAppStore((s) => s.activeRun !== null);
+  const canSteer = useAppStore((s) => !!shownRun(s));
   // `AGC-3`: while the run waits on a question, what you type answers it.
-  const asking = useAppStore((s) => s.pendingQuestion !== null);
+  const asking = useAppStore((s) => !!questionOf(s, s.activeConversationId));
   // `SUB-UI-3`: how many agents the running turn has out right now. Stop takes
   // all of them, and the user has to know that before pressing it.
   const convId = useAppStore((s) => s.activeConversationId);
@@ -229,6 +235,13 @@ export default function Composer({
   }, [composerQuote]);
 
   function sendWithExtras(text: string, opts?: SendOptions) {
+    // `PAR-8`: one local run at a time. Asked before the box is cleared, so nothing is lost.
+    const held = !!localModelNotice(useAppStore.getState(), activeConversationId, selected);
+    setSendHeld(held);
+    if (held) {
+      setValue(opts?.skill ? value : text);
+      return;
+    }
     // The files still mentioned in the words that go out, after the chips.
     const all = [...refs, ...mention.refsFor(text)];
     const extras: SendOptions = { ...opts, refs: all.length ? all : undefined };
@@ -297,7 +310,6 @@ export default function Composer({
       }
       return;
     }
-
     if (mediaTarget !== null) {
       if (!text) return;
       createMedia({
@@ -477,9 +489,7 @@ export default function Composer({
   // `SEE-3`: the message is read while it is typed, for a chat message only: not a picture
   // being described, and not the answer to a question the run is waiting on.
   const quickThinking = useAppStore((s) => experimentOn(s, "fast-slow"));
-  const liveRunId = useAppStore((s) =>
-    s.activeRun && s.activeRun.convId === s.activeConversationId ? s.activeRun.runId : undefined
-  );
+  const liveRunId = useAppStore((s) => shownRun(s)?.runId);
   const hintWeb = useAppStore((s) => !!s.turnModifiers.web);
   const hintYourself = useAppStore((s) => !!s.turnModifiers.noHandover);
   const hintAddition = useAppStore((s) => !!s.turnModifiers.asAddition);
@@ -526,9 +536,13 @@ export default function Composer({
 
   // One notice at a time, in one slot: what just failed first, then what the
   // drop said, then the standing model notice. Each still has its own dismiss.
+  // The held send's line is read live: it goes by itself once the model is free.
+  const heldNotice = useAppStore((s) => (sendHeld ? localModelNotice(s, s.activeConversationId, selected) : null));
   const notice = cmd.error
     ? { text: cmd.error, dismiss: cmd.clearError }
-    : dropNotice
+    : heldNotice
+      ? { text: heldNotice, dismiss: () => setSendHeld(false) }
+      : dropNotice
       ? { text: dropNotice, dismiss: () => setDropNotice(null) }
       : modelNotice
         ? { text: modelNotice, dismiss: dismissModelNotice }
@@ -555,8 +569,6 @@ export default function Composer({
   return (
     <div className={`composer-wrap ${dragOver ? "drag-over" : ""} ${inStream ? "in-stream" : ""}`}>
       <div className="composer-col">
-        {/* `RUN`: what the run is doing and did, above everything else here. */}
-        <RunBar />
         {/* `BTW-UI-1`: a side answer, outside the conversation. */}
         <BtwCard />
 
@@ -803,6 +815,9 @@ export default function Composer({
             how to answer it sits on the row underneath. */}
         {/* `TEAM-17`: who the next message goes to, when the person may speak to a member. */}
         <MemberRow />
+        {/* `RUN`: what the run is doing and did. Last before the box: it is a
+            tray tucked behind it, so nothing may come between the two. */}
+        <RunBar />
         <div className="composer">
           <div className="composer-input-wrap">
             {cmd.model.popover && <div className="composer-menu-backdrop" onClick={cmd.closePopover} />}

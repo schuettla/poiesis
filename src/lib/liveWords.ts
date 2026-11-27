@@ -15,10 +15,13 @@ export function cutAtWord(text: string, max = 60): string {
   return `${(at > 0 ? cut.slice(0, at) : cut).trimEnd()}…`;
 }
 
-/** `UI-3`/`UI-4`: a clock, `m:ss`. */
+/** `UI-3`/`UI-4`: a clock, `m:ss`, and `h:mm:ss` past an hour. */
 export function clockText(ms: number): string {
   const secs = Math.max(0, Math.floor(ms / 1000));
-  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+  const two = (n: number) => String(n).padStart(2, "0");
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  return h ? `${h}:${two(m)}:${two(secs % 60)}` : `${m}:${two(secs % 60)}`;
 }
 
 /** `UI-4`: how long a step took, as omher writes it: "0.4s", "38s", "2m 41s". */
@@ -40,12 +43,46 @@ export function trimItem(text: string, max = 44): string {
  * being worked on goes in front, because it says what the work is for. */
 export function liveActivity(
   steps: Pick<AgentStep, "status" | "verb" | "target">[] | undefined,
-  run: { thinking: string; plan?: { items: { status: string; text: string }[] } } | null | undefined
+  run:
+    | { thinking: string; writing?: { label: string | null }; plan?: { items: { status: string; text: string }[] } }
+    | null
+    | undefined
 ): string {
   const running = steps?.find((s) => s.status === "running");
-  const activity = running ? stepWords(running) : run?.thinking ? "thinking" : "waiting for the model";
+  const activity = running
+    ? stepWords(running)
+    : run?.writing
+      ? writingWords(run.writing.label)
+      : run?.thinking
+        ? "thinking"
+        : "waiting for the model";
   const item = run?.plan?.items.find((i) => i.status === "doing");
   return item ? `${trimItem(item.text)} · ${activity}` : activity;
+}
+
+/** A long tool call being written, as the live line says it: "writing “AI in Marketing”". */
+export function writingWords(label: string | null): string {
+  return label ? `writing “${trimItem(label)}”` : "writing";
+}
+
+/** The word count beside the live line while a long tool call is written, or null when
+ * nothing is being written or a step is already running. */
+export function writingCount(
+  steps: Pick<AgentStep, "status">[] | undefined,
+  run: { writing?: { words: number } } | null | undefined
+): number | null {
+  if (!run?.writing || steps?.some((s) => s.status === "running")) return null;
+  return run.writing.words;
+}
+
+/** Is the model's thinking what is happening now? A running step is the newer truth:
+ * thinking left over from the call that asked for it is not arriving any more. This
+ * decides which line carries the moving light, so a turn has only one. */
+export function thinkingIsLive(
+  steps: Pick<AgentStep, "status">[] | undefined,
+  thinking: string | undefined
+): boolean {
+  return !!thinking && !steps?.some((s) => s.status === "running");
 }
 
 /** `UI-4`: how long a finished run's steps took together: the first start to the last end.

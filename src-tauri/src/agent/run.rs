@@ -455,6 +455,93 @@ impl ToolRegistry {
     }
 }
 
+/// What the screen is told about a tool call the model is still writing
+/// (`AgentEvent::Writing`). A short call is done before the words could be
+/// read, so nothing is said until the arguments reach `WRITING_FROM` characters,
+/// and then at most once per `WRITING_EVERY`.
+#[derive(Default)]
+struct Writing {
+    last: Option<std::time::Instant>,
+}
+
+/// How often a model call that stalled before any answer is asked again. One:
+/// each try can take the full quiet clock (`runtime::proxy`), so more would
+/// leave the user waiting for a provider that is down.
+const STALL_RETRIES: u32 = 1;
+
+const WRITING_FROM: usize = 400;
+const WRITING_EVERY: std::time::Duration = std::time::Duration::from_millis(250);
+
+impl Writing {
+    /// The label and word count to send now, if any. `args` is the call's
+    /// arguments so far, as raw JSON.
+    fn update(&mut self, args: &str, now: std::time::Instant) -> Option<(Option<String>, usize)> {
+        if args.len() < WRITING_FROM || self.last.is_some_and(|at| now.duration_since(at) < WRITING_EVERY) {
+            return None;
+        }
+        self.last = Some(now);
+        // A newline inside a JSON string is the two characters `\n`, which would
+        // glue the words on either side together.
+        let words = args.replace("\\n", " ").split_whitespace().count();
+        Some((written_label(args), words))
+    }
+}
+
+/// The `title` or `path` of a tool call still being written, once its value is
+/// complete. Read by hand because the JSON around it is not finished.
+fn written_label(args: &str) -> Option<String> {
+    for key in ["\"title\"", "\"path\""] {
+        let Some(at) = args.find(key) else { continue };
+        let Some(rest) = args[at + key.len()..].trim_start().strip_prefix(':') else { continue };
+        let rest = rest.trim_start();
+        if !rest.starts_with('"') {
+            continue;
+        }
+        let mut escaped = false;
+        for (i, c) in rest.char_indices().skip(1) {
+            match c {
+                '\\' if !escaped => escaped = true,
+                '"' if !escaped => {
+                    let label = serde_json::from_str::<String>(&rest[..=i]).ok()?;
+                    // A file is named by its name, not its whole path.
+                    let label = label.rsplit(['/', '\\']).next().unwrap_or("").trim();
+                    return (!label.is_empty()).then(|| label.to_string());
+                }
+                _ => escaped = false,
+            }
+        }
+        // The value is still being written.
+        return None;
+    }
+    None
+}
+
+#[cfg(test)]
+mod writing_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn the_label_is_read_once_its_value_is_whole() {
+        assert_eq!(written_label(r#"{"kind":"markdown","title":"AI in Mark"#), None);
+        assert_eq!(written_label(r##"{"kind":"markdown","title":"AI in \"Marketing\"","content":"# A"##).as_deref(), Some("AI in \"Marketing\""));
+        assert_eq!(written_label(r#"{"path":"C:\\work\\report.md","content":"x"#).as_deref(), Some("report.md"));
+        assert_eq!(written_label(r#"{"content":"a \"title\": \"no\""#), None, "a key inside a value is not the key");
+        assert_eq!(written_label(r#"{"query":"x"}"#), None);
+    }
+
+    #[test]
+    fn a_short_call_says_nothing_and_a_long_one_is_said_a_few_times_a_second() {
+        let mut w = Writing::default();
+        let t = Instant::now();
+        assert_eq!(w.update(r#"{"title":"T","content":"short"#, t), None);
+        let long = format!(r#"{{"title":"T","content":"{}"#, "word\\n".repeat(100));
+        assert_eq!(w.update(&long, t), Some((Some("T".into()), 100)));
+        assert_eq!(w.update(&long, t + Duration::from_millis(100)), None);
+        assert!(w.update(&long, t + WRITING_EVERY).is_some());
+    }
+}
+
 /// Least tokens after which a still-unclassified buffer is judged prose (LOOP-4).
 const EARLY_FLUSH_CHARS: usize = 160;
 
@@ -635,6 +722,10 @@ impl AgentEventSink {
             text: text.to_string(),
         });
     }
+    /// The model is writing a long tool call (`Writing`).
+    pub fn writing(&self, run_id: &str, label: Option<String>, words: usize) {
+        self.send(AgentEvent::Writing { run_id: run_id.to_string(), label, words });
+    }
     pub fn step_start(&self, id: &str, verb: &str, target: &str) {
         self.send(AgentEvent::StepStart {
             id: id.to_string(),
@@ -726,12 +817,13 @@ impl AgentEventSink {
         self.send(AgentEvent::StateUpdate { state: state.clone() });
     }
     /// `HRN-1`: hand the UI this run's id, so it has something to steer and stop.
-    fn run_started(&self, run_id: &str, max_steps: usize, context_window: Option<usize>, tier: ModelTier) {
+    fn run_started(&self, run: &RunHandle, max_steps: usize, context_window: Option<usize>, tier: ModelTier) {
         self.send(AgentEvent::RunStarted {
-            run_id: run_id.to_string(),
+            run_id: run.id.clone(),
             max_steps,
             context_window,
             tier,
+            local: run.local,
         });
     }
     fn run_progress(
@@ -2315,7 +2407,7 @@ async fn run_agent_inner(
     sink: &AgentEventSink,
 ) -> RunOutcome {
     let (run, limits) = (rc.run, rc.limits);
-    sink.run_started(&run.id, limits.max_iterations, rc.context_window, rc.tier);
+    sink.run_started(run, limits.max_iterations, rc.context_window, rc.tier);
 
     // `WRK-1`/`WRK-3`: how this run works. Only a lead run somebody watches takes a
     // preset; every run holds the base rules. Resolved first because what it holds
@@ -2560,6 +2652,8 @@ async fn run_agent_inner(
     let log = super::log::SessionLog::new(db, conversation_id, &run.id);
     let obs: &dyn RunObserver = &log;
     obs.prompt(&messages);
+    // `DBG-1`: how this run was set up, which the transcript does not say.
+    super::log::record_setup(db, conversation_id, &run.id, &cx.setup_record());
 
     let mut st = RunState {
         logged: messages.len(),
@@ -3055,6 +3149,43 @@ fn apply_switch(&self, slug: &str) {
         });
     }
 
+    /// `DBG-1`: what this run starts with, for the session report. The tools are the ones
+    /// offered on the first step.
+    fn setup_record(&self) -> serde_json::Value {
+        let (rc, limits) = (self.rc, self.rc.limits);
+        let mut scratch = Vec::new();
+        let tools: Vec<&str> = self
+            .assemble(&mut scratch)
+            .iter()
+            .filter_map(|s| s.pointer("/function/name").and_then(|n| n.as_str()))
+            .collect();
+        let held_back: Vec<String> = rc.run.held.lock().unwrap().out_tools().into_iter().map(str::to_string).collect();
+        serde_json::json!({
+            "model": self.model_name,
+            "provenance": rc.provenance,
+            "tier": rc.tier,
+            "temperature": self.temperature,
+            "effort": self.effort.as_str(),
+            "context_window": rc.context_window,
+            "max_steps": limits.max_iterations,
+            "max_depth": limits.max_depth,
+            "plan_ceiling": limits.plan_ceiling,
+            "time_limit_s": limits.deadline.map(|d| d.saturating_duration_since(std::time::Instant::now()).as_secs()),
+            "plan_mode": format!("{:?}", self.plan_mode).to_lowercase(),
+            "parent_run": rc.run.parent,
+            "tools_enabled": self.tools_enabled,
+            "headless": self.headless,
+            "read_only": self.read_only,
+            "plan_first": self.plan_first,
+            "remote": rc.remote,
+            "skill": rc.options.skill,
+            "delegate_to": rc.options.delegate_to,
+            "toolsets": self.registry.toolsets.iter().map(|t| t.id()).collect::<Vec<_>>(),
+            "tools": tools,
+            "held_back": held_back,
+        })
+    }
+
     /// **assemble** — the tools this turn is allowed to use.
     ///
     /// `HRN-8`: `read_result`/`search_result` appear only once this run has
@@ -3159,16 +3290,27 @@ fn apply_switch(&self, slug: &str) {
         let (tool_names, invocable) = (&self.tool_names, &self.invocable);
         let final_text = &mut st.final_text;
         let run_id = self.rc.run.id.as_str();
+        let mut writing = Writing::default();
+        // Whether any answer text came this turn. A turn that stalled before
+        // any is asked again; one with text is not, as the text would repeat.
+        let answered = std::sync::atomic::AtomicBool::new(false);
         let mut on_token = |delta: Delta| {
             // Thinking never joins `turn_buf`: everything below is about
             // deciding how much of the *answer* is safe to show, and reasoning
             // is not part of the answer. It goes straight out as its own event
             // so the run reads as working instead of hung.
-            let Delta::Answer(t) = delta else {
-                if let Delta::Thinking(t) = delta {
-                    sink.thinking(run_id, t);
+            let t = match delta {
+                Delta::Answer(t) => {
+                    answered.store(true, std::sync::atomic::Ordering::Relaxed);
+                    t
                 }
-                return;
+                Delta::Thinking(t) => return sink.thinking(run_id, t),
+                Delta::Writing { args, .. } => {
+                    if let Some((label, words)) = writing.update(args, std::time::Instant::now()) {
+                        sink.writing(run_id, label, words);
+                    }
+                    return;
+                }
             };
             turn_buf.push_str(t);
             if !tools_enabled {
@@ -3208,18 +3350,31 @@ fn apply_switch(&self, slug: &str) {
             }
             None => false,
         };
-        let outcome = drive_turn_adapting(
-            self.client,
-            self.endpoint,
-            &st.messages,
-            tools,
-            self.temperature,
-            self.effort,
-            &self.cancel,
-            &mut st.strict_template,
-            &mut on_token,
-        )
-        .await;
+        let mut stalls = 0;
+        let outcome = loop {
+            let out = drive_turn_adapting(
+                self.client,
+                self.endpoint,
+                &st.messages,
+                tools,
+                self.temperature,
+                self.effort,
+                &self.cancel,
+                &mut st.strict_template,
+                &mut on_token,
+            )
+            .await;
+            // A provider that got stuck mid-turn: no tool ran and no answer was
+            // shown, so asking again is safe, and on a free model it usually
+            // answers the second time.
+            match out {
+                Err(ProxyError::Stalled(why)) if stalls < STALL_RETRIES && !answered.load(std::sync::atomic::Ordering::Relaxed) => {
+                    stalls += 1;
+                    eprintln!("request: the model stalled ({why}); asking again ({stalls}/{STALL_RETRIES})");
+                }
+                other => break other,
+            }
+        };
         if noted {
             st.messages.pop();
         }
@@ -3399,6 +3554,8 @@ fn apply_switch(&self, slug: &str) {
             // The wrap-up is where a run out of budget writes its answer, so a
             // silent think here is the worst place to look hung.
             Delta::Thinking(t) => self.sink.thinking(&self.rc.run.id, t),
+            // This turn has no tools, so nothing is written into one.
+            Delta::Writing { .. } => {}
         };
         let outcome = drive_turn_adapting(
             self.client,
@@ -3951,6 +4108,11 @@ async fn try_two_ways(&self, st: &mut RunState, item: usize, what: &str) {
         self.work.branch_failed();
         return;
     };
+    // `PAR-5`: held before the copies are made, so what is kept goes onto the folder they were
+    // made from, with no other chat's writes in between.
+    if !self.hold_folder(&folder, "branch").await {
+        return;
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let (a, b) = (branch::workdir(self.data_dir, &id).join("a"), branch::workdir(self.data_dir, &id).join("b"));
     let copied = {
@@ -4647,6 +4809,17 @@ async fn dispatch(
         return Err(self.refusal().to_string());
     }
     if let Some(toolset) = registry.builtin_for(name) {
+        // `PAR-5`: from its first change to the working folder until it ends, a run holds the
+        // folder against other chats. Before anything of the change is looked at, so what is
+        // asked about and written is what the folder holds then. A run nobody watches changes
+        // nothing here: its changes wait for the person (`TEAM-19`).
+        if toolset == Toolset::FileSystem && !self.headless {
+            if let Some(folder) = super::filesystem::folder_it_changes(self.db, self.conversation_id, name, args) {
+                if !self.hold_folder(&folder, call_id).await {
+                    return Err("Stopped.".into());
+                }
+            }
+        }
         let ctx = self.tool_context(call_id, rpc);
         // `USE-12`: a quick look at a call that runs code, sends, drives a page or
         // changes files the person would be asked about. It can add a question or a
@@ -4800,6 +4973,14 @@ async fn dispatch(
 }
 
 impl TurnCtx<'_> {
+    /// `PAR-5`: hold the working folder against other chats for the rest of this run. `false`
+    /// when Stop came while it waited.
+    async fn hold_folder(&self, folder: &std::path::Path, call_id: &str) -> bool {
+        // Boxed, like the loop's other deep calls: a helper's whole run sits inside its lead's.
+        Box::pin(super::subagents::hold_folder(self.db, self.rc.fleet, self.rc.run, folder, &self.cancel, self.sink, call_id))
+            .await
+    }
+
     /// `USE-12`: everything a look at a tool call needs from this run.
     /// `HAB-1`/`HAB-2`: what the lessons that fire at this tool have to say about the
     /// call that just finished. The text goes on the result the model reads; the
@@ -6184,7 +6365,7 @@ mod tests {
     #[test]
     fn a_run_is_read_only_when_asked_to_plan_first_or_below_one_that_was() {
         let fleet = Fleet::new();
-        let handle = fleet.open("conv", CancelFlag::default(), None, 0);
+        let handle = fleet.open("conv", CancelFlag::default(), None, 0, false);
         let limits = RunLimits::default();
         let ordinary = RunContext::top(&handle, &limits, None, "local", None);
         assert!(!ordinary.is_read_only());
@@ -6569,7 +6750,7 @@ mod tests {
     #[test]
     fn a_mid_run_instruction_lands_as_a_user_message_at_the_top_of_the_next_turn() {
         let fleet = Fleet::new();
-        let run = fleet.open("conv", CancelFlag::default(), None, 0);
+        let run = fleet.open("conv", CancelFlag::default(), None, 0, false);
         let limits = RunLimits::default();
         let obs = Steers::default();
 
@@ -6609,7 +6790,7 @@ mod tests {
     #[test]
     fn a_lead_redirecting_a_child_is_labelled_but_a_person_is_not() {
         let fleet = Fleet::new();
-        let run = fleet.open("conv", CancelFlag::default(), None, 0);
+        let run = fleet.open("conv", CancelFlag::default(), None, 0, false);
         let mut st = state(vec![user("go")]);
 
         run.steer(super::super::fleet::Steer::user("stop at page two"));
@@ -6636,7 +6817,7 @@ mod tests {
     #[test]
     fn a_plan_run_goes_on_while_it_makes_progress_and_stops_when_it_does_not() {
         let fleet = Fleet::new();
-        let run = fleet.open("conv", CancelFlag::default(), None, 0);
+        let run = fleet.open("conv", CancelFlag::default(), None, 0, false);
         let limits = RunLimits { max_iterations: 12, plan_ceiling: Some(100), ..RunLimits::default() };
         let mut st = state(vec![user("write the report")]);
         st.plan_state = (7, 0, true);
@@ -6672,7 +6853,7 @@ mod tests {
     #[test]
     fn running_out_of_steps_buys_one_closing_turn_rather_than_an_abort() {
         let fleet = Fleet::new();
-        let run = fleet.open("conv", CancelFlag::default(), None, 0);
+        let run = fleet.open("conv", CancelFlag::default(), None, 0, false);
         let limits = RunLimits { max_iterations: 3, ..RunLimits::default() };
         let mut st = state(vec![user("find it")]);
 
@@ -6707,7 +6888,7 @@ mod tests {
     #[test]
     fn a_coordinator_whose_task_ran_out_gets_its_closing_turn_with_the_budget_reason() {
         let fleet = Fleet::new();
-        let run = fleet.open("conv", CancelFlag::default(), None, 0);
+        let run = fleet.open("conv", CancelFlag::default(), None, 0, false);
         let allowance = std::sync::Arc::new(super::super::fleet::Allowance::new(0.50, 90));
         let limits = RunLimits { allowance: Some(allowance.clone()), ..RunLimits::default() };
         let mut st = state(vec![user("add Apple Pay")]);
@@ -6724,7 +6905,7 @@ mod tests {
     #[test]
     fn a_run_that_is_out_of_time_also_gets_its_closing_turn() {
         let fleet = Fleet::new();
-        let run = fleet.open("conv", CancelFlag::default(), None, 0);
+        let run = fleet.open("conv", CancelFlag::default(), None, 0, false);
         let limits = RunLimits {
             max_iterations: 50,
             deadline: Some(std::time::Instant::now() - std::time::Duration::from_secs(1)),
@@ -6746,7 +6927,7 @@ mod tests {
     #[test]
     fn a_run_without_tools_is_never_told_to_wrap_up() {
         let fleet = Fleet::new();
-        let run = fleet.open("conv", CancelFlag::default(), None, 0);
+        let run = fleet.open("conv", CancelFlag::default(), None, 0, false);
         let limits = RunLimits { max_iterations: 1, ..RunLimits::default() };
         let mut st = state(vec![user("hello")]);
 

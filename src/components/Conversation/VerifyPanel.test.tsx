@@ -87,7 +87,7 @@ const on = (isOn: boolean) => useAppStore.setState({ experiments: [experiment({ 
 beforeEach(() => {
   for (const f of [verifyMessage, cancelVerify, markClaim, reviseFromVerification, loadVerifications]) f.mockClear();
   useAppStore.setState({
-    busy: false,
+    busyChats: {},
     activeConversationId: "c1",
     experiments: [experiment({ id: "fast-slow", on: true })],
     verifications: {},
@@ -156,7 +156,7 @@ describe("the Check more deeply action", () => {
     expect(actions()).not.toContain("Check more deeply");
     render(message({ streaming: true }));
     expect(actions()).not.toContain("Check more deeply");
-    act(() => useAppStore.setState({ busy: true }));
+    act(() => useAppStore.setState({ busyChats: { c1: "other" } }));
     render();
     expect(actions()).not.toContain("Check more deeply");
   });

@@ -290,6 +290,24 @@ fn impact(name: &str) -> Impact {
     }
 }
 
+/// `PAR-5`: the working folder this call would change something in, if it would. `None` for a
+/// read, for a place outside the folder, and in a folder that may only be looked at.
+pub fn folder_it_changes(db: &Db, conversation_id: &str, name: &str, args: &serde_json::Value) -> Option<PathBuf> {
+    if impact(name) == Impact::Read {
+        return None;
+    }
+    let (folder, trust) = db.conversation_folder(conversation_id).ok()?;
+    if Trust::parse(&trust) == Trust::ReadOnly {
+        return None;
+    }
+    let folder = canonicalize_lenient(Path::new(&folder?));
+    let inside = ["path", "from", "to"]
+        .iter()
+        .filter_map(|k| args.get(*k).and_then(|v| v.as_str()))
+        .any(|p| path_within_root(&resolve(p, Some(&folder)), &folder));
+    inside.then_some(folder)
+}
+
 /// `HRN-4`: does this tool only look at the disk? Only these are safe to run
 /// beside another call — a write, a move or a delete races anything that reads
 /// the same path in the same batch.

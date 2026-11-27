@@ -50,7 +50,7 @@
     "section": "turn",
     "kind": "action",
     "args": { "type": "none" },
-    "summary": "Try the last question again on a branch",
+    "summary": "Ask the last question again",
     "who": "user",
     "needs": ["conv", "norun", "turn"]
   },
@@ -133,7 +133,7 @@
     "section": "conversation",
     "kind": "action",
     "args": { "type": "choice", "source": "turns", "hint": "turn", "required": true },
-    "summary": "Go back to before a turn, on a branch; the original stays",
+    "summary": "Go back to before a turn; what came after is removed",
     "who": "user",
     "needs": ["conv", "norun", "turn"]
   },

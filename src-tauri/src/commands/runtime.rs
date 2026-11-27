@@ -1,11 +1,12 @@
 //! Runtime subsystem commands (Phase 1): hardware survey, runtime provisioning,
 //! engine lifecycle, and streamed chat completions.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tauri::ipc::Channel;
 use tauri::State;
 
+use crate::agent::fleet::Fleet;
 use crate::db::Db;
 use crate::runtime::download::{
     download_with_resume, find_server_binary, resolve_asset, unpack_archive, DownloadProgress,
@@ -208,6 +209,22 @@ async fn load_with_window(
     Ok(status)
 }
 
+/// `PAR-4`: may the engine be given `wanted` now (`None`: be stopped)? Never under a live run
+/// that works on it. `Ok(true)`: that run has what is wanted already, so leave the engine as it
+/// is. `Ok(false)`: nothing works on it, so go ahead. `Err` is for the person.
+fn swap_check(fleet: &Fleet, db: &Db, loaded: Option<&Path>, wanted: Option<&Path>) -> Result<bool, String> {
+    let Some(run) = fleet.local_run() else { return Ok(false) };
+    if wanted.is_some() && wanted == loaded {
+        return Ok(true);
+    }
+    let chat = db.get_conversation(&run.chat).ok().flatten().map_or_else(|| "another chat".to_string(), |c| c.title);
+    let then = match wanted {
+        Some(_) => "Your message is kept: send it when that one is done, or pick a cloud model.",
+        None => "Stop that chat first, or wait until it is done.",
+    };
+    Err(format!("The local model is working in \"{chat}\". {then}"))
+}
+
 /// Load a model into the engine and block until ready (§7.4). Spawns the engine
 /// (provisioning the runtime first if necessary).
 #[tauri::command]
@@ -219,12 +236,18 @@ pub async fn load_model_cmd(
     embed: State<'_, EmbedManager>,
     rerank: State<'_, RerankManager>,
     decide: State<'_, DecideManager>,
+    fleet: State<'_, Fleet>,
     model_path: String,
     ctx_size: Option<u32>,
     n_gpu_layers: Option<u32>,
     on_progress: Channel<DownloadProgress>,
 ) -> Cmd<EngineStatus> {
     let server_binary = provision_active(&mgr, &db, &on_progress).await?;
+    // Asked right before the swap, so a run that started during a download counts too.
+    let loaded = mgr.engine_model_path().await;
+    if swap_check(&fleet, &db, loaded.as_deref(), Some(Path::new(&model_path))).map_err(err)? {
+        return Ok(mgr.status().await);
+    }
     load_with_window(
         app,
         &mgr,
@@ -330,6 +353,7 @@ pub async fn start_engine_cmd(
     embed: State<'_, EmbedManager>,
     rerank: State<'_, RerankManager>,
     decide: State<'_, DecideManager>,
+    fleet: State<'_, Fleet>,
     on_progress: Channel<DownloadProgress>,
 ) -> Cmd<EngineStatus> {
     let model = db
@@ -340,6 +364,10 @@ pub async fn start_engine_cmd(
             PoiesisError::Message("No model in your library yet. Download one from Models first.".into())
         })?;
     let server_binary = provision_active(&mgr, &db, &on_progress).await?;
+    let loaded = mgr.engine_model_path().await;
+    if swap_check(&fleet, &db, loaded.as_deref(), Some(Path::new(&model.path))).map_err(err)? {
+        return Ok(mgr.status().await);
+    }
     load_with_window(
         app,
         &mgr,
@@ -390,7 +418,8 @@ pub async fn check_runtime_update_cmd(mgr: State<'_, RuntimeManager>) -> Cmd<Upd
 
 /// Stop the running engine and release VRAM.
 #[tauri::command]
-pub async fn stop_engine_cmd(mgr: State<'_, RuntimeManager>) -> Cmd<()> {
+pub async fn stop_engine_cmd(mgr: State<'_, RuntimeManager>, db: State<'_, Db>, fleet: State<'_, Fleet>) -> Cmd<()> {
+    swap_check(&fleet, &db, None, None).map_err(err)?;
     mgr.stop().await;
     Ok(())
 }
@@ -442,13 +471,48 @@ pub async fn chat_cmd(
     .map_err(err)
 }
 
-/// Trip the active turn's cancellation flag (Stop control).
+/// The Stop control of one chat.
 ///
-/// `HRN-1`: a turn is a tree now, so Stop trips every live run, not just the
-/// one whose flag happened to be in the manager's slot. `cancel_active` stays
-/// for the plain-chat stream, which never registers a run.
+/// `PAR-1`: that chat's run and the helpers it waits for. Other chats carry on.
+/// `cancel_active` stays for the plain-chat stream, which never registers a run.
 #[tauri::command]
-pub fn stop_chat_cmd(mgr: State<'_, RuntimeManager>, fleet: State<'_, crate::agent::fleet::Fleet>) {
+pub fn stop_chat_cmd(mgr: State<'_, RuntimeManager>, fleet: State<'_, Fleet>, conversation_id: String) {
     mgr.cancel_active();
-    fleet.cancel_all();
+    fleet.stop_chat(&conversation_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::proxy::CancelFlag;
+
+    /// `PAR-4`: the engine is never swapped or stopped under a live run on it. Asking for the
+    /// model it has already is nothing to do.
+    #[test]
+    fn the_engine_is_not_swapped_under_a_live_local_run() {
+        let db = Db::open_in_memory().unwrap();
+        let chat = db.create_conversation("Fix the login", None, false).unwrap().id;
+        let fleet = Fleet::new();
+        let (loaded, other) = (Path::new("a.gguf"), Path::new("b.gguf"));
+        // A run in the cloud holds nothing up.
+        fleet.open(&chat, CancelFlag::new(), None, 0, false);
+        assert_eq!(swap_check(&fleet, &db, Some(loaded), Some(other)), Ok(false));
+        assert_eq!(swap_check(&fleet, &db, Some(loaded), None), Ok(false));
+
+        let run = fleet.open(&chat, CancelFlag::new(), None, 0, true);
+        assert_eq!(
+            swap_check(&fleet, &db, Some(loaded), Some(other)),
+            Err("The local model is working in \"Fix the login\". Your message is kept: send it when that one is done, or pick a cloud model.".to_string())
+        );
+        assert_eq!(
+            swap_check(&fleet, &db, Some(loaded), None),
+            Err("The local model is working in \"Fix the login\". Stop that chat first, or wait until it is done.".to_string())
+        );
+        assert_eq!(swap_check(&fleet, &db, Some(loaded), Some(loaded)), Ok(true), "already loaded: left alone");
+        // An engine that is gone is not "already loaded".
+        assert!(swap_check(&fleet, &db, None, Some(loaded)).is_err());
+
+        fleet.close(&run.id);
+        assert_eq!(swap_check(&fleet, &db, Some(loaded), Some(other)), Ok(false));
+    }
 }

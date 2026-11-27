@@ -77,7 +77,7 @@ async function show(m: Model, toolsEnabled = true, activeRun: unknown = null) {
     view: "chat",
     focusedModelId: null,
     activeConversationId: "c1",
-    activeRun,
+    liveRuns: activeRun ? { c1: activeRun } : {},
   } as never);
   await act(async () => root.render(<ModeChips />));
 }

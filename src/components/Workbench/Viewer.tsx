@@ -27,6 +27,7 @@ import {
   usePreviewConsole,
   type ConsoleEntry,
 } from "./PreviewConsole";
+import { busyIn } from "../../lib/runs";
 
 /** Render kinds the viewer knows. Artifacts carry theirs; files get one from
  * their extension — one renderer, two origins, which is the whole point of
@@ -285,7 +286,7 @@ function HtmlView({ content, artifactId }: { content: string; artifactId?: strin
   const src =
     base && artifactId ? `${base}/${artifactId}?v=${contentVersion(content)}` : null;
   const { entries, clear } = usePreviewConsole(frame, artifactId, content, src);
-  const busy = useAppStore((s) => s.busy);
+  const busy = useAppStore((s) => busyIn(s, s.activeConversationId));
   const title = useAppStore((s) => {
     const convId = s.activeConversationId;
     if (!convId || !artifactId) return null;

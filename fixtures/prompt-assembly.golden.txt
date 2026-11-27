@@ -47,6 +47,8 @@ One fact per save, in their own terms, with a slug you would search for later.
 Note: your "browse" tool has failed often recently — double-check its arguments, and prefer an alternative when one exists.
 Note: your "web_search" tool has failed often recently — double-check its arguments, and prefer an alternative when one exists.
 
+Today is Friday, 27 November 2026.
+
 ## Conversation so far (older turns were summarized)
 The user asked about laptops and picked option b.
 

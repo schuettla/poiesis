@@ -1,11 +1,8 @@
-//! REM-3: which chat a sender is in, and the rule that a chat runs one turn at a time.
+//! REM-3: which chat a sender is in.
 //!
 //! A sender has one active conversation. Its first message makes it. The chat is an ordinary
 //! conversation row, so it shows in the desktop sidebar like any other. A message that arrives
-//! while a turn runs is steering, not a second turn.
-
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+//! while a turn runs is steering, not a second turn (one turn per chat: `Fleet::enter_chat`).
 
 use super::pairing::{self, Sender};
 use crate::db::Db;
@@ -46,39 +43,6 @@ pub fn title_from(text: &str) -> Option<String> {
     Some(if folded.chars().count() > 48 { format!("{}…", folded.chars().take(48).collect::<String>()) } else { folded })
 }
 
-/// Chats with a turn in flight. Shared with the turn's closure, so the mark is lifted however the
-/// turn ends.
-#[derive(Default, Clone)]
-pub struct Busy(Arc<Mutex<HashSet<String>>>);
-
-/// Held while a turn runs; dropping it lets the chat take the next one.
-pub struct BusyGuard {
-    set: Arc<Mutex<HashSet<String>>>,
-    conversation: String,
-}
-
-impl Busy {
-    /// Mark the chat busy. `None` when it already is.
-    pub fn try_enter(&self, conversation: &str) -> Option<BusyGuard> {
-        let mut set = self.0.lock().unwrap();
-        if !set.insert(conversation.to_string()) {
-            return None;
-        }
-        Some(BusyGuard { set: self.0.clone(), conversation: conversation.to_string() })
-    }
-
-    pub fn is_busy(&self, conversation: &str) -> bool {
-        self.0.lock().unwrap().contains(conversation)
-    }
-}
-
-impl Drop for BusyGuard {
-    fn drop(&mut self) {
-        if let Ok(mut set) = self.set.lock() {
-            set.remove(&self.conversation);
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -147,17 +111,5 @@ mod tests {
         let long = "ü".repeat(60);
         assert_eq!(title_from(&long), Some(format!("{}…", "ü".repeat(48))));
         assert_eq!(title_from(" \n "), None, "a photo alone keeps the first name");
-    }
-
-    #[test]
-    fn a_chat_takes_one_turn_at_a_time() {
-        let busy = Busy::default();
-        let guard = busy.try_enter("c1").expect("free");
-        assert!(busy.try_enter("c1").is_none(), "a second turn in the same chat is refused");
-        assert!(busy.try_enter("c2").is_some(), "another chat is not held up");
-        assert!(busy.is_busy("c1"));
-        drop(guard);
-        assert!(!busy.is_busy("c1"));
-        assert!(busy.try_enter("c1").is_some(), "free again once the turn ends");
     }
 }

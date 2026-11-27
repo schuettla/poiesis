@@ -51,8 +51,8 @@ beforeEach(() => {
     turnModifiers: {},
     conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [] }],
     activeConversationId: "c1",
-    activeRun: null,
-    busy: false,
+    liveRuns: {},
+    busyChats: {},
     changeSets: {},
     workspaceMode: false,
     toolsEnabled: true,
@@ -204,7 +204,7 @@ describe("the menu", () => {
     expect(rowNames()).not.toContain("stop");
     act(() => {
       useAppStore.setState({
-        activeRun: {
+        liveRuns: { c1: {
           runId: "r1",
           convId: "c1",
           step: 1,
@@ -213,8 +213,8 @@ describe("the menu", () => {
           contextTokens: 0,
           contextWindow: null,
           thinking: "",
-        },
-        busy: true,
+        } },
+        busyChats: { c1: "other" },
       });
     });
     type("/");
@@ -492,6 +492,64 @@ describe("the + menu (CMP-T3)", () => {
     });
     expect(plusButton().className).not.toContain("lit");
     expect(plusButton().className).not.toContain(" on");
+  });
+});
+
+describe("while another chat is working (PAR-8)", () => {
+  const elsewhere = (seat: "local" | "other") =>
+    act(() => {
+      useAppStore.setState((s) => ({
+        conversations: [...s.conversations, { id: "c2", title: "Plan the trip", updatedAt: 0, messages: [] }],
+        busyChats: { c2: seat },
+        liveRuns: {
+          c2: { runId: "r1", convId: "c2", step: 1, maxSteps: 12, startedAt: Date.now(), contextTokens: 0, contextWindow: null, thinking: "" },
+        },
+      }));
+    });
+  const pick = (provenance: "local" | "cloud") =>
+    act(() => {
+      const model = { ...useAppStore.getState().models[0], id: "picked", provenance, modality: "chat" as const };
+      useAppStore.setState({ models: [model], selectedModelId: model.id });
+    });
+
+  it("a send here starts a turn here", async () => {
+    pick("cloud");
+    elsewhere("local");
+    type("hello");
+    await press("Enter");
+    expect(sent).toHaveLength(1);
+    expect(input().value).toBe("");
+  });
+
+  it("keeps a message for the local model while another chat has it, and says which", async () => {
+    pick("local");
+    elsewhere("local");
+    type("hello");
+    await press("Enter");
+    expect(sent).toHaveLength(0);
+    expect(input().value).toBe("hello");
+    expect(container.querySelector(".composer-model-notice")?.textContent).toContain(
+      'The local model is working in "Plan the trip". Your message is kept'
+    );
+  });
+
+  it("takes the line away by itself once the model is free", async () => {
+    pick("local");
+    elsewhere("local");
+    type("hello");
+    await press("Enter");
+    act(() => useAppStore.setState({ busyChats: {}, liveRuns: {} }));
+    expect(container.querySelector(".composer-model-notice")).toBeNull();
+    await press("Enter");
+    expect(sent).toHaveLength(1);
+  });
+
+  it("sends to the local model while the other chat is on a cloud one", async () => {
+    pick("local");
+    elsewhere("other");
+    type("hello");
+    await press("Enter");
+    expect(sent).toHaveLength(1);
   });
 });
 

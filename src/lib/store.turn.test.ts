@@ -69,7 +69,7 @@ beforeEach(() => {
     pendingActions: {},
     verifications: {},
     harnessProposals: [],
-    busy: false,
+    busyChats: {},
     presence: "idle",
   });
 });
@@ -290,7 +290,7 @@ describe("a turn that never runs", () => {
     expect(finalized[0].id).toBe("m-reply");
     expect(finalized[0].content).toContain("I couldn't start the engine");
     expect(transcript().map((m) => m.id)).toEqual(["m-user", "m-reply"]);
-    expect(useAppStore.getState().busy).toBe(false);
+    expect(useAppStore.getState().busyChats).toEqual({});
   });
 
   it("writes the failure on the saved answer when the run cannot begin", async () => {
@@ -356,7 +356,7 @@ describe("the model a persona pins (TEAM-1)", () => {
     expect(sent!.target).toMatchObject({ model: "a-model" });
     expect(conversationLeader).not.toHaveBeenCalled();
 
-    useAppStore.setState({ conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [] }], busy: false } as never);
+    useAppStore.setState({ conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [] }], busyChats: {} } as never);
     conversationLeader.mockResolvedValue({ leader: "poiesis", source: "none" });
     await useAppStore.getState().sendMessage("hi");
     expect(sent!.target).toMatchObject({ model: "a-model" });

@@ -5,6 +5,7 @@ import { useAppStore } from "../../lib/store";
 import { ChevronIcon, KebabIcon } from "../Icons/Icons";
 import BranchDialog from "./BranchDialog";
 import OrgStrip from "./OrgStrip";
+import { RollingText } from "../Ticker/RollingNumber";
 
 /**
  * `PLN-UI-1`: the work a run means to do, above the steps that carry it out.
@@ -99,8 +100,9 @@ export default function PlanCard({
           <span className="plan-title">My plan</span>
           {plan.items.length > 0 && (
             <span className="plan-progress">
-              {done} of {counted} done
-              {dropped > 0 && `, ${dropped} dropped`}
+              <RollingText
+                text={`${done} of ${counted} done${dropped > 0 ? `, ${dropped} dropped` : ""}`}
+              />
             </span>
           )}
         </button>

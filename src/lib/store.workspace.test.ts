@@ -35,7 +35,7 @@ describe("an interaction is an ordinary turn", () => {
       activeConversationId: "c1",
       selectedModelId: model.id,
       workspaceMode: true,
-      busy: false,
+      busyChats: {},
       sessionState: {},
       pendingActions: {},
       surfaces: { c1: { ...(surface as object), state: { pick: "a" } } as never },
@@ -63,7 +63,7 @@ describe("an interaction is an ordinary turn", () => {
   });
 
   it("does nothing while a turn is running", async () => {
-    useAppStore.setState({ busy: true });
+    useAppStore.setState({ busyChats: { c1: "other" } });
     await useAppStore.getState().sendSurfaceAction("Chose “Next”.", { action: "next" });
     expect(sent).toHaveLength(0);
   });
@@ -77,7 +77,7 @@ describe("what an interaction writes into the session state", () => {
       activeConversationId: "c1",
       selectedModelId: model.id,
       workspaceMode: true,
-      busy: false,
+      busyChats: {},
       sessionState: {},
       pendingActions: {},
       surfaces: { c1: surface },
@@ -109,7 +109,7 @@ describe("typing in a composed interface", () => {
       conversations: [conv(true)],
       activeConversationId: "c1",
       workspaceMode: true,
-      busy: false,
+      busyChats: {},
       surfaces: { c1: surface },
       sendMessage: (() => Promise.resolve()) as never,
     });

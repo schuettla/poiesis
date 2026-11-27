@@ -7,6 +7,7 @@ import DiagnosticsList, { locateDiagnostic } from "../Conversation/Diagnostics";
 import ClassifyBlock from "./ClassifyBlock";
 import ConnectBlock from "./ConnectBlock";
 import Frame from "./Frame";
+import { busyIn } from "../../lib/runs";
 import "./blocks.css";
 
 /** Loose object access for lenient, model-provided block data. */
@@ -108,7 +109,7 @@ function ComparisonBlock({ block }: { block: BlockView }) {
   const recommendedId = data.recommended_id as string | undefined;
   const state = asObj(block.state);
   const pinned = (state.pinned as string[]) ?? [];
-  const busy = useAppStore((s) => s.busy);
+  const busy = useAppStore((s) => busyIn(s, s.activeConversationId));
   const sendBlockAction = useAppStore((s) => s.sendBlockAction);
   const setBlockState = useAppStore((s) => s.setBlockState);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -224,7 +225,7 @@ function CollectionBlock({ block }: { block: BlockView }) {
   const state = asObj(block.state);
   const activeTags = (state.tags as string[]) ?? [];
   const setBlockState = useAppStore((s) => s.setBlockState);
-  const busy = useAppStore((s) => s.busy);
+  const busy = useAppStore((s) => busyIn(s, s.activeConversationId));
   const sendBlockAction = useAppStore((s) => s.sendBlockAction);
 
   const allTags = useMemo(() => {
@@ -310,7 +311,7 @@ function PlanBlock({ block }: { block: BlockView }) {
   const steps = asArr(data.steps);
   const state = asObj(block.state);
   const checked = asObj(state.checked);
-  const busy = useAppStore((s) => s.busy);
+  const busy = useAppStore((s) => busyIn(s, s.activeConversationId));
   const sendBlockAction = useAppStore((s) => s.sendBlockAction);
   const setBlockState = useAppStore((s) => s.setBlockState);
 
@@ -376,7 +377,7 @@ function FormBlock({ block }: { block: BlockView }) {
   const state = asObj(block.state);
   const submitted = !!state.submitted;
   const setBlockState = useAppStore((s) => s.setBlockState);
-  const busy = useAppStore((s) => s.busy);
+  const busy = useAppStore((s) => busyIn(s, s.activeConversationId));
   const sendBlockAction = useAppStore((s) => s.sendBlockAction);
   const [values, setValues] = useState<Obj>(() => asObj(state.values));
 

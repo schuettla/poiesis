@@ -61,7 +61,7 @@ beforeEach(() => {
     subRuns: {},
     changeSets: {},
     pendingQuestion: null,
-    busy: false,
+    busyChats: {},
   });
   act(() => root.render(<RunBar />));
 });
@@ -241,7 +241,7 @@ describe("how long it stays (RUN-T3)", () => {
   it("survives the run ending", () => {
     seeded();
     expect(bar()).not.toBeNull();
-    put({ busy: false, activeRun: null });
+    put({ busyChats: {}, liveRuns: {} });
     expect(bar()).not.toBeNull();
   });
 

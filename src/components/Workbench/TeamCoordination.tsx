@@ -10,6 +10,7 @@ import { PauseIcon, PlayIcon, SkipBackIcon, TeamIcon } from "../Icons/Icons";
 import MemberGlyph from "../Personas/MemberGlyph";
 import OrgDiagram, { useCoordinationStyle, useLastPlan } from "./OrgDiagram";
 import { TaskMark } from "./TeamDiagram";
+import { questionOf } from "../../lib/runs";
 
 /**
  * `TEAM-14`: the Coordination view of a session a team leads (`TEAMS_PLAN` II.6). The head says
@@ -43,7 +44,7 @@ export default function TeamCoordination({ conversationId, team }: { conversatio
   const summary = useAppStore((s) => s.runSummaries[conversationId]);
   const messages = useAppStore((s) => s.conversations.find((c) => c.id === conversationId)?.messages);
   const presets = useAppStore((s) => s.presets);
-  const asking = useAppStore((s) => !!s.pendingQuestion && s.pendingQuestion.convId === conversationId);
+  const asking = useAppStore((s) => !!questionOf(s, conversationId));
   const openItem = useAppStore((s) => s.openItem);
   const allPosts = useAppStore((s) => s.posts[conversationId]) ?? NO_POSTS;
   const loadPosts = useAppStore((s) => s.loadPosts);

@@ -45,7 +45,7 @@ beforeEach(() => {
     runSummaries: {},
     subRuns: {},
     posts: {},
-    busy: false,
+    busyChats: {},
     presence: "idle",
   } as never);
 });

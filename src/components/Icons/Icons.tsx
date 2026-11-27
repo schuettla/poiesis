@@ -692,6 +692,46 @@ export function RefreshIcon(props: IconProps) {
   );
 }
 
+/** A pencil: change what you wrote. */
+export function EditIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M13.5 3.8 16.2 6.5 7 15.7l-3.4.7.7-3.4ZM11.7 5.6l2.7 2.7" strokeLinecap="round" strokeLinejoin="round" />
+    </Glyph>
+  );
+}
+
+/** One sheet on another: take a copy. */
+export function CopyIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <rect x="7.5" y="7.5" width="9" height="9" rx="1.5" />
+      <path d="M12.5 7.5V5A1.5 1.5 0 0 0 11 3.5H5A1.5 1.5 0 0 0 3.5 5v6A1.5 1.5 0 0 0 5 12.5h2.5" strokeLinecap="round" />
+    </Glyph>
+  );
+}
+
+/** An arrow turning back on itself: go back to an earlier point. */
+export function RewindIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M7.5 4 4 7.5 7.5 11M4 7.5h7.75a4.25 4.25 0 0 1 0 8.5H8" strokeLinecap="round" strokeLinejoin="round" />
+    </Glyph>
+  );
+}
+
+/** One line becoming two: carry on in a second chat. */
+export function ForkIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <circle cx="6" cy="4.5" r="2" />
+      <circle cx="6" cy="15.5" r="2" />
+      <circle cx="14.5" cy="6.5" r="2" />
+      <path d="M6 6.5v7M14.5 8.5c0 3.5-5 3.2-8.5 5" strokeLinecap="round" />
+    </Glyph>
+  );
+}
+
 /** An arrow leaving the page by its upper right corner: this link opens elsewhere. */
 export function ArrowUpRightIcon(props: IconProps) {
   return (

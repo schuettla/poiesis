@@ -29,7 +29,6 @@ use crate::agent::AgentEvent;
 use crate::commands::agent::TurnEnv;
 use crate::db::{now_ms, Db};
 use pairing::{Codes, PairError, Sender};
-use session::Busy;
 
 /// The kill switch. Off unless the person turned it on in Settings > Remote.
 pub const ENABLED_KEY: &str = "remote.enabled";
@@ -104,7 +103,6 @@ pub struct HostAddr {
 pub struct Gateway {
     app: AppHandle,
     codes: Codes,
-    busy: Busy,
     /// Questions sent out and not yet answered (`REM-4`).
     pending: Arc<approvals::Pending>,
     enabled: watch::Sender<bool>,
@@ -126,7 +124,6 @@ impl Gateway {
         Gateway {
             app,
             codes: Codes::default(),
-            busy: Busy::default(),
             pending: Arc::default(),
             enabled: watch::channel(on).0,
             links: AtomicUsize::new(0),
@@ -254,7 +251,7 @@ impl Gateway {
     fn stop_all(&self) {
         let fleet = self.app.state::<crate::agent::fleet::Fleet>();
         for run in fleet.roots() {
-            if self.busy.is_busy(&run.conversation_id) {
+            if fleet.chat_started_remotely(&run.conversation_id) {
                 fleet.cancel_tree(&run.id);
             }
         }
@@ -267,7 +264,7 @@ impl Gateway {
             return false;
         };
         let fleet = self.app.state::<crate::agent::fleet::Fleet>();
-        let runs: Vec<_> = fleet.roots().into_iter().filter(|r| r.conversation_id == conv).collect();
+        let runs = fleet.roots_of(&conv);
         for run in &runs {
             fleet.cancel_tree(&run.id);
         }
@@ -304,11 +301,12 @@ impl Gateway {
 
         // A turn already runs in this chat (started here or in the window): the text steers it.
         let fleet = self.app.state::<crate::agent::fleet::Fleet>();
-        if let Some(run) = fleet.roots().into_iter().find(|r| r.conversation_id == conversation_id) {
+        if let Some(run) = fleet.roots_of(&conversation_id).into_iter().next() {
             run.steer(Steer::user(text));
             return Intake::Steered;
         }
-        let Some(_turn) = self.busy.try_enter(&conversation_id) else {
+        // `PAR-3`: the same guard the window's turns take.
+        let Some(turn) = fleet.enter_chat(&conversation_id, true) else {
             return Intake::Refused(Refusal::Busy);
         };
 
@@ -359,7 +357,7 @@ impl Gateway {
             fleet: &fleet,
             grants: &grants,
         };
-        crate::agent::turn::run_turn(&env, input, channel).await;
+        crate::agent::turn::run_turn_held(&env, input, channel, Some(turn)).await;
         Intake::Ran
     }
 

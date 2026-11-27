@@ -57,7 +57,7 @@ beforeEach(() => {
     conversations: [{ id: "c1", title: "Phone", updatedAt: 0, messages: [] }],
     models: [model],
     selectedModelId: "m1",
-    busy: false,
+    busyChats: {},
     pendingPermissions: [],
     remoteReachable: false,
   });
@@ -92,7 +92,7 @@ describe("a turn a phone started", () => {
     const msgs = () => get().conversations[0].messages;
     expect(msgs().map((m) => m.id)).toEqual(["u1", "a1"]);
     expect(msgs()[0].text).toBe("What is on today?");
-    expect(get().busy).toBe(true);
+    expect(get().busyChats).toHaveProperty("c1");
     turn({ type: "token", text: "meetings." });
     expect(msgs()[1].text).toBe("Two meetings.");
     expect(msgs()[1].streaming).toBe(true);
@@ -100,7 +100,7 @@ describe("a turn a phone started", () => {
     turn({ type: "turn_finalized", message_id: "a1", steps_json: null });
     await settle();
     expect(msgs()[1].streaming).toBe(false);
-    expect(get().busy).toBe(false);
+    expect(get().busyChats).toEqual({});
   });
 
   it("shows a question as a card here too, and drops it when the phone answered", async () => {
@@ -131,9 +131,9 @@ describe("a turn a phone started", () => {
     set({ conversations: [] });
     turn({ type: "turn_saved", user_message_id: "u1", assistant_message_id: "a1" });
     await settle();
-    expect(get().busy).toBe(false);
+    expect(get().busyChats).toEqual({});
 
-    set({ conversations: [{ id: "c1", title: "Phone", updatedAt: 0, messages: [] }], busy: true });
+    set({ conversations: [{ id: "c1", title: "Phone", updatedAt: 0, messages: [] }], busyChats: { c1: "other" } });
     turn({ type: "turn_saved", user_message_id: "u2", assistant_message_id: "a2" });
     turn({ type: "token", text: "ignored" });
     await settle();

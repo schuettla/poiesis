@@ -89,7 +89,7 @@ function setup(waiting: ChangeProposal[], over: Record<string, unknown> = {}) {
     waitingNotes: {},
     waitingOpen: false,
     unreadIds: [],
-    busy: false,
+    busyChats: {},
     openSession,
     sendMessage,
     ...over,

@@ -149,7 +149,7 @@ warm:
 
 | Order | Block | Source | Condition |
 |---|---|---|---|
-| 1 | Base prompt | the chat's persona `system_prompt` (the leader's; for a team, its coordinator's), else the `system_prompt` setting (edited as "Who Poiesis is"), else the default | always |
+| 1 | Base prompt | the chat's persona `system_prompt` (the leader's; for a team, its coordinator's), else the `system_prompt` setting (edited as "Who Poiesis is"), else the default in [`shared/system-prompt.txt`](../shared/system-prompt.txt) | always |
 | 2 | *About you* | `PROFILE.md`, the agent's own synthesis | non-empty |
 | 3 | *Standing instructions* | `SOUL.md`, user-owned | non-empty |
 | 4 | *Project: name* | project instructions (`PRJ-7`), capped at 4000 chars | chat in a project with instructions |
@@ -161,6 +161,7 @@ warm:
 | 10 | Tool guidance | surface, block and plan guidance; the plan sentence depends on `agent.plan_mode` | tools on |
 | 11 | Memory guidance | how and when to save; sent even at zero facts | tools and Memory on |
 | 12 | Tool cautions | "your `X` tool has failed often lately", from 7-day `tool_stats` | tools on |
+| 13 | Date | "Today is …", by the computer's clock, no time (`context::today_line`). A delegated child gets the same line in its own prompt, a resumed run with the resume note | always |
 
 Everything block-shaped is gated on tools being on: a model told about
 `render_ui` but given no tools imitates tool-call JSON in prose.
@@ -382,9 +383,11 @@ rule: anything the model saw must be reconstructible from these rows.
 - **`replay(run_id)`** rebuilds the exact message array, skipping the
   descriptive rows. Resume uses it; `resume_run_cmd` also hands back
   `last_plan` so the plan continues instead of vanishing.
-- **Fork** (`fork_conversation_cmd`, "Try again from here") copies the chat up
-  to just before an assistant turn, keeping persona, model, folder, trust and
-  summary, and returns the user turn to send again.
+- **Fork** (`fork_conversation_cmd`, `/fork`) copies the chat up to one turn into
+  a new conversation, keeping persona, model, folder, trust and summary. It is
+  the only one of these that makes a second chat.
+- **Rewind** and **Try again** (`rewind_cmd`, `Db::cut_conversation`) remove a
+  user turn and what followed from the same chat, log rows included.
 - A run with no `stop` row was killed with the app, which is what "Continue
   where I stopped" picks up.
 
@@ -524,9 +527,13 @@ actions that already existed; a few are new capabilities:
   (`Question` / `QuestionGone`). Not for permissions, which the panel handles.
 - **Plan first** (`/plan`): a run that reads and changes nothing until the user
   approves its plan.
-- **Rewind** (`agent/rewind.rs`): a branch plus an optional file undo. The
-  original conversation is never edited; it gets one `rewound` row, the
-  strongest negative signal there is, which reflection reads.
+- **Rewind** (`agent/rewind.rs`): an optional file undo, then the turn and what
+  followed are removed from the chat for good. One `rewound` row stays, the
+  strongest negative signal there is, which reflection reads. "Try again" is the
+  same cut followed by the same message (with its attachments and `/skill`), and
+  writes no row. On one of your messages, **Try again** starts over from that
+  message and **Edit** sends new words in its place (`retryTurn` in the store).
+  The edit box sends plain text: a `/command` typed into it is not run.
 - **Goal** (`/goal`): the frontend loop keeps re-sending until
   `agent/goal.rs`'s judge says the goal holds. The judge is tool-free and
   deliberately hard to satisfy (prose, broken JSON or "met" with nothing to point
@@ -1252,7 +1259,8 @@ send it. If it should move the sidebar, call `setDockView` on a transition only.
 `autonomy_gate` at the write site, and map its tool in `self_change_class`.
 
 **A change to the system prompt:** change `context.rs` and regenerate the golden
-(§3.1).
+(§3.1). The default base prompt is the one file `shared/system-prompt.txt`, with
+no final newline; the backend and the window both read it.
 
 **A new agent app:** an entry in `shared/engines.json`; if it speaks ACP, that is
 all the driver it needs (`acp.rs`), otherwise a driver implementing the trait in

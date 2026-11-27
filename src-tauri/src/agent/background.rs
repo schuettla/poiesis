@@ -263,15 +263,18 @@ async fn run_one(spawn: Spawn) {
 
     // `PRF-5`: not in a place another helper is changing. Held until the child ends.
     let _claim = match &spawn.claim {
-        Some((at, paths)) => Some(
-            crate::agent::subagents::scopes()
-                .claim(&spawn.run_id, &crate::agent::subagents::leads_of(&fleet, &run), &spawn.agent, at, paths, &run.cancel, |because| {
-                    let _ = db.set_subagent_queued_because(&spawn.run_id, because);
-                    let _ = db.set_subagent_status(&spawn.run_id, if because.is_some() { "queued" } else { "running" });
-                    announce_waiting(app, &spawn.run_id, because);
-                })
-                .await,
-        ),
+        Some((at, paths)) => {
+            let who = crate::agent::subagents::Claimer::of(&db, Some(&fleet), &run, &spawn.agent);
+            Some(
+                crate::agent::subagents::scopes()
+                    .claim(&who, at, paths, &run.cancel, |because| {
+                        let _ = db.set_subagent_queued_because(&spawn.run_id, because);
+                        let _ = db.set_subagent_status(&spawn.run_id, if because.is_some() { "queued" } else { "running" });
+                        announce_waiting(app, &spawn.run_id, because);
+                    })
+                    .await,
+            )
+        }
         None => None,
     };
     let _ = db.set_subagent_status(&spawn.run_id, "running");

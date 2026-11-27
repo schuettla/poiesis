@@ -200,6 +200,9 @@ pub struct PromptInputs {
     /// `PLN-3`: whether — and how firmly — this turn is told to plan first.
     /// Defaults to *when it helps*, which is what an unset setting means.
     pub plan_mode: super::plan::PlanMode,
+    /// What [`today_line`] said when this turn was gathered. Data here rather
+    /// than read from the clock while composing, so the golden can hold it still.
+    pub today_line: Option<String>,
     /// `VTN-2`: the user is talking by voice and will hear the reply spoken.
     pub spoken: bool,
     /// `CRD-1`: what reached this turn, as the record stored beside the answer.
@@ -271,6 +274,8 @@ pub fn compose_system_prompt(inputs: &PromptInputs) -> String {
         }
         push(tool_cautions(&inputs.tool_health));
     }
+    // Near the end: it changes once a day, so what comes before it stays cached.
+    push(inputs.today_line.clone().unwrap_or_default());
     // `VTN-2`: last, so nothing above can talk the model back into markdown.
     if inputs.spoken {
         push(SPOKEN_GUIDANCE.to_string());
@@ -520,7 +525,15 @@ const SURFACE_TITLE: &str = "Workspace";
 /// The setting holding the user's global system prompt, and the text used when
 /// they have never changed it.
 pub const SYSTEM_PROMPT_KEY: &str = "system_prompt";
-pub const DEFAULT_SYSTEM_PROMPT: &str = "You are Poiesis Agent, a local-first assistant that maintains itself: you keep durable memory, learn lessons from your own mistakes, and propose — never impose — changes to how you work. Be concise and clear.";
+/// Edited in that file only: the window reads the same one (`store.ts`).
+pub const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../shared/system-prompt.txt");
+
+/// The date a model is told, by the computer's own clock. In English like
+/// `turn::short_date`. A date and no time: a time would change the prompt every
+/// turn and cost the prefix cache.
+pub fn today_line() -> String {
+    format!("Today is {}.", chrono::Local::now().format("%A, %-d %B %Y"))
+}
 
 /// Everything `gather` needs that is not a long-lived handle.
 pub struct GatherOpts<'a> {
@@ -553,6 +566,7 @@ pub async fn gather(
     opts: GatherOpts<'_>,
 ) -> PromptInputs {
     let mut inputs = from_db(db, &opts);
+    inputs.today_line = Some(today_line());
 
     // With the Memory toolset off, the standing instructions and the synthesis
     // still go in — the user approved those, and they are not something the
@@ -1135,6 +1149,14 @@ mod tests {
             query: "do the thing",
             attended: true,
         }
+    }
+
+    /// The file goes to the model byte for byte, so an editor's final newline
+    /// would go with it.
+    #[test]
+    fn the_default_prompt_file_has_no_stray_whitespace() {
+        assert!(!DEFAULT_SYSTEM_PROMPT.is_empty());
+        assert_eq!(DEFAULT_SYSTEM_PROMPT, DEFAULT_SYSTEM_PROMPT.trim(), "shared/system-prompt.txt");
     }
 
     /// A conversation with no persona falls back to the user's own prompt, and a

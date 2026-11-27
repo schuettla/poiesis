@@ -21,6 +21,7 @@ import { proposedDraft, scheduleDraft } from "./when";
 import { workspaceAvailable } from "./experiments";
 import { openVoice } from "./voice/controller";
 import type { Model } from "./types";
+import { busyIn, shownRun } from "./runs";
 
 export type CommandKind = "ui" | "action" | "modifier" | "skill";
 export type CommandSection =
@@ -170,9 +171,9 @@ function unmet(need: Need, s: AppState): { reason: string; hide: boolean } | nul
     case "conv":
       return conv ? null : { reason: "needs a conversation", hide: false };
     case "run":
-      return s.activeRun ? null : { reason: "nothing is running", hide: true };
+      return shownRun(s) ? null : { reason: "nothing is running", hide: true };
     case "norun":
-      return s.busy ? { reason: "I'm busy right now", hide: false } : null;
+      return busyIn(s, convId) ? { reason: "I'm busy right now", hide: false } : null;
     case "folder":
       return conv?.folderPath ? null : { reason: "needs a working folder", hide: false };
     case "changes": {
@@ -858,7 +859,7 @@ export const HANDLERS: Record<string, Handler> = {
   retry: async (_args, s) => {
     const last = lastAnswer(s);
     if (!last) return fail("There is nothing to try again yet.");
-    await s.forkFromMessage(last.id);
+    await s.retryAnswer(last.id);
     return done();
   },
 
@@ -889,8 +890,8 @@ export const HANDLERS: Record<string, Handler> = {
     const id = activeId(s);
     const last = lastAnswer(s);
     if (!id || !last || !api.inTauri()) return fail("There is nothing to branch yet.");
-    // `UCM-2`: inclusive, so the branch is the conversation exactly as it stands.
-    const { conversation } = await api.forkConversation(id, last.id, true);
+    // `UCM-2`: the branch is the conversation exactly as it stands.
+    const conversation = await api.forkConversation(id, last.id);
     await s.openSessionFromFork(conversation);
     return done("branched this chat");
   },
@@ -1245,11 +1246,11 @@ export const HANDLERS: Record<string, Handler> = {
       };
     }
     if (parsed === "stop") {
-      if (!s.busy) return fail("I'm not working toward a goal here.");
+      if (!busyIn(s, id)) return fail("I'm not working toward a goal here.");
       s.stopGenerating();
       return done("stopped working toward the goal");
     }
-    if (s.busy) return fail("I'm busy right now");
+    if (busyIn(s, id)) return fail("I'm busy right now");
     s.setTurnModifier({ style: "mission-command", criteria: [parsed.until] });
     return { kind: "modifier", send: parsed.text };
   },
@@ -1276,7 +1277,11 @@ export const HANDLERS: Record<string, Handler> = {
       body: "The files go back to how they were before I touched them.",
       confirmLabel: "Take back",
       run: async () => {
-        await s.undoChanges(id, target?.path);
+        try {
+          await s.undoChanges(id, target?.path);
+        } catch (e) {
+          return fail(String(e));
+        }
         return done(target ? "took back my changes to one file" : "took back my file changes");
       },
     };

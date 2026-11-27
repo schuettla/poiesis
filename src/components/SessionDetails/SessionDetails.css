@@ -1,0 +1,223 @@
+/* `DBG-3`: the session report. It borrows the confirm shell (`confirm-backdrop`,
+   `confirm-card`) and fixes its size: the tabs and the actions stay, only the body scrolls. */
+.sd-dialog {
+  position: relative;
+  width: min(880px, calc(100vw - 48px));
+  height: min(660px, calc(100vh - 80px));
+  display: flex;
+  flex-direction: column;
+}
+/* The corner X, drawn like the other panels' (`context-panel-close`). */
+.sd-x {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.sd-x:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.sd-x:active {
+  background: var(--fill-press);
+}
+.sd-dialog .confirm-title,
+.sd-sub {
+  /* Keeps a long title clear of the X. */
+  padding-right: 32px;
+}
+.sd-sub {
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sd-tabs {
+  flex: none;
+  margin-top: 12px;
+}
+.sd-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 12px;
+  overflow: auto;
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+}
+.sd-body .select {
+  margin-bottom: 8px;
+  max-width: 220px;
+}
+.sd-head {
+  margin: 16px 0 6px;
+  font-size: var(--fs-footnote);
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+.sd-quiet {
+  margin: 6px 0;
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.sd-bad {
+  color: var(--danger);
+}
+
+.sd-facts {
+  margin: 0;
+}
+.sd-facts > div {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  padding: 3px 0;
+}
+.sd-facts dt {
+  color: var(--ink-muted);
+}
+.sd-facts dd {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.sd-facts code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-footnote);
+}
+.sd-copy {
+  flex: none;
+  padding: 0;
+  font-size: var(--fs-caption);
+}
+.sd-link {
+  padding: 0;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.sd-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sd-fold {
+  border-bottom: 1px solid var(--paper-edge);
+}
+.sd-fold-line,
+.sd-plain {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 4px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  text-align: left;
+  color: var(--ink);
+}
+.sd-fold-line {
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.sd-fold-line:hover,
+.sd-fold-line[aria-expanded="true"] {
+  background: var(--fill-hover);
+}
+.sd-plain {
+  border-bottom: 1px solid var(--paper-edge);
+  box-sizing: border-box;
+}
+.sd-fold-line > span,
+.sd-plain > span {
+  flex: none;
+}
+.sd-seq {
+  min-width: 3ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+.sd-when {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+.sd-kind {
+  font-family: var(--font-mono);
+}
+.sd-fold-line > .sd-rest,
+.sd-plain > .sd-rest {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-muted);
+}
+.sd-fold-body {
+  padding: 6px 4px 10px 14px;
+}
+
+.sd-raw {
+  margin-top: 4px;
+}
+.sd-raw pre {
+  max-height: 260px;
+  overflow: auto;
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  background: var(--fill-quiet);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.sd-status {
+  flex: none;
+  min-height: 1.4em;
+  margin: 8px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.sd-status.sd-bad {
+  color: var(--danger);
+}
+.confirm-actions.sd-actions {
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.sd-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.sd-actions .sd-close {
+  margin-left: auto;
+}

@@ -21,7 +21,8 @@ Element.prototype.scrollTo = () => {};
 
 function activeRun(overrides: Record<string, unknown> = {}) {
   useAppStore.setState({
-    activeRun: {
+    activeConversationId: "c1",
+    liveRuns: { c1: {
       runId: "r1",
       convId: "c1",
       step: 1,
@@ -31,7 +32,7 @@ function activeRun(overrides: Record<string, unknown> = {}) {
       contextWindow: null,
       thinking: "",
       ...overrides,
-    },
+    } },
   } as never);
 }
 
@@ -51,7 +52,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
-  useAppStore.setState({ activeRun: null } as never);
+  useAppStore.setState({ liveRuns: {} } as never);
 });
 
 function meter(m: Message): string {
@@ -80,6 +81,21 @@ describe("the run meter", () => {
     meter(message());
     expect(container.querySelector(".run-meter")).not.toBeNull();
     expect(container.querySelector(".timeline")).toBeNull();
+  });
+
+  it("carries its orb in its own line, with none drawn above it", () => {
+    // Drawn above, the orb left its slot empty and the line sat indented under nothing.
+    activeRun({ thinking: "working through it" });
+    meter(message());
+    expect(container.querySelector(".thinking")).toBeNull();
+    expect(container.querySelector(".run-meter-orb")!.childElementCount).toBeGreaterThan(0);
+  });
+
+  it("leaves the bare orb as the only line before the first step", () => {
+    activeRun({ step: 0 });
+    meter(message());
+    expect(container.querySelector(".thinking")).not.toBeNull();
+    expect(container.querySelector(".run-meter-row")).toBeNull();
   });
 
   it("never shows the step budget, which is a setting and not a status", () => {

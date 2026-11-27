@@ -24,6 +24,7 @@ import Workspace from "./Workspace";
 import "../components/Conversation/Conversation.css";
 import "./Chat.css";
 import type { CommandNoteView, Message } from "../lib/types";
+import { busyIn } from "../lib/runs";
 
 /** One user turn plus every turn that follows it up to (not including) the
  * next user turn — a leading run of non-user messages before the first user
@@ -60,7 +61,8 @@ export default function Chat() {
   const conversation = useActiveConversation();
   const sendMessage = useAppStore((s) => s.sendMessage);
   const stopGenerating = useAppStore((s) => s.stopGenerating);
-  const busy = useAppStore((s) => s.busy);
+  // `PAR-6`: this chat's work only. Picture jobs register no run, so they still count.
+  const busy = useAppStore((s) => busyIn(s, s.activeConversationId));
   const presence = useAppStore((s) => s.presence);
   const checkingMyself = useAppStore((s) => s.checkupRunning);
   const voiceShown = useVoiceStore((s) => s.shown);
@@ -121,7 +123,7 @@ export default function Chat() {
     return (
       <>
         <Workspace />
-        <Composer onSend={sendMessage} busy={busy} onStop={stopGenerating} />
+        <Composer onSend={sendMessage} busy={busy} onStop={() => stopGenerating()} />
         <MemoryToast />
         <RecallOffer />
       </>
@@ -228,7 +230,7 @@ export default function Chat() {
         {voiceShown && <VoiceMode />}
       </div>
       {/* The voice surface has its own bar, so the box is not shown under it. */}
-      {!voiceShown && <Composer onSend={sendMessage} busy={busy} onStop={stopGenerating} inStream />}
+      {!voiceShown && <Composer onSend={sendMessage} busy={busy} onStop={() => stopGenerating()} inStream />}
       <RewindDialog />
       <MemoryToast />
       <RecallOffer />

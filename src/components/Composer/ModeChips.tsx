@@ -1,6 +1,7 @@
 import { useAppStore, useSelectedModel } from "../../lib/store";
 import { tierOf, tierTag } from "../../lib/tier";
 import { CloseIcon } from "../Icons/Icons";
+import { shownRun } from "../../lib/runs";
 import "./ModeChips.css";
 
 /**
@@ -49,7 +50,7 @@ export function useModeChips(): ModeChip[] {
   const showModel = useAppStore((s) => s.showModel);
   const setModelTier = useAppStore((s) => s.setModelTier);
   const model = useSelectedModel();
-  const runTier = useAppStore((s) => (s.activeRun?.convId === s.activeConversationId ? s.activeRun?.tier : undefined));
+  const runTier = useAppStore((s) => shownRun(s)?.tier);
 
   const chips: ModeChip[] = [];
   if (workspaceMode) {

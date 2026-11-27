@@ -19,7 +19,7 @@
   z-index: 16;
   /* Top pad adds to the stream's own bottom padding so the gap survives even
      if the last turn ends flush; bottom stays tight to keep the box low. */
-  padding: 10px 24px 14px;
+  padding: 1px 24px 14px;
 }
 /* Docked under the message stream the box takes the smaller corner (lg, not xl). */
 .composer-wrap.in-stream .composer {

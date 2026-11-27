@@ -53,7 +53,7 @@ beforeEach(() => {
     workspaceMode: false,
     toolsEnabled: false,
     turnModifiers: {},
-    busy: false,
+    busyChats: {},
     presence: "idle",
   });
 });

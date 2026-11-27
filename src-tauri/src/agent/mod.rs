@@ -35,6 +35,7 @@ pub mod habit;
 pub mod imagegen;
 pub mod index;
 pub mod leader;
+pub mod inspect;
 pub mod integrity;
 pub mod ledger;
 pub mod log;
@@ -153,6 +154,12 @@ pub enum AgentEvent {
     /// word of prose, and with nothing on this channel the run looked hung —
     /// the app's own timer ticking beside an empty screen.
     Thinking { run_id: String, text: String },
+    /// The model is writing a long tool call, such as a whole report into a
+    /// document. That can take minutes with no thinking and no prose, and the
+    /// screen showed a frozen "Thinking" line. `label` is the call's `title` or
+    /// `path` once the model has written it; `words` is about how much so far.
+    /// Sent a few times a second at most (`agent::run::Writing`).
+    Writing { run_id: String, label: Option<String>, words: usize },
     /// The assistant emitted an artifact to render in the Canvas panel (CHT-6).
     /// `meta_json` is the artifact's stored metadata — `None` for every kind
     /// but media, where it is what lets the stream render the same block the
@@ -345,6 +352,13 @@ pub enum AgentEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         evidence: Option<serde_json::Value>,
     },
+    /// `PAR-5`: a run waits for another chat to finish with the working folder (`reason` says
+    /// which), or the wait is over (`None`).
+    Held {
+        run_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     /// `PRF-5`: a helper waits for another to finish changing the same place (`because` says
     /// which), or has its place now (`None`).
     SubWaiting {
@@ -384,6 +398,8 @@ pub enum AgentEvent {
         /// `TIER-4`: what the turn really ran at. Can be lower than the listing
         /// said if the engine was restarted with less memory.
         tier: tier::ModelTier,
+        /// `PAR-8`: the run is on this PC's model, of which there is one.
+        local: bool,
     },
     /// One iteration of the loop began (`HRN-UI-3`'s meter). `step` is
     /// 1-based; `ms` is elapsed wall clock for the whole run so far.

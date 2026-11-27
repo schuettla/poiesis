@@ -1,7 +1,7 @@
 /* One scripted run in the Poiesis window: type a question, send it, watch the
    agent work, read the answer, see what it saved. Everything it shows is the
-   app's own markup and CSS (see index.html); this file only adds and removes
-   it in the order the real app does. */
+   app's own markup and CSS (see index.html); this file only shows and hides it
+   in the order the real app does. The markup rests in the finished state. */
 (function () {
   "use strict";
 
@@ -10,133 +10,101 @@
   var $$ = function (s, el) { return Array.prototype.slice.call((el || doc).querySelectorAll(s)); };
   var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  /* ---------- the app's icon set (src/components/Icons/Icons.tsx) ---------- */
-  var ICONS = {
-    plus: ['<path d="M10 4.5v11M4.5 10h11" stroke-linecap="round"/>', 1.3],
-    search: ['<circle cx="8.8" cy="8.8" r="5"/><path d="M12.5 12.5 16.5 16.5" stroke-linecap="round"/>', 1.3],
-    bookmark: ['<path d="M5.5 3.5h9a1 1 0 0 1 1 1V17l-5.5-3.2L4.5 17V4.5a1 1 0 0 1 1-1z" stroke-linejoin="round"/>', 1.3],
-    folder: ['<path d="M2.5 5.5A1.5 1.5 0 0 1 4 4h3.2l1.4 1.8H16a1.5 1.5 0 0 1 1.5 1.5v7.2A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5z" stroke-linejoin="round"/>', 1.3],
-    settings: ['<circle cx="10" cy="10" r="2.6"/><path d="M10 2.8v2.3M10 14.9v2.3M17.2 10h-2.3M5.1 10H2.8M15.1 4.9l-1.6 1.6M6.5 13.5l-1.6 1.6M15.1 15.1l-1.6-1.6M6.5 6.5 4.9 4.9" stroke-linecap="round"/>', 1.3],
-    kebab: ['<circle cx="4.5" cy="10" r="1.4" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.4" fill="currentColor" stroke="none"/><circle cx="15.5" cy="10" r="1.4" fill="currentColor" stroke="none"/>', 1.3],
-    chevR: ['<path d="M8 4.5 13.5 10 8 15.5" stroke-linecap="round" stroke-linejoin="round"/>', 1.5],
-    chevU: ['<path d="M4.5 12.5 10 7l5.5 5.5" stroke-linecap="round" stroke-linejoin="round"/>', 1.5],
-    sidebarL: ['<rect x="2.5" y="3.5" width="15" height="13" rx="2.5"/><line x1="7.7" y1="3.5" x2="7.7" y2="16.5"/>', 1.3],
-    sidebarR: ['<rect x="2.5" y="3.5" width="15" height="13" rx="2.5"/><line x1="12.3" y1="3.5" x2="12.3" y2="16.5"/>', 1.3],
-    refresh: ['<path d="M16 10a6 6 0 1 1-1.8-4.3M16 3v3h-3" stroke-linecap="round" stroke-linejoin="round"/>', 1.3],
-    treeFolder: ['<path d="M2.5 6A1.5 1.5 0 0 1 4 4.5h3.2l1.4 1.8H16A1.5 1.5 0 0 1 17.5 8v6A1.5 1.5 0 0 1 16 15.5H4A1.5 1.5 0 0 1 2.5 14z" stroke-linejoin="round"/>', 1.2],
-    treeFolderOpen: ['<path d="M2.5 15V6A1.5 1.5 0 0 1 4 4.5h3.2l1.4 1.8H15A1.5 1.5 0 0 1 16.5 8H5.6L2.5 15z" stroke-linejoin="round"/>', 1.2],
-    file: ['<path d="M5 3.5h6L15 7.5v9H5z" stroke-linejoin="round"/><path d="M11 3.5v4h4" stroke-linejoin="round"/>', 1.2],
-  };
-  $$("i[data-ic]").forEach(function (el) {
-    var def = ICONS[el.dataset.ic];
-    if (!def) return;
-    var size = el.dataset.size || 14;
-    var sw = el.dataset.sw || def[1];
-    var cls = el.dataset.cls ? ' class="' + el.dataset.cls + '"' : "";
-    el.outerHTML =
-      '<svg' + cls + ' width="' + size + '" height="' + size + '" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="' + sw + '" aria-hidden="true">' +
-      def[0] + "</svg>";
-  });
-
   // A picture of the window, not a form: nothing in it takes the keyboard.
-  $$("button, li[tabindex]").forEach(function (el) { el.setAttribute("tabindex", "-1"); });
+  $$("button, input, [tabindex]").forEach(function (el) { el.setAttribute("tabindex", "-1"); });
 
   window.PoiesisOrbs.mount(doc);
 
   /* ---------- the window ---------- */
-  var el = {
-    empty: $("#empty"), stream: $("#stream"), turnUser: $("#turnUser"), run: $("#run"),
-    tl: $("#tl"), tlHead: $("#tlHead"), tlTitle: $("#tlTitle"), tlSum: $("#tlSum"), tlRows: $("#tlRows"),
-    answer: $("#answer"), thinking: $("#thinking"), meter: $("#meter"), meterText: $("#meterText"),
-    meterOrb: $("#meterOrb"), actions: $("#actions"), input: $("#input"), send: $("#send"),
-    toast: $("#toast"), top: $("#topLabel"), mark: $("#brandMark"), sessions: $("#projSessions"), count: $("#projCount"),
-  };
-  var steps = $$(".step", el.tlRows);
+  var el = {};
+  ["empty", "stream", "turnUser", "run", "tlLive", "tlDone", "liveOrb", "liveDoing", "liveClock", "thinking",
+    "answer", "foot", "runBar", "input", "send", "toast", "topLabel", "brandMark", "rowTitle", "rowState",
+    "rowNow", "rowDoing"].forEach(function (id) { el[id] = doc.getElementById(id); });
+
+  var steps = $$(".step", el.tlLive);
+  var liveRows = $(".timeline-rows", el.tlLive);
+  var doneRows = $(".timeline-rows", el.tlDone);
+  var results = steps.map(function (s) { var r = $(".result", s); return r ? r.textContent : ""; });
+  // The live list holds the same rows as the finished one, so it takes its readings from there.
+  var finished = $$(".step", el.tlDone);
+  while (steps.length < finished.length) {
+    var copy = finished[steps.length].cloneNode(true);
+    liveRows.appendChild(copy);
+    steps.push(copy);
+  }
+  var readings = finished.map(function (s) {
+    return { meta: $(".step-meta", s).innerHTML, verb: $(".verb", s).textContent, target: $(".target", s).textContent };
+  });
+  var ORBS = ["weaving", "searching", "working", "weaving"];
+
   var QUESTION = "Find the Brandt invoice and tell me what I owe.";
-  var SUMMARY = "recalled memory 1 · searched 1 · read 1 · 1 more";
   var answerTexts = [];
   var walker = doc.createTreeWalker(el.answer, NodeFilter.SHOW_TEXT);
-  while (walker.nextNode()) answerTexts.push({ node: walker.currentNode, full: walker.currentNode.nodeValue });
+  while (walker.nextNode()) {
+    if (walker.currentNode.nodeValue.trim()) answerTexts.push({ node: walker.currentNode, full: walker.currentNode.nodeValue });
+  }
   var paragraphs = $$("p", el.answer);
 
   function show(node, on) { node.classList.toggle("pre", !on); }
   function setMark(state) {
-    el.mark.setAttribute("class", "poiesis-mark stage-2 state-" + state);
-    el.mark.setAttribute("aria-label", "Poiesis Agent: " + (state === "active" ? "working" : "resting"));
+    el.brandMark.setAttribute("class", "poiesis-mark stage-2 state-" + state);
+    el.brandMark.setAttribute("aria-label", "Poiesis Agent: " + (state === "active" ? "working" : "resting"));
   }
+  /** Everything outside the turn that says a run is going: the mark, the box, the sidebar row. */
   function setBusy(busy) {
     el.send.textContent = busy ? "■" : "↑";
     el.send.setAttribute("aria-label", busy ? "Stop generating" : "Send message");
+    el.input.placeholder = busy ? "Tell me something while I work" : "Message Poiesis";
+    show(el.runBar, busy);
+    show(el.rowState, busy);
+    show(el.rowNow, busy);
+    setMark(busy ? "active" : "idle");
   }
+  function setTitle(title) { el.topLabel.textContent = title; el.rowTitle.textContent = title; }
   function clock(s) { return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
-
-  var newRow = null;
-  function addRailRow() {
-    if (newRow) return;
-    newRow = doc.createElement("li");
-    newRow.className = "chat-row active";
-    newRow.innerHTML =
-      '<span class="chat-title">Brandt invoice</span><span class="row-slot"><time class="row-stamp">now</time>' +
-      '<div class="chat-menu-wrap"><button class="chat-more" aria-label="More actions" tabindex="-1">' + doc.querySelector(".chat-more").innerHTML + "</button></div></span>";
-    el.sessions.insertBefore(newRow, el.sessions.firstChild);
-    el.count.textContent = "2";
-    el.top.textContent = "Brandt invoice";
+  function toggleTimeline(tl, rows, open) {
+    tl.classList.toggle("open", open);
+    rows.style.display = open ? "" : "none";
+    $(".timeline-head", tl).setAttribute("aria-expanded", String(open));
   }
 
   function reset() {
-    $$(".turn-user, .agent-run, .timeline, .step, .run-text, .thinking, .run-meter-row, .turn-actions, .memory-toast", doc)
-      .forEach(function (n) { n.classList.add("pre"); });
     show(el.empty, true);
-    el.stream.classList.add("pre");
-    el.tl.className = "timeline live open pre";
-    el.tlHead.setAttribute("aria-expanded", "true");
-    el.tlRows.style.display = "";
-    el.tlTitle.textContent = "Working";
-    el.tlSum.textContent = "1 step";
-    steps.forEach(function (s) { s.classList.remove("running", "error"); $(".result", s).textContent = ""; });
-    el.answer.className = "run-text streaming pre";
+    [el.stream, el.turnUser, el.run, el.tlLive, el.tlDone, el.thinking, el.answer, el.foot, el.toast]
+      .forEach(function (n) { show(n, false); });
+    steps.forEach(function (s) { show(s, false); });
+    toggleTimeline(el.tlLive, liveRows, false);
+    toggleTimeline(el.tlDone, doneRows, false);
+    el.tlDone.classList.remove("arrived");
     answerTexts.forEach(function (t) { t.node.nodeValue = ""; });
     paragraphs.forEach(function (p, i) { p.style.display = i ? "none" : ""; });
+    el.answer.className = "run-text streaming pre";
     el.toast.classList.remove("arrive");
     el.input.value = "";
+    el.liveClock.textContent = "0:00";
     setBusy(false);
-    setMark("idle");
-    if (newRow) { newRow.remove(); newRow = null; }
-    el.count.textContent = "1";
-    el.top.textContent = "New chat";
+    setTitle("New chat");
   }
 
   /* The finished state: what the window rests on. */
   function settle() {
     show(el.empty, false);
-    el.stream.classList.remove("pre");
-    [el.turnUser, el.run, el.tl, el.answer, el.actions].forEach(function (n) { show(n, true); });
-    steps.forEach(function (s) {
-      show(s, true);
-      s.classList.remove("running");
-      $(".result", s).textContent = s.dataset.result;
-    });
-    el.tl.className = "timeline settled";
-    el.tlHead.setAttribute("aria-expanded", "false");
-    el.tlRows.style.display = "none";
-    el.tlTitle.textContent = "4 steps";
-    el.tlSum.textContent = SUMMARY;
+    show(el.tlLive, false);
+    [el.stream, el.turnUser, el.run, el.tlDone, el.answer, el.foot].forEach(function (n) { show(n, true); });
+    toggleTimeline(el.tlDone, doneRows, false);
     answerTexts.forEach(function (t) { t.node.nodeValue = t.full; });
     paragraphs.forEach(function (p) { p.style.display = ""; });
     el.answer.className = "run-text";
     show(el.thinking, false);
-    show(el.meter, false);
     setBusy(false);
-    setMark("idle");
-    addRailRow();
+    setTitle("Brandt invoice");
     show(el.toast, true);
   }
 
-  el.tlHead.addEventListener("click", function () {
-    var open = !el.tl.classList.contains("open");
-    el.tl.classList.toggle("open", open);
-    el.tlRows.style.display = open ? "" : "none";
-    el.tlHead.setAttribute("aria-expanded", String(open));
+  [[el.tlLive, liveRows], [el.tlDone, doneRows]].forEach(function (pair) {
+    $(".timeline-head", pair[0]).addEventListener("click", function () {
+      toggleTimeline(pair[0], pair[1], !pair[0].classList.contains("open"));
+    });
   });
   el.toast.addEventListener("click", function (e) {
     if (e.target.closest("#undo")) show(el.toast, false);
@@ -145,7 +113,6 @@
   /* ---------- the scripted run ---------- */
   var token = 0;
   var CANCEL = {};
-  var runStart = 0;
   var tick = 0;
 
   function sleep(ms, mine) {
@@ -178,9 +145,14 @@
     return chain;
   }
 
-  function meterFor(step) {
-    var secs = Math.floor((Date.now() - runStart) / 1000);
-    el.meterText.textContent = step + " · " + clock(secs) + " · about 2k in context";
+  /** The words on the one live line, said in the timeline's head and under the chat in the sidebar. */
+  function doing(text) {
+    [el.liveDoing, el.rowDoing].forEach(function (n) {
+      n.textContent = text;
+    });
+    el.liveDoing.classList.remove("in");
+    void el.liveDoing.offsetWidth;
+    el.liveDoing.classList.add("in");
   }
 
   async function run() {
@@ -195,48 +167,49 @@
       // Send.
       el.input.value = "";
       setBusy(true);
-      setMark("active");
+      doing("Thinking");
+      setTitle("Brandt invoice");
       show(el.empty, false);
-      el.stream.classList.remove("pre");
+      show(el.stream, true);
       show(el.turnUser, true);
       await sleep(500, mine);
       show(el.run, true);
       show(el.thinking, true);
-      runStart = Date.now();
+      var started = Date.now();
       await sleep(900, mine);
 
-      // Steps.
+      // Steps: one live line, which opens into its rows if you click it.
       show(el.thinking, false);
-      show(el.tl, true);
-      show(el.meter, true);
-      tick = setInterval(function () { if (mine === token) meterFor(el.meterText.dataset.step || "waiting for the model"); }, 1000);
+      show(el.tlLive, true);
+      tick = setInterval(function () {
+        if (mine === token) el.liveClock.textContent = clock(Math.floor((Date.now() - started) / 1000));
+      }, 500);
       for (var i = 0; i < steps.length; i++) {
         var s = steps[i];
+        var r = readings[i];
         show(s, true);
-        s.classList.add("running");
-        el.tlSum.textContent = i + 1 + (i === 0 ? " step" : " steps");
-        el.meterText.dataset.step = s.dataset.verb + " " + s.dataset.target;
-        meterFor(el.meterText.dataset.step);
-        window.PoiesisOrbs.set(el.meterOrb, s.dataset.orb);
-        if (i === 2) addRailRow();
+        s.className = "step running";
+        $(".step-meta", s).innerHTML = "";
+        doing(r.verb + " " + r.target);
+        window.PoiesisOrbs.set(el.liveOrb, ORBS[i % ORBS.length]);
         await sleep(1150, mine);
-        s.classList.remove("running");
-        $(".result", s).textContent = s.dataset.result;
+        s.className = "step done";
+        $(".step-meta", s).innerHTML = r.meta;
         await sleep(160, mine);
       }
 
       // The answer, as it arrives.
-      el.meterText.dataset.step = "waiting for the model";
-      meterFor("waiting for the model");
-      window.PoiesisOrbs.set(el.meterOrb, "composing");
+      doing("Writing the answer");
+      window.PoiesisOrbs.set(el.liveOrb, "composing");
       await sleep(600, mine);
       answerTexts.forEach(function (t) { t.node.nodeValue = ""; });
       show(el.answer, true);
       await streamAnswer(15, mine);
       await sleep(350, mine);
 
-      // Done: the steps fold to one line, the toast says what it kept.
+      // Done: the line becomes a count, the toast says what it kept.
       clearInterval(tick);
+      el.tlDone.classList.add("arrived");
       settle();
       el.toast.classList.add("arrive");
     } catch (e) {
@@ -256,8 +229,12 @@
     if (!d || typeof d !== "object") return;
     if (d.type === "mode") setMode(d.mode);
     else if (d.type === "play" || d.type === "replay") play();
+    else if (d.type === "settle") { token += 1; clearInterval(tick); reset(); settle(); }
   });
   if (window.matchMedia("(prefers-color-scheme: dark)").matches) setMode("dark");
+
+  // Rows start closed, as in the app.
+  toggleTimeline(el.tlDone, doneRows, false);
 
   // Opened on its own, it plays itself; inside the site, the page says when.
   if (window.parent === window) play();

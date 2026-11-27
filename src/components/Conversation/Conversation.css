@@ -13,7 +13,7 @@
 /* ---- user turn ----
    A white panel with the hairline outline and radius every other panel in
    the app uses, the question set a little heavier than the answer, its time
-   at the end of the line in the Rail's mono stamp.
+   and actions in a quiet row right under it.
 
    It also stays pinned to the top of the scroll area for as long as you're
    reading the answer underneath it: `.turn-group` (Chat.tsx) wraps a user
@@ -32,9 +32,7 @@
      question instead of being covered by it. */
   z-index: 2;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 18px;
-  align-items: baseline;
+  grid-template-columns: minmax(0, 1fr);
   margin-bottom: 20px;
   padding: 12px 16px;
   background: var(--paper);
@@ -43,8 +41,9 @@
   /* The second shadow is a frame of canvas around the card. Pinned, the answer
      scrolls past beneath it and showed through the rounded corners and the
      gap below; the frame covers those. Listed last so it paints under the
-     soft shadow. */
-  box-shadow: var(--shadow-xs), 0 0 0 8px var(--canvas);
+     soft shadow. Raised so it ends 2px below the card: the line of actions
+     right under the card must not be painted over. */
+  box-shadow: var(--shadow-xs), 0 -6px 0 8px var(--canvas);
   animation: rise-in var(--dur-slow) var(--ease-out);
 }
 /* While pinned, the stream's top padding is a gap above the card that the
@@ -109,9 +108,97 @@
   font-size: var(--fs-caption);
   color: var(--ink-faint);
 }
+/* Your message's actions and time: a line right after the card, on the right,
+   as an answer's line sits under the answer, and like it shown only on hover.
+   The card's canvas frame ends 2px below it, so the line starts there. */
+.turn-user-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: -17px 0 8px;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease-out);
+}
+.turn-user-foot .turn-actions {
+  min-height: 22px;
+  opacity: 1;
+}
+.turn-user-foot .turn-btn {
+  width: 22px;
+  height: 22px;
+}
+.turn-user:hover + .turn-user-foot,
+.turn-user-foot:hover,
+.turn-user-foot:focus-within {
+  opacity: 1;
+}
+.turn-user-foot .turn-stamp {
+  white-space: nowrap;
+}
+/* Your message, open for changes. The card is the field: it takes a field's
+   focus (border and halo, outside the canvas frame) and the words keep their
+   type. They take the card's whole width, as the actions are gone. */
+.turn-user.editing {
+  border-color: var(--paper-edge-2);
+}
+.turn-user.editing:focus-within {
+  border-color: var(--ink-faint);
+  box-shadow: var(--ring), var(--shadow-xs), 0 -6px 0 8px var(--canvas);
+}
+.turn-user > .turn-edit {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.turn-edit textarea {
+  display: block;
+  width: 100%;
+  max-width: var(--measure);
+  max-height: 40vh;
+  margin: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  resize: none;
+  font-family: var(--font-message);
+  font-size: var(--fs-ui-lg);
+  font-weight: 500;
+  line-height: 1.55;
+  letter-spacing: -0.005em;
+  color: var(--ink);
+}
+.turn-edit .command-chip-name {
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+.turn-edit-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+/* Small controls inside the card: one step down, as its radius is. */
+.turn-edit-foot .btn-primary,
+.turn-edit-foot .btn-secondary {
+  min-height: var(--control-sm);
+  padding: 0 12px;
+  font-size: var(--fs-footnote);
+}
+.turn-edit-note {
+  margin-right: auto;
+  font-family: var(--font-sans);
+  font-size: var(--fs-caption);
+  color: var(--ink-muted);
+}
 .turn-stamp {
-  grid-column: 2;
-  grid-row: 1;
   font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
   font-size: var(--fs-caption);
@@ -251,8 +338,15 @@
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 10px;
+}
+.chat-media-words {
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
 }
 .chat-media-orb ~ .chat-media-waiting {
   justify-content: flex-end;
@@ -397,8 +491,19 @@
   margin: 2px 0 4px;
 }
 .run-meter-row .run-meter {
+  display: flex;
+  align-items: center;
   margin: 0;
   min-width: 0;
+}
+/* The words change in place and clip; the clock beside them stays whole. */
+.run-meter-words {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.run-meter-rest {
+  flex: none;
+  white-space: pre;
 }
 .run-meter-orb {
   flex: none;
@@ -407,18 +512,14 @@
 }
 /* The model's thinking, while it is thinking. Deliberately quieter than the
    meter above it: this is evidence the run is alive, not something to read.
-   It hangs in the meter's text column (the orb's 20px slot + the row's 8px gap)
-   so the two lines read as one block, and it opens like the timeline does —
-   a turned chevron and the same hover fill as every other quiet control. */
+   It starts at the column's edge, under the meter as under a timeline, and it
+   opens like the timeline does — a turned chevron and the same hover fill as
+   every other quiet control. */
 .run-thinking {
-  margin: 0 0 8px 28px;
+  margin: 0 0 8px;
   font-family: var(--font-sans);
   font-size: var(--fs-timeline);
   color: var(--ink-faint);
-}
-/* Under a timeline there is no meter line to hang from, so it starts at the column's edge. */
-.run-thinking.solo {
-  margin-left: 0;
 }
 .run-thinking > summary {
   display: inline-flex;
@@ -451,6 +552,8 @@
   transform: rotate(90deg);
 }
 .run-thinking-count {
+  display: inline-flex;
+  align-items: center;
   font-size: var(--fs-footnote);
   font-variant-numeric: tabular-nums;
   color: var(--ink-faint);
@@ -1003,6 +1106,11 @@
   font-size: var(--fs-footnote);
   color: var(--ink-faint);
 }
+/* A run that just ended: how many steps and how long flap in, once (`Ticker.css`). */
+.timeline.arrived .timeline-title,
+.timeline.arrived .timeline-summary {
+  animation: flap-in var(--dur-slow) var(--ease-out);
+}
 .timeline-failed {
   flex: none;
   margin-left: auto;
@@ -1126,21 +1234,12 @@
   color: var(--ink-muted);
   white-space: nowrap;
 }
+/* The verb of a running step carries the moving light (`.live-words`). */
 .step.running .verb {
   color: var(--ink);
-  animation: step-running 1.2s ease-in-out infinite;
 }
 .step.error .verb {
   color: var(--danger);
-}
-@keyframes step-running {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.45;
-  }
 }
 .step .target {
   color: var(--ink);
@@ -1962,11 +2061,6 @@
   font-weight: 600;
   color: var(--ink-faint);
 }
-/* Every dot in a live band pulses together: the whole band is the unit. */
-.step-band.running .step.running .verb {
-  animation: step-running 1.2s ease-in-out infinite;
-}
-
 /* ---- `HRN-UI-4`: a result kept on disk ---- */
 .kept-disclosure {
   flex-basis: 100%;
@@ -2066,12 +2160,65 @@
   color: var(--ink-faint);
   white-space: nowrap;
 }
-/* The rarer actions behind a `⋯`, opening upward: the last answer sits right
+/* The tooltips of a message's line: soon, floating like a menu, above the
+   line (the last answer sits over the composer; your own message turns them
+   downwards) and drawn leftwards, so they stay inside the column. They arrive
+   after a short wait and leave at once. */
+.turn-actions [data-tip],
+.turn-user-foot [data-tip] {
+  position: relative;
+}
+.turn-actions [data-tip]::after,
+.turn-user-foot [data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 6;
+  width: max-content;
+  max-width: 280px;
+  padding: 4px 8px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-float);
+  font-family: var(--font-sans);
+  font-size: var(--fs-caption);
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--ink);
+  text-align: left;
+  white-space: pre-line;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+.turn-actions [data-tip]:hover::after,
+.turn-actions [data-tip]:focus-visible::after,
+.turn-user-foot [data-tip]:hover::after,
+.turn-user-foot [data-tip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity var(--dur-fast) var(--ease-out) 300ms, visibility 0s 300ms;
+}
+.turn-actions [aria-expanded="true"]::after {
+  display: none;
+}
+/* Downwards under your message: upwards they would slide under the card, which
+   sits above its line. After the rule above and more specific than it, so
+   `bottom` is not set back as well. */
+.turn-user-foot.turn-user-foot [data-tip]::after {
+  top: calc(100% + 6px);
+  bottom: auto;
+}
+
+/* The rare action behind a `⋯`, opening upward: the last answer sits right
    above the composer, and a menu that dropped down would open under it. */
 .turn-more {
   position: relative;
   display: inline-flex;
 }
+.turn-btn,
 .turn-more-btn {
   display: inline-flex;
   align-items: center;
@@ -2081,14 +2228,23 @@
   padding: 0;
   background: none;
   border: none;
-  border-radius: var(--radius);
-  color: var(--ink-faint);
+  border-radius: var(--radius-sm);
+  color: var(--ink-muted);
   cursor: pointer;
 }
+.turn-btn:hover:not(:disabled),
 .turn-more-btn:hover,
 .turn-more-btn[aria-expanded="true"] {
   background: var(--fill-hover);
   color: var(--ink);
+}
+.turn-btn:active:not(:disabled),
+.turn-more-btn:active {
+  background: var(--fill-press);
+}
+.turn-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 .turn-more .row-menu {
   top: auto;

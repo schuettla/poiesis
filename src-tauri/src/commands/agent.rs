@@ -5,7 +5,7 @@ use tauri::State;
 
 use crate::agent::artifacts::ConsoleEntry;
 use crate::agent::browser::BrowserPool;
-use crate::agent::fleet::{Fleet, RunLimits, RunOutcome, Steer};
+use crate::agent::fleet::{on_this_pc, Fleet, RunLimits, RunOutcome, Steer};
 use crate::agent::tier::{self, ModelTier};
 use crate::commands::files::DialogGrants;
 use crate::agent::run::{run_agent, AgentEventSink, RunContext, RunOptions};
@@ -15,6 +15,7 @@ use crate::cloud::{self, endpoints, ChatEndpoint, Provider};
 use crate::db::Db;
 use crate::memory::MemoryStore;
 use crate::permissions::{Decision, PermissionManager};
+use crate::runtime::proxy::CancelFlag;
 use crate::runtime::{EmbedManager, RerankManager, RuntimeManager};
 use crate::PoiesisError;
 
@@ -200,20 +201,34 @@ pub(crate) async fn execute_turn(
     // restricted. Settled here, once, so a stray chip can never loop approval.
     let remote = options.remote;
     let (plan, options) = options.settle_approval(plan);
-    let cancel = env.mgr.new_cancel();
-    let run = env.fleet.open(conversation_id, cancel, None, 0);
+    let provenance = target.provenance.as_deref().unwrap_or("local");
+    // `PAR-2`: a flag of its own, since another chat's turn may be running beside this one.
+    let run = env.fleet.open(conversation_id, CancelFlag::new(), None, 0, on_this_pc(provenance));
     let mut limits = RunLimits::top(env.db).with_max_steps(options.max_steps);
     // `TEAM-12`: a team's coordinator runs under the allowance of its task.
     limits.allowance = crate::agent::team::start_task(env.db, env.memory, conversation_id, assistant_message_id);
     // `TEAM-13`: the task before this one is over: its done work is brought in and its copies go.
-    crate::agent::team_folder::sweep(env.db, env.memory, &env.mgr.generated_media_dir(), conversation_id, assistant_message_id);
-    let provenance = target.provenance.as_deref().unwrap_or("local");
+    // `PAR-5`: not while another chat is changing the folder.
+    let images_dir = env.mgr.generated_media_dir();
+    let due = crate::agent::team::of_session(env.db, env.memory, conversation_id)
+        .and_then(|t| crate::agent::team_folder::to_merge(env.db, &images_dir, conversation_id, &t));
+    let free = match due {
+        Some(folder) => {
+            Box::pin(crate::agent::subagents::hold_folder(env.db, Some(env.fleet), &run, &folder, &run.cancel, sink, "sweep"))
+                .await
+        }
+        None => true,
+    };
+    if free {
+        crate::agent::team_folder::sweep(env.db, env.memory, &images_dir, conversation_id, assistant_message_id);
+    }
+    // That was the last task's work. This one holds the folder from its own first change.
+    run.release_folder();
     let rc = RunContext::top(&run, &limits, Some(env.fleet), provenance, setup.context_window)
         .resuming(plan)
         .with_options(options)
         .with_tier(setup.tier)
         .with_remote(remote);
-    let images_dir = env.mgr.generated_media_dir();
     let outcome = run_agent(
         &env.mgr.client,
         &setup.endpoint,
@@ -336,21 +351,15 @@ pub fn save_turn_cmd(
     crate::agent::turn::save_turn(&db, &input).map_err(|e| PoiesisError::Message(e.to_string()))
 }
 
-/// `HRN-UI-5`: "Try again from here". Branches the conversation just before one
-/// assistant turn and hands back the user turn that prompted it, for the caller
-/// to send into the fork.
+/// `UCM-2`: `/fork`. A new conversation holding this one up to `message_id`.
 #[tauri::command]
 pub fn fork_conversation_cmd(
     db: State<'_, Db>,
     conversation_id: String,
     message_id: String,
-    // `UCM-2`: `/fork` keeps the boundary message; "Try again" does not.
-    inclusive: Option<bool>,
-) -> Result<ForkedConversation, PoiesisError> {
-    let (conversation, resend) = db
-        .fork_conversation_at(&conversation_id, &message_id, inclusive.unwrap_or(false))
-        .map_err(|e| PoiesisError::Message(e.to_string()))?;
-    Ok(ForkedConversation { conversation, resend })
+) -> Result<crate::db::Conversation, PoiesisError> {
+    db.fork_conversation(&conversation_id, &message_id)
+        .map_err(|e| PoiesisError::Message(e.to_string()))
 }
 
 /// `BTW-1`: the one side question that may be in flight. A new one cancels the
@@ -486,16 +495,28 @@ pub fn cancel_side_question_cmd(side: State<'_, SideQuestion>) {
     }
 }
 
-/// `RWD-1`: go back to before one of the user's turns. A branch plus, when
-/// asked, a file undo; the original conversation is never edited.
+/// `RWD-1`: go back to before one of the user's turns, in the same chat: the
+/// turn and what followed are removed, after a file undo when asked. `retry`
+/// says the same message is about to be sent again ("Try again").
 #[tauri::command]
 pub fn rewind_cmd(
     db: State<'_, Db>,
+    memory: State<'_, MemoryStore>,
+    fleet: State<'_, Fleet>,
     conversation_id: String,
     message_id: String,
     undo_files: bool,
+    retry: bool,
 ) -> Result<crate::agent::rewind::Rewound, PoiesisError> {
-    crate::agent::rewind::rewind(&db, &conversation_id, &message_id, undo_files)
+    // Held until the cut is done, so no turn starts into a chat being cut.
+    let _chat = fleet
+        .enter_chat(&conversation_id, false)
+        .filter(|_| fleet.roots_of(&conversation_id).is_empty())
+        .ok_or_else(|| PoiesisError::Message("I'm still working in this chat. Stop me first.".into()))?;
+    if undo_files {
+        crate::agent::subagents::may_undo(&db, &conversation_id).map_err(PoiesisError::Message)?;
+    }
+    crate::agent::rewind::rewind(&db, &memory, &conversation_id, &message_id, undo_files, retry)
         .map_err(PoiesisError::Message)
 }
 
@@ -508,15 +529,6 @@ pub fn changes_since_cmd(
 ) -> Result<usize, PoiesisError> {
     crate::agent::rewind::files_since(&db, &conversation_id, &message_id)
         .map_err(PoiesisError::Message)
-}
-
-/// The new branch, and the question to ask it again.
-#[derive(serde::Serialize)]
-pub struct ForkedConversation {
-    pub conversation: crate::db::Conversation,
-    /// `None` when the fork point had no user turn before it — an empty branch
-    /// rather than a rerun of nothing.
-    pub resend: Option<String>,
 }
 
 /// What became of a message sent to a running agent (`HRN-2`, `USE-5`).

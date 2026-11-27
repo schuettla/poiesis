@@ -72,16 +72,16 @@ describe("the cost card (TEAM-12)", () => {
   it("starts with Start, or says Not now, at one click", () => {
     render(<QuestionCard q={card()} />);
     click(button("Start"));
-    expect(answer).toHaveBeenLastCalledWith({ choices: ["Start"] });
+    expect(answer).toHaveBeenLastCalledWith({ choices: ["Start"] }, expect.any(String));
     click(button("Not now"));
-    expect(answer).toHaveBeenLastCalledWith({ choices: ["Not now"] });
+    expect(answer).toHaveBeenLastCalledWith({ choices: ["Not now"] }, expect.any(String));
   });
 
   it("sends the box with Start when it is ticked", () => {
     render(<QuestionCard q={card()} />);
     click(container.querySelector<HTMLInputElement>(".question-card-check input"));
     click(button("Start"));
-    expect(answer).toHaveBeenCalledWith({ choices: ["Start", "Don't ask for this team"] });
+    expect(answer).toHaveBeenCalledWith({ choices: ["Start", "Don't ask for this team"] }, expect.any(String));
   });
 
   it("is still the plain card when it has no heading or box", () => {

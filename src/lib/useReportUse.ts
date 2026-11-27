@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { inTauri, noteUserInput } from "./api";
 import { useAppStore } from "./store";
+import { anyBusy } from "./runs";
 
 /** A key or a click is reported at most this often. The backend only needs to know
  * the app is in use, and to end a daily pass that began on its own. */
@@ -14,7 +15,7 @@ export const BUSY_BEAT_MS = 30000;
  * both hang on this; the backend has no other way to see a key press.
  */
 export function useReportUse() {
-  const busy = useAppStore((s) => s.busy);
+  const busy = useAppStore(anyBusy);
 
   useEffect(() => {
     if (!inTauri()) return;

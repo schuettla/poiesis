@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { stillWorking } from "../../lib/api";
-import { useAppStore } from "../../lib/store";
+import { sayRefused, useAppStore } from "../../lib/store";
 import type { SubRun } from "../../lib/types";
 import ConfirmDialog from "../Confirm/ConfirmDialog";
 import { CloseIcon } from "../Icons/Icons";
+import { RollingText } from "../Ticker/RollingNumber";
+import { useThrottled } from "../../lib/useThrottled";
+import { questionOf } from "../../lib/runs";
 import "./RunBar.css";
 
 /**
@@ -24,8 +27,9 @@ import "./RunBar.css";
 /** Said to a screen reader no more often than this, so a busy run does not
  * read itself out loud every time a number moves. */
 const ANNOUNCE_MS = 2000;
-/** Below this width, segments past the second fold into `+N`. */
-const NARROW_PX = 520;
+/** Below this width, segments past the second fold into `+N`. It is the width
+ * inside the tray, 34px less than the composer column (`RunBar.css`). */
+const NARROW_PX = 486;
 
 function money(usd: number): string {
   return usd < 0.01 ? "under $0.01" : `$${usd.toFixed(2)}`;
@@ -40,26 +44,8 @@ interface Segment {
   onClick?: () => void;
   /** Undo and Keep, for the files segment once the run is over. */
   extra?: { label: string; onClick: () => void }[];
-}
-
-/** Hold a value back so it changes at most once per `ms`. */
-function useThrottled<T>(value: T, ms: number): T {
-  const [held, setHeld] = useState(value);
-  const last = useRef(0);
-  useEffect(() => {
-    const wait = last.current + ms - Date.now();
-    if (wait <= 0) {
-      last.current = Date.now();
-      setHeld(value);
-      return;
-    }
-    const t = setTimeout(() => {
-      last.current = Date.now();
-      setHeld(value);
-    }, wait);
-    return () => clearTimeout(t);
-  }, [value, ms]);
-  return held;
+  /** Its numbers rise while a run works (plan, cost): their digits flap over. */
+  rolls?: boolean;
 }
 
 /** The cost segment's text, or `null` when there is nothing true to say.
@@ -103,7 +89,7 @@ export default function RunBar() {
   const undoChanges = useAppStore((s) => s.undoChanges);
   const requestComposer = useAppStore((s) => s.requestComposer);
   // `AGC-3`: the run is paused on a question for this chat.
-  const asking = useAppStore((s) => !!s.pendingQuestion && s.pendingQuestion.convId === s.activeConversationId);
+  const asking = useAppStore((s) => !!questionOf(s, s.activeConversationId));
 
   const [confirmUndo, setConfirmUndo] = useState(false);
   const [narrow, setNarrow] = useState(false);
@@ -218,6 +204,7 @@ export default function RunBar() {
       out.push({
         key: "plan",
         text,
+        rolls: true,
         title: "Show the plan",
         onClick: () => {
           const cards = document.querySelectorAll(".plan-card");
@@ -280,6 +267,7 @@ export default function RunBar() {
       out.push({
         key: "cost",
         text: cost.text,
+        rolls: true,
         title: cost.title ?? "What this chat has cost",
         onClick: () => openUsage(convId),
       });
@@ -310,7 +298,7 @@ export default function RunBar() {
   const render = (seg: Segment) => (
     <span className="run-bar-segment" key={seg.key}>
       <button className="run-bar-link" title={seg.title} onClick={seg.onClick}>
-        {seg.text}
+        {seg.rolls ? <RollingText text={seg.text} /> : seg.text}
       </button>
       {seg.extra?.map((x) => (
         <span key={x.label}>
@@ -366,7 +354,7 @@ export default function RunBar() {
           onCancel={() => setConfirmUndo(false)}
           onConfirm={() => {
             setConfirmUndo(false);
-            void undoChanges(convId);
+            void undoChanges(convId).catch(sayRefused);
           }}
         />
       )}

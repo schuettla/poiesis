@@ -31,7 +31,7 @@ beforeEach(() => {
   useAppStore.setState({
     conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [] }],
     activeConversationId: "c1",
-    busy: false,
+    busyChats: {},
   });
 });
 
@@ -72,7 +72,7 @@ describe("a question (AGC-3)", () => {
   it("answers with the option you click, at once", () => {
     render(<QuestionCard q={question()} />);
     click(container.querySelectorAll(".question-card-option")[1]);
-    expect(answer).toHaveBeenCalledWith({ choices: ["Postgres"] });
+    expect(answer).toHaveBeenCalledWith({ choices: ["Postgres"] }, expect.any(String));
   });
 
   it("answers with the number key when nothing editable has focus", () => {
@@ -80,7 +80,7 @@ describe("a question (AGC-3)", () => {
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
     });
-    expect(answer).toHaveBeenCalledWith({ choices: ["SQLite"] });
+    expect(answer).toHaveBeenCalledWith({ choices: ["SQLite"] }, expect.any(String));
   });
 
   it("leaves the digits to the composer while you are typing in it", () => {
@@ -102,7 +102,7 @@ describe("a question (AGC-3)", () => {
     expect(answer).not.toHaveBeenCalled();
     const send = Array.from(container.querySelectorAll("button")).find((x) => x.textContent === "Send");
     click(send);
-    expect(answer).toHaveBeenCalledWith({ choices: ["SQLite", "Postgres"], text: undefined });
+    expect(answer).toHaveBeenCalledWith({ choices: ["SQLite", "Postgres"], text: undefined }, expect.any(String));
   });
 
   it("always has a way to say it in your own words", () => {
@@ -115,7 +115,7 @@ describe("a question (AGC-3)", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     click(Array.from(container.querySelectorAll("button")).find((x) => x.textContent === "Send"));
-    expect(answer).toHaveBeenCalledWith({ choices: [], text: "whichever is faster" });
+    expect(answer).toHaveBeenCalledWith({ choices: [], text: "whichever is faster" }, expect.any(String));
   });
 });
 
@@ -281,6 +281,7 @@ describe("going back (RWD-UI-1)", () => {
     useAppStore.setState({
       rewindTo,
       rewindRequest: "m1",
+      rewindRetry: false,
       conversations: [
         {
           id: "c1",
@@ -305,6 +306,15 @@ describe("going back (RWD-UI-1)", () => {
     click(Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "Rewind"));
     expect(rewindTo).toHaveBeenCalledWith("m1", { undoFiles: false, putBack: true });
     expect(useAppStore.getState().rewindRequest).toBeNull();
+  });
+
+  it("asks for Try again in its own words, without the box question", () => {
+    useAppStore.setState({ rewindRetry: true });
+    render(<RewindDialog />);
+    expect(document.body.textContent).toContain("Try “refactor the parser” again?");
+    expect(document.body.textContent).not.toContain("back in the box");
+    click(Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "Try again"));
+    expect(rewindTo).toHaveBeenCalledWith("m1", { undoFiles: false, putBack: false, retry: true });
   });
 
   it("goes away without doing anything on Cancel", () => {

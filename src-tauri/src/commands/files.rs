@@ -749,6 +749,7 @@ pub fn undo_file_op_cmd(db: State<'_, Db>, id: String) -> Cmd<()> {
         .get_trash_entry(&id)
         .map_err(err)?
         .ok_or_else(|| PoiesisError::Message("that change is no longer undoable".into()))?;
+    crate::agent::subagents::may_undo(&db, &entry.conversation_id).map_err(PoiesisError::Message)?;
     trash::undo(&db, &entry).map_err(PoiesisError::Message)?;
     let _ = db.log_activity(
         Some(&entry.conversation_id),

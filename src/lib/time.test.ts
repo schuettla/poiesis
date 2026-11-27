@@ -1,9 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { bucketFor, groupByBucket, shortTime } from "./time";
+import { bucketFor, clockTime, fullTime, groupByBucket, shortTime, turnTime } from "./time";
 
 // Local wall-clock times, so the calendar boundaries are the machine's own.
 const at = (y: number, mo: number, d: number, h = 12, mi = 0) =>
   new Date(y, mo - 1, d, h, mi).getTime();
+
+describe("a message's stamp", () => {
+  const now = at(2026, 11, 27, 15, 44);
+
+  it("is the time today and the day before that", () => {
+    expect(turnTime(at(2026, 11, 27, 0, 5), now)).toBe(clockTime(at(2026, 11, 27, 0, 5)));
+    expect(turnTime(at(2026, 11, 26, 23, 59), now)).toBe("Nov 26");
+    expect(turnTime(at(2025, 11, 20), now)).toBe("Nov 20, 25");
+  });
+
+  it("names the whole date in its tooltip", () => {
+    expect(fullTime(at(2020, 11, 27, 11, 59))).toBe(`Friday, November 27, 2020, ${clockTime(at(2020, 11, 27, 11, 59))}`);
+  });
+});
 
 describe("shortTime", () => {
   const now = at(2026, 9, 18, 14, 30);

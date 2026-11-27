@@ -72,7 +72,7 @@ let root: Root;
 beforeEach(() => {
   for (const f of [restoreHeldTools, markReceiptWrong, reopenPlanItem, decideStart]) f.mockReset();
   decideStart.mockResolvedValue();
-  useAppStore.setState({ activeConversationId: "c1", restoreHeldTools, markReceiptWrong, reopenPlanItem, busy: false });
+  useAppStore.setState({ activeConversationId: "c1", restoreHeldTools, markReceiptWrong, reopenPlanItem, busyChats: {} });
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);

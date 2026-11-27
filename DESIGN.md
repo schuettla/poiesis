@@ -217,6 +217,7 @@ Radii are restrained and nested, macOS proportions: `--radius-xs` (3px) code spa
 - **Curves:** `--ease-out` for anything arriving or answering the pointer; `--ease-in-out` for layout that moves both ways (rail, dock); `--ease-pop` (expo out, no overshoot) for small things that pop (checkmarks, the composer buttons). No bounce or elastic curves.
 - **Durations:** `--dur-fast` (140ms) hover and colour; `--dur` (220ms) menus, popovers, disclosures; `--dur-slow` (360ms) dialogs, panels, layout.
 - **Every interactive surface transitions.** `global.css` gives buttons, links, fields and ARIA widgets one transition on background, border, colour, shadow, opacity and transform; nothing snaps.
+- **Live words.** The words that say what is happening now carry a light passing back and forth through them (`.live-words`: from ink at 36% to full `--ink`, 1.2s each way, `--ease-in-out`; it has to be seen at a glance, so the range is wide). One per turn, beside the orb, on the first of these that applies: "Thinking" while a thought is arriving; the words under a picture or clip being made; the running step's verb while the timeline is open; otherwise the working line. A working chat's line in the rail and the voice view's thinking line are surfaces of their own and carry it too. It stops while the run waits for you. Words that change in place slide (`Ticker`); numbers that rise while you watch flap digit by digit (`RollingNumber`, `RollingText`: the thinking tokens, plan progress, cost). A run that ends in front of you flaps its step count and time in once. Text you read never moves.
 - **Arrivals, not exits.** `pop-in` / `pop-up` (menus, grown from their trigger), `dialog-in`, `rise-in` (cards, new turns, settings sections), `fade-in`. Leaving is instant.
 - **Press:** primary/secondary buttons settle to `scale(0.97)`; cards to `scale(0.99)`; round buttons to `0.92`. Hover lifts cards 1–2px with a deeper shadow.
 - `prefers-reduced-motion` zeroes every duration token and every animation.
@@ -233,6 +234,12 @@ Controls are restrained: nothing colored at rest, an ink-derived fill under the 
 - **Text** (`.btn-text`): colour-only feedback, flush with the text column.
 - **Send** (`.composer .send`): a 32px ink circle; grows 4% on hover, settles on press. The composer's `+` is the same circle without fill and turns into a × while its menu is open.
 - **Danger** (`.confirm-go`): filled `--danger` background, `--paper` text; hover brightens via `filter: brightness(1.06)`, never a color swap.
+
+### Run tray (`.run-bar`)
+What a run is doing and did, in one line attached to the composer.
+- **Shape:** a tray tucked behind the box: inset 8px from its sides, 30px, `--radius-lg` on the top corners only, 1px `--hairline` with no bottom edge, a ground halfway between `--paper` and `--canvas`, no shadow. It sits directly on the composer; no other row goes between them.
+- **Alignment:** its text starts where the typed text starts; its close button sits over the middle of Send.
+- **Content:** `--fs-timeline`, `--ink-muted` text buttons separated by `·`; **Undo** and **Keep** in `--ink`, weight 500.
 
 ### Segmented control
 The one way to pick one of a few (`.segmented`, and the legacy names `.model-tabs`, `.filter-chip`, `.usage-range`, `.self-segment`, `.wb-segment`, `.memory-scope-segment`, `.setting-actions[role=group]`, all drawn in `global.css`): a `--fill-press` track with the chosen segment lifted out as a small paper tile with `--shadow-xs`. Never an inverted ink block.

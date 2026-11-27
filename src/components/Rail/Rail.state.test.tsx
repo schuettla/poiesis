@@ -9,6 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import Rail from "./Rail";
 import { useAppStore } from "../../lib/store";
+import { NO_RAIL_FILTERS } from "../../lib/railView";
 import type { ChangeProposal } from "../../lib/api";
 import type { Conversation, RunSummary } from "../../lib/types";
 
@@ -49,7 +50,13 @@ function setup(over: Record<string, unknown> = {}) {
     runSummaries: {},
     subRuns: {},
     unreadIds: [],
-    activeRun: null,
+    liveRuns: {},
+    pendingPermissions: [],
+    permissionChats: {},
+    permissionAgents: {},
+    outcomes: {},
+    railFilters: NO_RAIL_FILTERS,
+    railGroup: "date",
     ...over,
   } as never);
 }
@@ -152,5 +159,115 @@ describe("the second line (UI-2)", () => {
     expect(text.endsWith("…")).toBe(true);
     expect(text.length).toBeLessThanOrEqual(61);
     expect(long.startsWith(text.slice(0, -1))).toBe(true);
+  });
+});
+
+const going = (convId: string, ago: number) => ({ runId: `r-${convId}`, convId, startedAt: Date.now() - ago, thinking: "" });
+const answering = (id: string, verb: string, target: string) =>
+  conv(id, {
+    messages: [
+      { id: "m", role: "assistant", text: "", streaming: true, steps: [{ id: "s", verb, target, status: "running" }] } as never,
+    ],
+  });
+
+describe("two chats working at once (PAR-9)", () => {
+  const both = (over: Record<string, unknown> = {}) =>
+    setup({
+      conversations: [answering("trip", "Reading", "itinerary.md"), answering("login", "Running", "npm test"), conv("idle")],
+      runSummaries: { trip: live, login: live },
+      liveRuns: { trip: going("trip", 72_000), login: going("login", 7_000) },
+      ...over,
+    });
+  const line = (title: string) => row(title).querySelector(".tick-text.in")?.textContent;
+  const time = (title: string) => row(title).querySelector(".chat-now-time")?.textContent;
+
+  it("shows each row its own second line and time", () => {
+    both();
+    render();
+    expect([line("trip"), time("trip")]).toEqual(["Reading itinerary.md", "1:12"]);
+    expect([line("login"), time("login")]).toEqual(["Running npm test", "0:07"]);
+    expect(row("idle").querySelector(".chat-now")).toBeNull();
+  });
+
+  it("marks only the chat that asks, which then has no clock", () => {
+    both({ pendingPermissions: [{ id: "p", summary: "Delete build/?" }], permissionChats: { p: "login" } });
+    render();
+    expect(label("login")).toBe("Waiting for you");
+    expect(line("login")).toBe("Delete build/?");
+    expect(time("login")).toBeUndefined();
+    expect(label("trip")).toBe("Working");
+  });
+
+  it("gives a chat that waits for a folder its own mark and the reason, with no clock", () => {
+    both({ runSummaries: { trip: live, login: { ...live, waitingOn: "Waiting: trip is changing files." } } });
+    render();
+    expect(label("login")).toBe("Waiting on something else");
+    expect(line("login")).toBe("Waiting: trip is changing files.");
+    expect(time("login")).toBeUndefined();
+  });
+});
+
+describe("the Status filter (PAR-11)", () => {
+  const titles = () => Array.from(container.querySelectorAll(".chat-row .chat-title")).map((t) => t.textContent);
+  const click = (el: Element) => act(() => void el.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  const openStatus = () => {
+    click(container.querySelector(".rail-more")!);
+    const parent = Array.from(document.querySelectorAll(".row-menu-parent")).find((b) => b.textContent!.startsWith("Status\u2026"))!;
+    click(parent);
+  };
+  const option = (text: string) =>
+    Array.from(document.querySelectorAll<HTMLButtonElement>(".rail-flyout .rail-opt")).find(
+      (b) => b.querySelector(".row-menu-label")!.textContent === text
+    )!;
+  const chats = (over: Record<string, unknown> = {}) =>
+    setup({
+      conversations: [conv("runs"), conv("asks"), conv("stopped"), conv("rest")],
+      runSummaries: { runs: live },
+      waiting: [{ id: "w", target: "waiting-ask", session_id: "asks", rationale: "x" } as ChangeProposal],
+      outcomes: { stopped: "aborted" },
+      ...over,
+    });
+
+  it("keeps the flyout open while states are picked, and shows every picked kind", () => {
+    chats();
+    render();
+    openStatus();
+    click(option("Running"));
+    expect(titles()).toEqual(["runs"]);
+    expect(option("Waiting for you")).toBeDefined();
+    click(option("Waiting for you"));
+    expect(titles()).toEqual(["runs", "asks"]);
+    expect(option("Running").getAttribute("aria-checked")).toBe("true");
+    expect(container.querySelector(".rail-filter-chip")!.textContent).toContain("Running or Waiting for you");
+  });
+
+  it("picks the three live states with one click", () => {
+    chats();
+    render();
+    openStatus();
+    click(option("Working or waiting now"));
+    expect(useAppStore.getState().railFilters.status).toEqual(["running", "needs-you", "held"]);
+    expect(option("Working or waiting now").getAttribute("aria-checked")).toBe("true");
+    click(option("Working or waiting now"));
+    expect(useAppStore.getState().railFilters.status).toEqual([]);
+  });
+
+  it("keeps a read chat whose last answer was stopped under Stopped early", () => {
+    chats({ railFilters: { ...NO_RAIL_FILTERS, status: ["stopped"] } });
+    render();
+    expect(titles()).toEqual(["stopped"]);
+  });
+
+  it("keeps the chat on screen after its run ends, until another is opened", () => {
+    chats({ activeConversationId: "runs", railFilters: { ...NO_RAIL_FILTERS, status: ["running"] } });
+    render();
+    expect(titles()).toEqual(["runs"]);
+    act(() => useAppStore.setState({ runSummaries: { runs: { ...live, live: false } } } as never));
+    expect(titles()).toEqual(["runs"]);
+    act(() => useAppStore.setState({ activeConversationId: "rest" } as never));
+    expect(titles()).toEqual([]);
+    expect(container.querySelector(".rail-filter-empty")!.textContent).toBe("No chats are running.");
+    click(container.querySelector(".rail-filter-all")!);
+    expect(titles()).toEqual(["runs", "asks", "stopped", "rest"]);
   });
 });

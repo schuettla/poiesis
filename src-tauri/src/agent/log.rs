@@ -98,6 +98,15 @@ pub fn last_plan(db: &Db, conversation_id: &str) -> Option<super::plan::Plan> {
         .and_then(|r| serde_json::from_str::<super::plan::Plan>(&r.payload_json).ok())
 }
 
+/// `DBG-1`: the log's name for how one run was set up: the model, what it was
+/// allowed and the tools it was offered. For the session report, never for the model.
+pub const SETUP_KIND: &str = "setup";
+
+/// Record a run's setup. Best effort, like every other write here.
+pub fn record_setup(db: &Db, conversation_id: &str, run_id: &str, setup: &serde_json::Value) {
+    let _ = db.append_session_event(conversation_id, Some(run_id), SETUP_KIND, setup);
+}
+
 /// `DEC-7`: the log's name for one decision.
 pub const DECISION_KIND: &str = "decision";
 
@@ -130,8 +139,8 @@ pub fn record_decision(db: &Db, conversation_id: &str, run_id: Option<&str>, rec
 /// `REG-4`: the log's name for a command that changed something.
 pub const COMMAND_KIND: &str = "command";
 
-/// `REG-4`: the log's name for a rewind, written in the *original* conversation
-/// so it can say that the user went back and abandoned what followed.
+/// `REG-4`: the log's name for a rewind. The one row that outlives the turns it
+/// removed, so it can say that the user went back and abandoned what followed.
 pub const REWOUND_KIND: &str = "rewound";
 
 /// One command that left a trace, as it goes into the log and comes back out.
@@ -238,6 +247,16 @@ pub fn was_rewound(db: &Db, conversation_id: &str) -> bool {
     db.session_events(conversation_id)
         .map(|rows| rows.iter().any(|r| r.kind == REWOUND_KIND))
         .unwrap_or(false)
+}
+
+/// Was this conversation left where a rewind put it, with nothing said since?
+/// A chat that went on after one was not abandoned.
+pub fn ends_on_rewind(db: &Db, conversation_id: &str) -> bool {
+    let Ok(rows) = db.session_events(conversation_id) else { return false };
+    let Some(at) = rows.iter().filter(|r| r.kind == REWOUND_KIND).map(|r| r.created_at).max() else {
+        return false;
+    };
+    !db.list_messages(conversation_id).unwrap_or_default().iter().any(|m| m.created_at > at)
 }
 
 /// `CPX-5`: how many times the user has said not now to suggesting this command,
@@ -353,10 +372,12 @@ pub fn replay(db: &Db, run_id: &str) -> Vec<serde_json::Value> {
         // `decision` is the same kind of record: the model is not shown the
         // questions the runtime asked on its behalf. A `way` is a signal about
         // how it worked, kept for what is learned from it, not for the model.
+        // A `setup` row says how the run was started, for the person.
         if matches!(
             row.kind.as_str(),
             "steer"
                 | "stop"
+                | SETUP_KIND
                 | COMPACTION_KIND
                 | PLAN_KIND
                 | COMMAND_KIND
@@ -765,7 +786,7 @@ mod tests {
         record_command(&db, &source, None, &trace("late", "user"));
         let _ = m1;
 
-        let (branch, _) = db.fork_conversation_at(&source, &a1.id, true).unwrap();
+        let branch = db.fork_conversation(&source, &a1.id).unwrap();
         let names: Vec<String> = commands(&db, &branch.id).into_iter().map(|r| r.trace.name).collect();
         assert_eq!(names, vec!["rename".to_string(), "fork".to_string()]);
     }

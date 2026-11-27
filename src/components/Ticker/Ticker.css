@@ -19,6 +19,36 @@
   inset: 0 0 auto 0;
   animation: tick-out var(--dur) var(--ease-out) forwards;
 }
+/* `RollingNumber`, `RollingText`: the same change in place, one digit to a cell, tipped on the way so it
+   reads as a flap turning over. */
+.roll {
+  display: inline-flex;
+  font-variant-numeric: tabular-nums;
+}
+.roll-cell .tick {
+  perspective: 4em;
+}
+.roll-cell .tick-text {
+  text-overflow: clip;
+}
+.roll-cell .tick-text.in {
+  animation-name: flap-in;
+}
+.roll-cell .tick-text.out {
+  animation-name: flap-out;
+}
+@keyframes flap-in {
+  from {
+    opacity: 0;
+    transform: translateY(70%) rotateX(-80deg);
+  }
+}
+@keyframes flap-out {
+  to {
+    opacity: 0;
+    transform: translateY(-70%) rotateX(80deg);
+  }
+}
 @keyframes tick-in {
   from {
     opacity: 0;

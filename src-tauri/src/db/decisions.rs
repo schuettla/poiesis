@@ -174,6 +174,18 @@ impl Db {
         Ok(rows)
     }
 
+    /// Every decision made in one conversation, oldest first, with its labels, answered
+    /// or not (`DBG-2`).
+    pub fn decisions_in(&self, conversation_id: &str) -> Result<Vec<DecisionRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {COLUMNS} FROM decisions WHERE conversation_id = ?1 ORDER BY at ASC, rowid ASC"
+        ))?;
+        let mut rows = stmt.query_map(params![conversation_id], decision_row)?.collect::<Result<Vec<_>, _>>()?;
+        attach_outcomes(&conn, &mut rows)?;
+        Ok(rows)
+    }
+
     /// Newest first, each with its outcome labels. `purpose` narrows it.
     pub fn decisions_recent(&self, limit: i64, purpose: Option<&str>) -> Result<Vec<DecisionRow>, DbError> {
         let conn = self.conn.lock().unwrap();

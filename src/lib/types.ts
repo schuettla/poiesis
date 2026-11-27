@@ -226,6 +226,8 @@ export interface RunSummary {
   freshAt?: number;
   /** When the run ended (epoch ms), for the mark's one slow breath. */
   endedAt?: number;
+  /** `PAR-5`: what the turn waits for, while another chat holds the folder it must change. */
+  waitingOn?: string;
 }
 
 /** The typed workspace-block kinds the renderer understands (Generative UI).
@@ -717,6 +719,8 @@ export interface ContextRef {
 
 /** What `sendMessage` accepts beyond the text. */
 export interface SendOptions {
+  /** `HRN-UI-5`: your message sent once more ("Try again"): the chat keeps its name. */
+  again?: boolean;
   /** `SKC-2`: the skill the user named with `/name`. */
   skill?: string;
   skillArgs?: string;

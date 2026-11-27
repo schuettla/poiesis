@@ -439,6 +439,9 @@ pre {
 .sig.danger {
   background: var(--danger);
 }
+.sig.idle {
+  border: 1px solid var(--ink-faint);
+}
 kbd {
   display: inline-block;
   padding: 1px 6px;
@@ -628,6 +631,55 @@ kbd {
 }
 .shot:not(.fit) {
   overflow-x: auto;
+}
+
+/* ---------- the real phone screens, as pictures ----------
+   app/phone.html at a phone's own size, scaled to the frame (script.js). The
+   frame is the one thing here rounder than the app: it is a device. */
+.phones {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 300px));
+  justify-content: space-between;
+  gap: 32px;
+  margin-top: 56px;
+}
+.phone {
+  margin: 0;
+}
+.phone-body {
+  padding: 8px;
+  background: var(--canvas);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: 40px;
+  box-shadow: var(--shadow-float);
+}
+.phone-screen {
+  position: relative;
+  aspect-ratio: 390 / 800;
+  overflow: hidden;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: 32px;
+}
+.phone-screen iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: 390px;
+  height: 800px;
+  border: 0;
+  transform-origin: 0 0;
+}
+.phone figcaption {
+  margin-top: 18px;
+  padding: 0 8px;
+  font-size: var(--fs-callout);
+  color: var(--ink-muted);
+}
+.phone figcaption b {
+  color: var(--ink);
+  font-weight: 500;
 }
 
 .card {
@@ -1848,6 +1900,162 @@ kbd {
   max-width: 16ch;
 }
 
+/* ---------- overview: links into the features page ---------- */
+.more {
+  margin-top: 22px;
+  font-size: var(--fs-callout);
+}
+.more a {
+  font-weight: 500;
+  text-underline-offset: 3px;
+}
+.outline {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 40px;
+}
+.outline a {
+  padding: 18px 18px 20px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge-2);
+  border-radius: var(--radius-lg);
+  text-decoration: none;
+  transition:
+    transform var(--dur) var(--ease-out),
+    border-color var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out);
+}
+.outline a:hover {
+  transform: translateY(-1px);
+  border-color: var(--ink-faint);
+  box-shadow: var(--shadow-sm);
+}
+.outline h3 {
+  font-size: 21px;
+  margin-bottom: 4px;
+}
+.outline p {
+  font-size: var(--fs-callout);
+  color: var(--ink-muted);
+}
+
+/* ---------- features page ---------- */
+.page-head {
+  padding: 64px 0 48px;
+  border-bottom: 1px solid var(--paper-edge-2);
+  background: var(--canvas);
+}
+.page-head h1 {
+  font-size: clamp(36px, 5vw, 60px);
+  line-height: 1.05;
+}
+.docs {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 56px;
+  align-items: start;
+}
+/* The contents stay in view and scroll on their own when the window is short. */
+.toc {
+  position: sticky;
+  top: 53px;
+  max-height: calc(100vh - 53px);
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  padding: 24px 0;
+  scrollbar-width: thin;
+}
+.toc-t {
+  padding: 16px 8px 4px;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  color: var(--ink-faint);
+}
+.toc-t:first-child {
+  padding-top: 0;
+}
+.toc a {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: var(--radius);
+  font-size: var(--fs-ui);
+  color: var(--ink-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.toc a:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.toc a[aria-current="true"] {
+  background: var(--fill-selected);
+  color: var(--ink);
+  font-weight: 500;
+}
+.doc-main {
+  min-width: 0;
+}
+.doc {
+  padding: 64px 0;
+}
+.doc + .doc {
+  border-top: 1px solid var(--paper-edge-2);
+}
+.doc h2 {
+  font-size: clamp(28px, 3vw, 36px);
+  line-height: 1.12;
+}
+.doc h2 .badge {
+  vertical-align: middle;
+  font-family: var(--font-sans);
+}
+.doc .prose {
+  max-width: 64ch;
+}
+.doc .fig {
+  margin-top: 28px;
+}
+.doc .narrow {
+  max-width: 580px;
+}
+.doc .plate {
+  max-width: 420px;
+  justify-self: start;
+}
+.trio.two-up {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.specs {
+  margin: 28px 0 0;
+  border-top: 1px solid var(--paper-edge-2);
+}
+.specs > div {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 2px 24px;
+  align-items: baseline;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--paper-edge);
+  font-size: var(--fs-callout);
+}
+.specs dt {
+  font-weight: 500;
+}
+.specs dd {
+  margin: 0;
+  color: var(--ink-muted);
+}
+.specs code {
+  font-size: var(--fs-footnote);
+}
+
 /* ---------- arrivals ---------- */
 @keyframes rise-in {
   from {
@@ -1891,7 +2099,42 @@ kbd {
 /* ---------- small screens ---------- */
 @media (max-width: 960px) {
   .nav {
+    margin-left: 0;
+  }
+  .nav .wide {
     display: none;
+  }
+  /* The contents become one row under the top bar, swiped sideways. */
+  html.doc-page {
+    scroll-padding-top: 104px;
+  }
+  .docs {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .toc {
+    z-index: 40;
+    display: flex;
+    gap: 2px;
+    margin: 0 calc(var(--gutter) * -1);
+    padding: 8px var(--gutter);
+    max-height: none;
+    overflow-x: auto;
+    background: var(--paper);
+    border-bottom: 1px solid var(--paper-edge-2);
+    scrollbar-width: none;
+  }
+  .toc a {
+    flex: none;
+  }
+  .toc-t {
+    display: none;
+  }
+  .doc {
+    padding: 48px 0;
+  }
+  .outline {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .band {
     padding: 72px 0;
@@ -1913,6 +2156,24 @@ kbd {
   }
   .cells {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* Side by side, swiped through: three phones stacked would be a long way down. */
+  .phones {
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: min(280px, 78%);
+    justify-content: start;
+    gap: 20px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    padding: 0 0 16px;
+  }
+  .phone {
+    scroll-snap-align: start;
+  }
+  /* The row clips what sticks out of it, so no soft shadow here. */
+  .phone-body {
+    box-shadow: none;
   }
   .cell:nth-child(3) {
     border-left: 0;
@@ -1940,9 +2201,6 @@ kbd {
     border-left: 0;
     border-top: 1px solid var(--paper-edge-2);
   }
-
-
-
 }
 @media (max-width: 640px) {
   :root {
@@ -1965,6 +2223,18 @@ kbd {
   }
   .topbar .btn {
     display: none;
+  }
+  .topbar .segmented {
+    flex-wrap: nowrap;
+    height: 32px;
+  }
+  .topbar .segmented button {
+    padding: 0 8px;
+  }
+  .outline,
+  .trio.two-up,
+  .specs > div {
+    grid-template-columns: minmax(0, 1fr);
   }
 
 

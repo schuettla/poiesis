@@ -1,14 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { OrbState } from "thinking-orbs";
 import type { AgentStep } from "../../lib/types";
-import { clockText, liveActivity, stepsDuration, stepTime } from "../../lib/liveWords";
+import { clockText, liveActivity, stepsDuration, stepTime, thinkingIsLive, writingCount } from "../../lib/liveWords";
 import Orb from "../Orb/Orb";
 import Ticker from "../Ticker/Ticker";
+import RollingNumber from "../Ticker/RollingNumber";
 import { saveKeptResult, type SearchHit } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
+import { runWaitsForYou } from "../../lib/chatState";
 import DiagnosticsList, { locateDiagnostic } from "./Diagnostics";
 import RecallMemoryRow from "./RecallMemoryRow";
 import { ChevronIcon } from "../Icons/Icons";
+import { shownRun } from "../../lib/runs";
 
 /** Screen-reader sentence for a step (§5.5: "searched project files, 3 matches"). */
 function announce(step: AgentStep): string {
@@ -244,7 +247,7 @@ function stamp(result: string): string {
   return result.replace(/^\s*—\s*/, "");
 }
 
-function Step({ step }: { step: AgentStep }) {
+function Step({ step, lit }: { step: AgentStep; lit: boolean }) {
   const [open, setOpen] = useState(false);
   const matches = step.matches ?? [];
   const code = step.code;
@@ -279,7 +282,7 @@ function Step({ step }: { step: AgentStep }) {
       <div className="step-head" onClick={expandable ? toggle : undefined}>
         <span className="step-dot" aria-hidden="true" />
         <span className="verb" aria-hidden="true">
-          {step.verb}
+          {lit && step.status === "running" ? <span className="live-words">{step.verb}</span> : step.verb}
         </span>
         <span className="target" aria-hidden="true" title={task ? task.argv.join(" ") : step.target}>
           {step.target}
@@ -350,7 +353,7 @@ export function bands(steps: AgentStep[]): { group: string | null; steps: AgentS
 
 /** Several steps running at once, drawn as one thing. A stack that fills a row
  * at a time reads as sequential work, which is precisely what this is not. */
-function ParallelBand({ steps }: { steps: AgentStep[] }) {
+function ParallelBand({ steps, lit }: { steps: AgentStep[]; lit: boolean }) {
   const working = steps.some((s) => s.status === "running");
   return (
     <div className={`step-band ${working ? "running" : "settled"}`}>
@@ -358,7 +361,7 @@ function ParallelBand({ steps }: { steps: AgentStep[] }) {
         {steps.length} things at once
       </span>
       {steps.map((step) => (
-        <Step key={step.id} step={step} />
+        <Step key={step.id} step={step} lit={lit} />
       ))}
     </div>
   );
@@ -424,9 +427,15 @@ export function hasVisibleSteps(steps: AgentStep[] | undefined): boolean {
 }
 
 /** `UI-4`: the head of a live timeline: the orb, "Working", what it does now and the clock. One
- * moving line for the whole turn. The words change in place (`Ticker`). */
-function LiveHead({ steps, orb }: { steps: AgentStep[]; orb: OrbState | null }) {
-  const run = useAppStore((s) => s.activeRun);
+ * moving line for the whole turn. The words change in place (`Ticker`), and "Working" carries
+ * the moving light unless something else in the turn has it (`mayLight` is false), the
+ * thinking line below has it, or the run is waiting for you. */
+function LiveHead({ steps, orb, mayLight }: { steps: AgentStep[]; orb: OrbState | null; mayLight: boolean }) {
+  const run = useAppStore(shownRun);
+  const asking = useAppStore((s) => runWaitsForYou(s, s.activeConversationId));
+  const lit = mayLight && !asking && !thinkingIsLive(steps, run?.thinking);
+  // A long tool call being written: the count is what shows it is still going.
+  const words = writingCount(steps, run);
   const [, tick] = useState(0);
   useEffect(() => {
     if (!run) return;
@@ -436,13 +445,26 @@ function LiveHead({ steps, orb }: { steps: AgentStep[]; orb: OrbState | null }) 
   return (
     <>
       <span className="timeline-orb">{orb && <Orb state={orb} />}</span>
-      <span className="timeline-title">Working</span>
+      <span className="timeline-title">
+        <span className={lit ? "live-words" : undefined}>Working</span>
+      </span>
       <span className="timeline-sep" aria-hidden="true">
         ·
       </span>
       <span className="timeline-activity">
         <Ticker text={liveActivity(steps, run)} />
       </span>
+      {words !== null && (
+        <>
+          <span className="timeline-sep" aria-hidden="true">
+            ·
+          </span>
+          <span className="timeline-clock">
+            <RollingNumber value={words} />
+            {" words"}
+          </span>
+        </>
+      )}
       {run && (
         <>
           <span className="timeline-sep" aria-hidden="true">
@@ -465,14 +487,22 @@ export default function Timeline({
   steps,
   live = false,
   orb = null,
+  mayLight = true,
 }: {
   steps: AgentStep[];
   live?: boolean;
   /** The orb that goes with the live head, or none. There is only ever one orb in a turn. */
   orb?: OrbState | null;
+  /** False while something else in the turn carries the moving light. */
+  mayLight?: boolean;
 }) {
   const [chosen, setChosen] = useState<boolean | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const asking = useAppStore((s) => live && runWaitsForYou(s, s.activeConversationId));
+  // The count and the time of a run that ended in front of you flap in, once. A turn read
+  // back from the chat is simply there.
+  const ran = useRef(false);
+  if (live) ran.current = true;
   // `WRK-2`: a divider is where an item ended, not a step. It is drawn between
   // the steps and never counted among them.
   const noted = steps.filter((s) => !isPlanNote(s));
@@ -487,9 +517,13 @@ export default function Timeline({
   const rows = noted.slice(Math.max(0, first));
   const count = `${visible.length} ${visible.length === 1 ? "step" : "steps"}`;
   const took = live ? null : stepsDuration(visible);
+  const stepsLit = mayLight && !asking;
+  // Open, a running step is on screen: the light is on its row, not on the head.
+  const onRow = open && visible.some((s) => s.status === "running");
+  const arrived = !live && ran.current;
 
   return (
-    <div className={`timeline ${live ? "live" : "settled"}${open ? " open" : ""}`}>
+    <div className={`timeline ${live ? "live" : "settled"}${open ? " open" : ""}${arrived ? " arrived" : ""}`}>
       <button
         className="timeline-head"
         onClick={() => setChosen(!open)}
@@ -499,7 +533,7 @@ export default function Timeline({
           <ChevronIcon dir="right" size={12} strokeWidth={1.6} />
         </span>
         {live ? (
-          <LiveHead steps={visible} orb={orb} />
+          <LiveHead steps={visible} orb={orb} mayLight={mayLight && !onRow} />
         ) : (
           <>
             <span className="timeline-title">{count}</span>
@@ -519,13 +553,13 @@ export default function Timeline({
           )}
           {bands(rows).map((band, i) =>
             band.group && band.steps.length > 1 ? (
-              <ParallelBand key={band.group + i} steps={band.steps} />
+              <ParallelBand key={band.group + i} steps={band.steps} lit={stepsLit} />
             ) : (
               band.steps.map((step) =>
                 step.divider ? (
                   <Divider key={step.id} step={step} />
                 ) : (
-                  <Step key={step.id} step={step} />
+                  <Step key={step.id} step={step} lit={stepsLit} />
                 )
               )
             )

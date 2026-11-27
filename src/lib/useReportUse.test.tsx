@@ -34,7 +34,7 @@ let root: Root;
 beforeEach(() => {
   vi.useFakeTimers();
   calls.length = 0;
-  useAppStore.setState({ busy: false } as never);
+  useAppStore.setState({ busyChats: {} } as never);
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -59,11 +59,11 @@ describe("reporting use", () => {
 
   it("says a turn is streaming, now and on a beat, without ending anything", () => {
     act(() => root.render(<Probe />));
-    act(() => useAppStore.setState({ busy: true } as never));
+    act(() => useAppStore.setState({ busyChats: { c1: "other" } } as never));
     expect(calls).toEqual([false]);
     act(() => void vi.advanceTimersByTime(BUSY_BEAT_MS));
     expect(calls).toEqual([false, false]);
-    act(() => useAppStore.setState({ busy: false } as never));
+    act(() => useAppStore.setState({ busyChats: {} } as never));
     act(() => void vi.advanceTimersByTime(BUSY_BEAT_MS * 2));
     expect(calls).toEqual([false, false]);
   });

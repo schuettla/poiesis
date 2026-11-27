@@ -180,27 +180,19 @@ pub struct GoldenResult {
     pub total: usize,
 }
 
-/// The base prompt, mirroring `DEFAULT_SYSTEM_PROMPT` in `agent/context.rs`.
-///
-/// The duplication is deliberate and load-bearing. A real turn's system prompt
-/// is assembled per turn (`agent::turn::run_turn`) and never reaches this
-/// guard; it has no turn to borrow one from. If it
-/// asked the model a bare question instead, then a soul edit, a consolidation
-/// and a newly enabled skill would all be invisible to it — it would be
-/// checking a prompt none of those three self-changes touch, and could never
-/// catch the regression it exists to catch.
-const GOLDEN_BASE_PROMPT: &str =
-    "You are Poiesis Agent, a local-first assistant that maintains itself: you keep durable \
-     memory, learn lessons from your own mistakes, and propose — never impose — changes to how \
-     you work. Be concise and clear.";
-
 /// Reassemble the self-changing parts of a real turn's system prompt: standing
 /// instructions, the durable memory index, and the stage-1 skills list. These
 /// are exactly the three things `GLD-2` guards a change to, so these are
-/// exactly the three that have to be here. Mirrors `soul_block`,
-/// `memory_index_block` and `skills_block` in `agent/context.rs`.
+/// exactly the three that have to be here, after the default base prompt.
+/// Mirrors `soul_block`, `memory_index_block` and `skills_block` in
+/// `agent/context.rs`.
+///
+/// A real turn's prompt is assembled per turn (`agent::turn::run_turn`) and
+/// never reaches this guard, which has no turn to borrow one from. If it asked
+/// the model a bare question instead, a soul edit, a consolidation and a newly
+/// enabled skill would all be invisible to it.
 fn golden_system_prompt(db: &Db, mem: &MemoryStore, app_data: &Path) -> String {
-    let mut out = String::from(GOLDEN_BASE_PROMPT);
+    let mut out = String::from(super::context::DEFAULT_SYSTEM_PROMPT);
 
     let soul = mem.soul();
     if !soul.trim().is_empty() {

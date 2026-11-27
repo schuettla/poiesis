@@ -26,7 +26,32 @@ export function shortTime(ts: number, now = Date.now()): string {
   return d.toLocaleDateString(STAMP_LOCALE, { month: "short", year: "2-digit" });
 }
 
-export const BUCKETS = ["Today", "Yesterday", "Previous 7 days", "Previous 30 days", "Older"] as const;
+/** The clock time, as the person's system writes it. */
+export function clockTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** A message's stamp: the time for one of today, the day for an older one.
+ * `15:44`, `Nov 20`, `Nov 20, 25`. */
+export function turnTime(ts: number, now = Date.now()): string {
+  if (ts >= dayStart(now) && ts < dayStart(now, -1)) return clockTime(ts);
+  const d = new Date(ts);
+  const year = d.getFullYear() === new Date(now).getFullYear() ? undefined : "2-digit";
+  return d.toLocaleDateString(STAMP_LOCALE, { month: "short", day: "numeric", year });
+}
+
+/** The whole date and time, for a stamp's tooltip. */
+export function fullTime(ts: number): string {
+  const day = new Date(ts).toLocaleDateString(STAMP_LOCALE, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+  return `${day}, ${clockTime(ts)}`;
+}
+
+export const BUCKETS =["Today", "Yesterday", "Previous 7 days", "Previous 30 days", "Older"] as const;
 export type Bucket = (typeof BUCKETS)[number];
 
 /** Calendar days, not a rolling window: a chat from 11pm last night is

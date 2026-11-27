@@ -158,7 +158,7 @@ export default function VoiceMode() {
           <Orb state={orb} size={64} />
         </div>
         <p className="voice-state" role="status" aria-live="polite">
-          {line}
+          {floor === "thinking" && !muted ? <span className="live-words">{line}</span> : line}
         </p>
 
         {setup ? (

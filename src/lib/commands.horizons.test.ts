@@ -43,8 +43,8 @@ beforeEach(() => {
     turnModifiers: {},
     conversations: [{ id: "c1", title: "Plan the trip", updatedAt: 0, messages: [] }],
     activeConversationId: "c1",
-    activeRun: null,
-    busy: false,
+    liveRuns: {},
+    busyChats: {},
     changeSets: {},
     commandNotes: {},
     taskDraft: null,
@@ -84,7 +84,7 @@ describe("/goal (WRK-12)", () => {
   });
 
   it("will not start while I am busy", async () => {
-    useAppStore.setState({ busy: true });
+    useAppStore.setState({ busyChats: { c1: "other" } });
     const r = await run("/goal b");
     expect(r).toMatchObject({ kind: "error" });
     expect(useAppStore.getState().turnModifiers.criteria).toBeUndefined();
@@ -92,7 +92,7 @@ describe("/goal (WRK-12)", () => {
 
   it("stop stops the run that is working toward it", async () => {
     const stopGenerating = vi.fn();
-    useAppStore.setState({ busy: true, stopGenerating });
+    useAppStore.setState({ busyChats: { c1: "other" }, stopGenerating });
     const r = await run("/goal stop");
     expect(r).toMatchObject({ kind: "done" });
     expect(stopGenerating).toHaveBeenCalled();

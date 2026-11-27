@@ -3,16 +3,19 @@
 //! response, and maps it back to a [`TurnOutcome`] — so cloud Anthropic models get
 //! the same tool-calling agent loop as local models (CLD-5).
 
-use futures_util::StreamExt;
 use serde_json::{json, Value};
 
 use crate::runtime::proxy::{
-    api_error, CancelFlag, Delta, ProxyError, ToolCallReq, TurnOutcome, Usage,
+    next_chunk, send_turn, CancelFlag, Clocks, Delta, ProxyError, ToolCallReq, TurnOutcome, Usage, Waited,
 };
 
 const ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 pub(crate) const API_VERSION: &str = "2023-06-01";
-const MAX_TOKENS: u32 = 4096;
+/// The most one answer may write. 4096 cut a report written into a document
+/// off partway, and the cut-off tool input then failed. 32,000 is the lowest
+/// "max output" of any Claude model still served (Opus 4 and 4.1); the current
+/// ones allow 64K to 128K. Only what is written is billed, not this ceiling.
+const MAX_TOKENS: u32 = 32_000;
 
 /// Stream one Anthropic turn. `messages`/`tools` are OpenAI-shaped.
 #[allow(clippy::too_many_arguments)]
@@ -24,11 +27,37 @@ pub async fn stream_turn<F>(
     tools: &[Value],
     temperature: f32,
     cancel: &CancelFlag,
+    on_token: F,
+) -> Result<TurnOutcome, ProxyError>
+where
+    F: FnMut(Delta),
+{
+    let turn = Turn { url: ENDPOINT, api_key, model, clocks: Clocks::TURN };
+    stream_turn_to(client, turn, messages, tools, temperature, cancel, on_token).await
+}
+
+/// Where a turn goes and how long it may wait: apart so a test can aim it at a
+/// local server with short clocks.
+struct Turn<'a> {
+    url: &'a str,
+    api_key: &'a str,
+    model: &'a str,
+    clocks: Clocks,
+}
+
+async fn stream_turn_to<F>(
+    client: &reqwest::Client,
+    turn: Turn<'_>,
+    messages: &[Value],
+    tools: &[Value],
+    temperature: f32,
+    cancel: &CancelFlag,
     mut on_token: F,
 ) -> Result<TurnOutcome, ProxyError>
 where
     F: FnMut(Delta),
 {
+    let Turn { url, api_key, model, clocks } = turn;
     let (system, anth_messages) = translate_messages(messages);
     let mut body = json!({
         "model": model,
@@ -45,29 +74,39 @@ where
         body["tools"] = json!(anth_tools);
     }
 
-    let resp = client
-        .post(ENDPOINT)
+    let req = client
+        .post(url)
         .header("x-api-key", api_key)
         .header("anthropic-version", API_VERSION)
         .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
-    if resp.status().is_client_error() || resp.status().is_server_error() {
-        return Err(api_error(resp).await);
-    }
+        .json(&body);
+    let asked = std::time::Instant::now();
+    // Same clocks and the same Stop as the OpenAI-shaped turns. Before, this had
+    // neither: a quiet model waited forever, and Stop was read only when the
+    // next chunk came.
+    let Some(resp) = send_turn(req, cancel, clocks).await? else {
+        return Ok(TurnOutcome::Cancelled);
+    };
 
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
     let mut content = String::new();
     let mut blocks: Vec<Block> = Vec::new();
     let mut usage: Option<Usage> = None;
+    // When real output last came, and when any bytes last came. A `ping` keeps
+    // the turn alive, but only up to `Clocks::quiet`: it comes while nothing is
+    // being written. With `eager_input_streaming` on every tool, a long tool
+    // input arrives in pieces, so a healthy turn keeps refreshing `heard`.
+    let mut heard: Option<std::time::Instant> = None;
+    let mut alive: Option<std::time::Instant> = None;
 
-    while let Some(chunk) = stream.next().await {
-        if cancel.is_cancelled() {
-            return Ok(TurnOutcome::Cancelled);
-        }
-        let chunk = chunk?;
+    loop {
+        let chunk = match next_chunk(&mut stream, cancel, clocks, asked, heard, alive).await? {
+            Waited::Chunk(c) => c?,
+            Waited::End => break,
+            Waited::Cancelled => return Ok(TurnOutcome::Cancelled),
+        };
+        alive = Some(std::time::Instant::now());
         buf.push_str(&String::from_utf8_lossy(&chunk));
         while let Some(nl) = buf.find('\n') {
             let line = buf[..nl].trim().to_string();
@@ -80,6 +119,21 @@ where
                 continue;
             }
             if let Ok(evt) = serde_json::from_str::<Value>(payload) {
+                match evt.get("type").and_then(|t| t.as_str()) {
+                    Some("ping") => continue,
+                    // A failure after the headers were sent (`overloaded_error`
+                    // is the common one). Read as data, it was an empty answer.
+                    Some("error") => {
+                        let kind = evt.pointer("/error/type").and_then(|t| t.as_str()).unwrap_or("");
+                        let said = evt.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or(kind);
+                        return Err(ProxyError::Api {
+                            // What the same failure would be without streaming.
+                            status: if kind == "overloaded_error" { 529 } else { 500 },
+                            message: format!("The provider stopped the answer with an error: {said}"),
+                        });
+                    }
+                    _ => heard = Some(std::time::Instant::now()),
+                }
                 // `OBS-1`: input tokens arrive on `message_start`, output
                 // tokens on `message_delta`. Both are merged into one figure.
                 for pointer in ["/message/usage", "/usage"] {
@@ -175,6 +229,7 @@ fn handle_event<F: FnMut(Delta)>(
                         (blocks.get_mut(idx), delta.get("partial_json").and_then(|p| p.as_str()))
                     {
                         b.input_json.push_str(partial);
+                        on_token(Delta::Writing { tool: &b.name, args: &b.input_json });
                     }
                 }
                 _ => {}
@@ -195,6 +250,11 @@ fn translate_tools(tools: &[Value]) -> Vec<Value> {
                 "name": name,
                 "description": f.get("description").and_then(|d| d.as_str()).unwrap_or(""),
                 "input_schema": f.get("parameters").cloned().unwrap_or_else(|| json!({"type":"object"})),
+                // Without it the API holds each input value back until it is
+                // whole, so a report written into a tool arrives all at once after
+                // minutes of pings: no progress to show, and only the quiet cap
+                // ends a stall. Stable on every model, no beta header.
+                "eager_input_streaming": true,
             }))
         })
         .collect()
@@ -356,6 +416,7 @@ mod tests {
         let mut on_token = |d: Delta| match d {
             Delta::Answer(t) => seen.push((false, t.to_string())),
             Delta::Thinking(t) => seen.push((true, t.to_string())),
+            Delta::Writing { .. } => {}
         };
 
         for evt in [
@@ -373,5 +434,69 @@ mod tests {
             vec![(true, "let me work this out".into()), (false, "42".into())],
             "both were relayed, each labelled as what it is"
         );
+    }
+
+    #[test]
+    fn every_tool_streams_its_input() {
+        let tools = [json!({ "type": "function", "function": { "name": "create_artifact", "parameters": {} } })];
+        assert_eq!(translate_tools(&tools)[0]["eager_input_streaming"], true);
+    }
+
+    // ---- the stream, against a local server ----
+
+    use crate::runtime::proxy::clock_tests::{serve, SHORT};
+    use std::time::Duration;
+
+    async fn turn(base: &str, writes: &mut Vec<(String, usize)>) -> Result<TurnOutcome, ProxyError> {
+        let url = format!("{base}/v1/messages");
+        let turn = Turn { url: &url, api_key: "k", model: "m", clocks: SHORT };
+        let on_token = |d: Delta| {
+            if let Delta::Writing { tool, args } = d {
+                writes.push((tool.to_string(), args.len()));
+            }
+        };
+        let client = reqwest::Client::new();
+        let cancel = CancelFlag::new();
+        tokio::time::timeout(Duration::from_secs(5), stream_turn_to(&client, turn, &[], &[], 0.0, &cancel, on_token))
+            .await
+            .expect("the turn ended by itself")
+    }
+
+    const PING: &str = "event: ping\ndata: {\"type\": \"ping\"}\n\n";
+
+    #[tokio::test]
+    async fn pings_alone_end_the_turn_at_the_quiet_cap() {
+        let began = std::time::Instant::now();
+        let out = turn(&serve(vec![], Some(PING)).await, &mut Vec::new()).await;
+        assert!(matches!(out, Err(ProxyError::Stalled(ref m)) if m.contains("keepalive")), "{out:?}");
+        assert!(began.elapsed() >= SHORT.quiet, "held until the cap, not the first-word clock");
+    }
+
+    #[tokio::test]
+    async fn an_error_event_is_an_error_not_an_empty_answer() {
+        let failed = "event: error\ndata: {\"type\": \"error\", \"error\": {\"type\": \"overloaded_error\", \"message\": \"Overloaded\"}}\n\n";
+        match turn(&serve(vec![(0, failed)], None).await, &mut Vec::new()).await {
+            Err(e) => {
+                assert_eq!(e.status(), Some(529));
+                assert!(e.to_string().contains("Overloaded"), "{e}");
+            }
+            other => panic!("expected an error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tool_input_written_slowly_is_shown_and_not_cut() {
+        let start = "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"create_artifact\"}}\n\n";
+        let piece = "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"aaaa\"}}\n\n";
+        // Pieces 150 ms apart, a ping between each: longer than both clocks in total.
+        let parts = [(0, start)]
+            .into_iter()
+            .chain([(75, PING), (75, piece)].into_iter().cycle().take(10))
+            .collect();
+        let mut writes = Vec::new();
+        let out = turn(&serve(parts, None).await, &mut writes).await;
+        assert!(matches!(out, Ok(TurnOutcome::ToolCalls { ref calls, .. }) if calls[0].arguments.len() == 20), "{out:?}");
+        assert_eq!(writes.last(), Some(&("create_artifact".to_string(), 20)));
+        assert_eq!(writes.len(), 5);
     }
 }

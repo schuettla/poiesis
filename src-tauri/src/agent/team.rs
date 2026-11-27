@@ -1967,7 +1967,7 @@ mod tests {
 
         let fleet = crate::agent::fleet::Fleet::new();
         let handle = |conv: &str, parent: Option<&str>| {
-            fleet.open(conv, crate::runtime::proxy::CancelFlag::new(), parent.map(str::to_string), usize::from(parent.is_some()))
+            fleet.open(conv, crate::runtime::proxy::CancelFlag::new(), parent.map(str::to_string), usize::from(parent.is_some()), false)
         };
         let lead = handle(&session, None);
         let mut specs = plain.clone();

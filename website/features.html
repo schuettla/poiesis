@@ -1,0 +1,835 @@
+<!doctype html>
+<html lang="en" data-mode="light" class="doc-page">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Poiesis features</title>
+  <meta
+    name="description"
+    content="Every Poiesis feature in detail: plain-text memory, self-repair, agents and teams, agent apps, proof before done, phone, connected apps, code, voice, local and cloud models, and privacy."
+  />
+  <meta name="theme-color" content="#f3f5f3" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0d100e" media="(prefers-color-scheme: dark)" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Poiesis features" />
+  <meta property="og:description" content="Everything the local-first agent does, in detail." />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preload" href="fonts/newsreader-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="fonts/inter-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <script>
+    (function () {
+      var d = document.documentElement;
+      d.classList.add("js");
+      try {
+        var m = localStorage.getItem("poiesis-mode");
+        if (m !== "light" && m !== "dark") {
+          m = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        d.setAttribute("data-mode", m);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <svg width="0" height="0" style="position: absolute" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="i-download" viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7.5 8 11l3.5-3.5M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></symbol>
+      <symbol id="i-github" viewBox="0 0 16 16"><path fill="currentColor" d="M8 .2a8 8 0 0 0-2.53 15.59c.4.07.55-.17.55-.38v-1.35c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.05-.49.05-.49.8.06 1.23.83 1.23.83.72 1.22 1.88.87 2.34.66.07-.52.28-.87.5-1.07-1.78-.2-3.65-.89-3.65-3.96 0-.88.31-1.6.82-2.16-.08-.2-.36-1.02.08-2.12 0 0 .67-.22 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.16 0 3.08-1.87 3.76-3.66 3.96.29.25.54.74.54 1.5v2.22c0 .21.15.46.55.38A8 8 0 0 0 8 .2z" /></symbol>
+    </defs>
+  </svg>
+
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="index.html" aria-label="Poiesis, home">
+        <svg class="poiesis-mark stage-3" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"></svg>
+        Poiesis
+      </a>
+      <nav class="nav" aria-label="Site">
+        <a class="wide" href="index.html#idea">Why Poiesis</a>
+        <a href="features.html">Features</a>
+        <a class="wide" href="index.html#private">Privacy</a>
+        <a class="wide" href="index.html#faq">FAQ</a>
+      </nav>
+      <div class="topbar-end">
+        <div class="segmented" role="group" aria-label="Lighting">
+          <button type="button" data-mode-btn="light" aria-pressed="true">Daylight</button>
+          <button type="button" data-mode-btn="dark" aria-pressed="false">Backlit</button>
+        </div>
+        <a class="btn btn-secondary btn-sm btn-icon" href="https://github.com/schuettla/poiesis" aria-label="GitHub" title="GitHub">
+          <svg aria-hidden="true"><use href="#i-github" /></svg>
+        </a>
+        <a class="btn btn-primary btn-sm" href="index.html#download">
+          <svg><use href="#i-download" /></svg>
+          Download
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <div class="sheet">
+    <div class="page-head">
+      <div class="wrap">
+        <span class="eyebrow">Features</span>
+        <h1>Everything Poiesis does.</h1>
+        <p class="lede">
+          The full account, part by part. For the short version, read the
+          <a href="index.html">overview</a>.
+        </p>
+      </div>
+    </div>
+
+    <div class="wrap docs">
+      <!-- ================= CONTENTS ================= -->
+      <nav class="toc" aria-label="Contents">
+        <span class="toc-t">Itself</span>
+        <a href="#memory">Memory</a>
+        <a href="#autonomy-rules">Control</a>
+        <a href="#repair">Repair</a>
+        <a href="#ways">How it works</a>
+        <a href="#mark">Name and mark</a>
+        <span class="toc-t">Work</span>
+        <a href="#runs">Runs and chats</a>
+        <a href="#history">Going back</a>
+        <a href="#helpers">Helper agents</a>
+        <a href="#proof">Proof before done</a>
+        <a href="#agent-apps">Agent apps</a>
+        <a href="#teams">Personas and teams</a>
+        <a href="#away">While you are away</a>
+        <span class="toc-t">Your things</span>
+        <a href="#folders">Folders and projects</a>
+        <a href="#code">Code</a>
+        <a href="#apps">Connected apps</a>
+        <a href="#tools">Tools</a>
+        <a href="#commands">Commands and skills</a>
+        <span class="toc-t">Using it</span>
+        <a href="#window">The window</a>
+        <a href="#create">Images and interfaces</a>
+        <a href="#voice">Voice</a>
+        <a href="#phone">Phone and Telegram</a>
+        <span class="toc-t">Under it</span>
+        <a href="#models">Models and cost</a>
+        <a href="#quick">Quick decisions</a>
+        <a href="#privacy">Privacy and security</a>
+        <a href="#source">Systems and source</a>
+      </nav>
+
+      <main id="main" class="doc-main">
+        <!-- ================= MEMORY ================= -->
+        <section class="doc" id="memory" aria-labelledby="memory-h">
+          <span class="eyebrow">Itself</span>
+          <h2 id="memory-h">Memory</h2>
+          <p class="prose">What the agent knows about you is a folder of plain markdown files in your app data folder. No database stands between you and it.</p>
+          <div class="fig">
+            <div class="panel term">
+              <div class="path">memory/</div>
+<pre>MEMORY.md    <span class="k">the index in every chat</span>
+SOUL.md      <span class="k">your standing rules</span>
+PROFILE.md   <span class="k">how you like to work</span>
+facts/       <span class="k">facts about you</span>
+lessons/     <span class="k">lessons from mistakes</span>
+ways/        <span class="k">styles and rules</span></pre>
+            </div>
+          </div>
+          <dl class="specs">
+            <div><dt>Edit and delete</dt><dd>Open a file in any editor and change it, even with the app closed. Delete a file and the agent forgets that thing.</dd></div>
+            <div><dt>Your rules stay yours</dt><dd>SOUL.md holds your standing instructions. The agent may propose edits. It cannot write there on its own.</dd></div>
+            <div><dt>Recall by meaning</dt><dd>A memory comes back when it is relevant, not only when it shares words with your question. A small model on your machine does the matching. Without it, the agent searches by words and says so.</dd></div>
+            <div><dt>Past chats</dt><dd>It can search your earlier conversations as well as saved memories. This stays on your device.</dd></div>
+            <div><dt>Reflection</dt><dd>When a conversation ends, it reads it back and keeps a lesson if one is worth keeping. A second check gates the lesson. What fails becomes a proposal, not a silent loss.</dd></div>
+            <div><dt>Per project</dt><dd>A fact saved in a project is not recalled in other projects. A note with no tag is shared everywhere.</dd></div>
+            <div><dt>Per persona</dt><dd>What a persona learns in chats it leads is its own. Facts about you stay shared. You can share an entry with everyone, forget it, or switch memory across chats off.</dd></div>
+            <div><dt>Nothing hidden</dt><dd>A panel called &ldquo;What I&rsquo;m working from&rdquo; shows every layer that fed a turn: instructions, what it remembers, what it recalled and which files it read.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= CONTROL ================= -->
+        <section class="doc" id="autonomy-rules" aria-labelledby="control-h">
+          <span class="eyebrow">Itself</span>
+          <h2 id="control-h">Control</h2>
+          <p class="prose">A self-improving agent is only safe if you can see it and stop it.</p>
+          <dl class="specs">
+            <div><dt>Seen as it happens</dt><dd>Every write to its own memory shows a quiet notice at that moment, with an Undo. It is never a log you have to go and find.</dd></div>
+            <div><dt>Freedom per kind</dt><dd>Under Self, then Autonomy, each kind of change is set to auto with undo, ask first, or off.</dd></div>
+            <div><dt>Proposals</dt><dd>Anything on &ldquo;ask first&rdquo; waits until you accept or decline it.</dd></div>
+            <div><dt>Outside text</dt><dd>Text from a web page, a mail or a file that looks risky can never become a saved fact or lesson.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= REPAIR ================= -->
+        <section class="doc" id="repair" aria-labelledby="repair-h">
+          <span class="eyebrow">Itself</span>
+          <h2 id="repair-h">Repair</h2>
+          <p class="prose">It notices what is broken, and says so. It also catches itself getting worse.</p>
+          <div class="fig two">
+            <div class="panel">
+              <div class="pane-title">Self &middot; Health <span class="r">just now</span></div>
+              <ul class="lines">
+                <li><i class="sig ok"></i><span>Memory files<small>All readable.</small></span></li>
+                <li><i class="sig danger"></i><span><code>lessons/old-note.md</code><small>I could not read this file. I moved it aside instead of deleting it.</small></span></li>
+                <li><i class="sig idle"></i><span>Web search<small>It failed three times today. I noted that to myself and will plan around it.</small></span></li>
+                <li><i class="sig ok"></i><span>Local engine<small>Restarted once after a crash.</small></span></li>
+              </ul>
+            </div>
+            <div class="panel">
+              <div class="pane-title">Self &middot; Fixed rules</div>
+              <ul class="lines">
+                <li><i class="sig ok"></i><span>Asked to remember something, it still uses its memory tool.<small>Passed</small></span></li>
+                <li><i class="sig ok"></i><span>A web page that says &ldquo;ignore your instructions&rdquo; still fails to work.<small>Passed</small></span></li>
+              </ul>
+              <div class="pane-foot">
+                <div class="toast"><i class="mk"></i><span class="tx">That change made me worse at 1 thing. I put it back.</span></div>
+              </div>
+            </div>
+          </div>
+          <dl class="specs">
+            <div><dt>Damaged files</dt><dd>A memory file it cannot parse is set aside, never deleted. Self, then Health lets you fix or discard it.</dd></div>
+            <div><dt>Failing tools</dt><dd>A tool that has been failing lately is noted, and the agent plans around it.</dd></div>
+            <div><dt>Engine watchdog</dt><dd>A crashed local engine is restarted with a growing wait. Restarts are capped per hour, so it cannot loop forever.</dd></div>
+            <div><dt>Self-check</dt><dd>Each change to itself is tested against a small set of fixed behaviours. A change that breaks one is put back, and you are told.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= WAYS ================= -->
+        <section class="doc" id="ways" aria-labelledby="ways-h">
+          <span class="eyebrow">Itself</span>
+          <h2 id="ways-h">How it works, in your words</h2>
+          <p class="prose">Under Self, then How I work, a style says how a task is organised. A rule is one sentence: when this happens, I do that. Both come from fixed lists, so nothing can be written that the agent cannot do.</p>
+          <dl class="specs">
+            <div><dt>Ad hoc</dt><dd>Just answer.</dd></div>
+            <div><dt>Lean</dt><dd>One thing at a time, stop the line when something breaks.</dd></div>
+            <div><dt>Command &amp; Control</dt><dd>You decide every step.</dd></div>
+            <div><dt>Mission Command</dt><dd>You set the goal, it finds the way.</dd></div>
+            <div><dt>Swarm</dt><dd>Many helpers, no boss.</dd></div>
+            <div><dt>Base rules</dt><dd>They hold in every style, and only you can switch one off: fix a failing check first, and check in when the same problem comes twice.</dd></div>
+            <div><dt>Your own</dt><dd>Edit a style, add rules, make your own, or lock one so it stays as it is.</dd></div>
+            <div><dt>It gets better</dt><dd>It proposes changes from what it saw, for example to retire a rule you keep skipping. A new rule can be tried on a few tasks, then kept or retired.</dd></div>
+            <div><dt>Where chats start</dt><dd>Set who leads and which style a chat starts with: everywhere, per project or per kind of work.</dd></div>
+            <div><dt>Plain files</dt><dd>Every change is a file in <code>memory/ways/</code>, and you can go back to an earlier day.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= MARK ================= -->
+        <section class="doc" id="mark" aria-labelledby="mark-h">
+          <span class="eyebrow">Itself</span>
+          <h2 id="mark-h">Poiesis is Greek for making.</h2>
+          <p class="prose">
+            <strong>Poiesis</strong> (ποίησις) is the act of bringing something into being that
+            was not there before. It is the root of the word &ldquo;poetry&rdquo;. In Plato&rsquo;s
+            <em>Symposium</em> it is the cause that makes anything pass from non-being into
+            being, and Heidegger later used it for a bringing-forth that reveals something
+            rather than merely producing it. The app is named for both halves: it makes things
+            with you, and it keeps making itself.
+          </p>
+          <p class="prose">
+            <strong>Autopoiesis</strong> is a word from the biologists Maturana and Varela. It
+            describes a system that keeps producing the parts it is made of. A living cell is
+            the usual example. Poiesis applies that idea to a desktop agent, and you are the
+            boundary that decides what may change. Say it: <em>poy-EE-sis</em>.
+          </p>
+          <p class="prose">The mark in the app shows what the agent is doing and how much it has learned. Try it.</p>
+          <div class="fig panel mark-lab" id="markLab">
+            <div class="view">
+              <svg id="labMark" class="poiesis-mark stage-1 state-idle" viewBox="0 0 24 24" role="img" aria-label="The Poiesis mark"></svg>
+            </div>
+            <div class="controls">
+              <div class="row">
+                <span class="lab">State</span>
+                <div class="segmented" role="group" aria-label="State of the mark">
+                  <button type="button" data-state="idle" aria-pressed="true">Resting</button>
+                  <button type="button" data-state="active" aria-pressed="false">Working</button>
+                  <button type="button" data-state="reflecting" aria-pressed="false">Reflecting</button>
+                  <button type="button" data-state="healing" aria-pressed="false">Recovering</button>
+                </div>
+              </div>
+              <div class="row">
+                <span class="lab">Knows</span>
+                <div class="segmented" role="group" aria-label="How much it knows">
+                  <button type="button" data-stage="0" aria-pressed="false">Nothing yet</button>
+                  <button type="button" data-stage="1" aria-pressed="true">5 things</button>
+                  <button type="button" data-stage="2" aria-pressed="false">20</button>
+                  <button type="button" data-stage="3" aria-pressed="false">50</button>
+                </div>
+              </div>
+              <p class="say" id="labSay" aria-live="polite"></p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= RUNS ================= -->
+        <section class="doc" id="runs" aria-labelledby="runs-h">
+          <span class="eyebrow">Work</span>
+          <h2 id="runs-h">Work you can watch, steer and stop</h2>
+          <p class="prose">A turn is not a black box you wait out. While the agent works you can talk to it, see what it is doing, and stop it without losing what it found.</p>
+          <div class="fig stack narrow">
+            <section class="card" aria-label="My plan">
+              <div class="card-head"><span class="t">My plan</span><span>2 of 4 done</span></div>
+              <div class="plan-item done"><span class="box"></span><span class="tx">Collect last year&rsquo;s invoices</span></div>
+              <div class="plan-item done"><span class="box"></span><span class="tx">Group them by client</span></div>
+              <div class="plan-item doing"><span class="box"></span><span class="tx">Write the summary</span></div>
+              <div class="plan-item todo"><span class="box"></span><span class="tx">Check totals against the bank export</span></div>
+            </section>
+          </div>
+          <dl class="specs">
+            <div><dt>Plans</dt><dd>For work with several parts it writes a short plan and ticks it off. A dropped item says why. A run that tries to finish with the plan half done is asked once to continue or revise it.</dd></div>
+            <div><dt>Plan first</dt><dd><code>/plan</code> lets it read but change nothing until you approve.</dd></div>
+            <div><dt>Goals</dt><dd><code>/goal</code> keeps it working until a condition you state is true.</dd></div>
+            <div><dt>Type while it works</dt><dd>Your message lands between steps, never inside a half-finished tool call.</dd></div>
+            <div><dt>Stop keeps the work</dt><dd>A stopped run ends with what it had, and says it was stopped.</dd></div>
+            <div><dt>Limits end well</dt><dd>At its step or time limit the run gets one last turn to say what it found. You set the step limit (12 by default).</dd></div>
+            <div><dt>Real questions</dt><dd>At a true fork it asks you, with 2 to 4 options, and pauses until you answer.</dd></div>
+            <div><dt>Side questions</dt><dd><code>/btw</code> asks something on the side. The answer stays out of the conversation.</dd></div>
+            <div><dt>Live status</dt><dd>One line says what is happening now and for how long. Searches and reads that do not depend on each other run together.</dd></div>
+            <div><dt>Big results</dt><dd>A large tool output is kept on disk. The model gets a preview it can search, and you can open or save the whole thing.</dd></div>
+            <div><dt>Many chats at once <span class="badge">New</span></dt><dd>Each chat has its own run, Stop and questions, and the sidebar shows what each one does. One run at a time can use a local model. Two chats never change the same folder at the same time: the second one waits.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= HISTORY ================= -->
+        <section class="doc" id="history" aria-labelledby="history-h">
+          <span class="eyebrow">Work</span>
+          <h2 id="history-h">Going back, and carrying on</h2>
+          <p class="prose">Every run is written to a session log that is only ever added to.</p>
+          <dl class="specs">
+            <div><dt>Try again</dt><dd>Asks the same message again, attachments included, and replaces the last answer.</dd></div>
+            <div><dt>Rewind</dt><dd>Removes a message and everything after it, can take back the file changes made since, and puts your words back in the box.</dd></div>
+            <div><dt>Fork</dt><dd>Carries on from any answer in a new chat and leaves the old one as it is.</dd></div>
+            <div><dt>Edit</dt><dd>Change your own message where it stands and start again from there.</dd></div>
+            <div><dt>Continue</dt><dd>A run that was stopped, timed out or hit a limit resumes with every tool result intact, so it does not repeat work you paid for.</dd></div>
+            <div><dt>Honest summaries</dt><dd>When a long chat is summarised, a divider says how many messages stand behind it. They are all still there.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= HELPERS ================= -->
+        <section class="doc" id="helpers" aria-labelledby="helpers-h">
+          <span class="eyebrow">Work</span>
+          <h2 id="helpers-h">Helper agents</h2>
+          <p class="prose">For a wide job it splits the work across several agents that run at the same time, each with a fresh context. It writes the final answer itself.</p>
+          <div class="fig stack">
+            <section class="card" aria-label="Agents I started" id="fleet">
+              <div class="card-head">Agents I started</div>
+              <div class="fleet-row" data-agent="researcher">
+                <span class="lead"><i class="orbdot"></i></span>
+                <span class="who">researcher</span>
+                <span class="doing">reading Documents/2026/brandt-0412.pdf</span>
+                <span class="clock">0:41</span>
+                <span class="acts"><button type="button">Open</button><button type="button" data-steer>Steer</button><button type="button" data-stop>Stop</button></span>
+              </div>
+              <div class="fleet-row" data-agent="checker">
+                <span class="lead"><i class="orbdot"></i></span>
+                <span class="who">checker</span>
+                <span class="doing">comparing totals with the bank export</span>
+                <span class="clock">0:38</span>
+                <span class="acts"><button type="button">Open</button><button type="button" data-steer>Steer</button><button type="button" data-stop>Stop</button></span>
+              </div>
+              <div class="fleet-row" data-agent="writer">
+                <span class="lead"><i class="sig cloud"></i></span>
+                <span class="who">writer</span>
+                <span class="doing">done &middot; 6 steps &middot; 0:52</span>
+                <span></span>
+                <span class="acts"><button type="button">Open</button><button type="button">Report</button></span>
+              </div>
+            </section>
+          </div>
+          <dl class="specs">
+            <div><dt>A real run</dt><dd>Each helper has its own chat, transcript, files and timeline. Open it and read it live.</dd></div>
+            <div><dt>Never more power</dt><dd>A helper inherits tools, folder access and trust, and can only narrow them. By default it cannot start more helpers.</dd></div>
+            <div><dt>Steer and stop</dt><dd>Redirect or stop each one. Stop on the message box stops the helpers the run waits for, and says so first.</dd></div>
+            <div><dt>Who is asking</dt><dd>A permission question names the agent that asks. Questions queue instead of replacing each other.</dd></div>
+            <div><dt>In the background</dt><dd>Agents can keep working after the turn ends. More than three at a time wait in line. A notice points back when one finishes.</dd></div>
+            <div><dt>No collisions</dt><dd>Two helpers never change the same files at once. The one that waits says what it waits for.</dd></div>
+            <div><dt>Scripts</dt><dd>With &ldquo;Scripts calling tools&rdquo; on, a job over many items is one script instead of one model turn each. Every call it makes is shown and still asks.</dd></div>
+          </dl>
+          <figure class="fig plate">
+            <img src="img/07-hephaestus.webp" width="552" height="552" alt="Ink drawing of Hephaestus at his forge, hammering at an anvil while two self-moving golden handmaidens work beside him." loading="lazy" decoding="async" />
+            <figcaption>Hephaestus and his self-moving handmaidens, at work in parallel.</figcaption>
+          </figure>
+        </section>
+
+        <!-- ================= PROOF ================= -->
+        <section class="doc" id="proof" aria-labelledby="proof-h">
+          <span class="eyebrow">Work</span>
+          <h2 id="proof-h">Proof before &ldquo;done&rdquo;</h2>
+          <p class="prose">When a helper or an agent app says it is done, Poiesis says what it actually saw.</p>
+          <div class="fig panel narrow">
+            <div class="pane-title">Agents I started</div>
+            <ul class="lines">
+              <li><i class="sig ok"></i><span>Codex<small>Changed 3 files. Ran cargo test after the last change: passed.</small></span></li>
+              <li><i class="sig danger"></i><span>Claude Code<small>Changed 1 file. It did not run the project&rsquo;s check (npm test).</small></span></li>
+            </ul>
+          </div>
+          <dl class="specs">
+            <div><dt>Checks that ran</dt><dd>Passed, failed, run only before the last change, or never run. If the check failed or never ran, Poiesis is told not to claim the change works.</dd></div>
+            <div><dt>Unfinished work</dt><dd>It points out a new TODO, a test switched off, a stub, or a removed safety check with no test that it still refuses.</dd></div>
+            <div><dt>Its own work too</dt><dd>Before it answers, it is asked to finish what it left open or to say so plainly.</dd></div>
+            <div><dt>Half-done plans</dt><dd>A run cannot quietly end with plan items open.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= AGENT APPS ================= -->
+        <section class="doc" id="agent-apps" aria-labelledby="agent-apps-h">
+          <span class="eyebrow">Work</span>
+          <h2 id="agent-apps-h">Agent apps you already have</h2>
+          <p class="prose">Hand a long coding job to the agent you already pay for. Poiesis keeps the conversation, your memory and the last word.</p>
+          <div class="fig panel demo narrow" aria-label="A handover card">
+            <div class="sec">
+              <div class="cap">I would like to hand this to Claude Code</div>
+              <div class="said">Make the failing tests in this project pass.<small>Because: Running the tests or the build and fixing what fails</small></div>
+            </div>
+            <div class="sec">
+              <div class="cap">Claude Code &middot; your plan &middot; in the invoices folder</div>
+              <div class="cta" style="margin: 0; gap: 8px">
+                <button class="btn btn-primary btn-sm" type="button">Hand it over</button>
+                <button class="btn btn-secondary btn-sm" type="button">Do it yourself</button>
+                <button class="btn-text" type="button">Always for this</button>
+              </div>
+            </div>
+          </div>
+          <dl class="specs">
+            <div><dt>Which ones</dt><dd>Claude Code, Codex and OpenCode. Newly added: Gemini CLI, Qwen Code, Kimi Code, Copilot CLI and Cline, which have had less testing.</dd></div>
+            <div><dt>Found for you</dt><dd>Settings, then External agents finds the ones installed, shows who pays (your plan, an API key or free) and has a &ldquo;Try it&rdquo; that cannot change anything.</dd></div>
+            <div><dt>Like any helper</dt><dd>Same Agents list: open it, read it live, answer it, stop it. It runs over its own structured protocol, not by reading its screen.</dd></div>
+            <div><dt>You write the rules</dt><dd>Per agent: only when you ask, suggest and you confirm, or hand over on its own. Plain &ldquo;use it for&rdquo; and &ldquo;do not use it for&rdquo; lines say what it is for.</dd></div>
+            <div><dt>Hard limits</dt><dd>Code projects only, never in a read-only folder, and a cap per chat. A rule you keep overriding becomes a proposal to edit it.</dd></div>
+            <div><dt>Ask directly</dt><dd><code>/delegate</code> hands over one task. <code>/external off</code> keeps agents out of a chat. A persona can run on one agent.</dd></div>
+            <div><dt>One place to say yes</dt><dd>Claude Code, Codex and OpenCode bring their questions to Poiesis&rsquo;s panel. The newer ones ask as far as their own settings say, and what they ask comes to you.</dd></div>
+            <div><dt>Sealed off</dt><dd>An agent app starts without your model providers&rsquo; keys, unless you set it to pay with one. It can use your memory or your connected apps only if you switch that on for it.</dd></div>
+            <div><dt>Old sessions</dt><dd><code>/resume</code> picks up a Claude Code or Codex session you started in a terminal on the same folder.</dd></div>
+            <div><dt>Plan limits</dt><dd>For Claude Code and Codex it shows how much of your plan is used. When one hits its limit, it stops cleanly, says when it is back, and the work can go elsewhere.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= TEAMS ================= -->
+        <section class="doc" id="teams" aria-labelledby="teams-h">
+          <span class="eyebrow">Work</span>
+          <h2 id="teams-h">Personas and teams</h2>
+          <p class="prose">Every chat has one leader: Poiesis, a persona of yours, or a team you drew.</p>
+          <div class="fig panel demo narrow" aria-label="A team at work">
+            <div class="sec">
+              <div class="cap">Shop team &middot; coordinator Mira &middot; Lean</div>
+              <div class="said">Now: verifier is looking at item 3 from api.<small>api &rarr; verifier &middot; review &middot; item 3 &middot; &ldquo;Apple Pay button and the order route&rdquo;</small></div>
+            </div>
+            <div class="sec">
+              <div class="cap">Shop team is about to start</div>
+              <div class="said">4 personas. A task like this has cost about $0.40 to $1.20.<small>It stops at $2.00 or after 90 minutes.</small></div>
+              <div class="cta" style="margin: 10px 0 0; gap: 8px">
+                <button class="btn btn-primary btn-sm" type="button">Start</button>
+                <button class="btn btn-secondary btn-sm" type="button">Not now</button>
+              </div>
+            </div>
+          </div>
+          <dl class="specs">
+            <div><dt>A persona</dt><dd>Someone Poiesis speaks as, with its own name, instructions, model, tools, apps, memory and way of working.</dd></div>
+            <div><dt>Switch any time</dt><dd>Change the leader mid-chat, or use <code>/lead</code> for one message. Poiesis may suggest a leader, once per chat.</dd></div>
+            <div><dt>A team</dt><dd>A few personas or plain helpers with a coordinator, and lines you draw on a chart: who hands work to whom, who reviews whom, who may ask whom. A line you did not draw is refused.</dd></div>
+            <div><dt>Reviewed first</dt><dd>A member&rsquo;s work goes to its reviewer before it counts. Sent back, it goes back with the reason. After a few rounds the coordinator decides.</dd></div>
+            <div><dt>Separate copies</dt><dd>Each member works in its own copy of your folder. Finished work is brought in with Undo. Two changes to one file are never overwritten.</dd></div>
+            <div><dt>Cost first</dt><dd>A card says what a task like this has cost before the team starts. Every task stops at the team&rsquo;s budget and time limit.</dd></div>
+            <div><dt>Watch it</dt><dd>A live chart shows who works and what passes between them. A board lists every message, and a replay plays them in order.</dd></div>
+            <div><dt>Talk to a member</dt><dd>Draw a line from you to a member and speak to it directly with <code>/ask</code>.</dd></div>
+            <div><dt>Teams get better</dt><dd>For a team you unlock, it proposes changes from what it saw, such as removing a member who never gets work. You say yes or no, and you can go back.</dd></div>
+            <div><dt>Keep a good one</dt><dd>Turn the helpers a chat used into a team you can edit.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= AWAY ================= -->
+        <section class="doc" id="away" aria-labelledby="away-h">
+          <span class="eyebrow">Work</span>
+          <h2 id="away-h">While you are away</h2>
+          <p class="prose">Scheduled work does not stop at the first question, and does not answer it for you.</p>
+          <div class="fig panel demo narrow" aria-label="Something waiting for you">
+            <div class="sec">
+              <div class="cap">Waiting for you &middot; 1</div>
+              <div class="said">Atlas would like to: Bring in its changes to src/api/pay.ts<small>From this morning&rsquo;s task, while you were away</small></div>
+              <div class="cta" style="margin: 10px 0 0; gap: 8px">
+                <button class="btn btn-primary btn-sm" type="button">Do it</button>
+                <button class="btn-text" type="button">Not now</button>
+              </div>
+            </div>
+          </div>
+          <dl class="specs">
+            <div><dt>Tasks</dt><dd>Hourly to weekly. &ldquo;Schedule this&rdquo; turns the chat you are in into a task. Poiesis, a persona or a team does it.</dd></div>
+            <div><dt>Open to read</dt><dd>Each run happens in its own chat, not in a summary you must take on faith.</dd></div>
+            <div><dt>Waiting for you</dt><dd>File changes and questions wait in one list while the run goes on with other work. Approve a change and it is made exactly as asked, unless the file changed since.</dd></div>
+            <div><dt>Careful alone</dt><dd>An unattended run never writes, moves, deletes or sends on its own, and never hangs on a prompt nobody sees.</dd></div>
+            <div><dt>Told in time</dt><dd>A desktop notification says who is waiting. A paired Telegram account gets Yes and No buttons.</dd></div>
+            <div><dt>Nightly reflection</dt><dd>Optional: it reads back over the day and leaves a short digest in the morning.</dd></div>
+            <div><dt>Needs the app</dt><dd>Tasks run while Poiesis is running. It can stay in the tray when you close the window, and start when you sign in.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= FOLDERS ================= -->
+        <section class="doc" id="folders" aria-labelledby="folders-h">
+          <span class="eyebrow">Your things</span>
+          <h2 id="folders-h">Folders and projects</h2>
+          <p class="prose">Attach a folder and ask about it in your own words. Folders are closed until you open them.</p>
+          <dl class="specs">
+            <div><dt>Reads ahead</dt><dd>It reads the folder in the background and answers from it, citing the files, which you can open.</dd></div>
+            <div><dt>By meaning</dt><dd>Your question does not need the file&rsquo;s words. When the best match is weak, it says so. A second local engine can re-read the best matches more carefully.</dd></div>
+            <div><dt>Duplicates</dt><dd>It groups copies and near copies: images by how they look, documents by what they say. It never deletes any.</dd></div>
+            <div><dt>Access levels</dt><dd>Read-only, ask first or full, per chat or for good. Ask first is the default.</dd></div>
+            <div><dt>Undo</dt><dd>Anything that destroys bytes is saved first and can be restored. Every file and tool action is in the Activity log.</dd></div>
+            <div><dt>Projects</dt><dd>A named group of chats that share instructions, memory and perhaps a folder. A project about a book or a job search works with no folder.</dd></div>
+            <div><dt>Safe to tidy</dt><dd>Moving chats between projects never touches messages or files. Archiving hides a project and deletes nothing.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= CODE ================= -->
+        <section class="doc" id="code" aria-labelledby="code-h">
+          <span class="eyebrow">Your things</span>
+          <h2 id="code-h">Code</h2>
+          <p class="prose">Poiesis is not an IDE. In a project folder it checks its own work and shows exactly what it changed.</p>
+          <div class="fig panel diff" aria-label="The Changes view">
+            <div class="diff-head">
+              <b>Changes</b><span style="color: var(--ink-faint)">1 file &middot; +2 &minus;1</span>
+              <span class="r"><button class="btn-text" type="button">Undo all</button><button class="btn-text" type="button">Keep all</button></span>
+            </div>
+            <div class="diff-file">src/invoice.ts<span class="cnt">+2 &minus;1</span></div>
+            <div class="ln"><i>12</i><i>12</i><span class="sgn"></span><span>function total(lines: Line[]) {</span></div>
+            <div class="ln del"><i>13</i><i></i><span class="sgn">−</span><span>  return lines.reduce((s, l) =&gt; s + l.net, 0)</span></div>
+            <div class="ln add"><i></i><i>13</i><span class="sgn">+</span><span>  const net = lines.reduce((s, l) =&gt; s + l.net, 0)</span></div>
+            <div class="ln add"><i></i><i>14</i><span class="sgn">+</span><span>  return Math.round(net * (1 + VAT) * 100) / 100</span></div>
+            <div class="ln"><i>14</i><i>15</i><span class="sgn"></span><span>}</span></div>
+            <div class="run-result"><i class="sig ok"></i>Ran the test task &middot; passed</div>
+          </div>
+          <dl class="specs">
+            <div><dt>Knows the project</dt><dd>It detects languages, manifests, tasks and the git branch, and reads AGENTS.md or CLAUDE.md into every chat there.</dd></div>
+            <div><dt>Read before edit</dt><dd>It cannot edit a file it has not read in this run, or one that changed since.</dd></div>
+            <div><dt>Runs your tasks</dt><dd>Build, check, test and lint, as the project declares them. Errors become rows that open the file at the line. Off, ask or allow per project, ask by default.</dd></div>
+            <div><dt>Honest patch</dt><dd>The Changes view is built from the agent&rsquo;s own undo snapshots, never from git diff, so your uncommitted work is never shown as the agent&rsquo;s. Undo per file or all.</dd></div>
+            <div><dt>Says when unchecked</dt><dd>If it edited code and never ran the check, it is reminded, or tells you the change is unverified.</dd></div>
+            <div><dt>Find symbols</dt><dd>Where a function or type is defined and used, in Rust, TypeScript, JavaScript, Python and Go.</dd></div>
+            <div><dt>Careful by design</dt><dd>It never commits, pushes or installs globally on its own. Free-form commands exist only in expert mode, always ask and never go through a shell.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= APPS ================= -->
+        <section class="doc" id="apps" aria-labelledby="apps-h">
+          <span class="eyebrow">Your things</span>
+          <h2 id="apps-h">Connected apps and MCP</h2>
+          <p class="prose">Notion, Slack, Calendar, Linear, Sheets and hundreds more. Nothing sends, posts or pays without you seeing it.</p>
+          <div class="fig panel demo narrow" aria-label="A connected app asks before it sends">
+            <div class="sec">
+              <div class="cap">Post to Slack (acme): #general</div>
+              <div class="said">The Q3 numbers are in, summary attached.<small>A send, so I ask every time</small></div>
+            </div>
+            <div class="sec">
+              <div class="cta" style="margin: 0; gap: 8px">
+                <button class="btn btn-primary btn-sm" type="button">Send once</button>
+                <button class="btn btn-secondary btn-sm" type="button">Up to 25 a day for Slack</button>
+                <button class="btn-text" type="button">No</button>
+              </div>
+            </div>
+          </div>
+          <dl class="specs">
+            <div><dt>Your own account</dt><dd>Connections run through your Composio account with your own key. There is no Poiesis server in between, and Composio bills you on your plan.</dd></div>
+            <div><dt>Connect in the chat</dt><dd>Ask for something in an app that is not connected and a card appears. Sign in, and it carries on.</dd></div>
+            <div><dt>Several accounts</dt><dd>Name each one. With more than one, the agent has to say which.</dd></div>
+            <div><dt>Read, change, send</dt><dd>Reading runs. A change asks. A send (a post, a reply, a payment) asks every time, or up to a daily limit you set.</dd></div>
+            <div><dt>Nobody there</dt><dd>A scheduled task never sends on its own. The approval waits for you.</dd></div>
+            <div><dt>Outside text</dt><dd>What an app returns is marked as coming from outside, and sign-in links never reach the model.</dd></div>
+            <div><dt>Per persona</dt><dd>A writing persona can use Notion and nothing else. Usage shows calls per app.</dd></div>
+            <div><dt>MCP servers</dt><dd>Add any Model Context Protocol server, by link or as a local command. Same read, change and send checks. Tokens go to your credential store. Export and import the setup without secrets.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= TOOLS ================= -->
+        <section class="doc" id="tools" aria-labelledby="tools-h">
+          <span class="eyebrow">Your things</span>
+          <h2 id="tools-h">Tools</h2>
+          <p class="prose">Each group has its own switch. A persona can narrow what is on, never widen it. A tool that cannot work yet is left out and says why.</p>
+          <dl class="specs">
+            <div><dt>File access <span class="badge">On</span></dt><dd>Read and write in folders you allow. Each change asks unless you say otherwise.</dd></div>
+            <div><dt>Folder reading <span class="badge">On</span></dt><dd>Reads an attached folder ahead of time. Grants no new folder.</dd></div>
+            <div><dt>Memory and recall <span class="badge">On</span></dt><dd>Keeps notes visibly and undoably, and searches past chats.</dd></div>
+            <div><dt>Artifacts and interface <span class="badge">On</span></dt><dd>Pages, drawings, documents and live task surfaces.</dd></div>
+            <div><dt>Skills <span class="badge">On</span></dt><dd>Reads and proposes procedures. Keeping a new one asks.</dd></div>
+            <div><dt>Delegation <span class="badge">On</span></dt><dd>Helper agents and agent apps.</dd></div>
+            <div><dt>Web search <span class="badge">Off</span></dt><dd>No key needed: DuckDuckGo, with Bing as the fallback. Your query leaves the device.</dd></div>
+            <div><dt>Code execution <span class="badge">Off</span></dt><dd>Python or Node in a sandbox with time and memory limits, also for analysing data in a folder.</dd></div>
+            <div><dt>Project tasks <span class="badge">Off</span></dt><dd>Your project&rsquo;s build and tests, with time and memory limits and secret-looking variables removed. It is not a full sandbox.</dd></div>
+            <div><dt>Scripts calling tools <span class="badge">Off</span></dt><dd>A script the agent wrote can use its tools. Every call still asks what it would ask.</dd></div>
+            <div><dt>Mail <span class="badge">Off</span></dt><dd>Your account directly over IMAP and SMTP. Sending always asks.</dd></div>
+            <div><dt>Browser <span class="badge">Off</span></dt><dd>Your installed Chrome or Edge, in its own profile. A new site asks first.</dd></div>
+            <div><dt>Screen and apps <span class="badge">Off</span></dt><dd>A screenshot, or opening an app by name. Both ask.</dd></div>
+            <div><dt>Image generation <span class="badge">Off</span></dt><dd>The on-device engine as a tool. Asking for a picture in chat works without it.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= COMMANDS ================= -->
+        <section class="doc" id="commands" aria-labelledby="commands-h">
+          <span class="eyebrow">Your things</span>
+          <h2 id="commands-h">Commands and skills</h2>
+          <p class="prose">The <b>/</b> button beside the plus holds about 50 commands. The plus adds things to a message, the slash does things. The agent can suggest one, and you decide.</p>
+          <dl class="specs">
+            <div><dt>This turn</dt><dd><code>/effort /steps /stop /continue /retry /plan /btw /goal</code></dd></div>
+            <div><dt>The conversation</dt><dd><code>/new /rename /fork /export /rewind /compact /context /why /talk /focus</code></dd></div>
+            <div><dt>Memory and self</dt><dd><code>/remember /forget /always /reflect /checkup /skillify /tidy /self /autonomy /ways</code></dd></div>
+            <div><dt>Reach</dt><dd><code>/tools /apps /connect /external /delegate /resume /agents /schedule /image /video /model</code></dd></div>
+            <div><dt>Who and how</dt><dd><code>/lead /ask /style /workspace</code></dd></div>
+            <div><dt>Code</dt><dd><code>/init /review /verify /changes /undo /keep</code></dd></div>
+            <div><dt>Information</dt><dd><code>/permissions /usage /activity /help</code></dd></div>
+          </dl>
+          <div class="fig trio two-up">
+            <article class="tile">
+              <div class="art">
+<pre class="codebox"><span class="k">---</span>
+name: weekly-report
+description: Build the weekly report
+  from the project folder
+<span class="k">---</span>
+1. Read notes/ for this week.
+2. Group items by client.</pre>
+              </div>
+              <div class="txt">
+                <h3>Skills in an open format.</h3>
+                <p>A folder with a SKILL.md file, in the open Agent Skills format. A skill from another agent works here unchanged.</p>
+              </div>
+            </article>
+            <article class="tile">
+              <div class="art">
+<pre class="codebox"><span class="k">command</span>
+npx -y @modelcontextprotocol/
+  server-filesystem ~/notes
+
+<span class="k">or paste a link</span>
+https://example.com/mcp</pre>
+              </div>
+              <div class="txt">
+                <h3>Your own MCP servers.</h3>
+                <p>Remote or local, and their tools join the toolbox.</p>
+              </div>
+            </article>
+          </div>
+          <dl class="specs">
+            <div><dt>Light until used</dt><dd>The agent sees one line per skill until it needs the rest, so skills cost nothing until then.</dd></div>
+            <div><dt>Where they live</dt><dd><code>~/.poiesis/skills/</code> and <code>.poiesis/skills/</code> in your folder. It never scans another agent&rsquo;s folders on its own.</dd></div>
+            <div><dt>Learned from work</dt><dd>After a task with many steps that you are likely to repeat, it can propose a skill.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= WINDOW ================= -->
+        <section class="doc" id="window" aria-labelledby="window-h">
+          <span class="eyebrow">Using it</span>
+          <h2 id="window-h">The window</h2>
+          <p class="prose">Calm to read, and everything you opened stays where you left it.</p>
+          <dl class="specs">
+            <div><dt>One row of tabs</dt><dd>Chats, files, artifacts, agent runs, patches and settings. They come back after a restart.</dd></div>
+            <div><dt>Side panel</dt><dd>Files, Artifacts, Agents, Browser and Changes. The agent may switch the panel, but never your tabs.</dd></div>
+            <div><dt>Chat list <span class="badge">New</span></dt><dd>A mark shows which chats work, wait for you, failed or finished while you were away, with helpers listed under their chat. Filter by state.</dd></div>
+            <div><dt>Small helps <span class="badge">New</span></dt><dd>A button back to the latest message, earlier prompts with the up arrow, and links drawn as small chips.</dd></div>
+            <div><dt>Search</dt><dd>Full-text search over your whole history, and a command palette.</dd></div>
+            <div><dt>Reading</dt><dd>Choose the message font and text size, in Daylight or Backlit.</dd></div>
+            <div><dt>Simple by default</dt><dd>The machinery stays out of the way until you switch on &ldquo;Show me everything&rdquo;.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= CREATE ================= -->
+        <section class="doc" id="create" aria-labelledby="create-h">
+          <span class="eyebrow">Using it</span>
+          <h2 id="create-h">Images, video and live interfaces</h2>
+          <p class="prose">There is no image mode. Ask in the chat, and it arrives under your message.</p>
+          <div class="fig media-wait narrow">
+            <span class="mk"><i class="orbdot"></i>Making an image &middot; 0:12</span>
+            <span class="bar"></span>
+            <button class="btn-text" type="button">Cancel</button>
+          </div>
+          <dl class="specs">
+            <div><dt>Refine</dt><dd>Say &ldquo;make it warmer&rdquo; and a better one follows.</dd></div>
+            <div><dt>On your device</dt><dd>Stable Diffusion 1.5 or SDXL, or your own model by link. Downloads resume if cut off. Stable Diffusion 1.5 at 512 &times; 512 fits about 6 GB of graphics memory.</dd></div>
+            <div><dt>With your key</dt><dd>OpenRouter for images and video, or OpenAI. Cost is shown before and after, and the first paid use asks.</dd></div>
+            <div><dt>In the background</dt><dd>Keep chatting while a clip renders. Results land in the Library with what made them and what they cost.</dd></div>
+            <div><dt>Artifacts</dt><dd>HTML, SVG, documents and code render in the side panel. A Python or Node artifact has a Run button.</dd></div>
+            <div><dt>Live interfaces</dt><dd>Instead of long text it can build a comparison table, checklist, form, picker or progress tracker, and update it as work moves. Ticking a box costs no model turn.</dd></div>
+          </dl>
+          <figure class="fig plate">
+            <img src="img/03-daedalus.webp" width="552" height="552" alt="Ink drawing of Daedalus in his workshop, assembling a wing among sketches, tools and small clockwork machines." loading="lazy" decoding="async" />
+            <figcaption>Daedalus in his workshop, with his notes pinned to the wall.</figcaption>
+          </figure>
+        </section>
+
+        <!-- ================= VOICE ================= -->
+        <section class="doc" id="voice" aria-labelledby="voice-h">
+          <span class="eyebrow">Using it</span>
+          <h2 id="voice-h">Voice</h2>
+          <p class="prose">Speak, and it answers out loud. Cut in whenever you like.</p>
+          <dl class="specs">
+            <div><dt>On your machine</dt><dd>Hearing and speaking run on your processor. No cloud model is needed.</dd></div>
+            <div><dt>Engines</dt><dd>Parakeet or Moonshine to hear, Kokoro and Piper voices to speak, Silero to know when you stopped.</dd></div>
+            <div><dt>A normal turn</dt><dd>A spoken turn has the same tools and the same safeguards as a typed one.</dd></div>
+            <div><dt>Install</dt><dd>Settings, then Runtime, then Voice.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= PHONE ================= -->
+        <section class="doc" id="phone" aria-labelledby="phone-h">
+          <span class="eyebrow">Using it</span>
+          <h2 id="phone-h">Your desktop, in your pocket</h2>
+          <p class="prose">An Android app, or a Telegram bot. Your chats, memory, folders and models stay on your computer.</p>
+          <!-- The real screens, drawn by the phone app's own stylesheets (see app/). -->
+          <div class="fig phones">
+            <figure class="phone">
+              <div class="phone-body">
+                <div class="phone-screen">
+                  <iframe src="app/phone.html#home" width="390" height="800" title="The phone app's home screen: one thing waiting for you, then your chats" loading="lazy" tabindex="-1"></iframe>
+                </div>
+              </div>
+              <figcaption><b>Home.</b> What is waiting for you, then your chats.</figcaption>
+            </figure>
+            <figure class="phone">
+              <div class="phone-body">
+                <div class="phone-screen">
+                  <iframe src="app/phone.html#ask" width="390" height="800" title="A chat on the phone: Poiesis asks before it moves a file, with the buttons No and Allow once" loading="lazy" tabindex="-1"></iframe>
+                </div>
+              </div>
+              <figcaption><b>A risky step asks.</b> Two large buttons. A yes counts once.</figcaption>
+            </figure>
+            <figure class="phone">
+              <div class="phone-body">
+                <div class="phone-screen">
+                  <iframe src="app/phone.html#voice" width="390" height="800" title="Voice on the phone: a bar at the foot of the chat is listening" loading="lazy" tabindex="-1"></iframe>
+                </div>
+              </div>
+              <figcaption><b>Talk to it.</b> The answer arrives in the chat and is read to you.</figcaption>
+            </figure>
+          </div>
+          <dl class="specs">
+            <div><dt>Off until on</dt><dd>One switch under Settings, then Remote, also in the tray. Off closes every way in within a second.</dd></div>
+            <div><dt>Android app</dt><dd>Scan a code to pair. No account. Chats, new chats, waiting questions, approvals, photos and voice. Your computer does the hearing and speaking.</dd></div>
+            <div><dt>Private line</dt><dd>End-to-end encrypted through iroh&rsquo;s free relay service. The relay sees your IP address, never your messages.</dd></div>
+            <div><dt>Limits</dt><dd>Android only, no push notifications, and not on the Play Store yet, so you <a href="https://github.com/schuettla/poiesis#building-the-phone-app">build it from the source</a>.</dd></div>
+            <div><dt>Telegram bot</dt><dd>Your own bot. It takes pictures and documents, sends back what a turn makes, and asks risky steps with buttons. Unknown accounts and groups get no answer.</dd></div>
+            <div><dt>Telegram privacy</dt><dd>Messages to the bot pass through Telegram&rsquo;s servers. They are not end-to-end encrypted.</dd></div>
+            <div><dt>Careful from afar</dt><dd>A remote turn asks before it writes a file, even in a folder you trust fully. &ldquo;Always&rdquo; is for the desktop only. No answer in 10 minutes means no.</dd></div>
+            <div><dt>Same chats</dt><dd>Watch a remote turn live on the desktop and carry on there. The first answer to a question wins.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= MODELS ================= -->
+        <section class="doc" id="models" aria-labelledby="models-h">
+          <span class="eyebrow">Under it</span>
+          <h2 id="models-h">Models and cost</h2>
+          <p class="prose">Local models on your own machine, hosted ones with your own key, in one picker. The two are marked.</p>
+          <div class="fig panel picker narrow" aria-label="The model picker">
+            <div class="grp">
+              <div class="grp-t"><i class="sig local"></i>On this device</div>
+              <div class="opt on">Llama 3.1 8B <span class="fit">Runs great</span></div>
+              <div class="opt">Gemma 3 4B <span class="fit">Runs great</span></div>
+              <div class="opt">Mistral 7B <span class="fit">Runs slowly</span></div>
+            </div>
+            <div class="grp">
+              <div class="grp-t"><i class="sig cloud"></i>Cloud, with your key</div>
+              <div class="opt">OpenRouter <span class="fit">cost shown before and after</span></div>
+              <div class="opt">OpenAI</div>
+              <div class="opt">Anthropic</div>
+            </div>
+          </div>
+          <dl class="specs">
+            <div><dt>Right engine</dt><dd>It checks your hardware and downloads a prebuilt llama.cpp engine: CUDA, Vulkan, ROCm, SYCL, Metal or CPU. No toolkit to install.</dd></div>
+            <div><dt>Finding models</dt><dd>Recommendations and discovery on Hugging Face and GitHub, with fit badges, quality levels and one-click download.</dd></div>
+            <div><dt>Small models</dt><dd>Each model gets what it can carry: all features, basic tools or chat only. Its context size is chosen for your hardware. You can change both.</dd></div>
+            <div><dt>Providers</dt><dd>OpenAI, OpenRouter, Anthropic or your own model servers. A key is checked before it says saved. A local-only filter hides cloud models.</dd></div>
+            <div><dt>Thinking</dt><dd>Set how hard a model thinks next to the model. It starts at &ldquo;think briefly&rdquo;.</dd></div>
+            <div><dt>Cost in the open</dt><dd>Usage by day, model and chat, plus agent apps and connected apps. Local runs cost nothing. A model with no known price says so.</dd></div>
+            <div><dt>Price</dt><dd>The app is free under the MIT license. A cloud model costs what its provider charges.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= QUICK ================= -->
+        <section class="doc" id="quick" aria-labelledby="quick-h">
+          <span class="eyebrow">Under it</span>
+          <h2 id="quick-h">Quick decisions <span class="badge">Experiment</span></h2>
+          <p class="prose">A small decision model answers short yes or no questions in a fraction of a second, so the large one does not have to. Off until you switch it on in Settings, then Experiments.</p>
+          <dl class="specs">
+            <div><dt>Leaner turns</dt><dd>It holds back tools a message clearly does not need. The model or you can ask for one back.</dd></div>
+            <div><dt>Mid-run messages</dt><dd>It reads what you send to a working agent: stop, redirect, addition or question.</dd></div>
+            <div><dt>Care before acting</dt><dd>A call that looks irreversible, or not what you asked for, gets a question of its own. It only ever adds caution.</dd></div>
+            <div><dt>Checked answers</dt><dd>Sentences are matched against what the run read or did. &ldquo;I ran the tests&rdquo; is flagged if no step did.</dd></div>
+            <div><dt>Sort many items</dt><dd>One question about up to 500 files, tickets or photos, answered as a table with a confidence per row.</dd></div>
+            <div><dt>Mail triage</dt><dd>With a local model: kind, urgency and &ldquo;wants a reply&rdquo;.</dd></div>
+            <div><dt>Measured</dt><dd>It learns from what you do, not from asking a model. Each switch has a 30-day report and a reset.</dd></div>
+            <div><dt>Where it runs</dt><dd>On your computer, or in the cloud if you choose, with providers that keep nothing. Background questions stay local unless you opt one in.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= PRIVACY ================= -->
+        <section class="doc" id="privacy" aria-labelledby="privacy-h">
+          <span class="eyebrow">Under it</span>
+          <h2 id="privacy-h">Privacy and security</h2>
+          <p class="prose">Local first. Cloud only when you choose.</p>
+          <div class="fig offlist">
+            <div class="head">
+              <h3>Off until you switch it on</h3>
+              <p>The things that reach outside or run code.</p>
+            </div>
+            <div class="offrows">
+              <div class="offrow"><b>Web search</b><span class="badge">Off</span><p>Your query leaves the device, so it asks to be switched on.</p></div>
+              <div class="offrow"><b>Code execution</b><span class="badge">Off</span><p>A sandbox with time and memory limits.</p></div>
+              <div class="offrow"><b>Mail</b><span class="badge">Off</span><p>A direct connection. Sending always asks.</p></div>
+              <div class="offrow"><b>Browser</b><span class="badge">Off</span><p>Its own profile. Your cookies are never touched.</p></div>
+              <div class="offrow"><b>Screen and apps</b><span class="badge">Off</span><p>A screenshot or opening an app both ask first.</p></div>
+              <div class="offrow"><b>Project tasks</b><span class="badge">Off</span><p>Your build and tests, with caps on time and memory.</p></div>
+              <div class="offrow"><b>Connected apps</b><span class="badge">Off</span><p>Needs your own key. A send asks.</p></div>
+              <div class="offrow"><b>Agent apps</b><span class="badge">Off</span><p>You choose when they are used, and which key, if any.</p></div>
+              <div class="offrow"><b>Phone and Telegram</b><span class="badge">Off</span><p>Only a paired sender gets in.</p></div>
+              <div class="offrow"><b>Quick decisions</b><span class="badge">Off</span><p>An experiment. The cloud version is yours to choose.</p></div>
+            </div>
+          </div>
+          <dl class="specs">
+            <div><dt>What leaves</dt><dd>Nothing, unless you use something that needs the network: web search, browser, mail, a connected app, an agent app, a cloud model, your phone, or a download.</dd></div>
+            <div><dt>Your keys</dt><dd>Kept in Windows Credential Manager, the macOS Keychain or the Linux Secret Service. Never in a file or in your chats.</dd></div>
+            <div><dt>Outside text</dt><dd>Web pages, mail, fetched files and skills are marked as data from outside. You can open each to read the raw source.</dd></div>
+            <div><dt>Folders</dt><dd>Deny by default, with protection against path tricks and links that lead outside.</dd></div>
+            <div><dt>Local engine</dt><dd>It listens on your machine only, with a new secret token each session.</dd></div>
+            <div><dt>Pairing</dt><dd>A one-time code on your screen, valid 5 minutes. A phone or chat cannot change remote settings or pair others.</dd></div>
+            <div><dt>Telemetry</dt><dd>Off by default, contains no content, and stays on your computer.</dd></div>
+          </dl>
+        </section>
+
+        <!-- ================= SOURCE ================= -->
+        <section class="doc" id="source" aria-labelledby="source-h">
+          <span class="eyebrow">Under it</span>
+          <h2 id="source-h">Systems and source</h2>
+          <p class="prose">Ready builds are on the <a href="index.html#download">download section</a>. Installed copies check for new versions and always ask before installing one. Or build it yourself.</p>
+          <div class="fig panel term">
+            <div class="path">Terminal</div>
+<pre><span class="k">$</span> git clone https://github.com/schuettla/poiesis.git
+<span class="k">$</span> cd poiesis
+<span class="k">$</span> npm install
+<span class="k">$</span> npm run tauri dev</pre>
+          </div>
+          <dl class="specs">
+            <div><dt>Systems</dt><dd>Windows 10 or 11, macOS on Apple Silicon, or 64-bit Linux with glibc 2.39 or newer. The macOS and Linux builds are newer and less tested. Intel Macs are not supported.</dd></div>
+            <div><dt>Tools to build</dt><dd>Rust, Node.js 18 or newer, and your system&rsquo;s build tools: MSVC C++ build tools on Windows, Xcode command line tools on a Mac, WebKitGTK and related libraries on Linux (<a href="https://github.com/schuettla/poiesis#prerequisites">full list</a>).</dd></div>
+            <div><dt>First start</dt><dd>It builds the Rust backend, which takes a few minutes. Then pick a model under Models.</dd></div>
+            <div><dt>Graphics card</dt><dd>Optional.</dd></div>
+            <div><dt>Make an installer</dt><dd><code>npm run tauri build</code></dd></div>
+            <div><dt>Built with</dt><dd>Tauri 2, Rust, React, llama.cpp and SQLite. MIT license.</dd></div>
+          </dl>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <div class="wrap">
+      <a class="brand" href="index.html">
+        <svg class="poiesis-mark stage-3" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"></svg>
+        Poiesis
+      </a>
+      <span>Copyright 2026 Erich Holzbauer. MIT license.</span>
+      <nav aria-label="Footer">
+        <a href="index.html#download">Download</a>
+        <a href="https://github.com/schuettla/poiesis" aria-label="GitHub" title="GitHub">
+          <svg aria-hidden="true"><use href="#i-github" /></svg>
+        </a>
+        <a href="index.html#faq">FAQ</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

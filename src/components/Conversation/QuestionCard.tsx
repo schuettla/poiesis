@@ -14,7 +14,8 @@ import "./QuestionCard.css";
  * else: no timer, no urgency colour. The run waits for as long as it takes.
  */
 export default function QuestionCard({ q }: { q: PendingQuestion }) {
-  const answer = useAppStore((s) => s.answerQuestion);
+  const answerQuestion = useAppStore((s) => s.answerQuestion);
+  const answer = (a: Parameters<typeof answerQuestion>[0]) => answerQuestion(a, q.id);
   const [picked, setPicked] = useState<string[]>([]);
   // A question with no options is a free answer: the box is already open.
   const [other, setOther] = useState(q.options.length === 0);

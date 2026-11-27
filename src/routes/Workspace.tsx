@@ -10,6 +10,7 @@ import SurfaceRenderer from "../components/Surface/SurfaceRenderer";
 import Orb from "../components/Orb/Orb";
 import { orbForPresence, orbForStep } from "../components/Orb/orbState";
 import { LayoutIcon, MessageIcon } from "../components/Icons/Icons";
+import { busyIn } from "../lib/runs";
 import "../components/Conversation/Conversation.css";
 import "./Workspace.css";
 
@@ -24,7 +25,7 @@ import "./Workspace.css";
  * reply. */
 export default function Workspace() {
   const conversation = useActiveConversation();
-  const busy = useAppStore((s) => s.busy);
+  const busy = useAppStore((s) => busyIn(s, s.activeConversationId));
   const surface = useAppStore((s) =>
     s.activeConversationId ? s.surfaces[s.activeConversationId] : undefined
   );
@@ -139,7 +140,7 @@ export default function Workspace() {
  * decisions the run is paused on, then what it is doing, then its latest words.
  * The full turn (steps, files, media) is in the chat. */
 function WorkspaceReply({ message }: { message: Message }) {
-  const busy = useAppStore((s) => s.busy);
+  const busy = useAppStore((s) => busyIn(s, s.activeConversationId));
   const setWorkspaceShown = useAppStore((s) => s.setWorkspaceShown);
   const [expanded, setExpanded] = useState(false);
 

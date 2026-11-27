@@ -261,6 +261,29 @@ fn counts_done(team: &Team, rows: &[crate::db::SubagentRun], at: usize) -> bool 
     }
 }
 
+/// Is the work of `rows[at]` there to be brought in? It is the latest run of its chat (the one
+/// that stands for it), its copy is there, and its item counts as done.
+fn ready(data_dir: &Path, team: &Team, rows: &[crate::db::SubagentRun], at: usize) -> bool {
+    let run = &rows[at];
+    run.member.is_some()
+        && !rows[at + 1..].iter().any(|x| x.child_conversation_id == run.child_conversation_id)
+        && copy_dir(data_dir, &run.child_conversation_id).is_dir()
+        && counts_done(team, rows, at)
+}
+
+/// `PAR-5`: the folder `merge_done` would write into now, when it has something to bring in.
+pub fn to_merge(db: &Db, data_dir: &Path, session: &str, team: &Team) -> Option<PathBuf> {
+    if team.folder != Folder::Copies {
+        return None;
+    }
+    let main = db.conversation_folder(session).ok().and_then(|(f, _)| f).map(PathBuf::from)?;
+    let rows = db.list_subagent_runs(session).unwrap_or_default();
+    let due = (0..rows.len()).any(|at| {
+        ready(data_dir, team, &rows, at) && merged_runs().lock().is_ok_and(|s| !s.contains(&rows[at].id))
+    });
+    due.then_some(main)
+}
+
 /// Bring in the work of every member chat whose latest item counts as done and is not merged
 /// yet. What cannot be brought in is queued for the coordinator (`take_conflicts`). Returns how
 /// many files were written. Does nothing for a team that is not on `copies`. In a run nobody watches
@@ -275,11 +298,7 @@ pub fn merge_done(db: &Db, data_dir: &Path, session: &str, ledger: &Ledger, team
     for at in 0..rows.len() {
         let run = &rows[at];
         let Some(role) = run.member.as_deref() else { continue };
-        // The latest run of its chat is the one that stands for it.
-        if rows[at + 1..].iter().any(|x| x.child_conversation_id == run.child_conversation_id) {
-            continue;
-        }
-        if !copy_dir(data_dir, &run.child_conversation_id).is_dir() || !counts_done(team, &rows, at) {
+        if !ready(data_dir, team, &rows, at) {
             continue;
         }
         if !merged_runs().lock().map(|mut s| s.insert(run.id.clone())).unwrap_or(false) {

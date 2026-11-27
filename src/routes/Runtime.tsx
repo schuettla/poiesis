@@ -88,7 +88,8 @@ export default function Runtime() {
 
   async function stop() {
     setBusyAction("stop");
-    await stopEngine();
+    setError(null);
+    await stopEngine().catch((e) => setError(String(e)));
     await refresh();
     setBusyAction(null);
   }

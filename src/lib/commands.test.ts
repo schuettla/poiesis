@@ -46,8 +46,8 @@ beforeEach(() => {
     turnModifiers: {},
     conversations: [],
     activeConversationId: null,
-    activeRun: null,
-    busy: false,
+    liveRuns: {},
+    busyChats: {},
     changeSets: {},
     commandNotes: {},
   });

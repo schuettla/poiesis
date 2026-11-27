@@ -1,12 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ChatState } from "../../lib/chatState";
+import { clockText } from "../../lib/liveWords";
 import Ticker from "../Ticker/Ticker";
-import { ArcIcon, CheckIcon, CloseIcon, DotIcon } from "../Icons/Icons";
+import { ArcIcon, CheckIcon, CloseIcon, DotIcon, PauseIcon } from "../Icons/Icons";
 
 /** `UI-1`: the words for each state's glyph. One glyph per state, and ink for all but a failure. */
 const WORDS: Record<Exclude<ChatState, "idle">, string> = {
   running: "Working",
   "needs-you": "Waiting for you",
+  held: "Waiting on something else",
   failed: "Stopped with an error",
   "done-unseen": "Finished while you were away",
 };
@@ -18,6 +20,8 @@ export function ChatStateMark({ state }: { state: ChatState }) {
       <ArcIcon size={12} />
     ) : state === "needs-you" ? (
       <DotIcon size={12} />
+    ) : state === "held" ? (
+      <PauseIcon size={12} />
     ) : state === "failed" ? (
       <CloseIcon size={12} strokeWidth={1.6} />
     ) : (
@@ -44,10 +48,43 @@ export function ChatSlot({ state, twisty }: { state: ChatState; twisty?: ReactNo
 
 const GROW_MS = 360;
 
+/** One timer for every clock in the list, running only while one is shown. */
+const clocks = new Set<() => void>();
+let clockTimer: ReturnType<typeof setInterval> | undefined;
+function onSecond(listener: () => void): () => void {
+  clocks.add(listener);
+  clockTimer ??= setInterval(() => clocks.forEach((tick) => tick()), 1000);
+  return () => {
+    clocks.delete(listener);
+    if (clocks.size) return;
+    clearInterval(clockTimer);
+    clockTimer = undefined;
+  };
+}
+
+/** `PAR-9`: how long a working chat has worked. */
+function RunClock({ since }: { since: number }) {
+  const [, setTick] = useState(0);
+  useEffect(() => onSecond(() => setTick((t) => t + 1)), []);
+  return <span className="chat-now-time">{clockText(Date.now() - since)}</span>;
+}
+
 /** `UI-2`: the second line of a chat that works or waits. The row grows when it appears and
  * shrinks when it goes; its words change in place (`Ticker`). Under reduced motion all of it
- * is instant (the global rule). */
-export function ChatNow({ text, indent = 20 }: { text: string | null; indent?: number }) {
+ * is instant (the global rule). `live` is for a chat that works: the moving light passes
+ * through its words. A question waiting for you stands still. `since` ends the line with
+ * the time the run has taken (`PAR-9`). */
+export function ChatNow({
+  text,
+  indent = 20,
+  live = false,
+  since = null,
+}: {
+  text: string | null;
+  indent?: number;
+  live?: boolean;
+  since?: number | null;
+}) {
   // The last words that were shown: what a closing line still says while it shrinks.
   const [held, setHeld] = useState<string | null>(text);
 
@@ -68,8 +105,9 @@ export function ChatNow({ text, indent = 20 }: { text: string | null; indent?: n
   return (
     <span className={`chat-now ${text === null ? "closing" : ""}`} style={{ paddingLeft: indent }}>
       <span className="chat-now-clip">
-        <span className="chat-now-line">
-          <Ticker text={shown} />
+        <span className={`chat-now-line${since !== null && text !== null ? " timed" : ""}`}>
+          <Ticker text={shown} live={live && text !== null} />
+          {since !== null && text !== null && <RunClock since={since} />}
         </span>
       </span>
     </span>

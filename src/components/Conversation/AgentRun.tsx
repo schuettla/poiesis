@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Message } from "../../lib/types";
 import type { StopReason } from "../../lib/api";
-import { isPersistedId, useAppStore } from "../../lib/store";
+import { isPersistedId, sayRefused, useAppStore } from "../../lib/store";
 import Timeline, { hasVisibleSteps } from "./Timeline";
 import CheckedAnswer from "./VerifyPanel";
 import RunText from "./RunText";
@@ -16,12 +16,19 @@ import ProposalCard from "./ProposalCard";
 import QuestionCard from "./QuestionCard";
 import HarnessProposal from "./HarnessProposal";
 import Orb from "../Orb/Orb";
-import { ChevronIcon, DownloadIcon, KebabIcon } from "../Icons/Icons";
+import { ChevronIcon, DownloadIcon, ForkIcon, KebabIcon, RefreshIcon, RewindIcon } from "../Icons/Icons";
+import CopyButton from "./CopyButton";
+import { fullTime, turnTime } from "../../lib/time";
 import { artifactKind, downloadArtifact } from "../Workbench/artifactFiles";
 import { SpokenGlyph, StoppedHere } from "./SpokenMark";
 import { orbForStep } from "../Orb/orbState";
-import { liveActivity, stepWords } from "../../lib/liveWords";
+import { liveActivity, stepWords, thinkingIsLive, writingCount } from "../../lib/liveWords";
+import { estimateTokens } from "../../lib/context";
+import { runWaitsForYou } from "../../lib/chatState";
+import Ticker from "../Ticker/Ticker";
+import RollingNumber from "../Ticker/RollingNumber";
 import type { OrbState } from "thinking-orbs";
+import { busyIn, openQuestions, shownRun } from "../../lib/runs";
 import "../Context/Context.css";
 
 /** The working orb, shown while the turn is live but nothing else on screen is
@@ -80,22 +87,26 @@ function NoAnswer() {
  * Only rendered for the turn that is actually streaming — a finished turn's
  * meter would be a number about nothing.
  *
- * `orb` is the animation for what the line says, or null when `Thinking`
- * already shows one: two orbs in one turn would break the rule that only one
- * slow animation is on screen at a time. The slot is kept either way so the
- * text does not slide sideways when a step starts or ends. */
+ * `orb` is the animation for what the line says. Once the meter is drawn the
+ * orb lives in its slot and the bare `Thinking` orb is gone: drawn above the
+ * line it left the slot empty, and the line looked indented under nothing. The
+ * slot is kept even without an orb so the text does not slide sideways. */
 export function RunMeter({
   steps,
   orb,
   idle = false,
+  mayLight = true,
 }: {
   steps?: Message["steps"];
   orb: OrbState | null;
   /** Before the run's first step, show a plain "what it is doing" line instead
    * of nothing. For views (the Workspace dock) with no other sign of life. */
   idle?: boolean;
+  /** False while something else in the turn carries the moving light. */
+  mayLight?: boolean;
 }) {
-  const run = useAppStore((s) => s.activeRun);
+  const run = useAppStore(shownRun);
+  const asking = useAppStore((s) => runWaitsForYou(s, s.activeConversationId));
   const [, tick] = useState(0);
   useEffect(() => {
     if (!run) return;
@@ -108,7 +119,11 @@ export function RunMeter({
     return (
       <div className="run-meter-row" role="status">
         <span className="run-meter-orb">{orb && <Orb state={orb} />}</span>
-        <p className="run-meter">{pending ? stepWords(pending) : "working"}</p>
+        <p className="run-meter">
+          <span className="run-meter-words">
+            <Ticker text={pending ? stepWords(pending) : "working"} live={mayLight} />
+          </span>
+        </p>
       </div>
     );
   }
@@ -124,16 +139,31 @@ export function RunMeter({
   // What is happening right now: a tool that is running, then thinking we can see arriving,
   // then the honest fallback, with the plan item in front (`liveActivity`).
   const doing = liveActivity(steps, run);
+  const thinkingNow = thinkingIsLive(steps, run.thinking);
+  // A long tool call being written: the count is what shows it is still going.
+  const words = writingCount(steps, run);
   return (
     <>
       <div className="run-meter-row">
         <span className="run-meter-orb">{orb && <Orb state={orb} />}</span>
         <p className={`run-meter ${tight ? "tight" : ""}`}>
-          {doing} · {clock}
-          {context ? ` · ${context}` : ""}
+          <span className="run-meter-words">
+            <Ticker text={doing} live={mayLight && !thinkingNow && !asking} />
+          </span>
+          <span className="run-meter-rest">
+            {words !== null && (
+              <>
+                {" · "}
+                <RollingNumber value={words} />
+                {" words"}
+              </>
+            )}
+            {` · ${clock}`}
+            {context ? ` · ${context}` : ""}
+          </span>
         </p>
       </div>
-      <ThinkingTrace text={run.thinking} />
+      <ThinkingTrace text={run.thinking} live={thinkingNow} />
     </>
   );
 }
@@ -144,18 +174,27 @@ export function RunMeter({
  * above it was the only sign of life — a clock ticking beside an empty screen,
  * which reads as a hang. This is folded shut by default because thinking is not
  * the answer and should not compete with it, but it is openable, because the
- * only thing worse than a wall of reasoning is no evidence at all. */
-function ThinkingTrace({ text, solo = false }: { text: string; solo?: boolean }) {
+ * only thing worse than a wall of reasoning is no evidence at all.
+ *
+ * While the thought is arriving (`live`) the word carries the moving light, and the
+ * token count flaps upward. The count is an estimate, hence the "~". The reasoning
+ * itself never moves: it is there to be read. */
+function ThinkingTrace({ text, live }: { text: string; live: boolean }) {
   const [open, setOpen] = useState(false);
   if (!text) return null;
+  const tokens = estimateTokens(text);
   return (
-    <details className={`run-thinking${solo ? " solo" : ""}`} open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+    <details className="run-thinking" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>
         <span className="run-thinking-twisty" aria-hidden="true">
           <ChevronIcon dir="right" size={11} strokeWidth={1.6} />
         </span>
-        Thinking
-        <span className="run-thinking-count">{text.length.toLocaleString()} characters</span>
+        <span className={live ? "live-words" : undefined}>Thinking</span>
+        <span className="run-thinking-count">
+          <span>~</span>
+          <RollingNumber value={tokens} />
+          <span>{" tokens"}</span>
+        </span>
       </summary>
       {/* The tail, not the head: what it is thinking about now is the part
           that says whether it is still going anywhere. */}
@@ -165,9 +204,9 @@ function ThinkingTrace({ text, solo = false }: { text: string; solo?: boolean })
 }
 
 /** The model's thinking under a timeline that is live: the meter used to carry it. */
-function LiveThinking() {
-  const text = useAppStore((s) => s.activeRun?.thinking ?? "");
-  return <ThinkingTrace text={text} solo />;
+function LiveThinking({ steps }: { steps: Message["steps"] }) {
+  const text = useAppStore((s) => shownRun(s)?.thinking ?? "");
+  return <ThinkingTrace text={text} live={thinkingIsLive(steps, text)} />;
 }
 
 /** `HRN-3`: why a turn stopped, when it stopped for anything but finishing.
@@ -295,7 +334,7 @@ function ChangedFiles({ ids }: { ids: string[] }) {
           {t!.undone ? (
             <span className="changed-file-undone">undone</span>
           ) : (
-            <button className="changed-file-undo" onClick={() => undoFileOp(t!.id)}>
+            <button className="changed-file-undo" onClick={() => void undoFileOp(t!.id).catch(sayRefused)}>
               Undo
             </button>
           )}
@@ -307,40 +346,25 @@ function ChangedFiles({ ids }: { ids: string[] }) {
   );
 }
 
-/** WHY-4's second entry point: opens the shared `ContextPanel` for exactly
- * this message's stored manifest, once it has one to show (a still-streaming
- * or purely optimistic message hasn't finalized yet). */
-function WhyThisAnswer({ messageId }: { messageId: string }) {
-  const convId = useAppStore((s) => s.activeConversationId);
-  const openContextPanel = useAppStore((s) => s.openContextPanel);
-  if (!convId || !isPersistedId(messageId)) return null;
-  return (
-    <button
-      className="why-link"
-      onClick={() => openContextPanel({ conversationId: convId, messageId })}
-    >
-      why this answer?
-    </button>
-  );
-}
-
 /**
- * `HRN-UI-5`: the two things you can do with an answer once it exists.
+ * `HRN-UI-5`: what you can do with an answer once it exists.
  *
- * **Try again from here** branches the chat just before this turn and asks the
- * question again, so a second attempt costs nothing that already worked — the
- * original stays exactly where it was.
+ * **Copy** takes its text, also while the chat is busy: it changes nothing.
+ * **Try again**, on the last answer only, replaces it: the same message is sent
+ * once more in this chat. **Rewind** removes your message and what followed.
+ * **Fork** carries on from this answer in a new chat and leaves this one alone.
  *
  * **Continue where I stopped** appears only on a run that ended at a limit or
  * was interrupted, and only on the last turn, because "continue" has one
  * meaning and it is the run at the end. It picks that run back up with its tool
  * results intact instead of paying for them twice.
  */
-function TurnActions({ message, modelName }: { message: Message; modelName?: string }) {
+function TurnActions({ message, last }: { message: Message; last: boolean }) {
   const [more, setMore] = useState(false);
-  const forkFromMessage = useAppStore((s) => s.forkFromMessage);
-  const busy = useAppStore((s) => s.busy);
+  const retryAnswer = useAppStore((s) => s.retryAnswer);
+  const busy = useAppStore((s) => busyIn(s, s.activeConversationId));
   const requestRewind = useAppStore((s) => s.requestRewind);
+  const forkAt = useAppStore((s) => s.forkAt);
   // `USE-UI-7`, `SEE-5`: only while `fast-slow` is on, and not while this answer is being checked.
   const verifyOn = useAppStore((s) => experimentOn(s, "fast-slow"));
   const verifyMessage = useAppStore((s) => s.verifyMessage);
@@ -358,37 +382,59 @@ function TurnActions({ message, modelName }: { message: Message; modelName?: str
 
   const persisted = isPersistedId(message.id);
   const canAct = !busy && persisted;
-  const when = message.createdAt
-    ? new Date(message.createdAt).toLocaleString(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      })
-    : null;
-  if (!when && !canAct) return null;
+  const at = message.createdAt || null;
+  // The line says the time alone. Who answered and the full date wait in its tooltip.
+  const about = [message.model?.name, at && fullTime(at)].filter(Boolean).join("\n");
+  // A spoken reply you cut off shows what you heard; Copy takes the whole of it.
+  const copy = message.unspoken ?? message.text;
+  if (!at && !canAct && !copy) return null;
 
-  // The rarer two wait behind the `⋯`, so the line holds two words and a time.
+  // The rare one waits behind the `⋯`.
   const deeper = canAct && verifyOn && !checking && canVerify(message.text);
-  const rewind = canAct && !!askedBy;
-  const menu = deeper || rewind;
 
   // One line, shown on hover (or keyboard focus) so a finished turn stays as
   // quiet as its text until you reach for it.
   return (
     <div className={`turn-actions${more ? " menu-open" : ""}`}>
-      {message.text && <WhyThisAnswer messageId={message.id} />}
-      {canAct && (
-        <button className="why-link" onClick={() => void forkFromMessage(message.id)}>
-          Try again from here
+      {copy && <CopyButton text={copy} tip="Copy this answer" />}
+      {canAct && last && !!askedBy && (
+        <button
+          className="turn-btn"
+          aria-label="Try again"
+          data-tip="Try again: replace this answer with a new one"
+          onClick={() => void retryAnswer(message.id)}
+        >
+          <RefreshIcon size={14} strokeWidth={1.5} />
         </button>
       )}
-      {menu && (
+      {canAct && !!askedBy && (
+        <button
+          className="turn-btn"
+          aria-label="Rewind"
+          data-tip="Rewind: remove your message and everything after it"
+          onClick={() => requestRewind(askedBy)}
+        >
+          <RewindIcon size={14} strokeWidth={1.5} />
+        </button>
+      )}
+      {canAct && (
+        <button
+          className="turn-btn"
+          aria-label="Fork"
+          data-tip="Fork: continue from here in a new chat"
+          onClick={() => void forkAt(message.id).catch(sayRefused)}
+        >
+          <ForkIcon size={14} strokeWidth={1.5} />
+        </button>
+      )}
+      {deeper && (
         <span className="turn-more">
           <button
             className="turn-more-btn"
             aria-label="More for this answer"
             aria-haspopup="menu"
             aria-expanded={more}
-            title="More"
+            data-tip="More"
             onClick={() => setMore((v) => !v)}
           >
             <KebabIcon size={14} />
@@ -397,41 +443,26 @@ function TurnActions({ message, modelName }: { message: Message; modelName?: str
             <>
               <div className="row-menu-backdrop" onClick={() => setMore(false)} />
               <div className="row-menu" role="menu">
-                {deeper && (
-                  <button
-                    className="row-menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      setMore(false);
-                      void verifyMessage(message.id);
-                    }}
-                    title="Search the web for this answer's claims (their words leave this computer) and have my slower model review the doubtful ones"
-                  >
-                    Check more deeply
-                  </button>
-                )}
-                {rewind && (
-                  <button
-                    className="row-menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      setMore(false);
-                      requestRewind(askedBy!);
-                    }}
-                  >
-                    Rewind to before this
-                  </button>
-                )}
+                <button
+                  className="row-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setMore(false);
+                    void verifyMessage(message.id);
+                  }}
+                  title="Search the web for this answer's claims (their words leave this computer) and have my slower model review the doubtful ones"
+                >
+                  Check more deeply
+                </button>
               </div>
             </>
           )}
         </span>
       )}
-      {when && (
-        <span className="turn-time">
+      {at && (
+        <span className="turn-time" tabIndex={0} data-tip={about}>
           {message.spoken && <SpokenGlyph />}
-          {modelName && <span className="turn-model">{modelName} · </span>}
-          {when}
+          {turnTime(at)}
         </span>
       )}
     </div>
@@ -443,9 +474,9 @@ function TurnActions({ message, modelName }: { message: Message; modelName?: str
  * run paused on a question nobody can see never continues. */
 export function RunAsks({ message }: { message: Message }) {
   // Selectors return stable references (zustand v5): the filter is a memo.
-  const pending = useAppStore((s) => s.pendingQuestion);
   const proposals = useAppStore((s) => s.harnessProposals);
-  const question = pending && pending.messageId === message.id ? pending : null;
+  // `PAR-10`: this turn's own question, also while another chat's waits ahead of it.
+  const question = useAppStore((s) => openQuestions(s).find((q) => q.messageId === message.id));
   const asked = useMemo(() => proposals.filter((p) => p.messageId === message.id), [proposals, message.id]);
   return (
     <>
@@ -505,9 +536,9 @@ export default function AgentRun({
 
 function FullRun({ message, last }: { message: Message; last: boolean }) {
   const model = message.model;
-  const busyNow = useAppStore((s) => s.busy);
+  const busyNow = useAppStore((s) => busyIn(s, s.activeConversationId));
   // Who answered is said over the answer only when it changed from the answer
-  // before. Otherwise it is in the hover line beside the time.
+  // before. The time's tooltip at the foot always names it.
   const sameModel = useAppStore((s) => {
     if (!model) return false;
     const list = s.conversations.find((c) => c.id === s.activeConversationId)?.messages ?? [];
@@ -527,6 +558,11 @@ function FullRun({ message, last }: { message: Message; last: boolean }) {
   // `WRK-1`: the check that stopped the line, while this turn is the one running.
   const stopped = useAppStore((s) =>
     message.streaming && s.activeConversationId ? s.runSummaries[s.activeConversationId]?.stopped?.check : undefined
+  );
+  // The words under a picture or clip being made carry the moving light, until partial
+  // frames take their place.
+  const making = useAppStore(
+    (s) => !!message.pendingMedia && !(message.pendingMedia.jobId && s.mediaPartials[message.pendingMedia.jobId])
   );
   // `WRK-7`/`WRK-6`: while this turn is the one running, the run behind its board
   // (for "Not this time") and the item being tried two ways.
@@ -568,6 +604,9 @@ function FullRun({ message, last }: { message: Message; last: boolean }) {
   // the clock in it. The meter and the bare `Thinking` orb are for a turn that has none yet.
   const timelineShown = hasVisibleSteps(message.steps);
   const headOrb: OrbState | null = meterOrb ?? (isThinking ? "working" : null);
+  // Whether the meter draws anything yet. Until the run's first step the bare orb is the
+  // only sign of life; from then on the orb is in the meter's line, never above it.
+  const metered = useAppStore((s) => (shownRun(s)?.step ?? 0) >= 1);
   // A run that stopped at a limit already says why it has nothing; the generic
   // "I said nothing" line under it would be the same news told worse.
   const saidNothing = !message.streaming && !hasContent && !message.stopReason;
@@ -606,7 +645,9 @@ function FullRun({ message, last }: { message: Message; last: boolean }) {
       )}
       {/* `SEE-2`: what the quick decisions understood, before the first word. */}
       <ThoughtStrip message={message} />
-      {message.steps && <Timeline steps={message.steps} live={!!message.streaming} orb={headOrb} />}
+      {message.steps && (
+        <Timeline steps={message.steps} live={!!message.streaming} orb={headOrb} mayLight={!making} />
+      )}
       {message.subRunIds && message.subRunIds.length > 0 && (
         <FleetCard runIds={message.subRunIds} />
       )}
@@ -629,9 +670,11 @@ function FullRun({ message, last }: { message: Message; last: boolean }) {
           jobId={message.pendingMedia.jobId}
         />
       )}
-      {isThinking && !timelineShown && <Thinking label={thinkingLabel} />}
-      {message.streaming && !timelineShown && <RunMeter steps={message.steps} orb={meterOrb} />}
-      {message.streaming && timelineShown && <LiveThinking />}
+      {isThinking && !timelineShown && !metered && <Thinking label={thinkingLabel} />}
+      {message.streaming && !timelineShown && (
+        <RunMeter steps={message.steps} orb={headOrb} mayLight={!making} />
+      )}
+      {message.streaming && timelineShown && <LiveThinking steps={message.steps} />}
       {!message.streaming && message.stopReason && (
         <StoppedNote
           reason={message.stopReason}
@@ -652,7 +695,7 @@ function FullRun({ message, last }: { message: Message; last: boolean }) {
           one line at the foot of the answer. */}
       <div className="turn-foot">
         <ThoughtReceipt message={message} />
-        <TurnActions message={message} modelName={model && sameModel ? model.name : undefined} />
+        <TurnActions message={message} last={last} />
       </div>
       <RunAsks message={message} />
     </div>

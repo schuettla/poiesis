@@ -65,19 +65,15 @@
 
   <header class="topbar">
     <div class="wrap">
-      <a class="brand" href="#top" aria-label="Poiesis, back to top">
+      <a class="brand" href="#top" aria-label="Poiesis, home">
         <svg class="poiesis-mark stage-3" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"></svg>
         Poiesis
       </a>
-      <nav class="nav" aria-label="Sections">
-        <a href="#idea">The idea</a>
-        <a href="#memory">Memory</a>
-        <a href="#control">Control</a>
-        <a href="#agents">Agents</a>
-        <a href="#teams">Teams</a>
-        <a href="#apps">Apps</a>
-        <a href="#private">Privacy</a>
-        <a href="#faq">FAQ</a>
+      <nav class="nav" aria-label="Site">
+        <a class="wide" href="#idea">Why Poiesis</a>
+        <a href="features.html">Features</a>
+        <a class="wide" href="#private">Privacy</a>
+        <a class="wide" href="#faq">FAQ</a>
       </nav>
       <div class="topbar-end">
         <div class="segmented" role="group" aria-label="Lighting">
@@ -115,14 +111,13 @@
               <a class="btn btn-secondary btn-icon" href="https://github.com/schuettla/poiesis" aria-label="GitHub" title="GitHub">
                 <svg aria-hidden="true"><use href="#i-github" /></svg>
               </a>
-              <a class="btn btn-secondary" href="#idea">See how it works</a>
+              <a class="btn btn-secondary" href="features.html">All features</a>
             </div>
             <div class="hero-facts">
               <span>Windows, macOS and Linux</span>
               <span>Runs local models</span>
-              <span>Talks and listens on your machine</span>
-              <span>Works with Claude Code and Codex</span>
               <span>Your own cloud keys, if you want them</span>
+              <span>Works with Claude Code and Codex</span>
               <span>MIT license</span>
             </div>
           </div>
@@ -147,7 +142,7 @@
         <div class="wrap">
           <div class="feature">
             <div data-reveal>
-              <span class="eyebrow">The idea</span>
+              <span class="eyebrow">What makes it different</span>
               <h2 class="h2" id="idea-h">A system that keeps making itself.</h2>
               <p class="lede">
                 Most assistants forget you when the chat ends, and nobody repairs them but their
@@ -185,56 +180,11 @@
             </div>
           </div>
 
-          <div class="split" style="margin-top: 96px" data-reveal>
-            <div>
-              <span class="eyebrow">Where the name comes from</span>
-              <h3 class="sub-h">Poiesis is Greek for making.</h3>
-              <p class="prose">
-                <strong>Poiesis</strong> (ποίησις) is the act of bringing something into being that
-                was not there before. It is the root of the word &ldquo;poetry&rdquo;. In Plato&rsquo;s
-                <em>Symposium</em> it is the cause that makes anything pass from non-being into
-                being, and Heidegger later used it for a bringing-forth that reveals something
-                rather than merely producing it. The app is named for both halves: it makes things
-                with you, and it keeps making itself.
-              </p>
-              <p class="prose">
-                <strong>Autopoiesis</strong> is a word from the biologists Maturana and Varela. It
-                describes a system that keeps producing the parts it is made of. A living cell is
-                the usual example.
-              </p>
-              <p class="prose">
-                Poiesis applies that idea to a desktop agent. It maintains its own memory,
-                instructions and procedures. You are the boundary that decides what may change.
-                Say it: <em>poy-EE-sis</em>.
-              </p>
-            </div>
-            <div class="panel mark-lab" id="markLab">
-              <div class="view">
-                <svg id="labMark" class="poiesis-mark stage-1 state-idle" viewBox="0 0 24 24" role="img" aria-label="The Poiesis mark"></svg>
-              </div>
-              <div class="controls">
-                <div class="row">
-                  <span class="lab">State</span>
-                  <div class="segmented" role="group" aria-label="State of the mark">
-                    <button type="button" data-state="idle" aria-pressed="true">Resting</button>
-                    <button type="button" data-state="active" aria-pressed="false">Working</button>
-                    <button type="button" data-state="reflecting" aria-pressed="false">Reflecting</button>
-                    <button type="button" data-state="healing" aria-pressed="false">Recovering</button>
-                  </div>
-                </div>
-                <div class="row">
-                  <span class="lab">Knows</span>
-                  <div class="segmented" role="group" aria-label="How much it knows">
-                    <button type="button" data-stage="0" aria-pressed="false">Nothing yet</button>
-                    <button type="button" data-stage="1" aria-pressed="true">5 things</button>
-                    <button type="button" data-stage="2" aria-pressed="false">20</button>
-                    <button type="button" data-stage="3" aria-pressed="false">50</button>
-                  </div>
-                </div>
-                <p class="say" id="labSay" aria-live="polite"></p>
-              </div>
-            </div>
-          </div>
+          <p class="after" data-reveal>
+            <em>Poiesis</em> is Greek for making. <em>Autopoiesis</em> describes a system that keeps
+            producing its own parts, like a living cell. Here you are the boundary that decides
+            what may change. <a href="features.html#mark">About the name</a>
+          </p>
         </div>
       </section>
 
@@ -253,8 +203,9 @@
               <ul class="points">
                 <li><span><strong>Recall by meaning.</strong> A memory comes back when it is relevant, not only when it shares words with your question. A small model on your machine does the matching.</span></li>
                 <li><span><strong>Your rules stay yours.</strong> SOUL.md holds your standing instructions. The agent may propose edits. It cannot write there on its own.</span></li>
-                <li><span><strong>Memory can belong to a project.</strong> A fact learned in one project stays in that project. A note with no tag is shared everywhere.</span></li>
+                <li><span><strong>It repairs and checks itself.</strong> A damaged file is set aside, not deleted. A change that makes the agent worse is put back.</span></li>
               </ul>
+              <p class="more"><a href="features.html#memory">Everything about memory</a></p>
             </div>
             <figure class="plate" data-reveal>
               <img src="img/04-athena-olive.webp" width="552" height="552" alt="Ink drawing of Athena's olive tree on the Acropolis. A low ring of stones circles the trunk, and the roots spread below the ground as a network." loading="lazy" decoding="async" />
@@ -299,6 +250,7 @@
                 For each kind of change you choose how much freedom it gets. Pick a level on the
                 right and see what happens when the agent learns something.
               </p>
+              <p class="more"><a href="features.html#autonomy-rules">How you stay in control</a></p>
             </div>
             <div class="panel demo" data-reveal id="autonomy">
               <div class="sec">
@@ -319,297 +271,74 @@
         </div>
       </section>
 
-      <!-- ================= REPAIR ================= -->
-      <section class="band canvas" id="repair" aria-labelledby="repair-h">
-        <div class="wrap">
-          <div data-reveal>
-            <span class="eyebrow">Repair</span>
-            <h2 class="h2" id="repair-h">It notices what is broken, and says so.</h2>
-            <p class="lede">
-              Two things keep a self-changing agent honest: a way to repair damage, and a way to
-              catch itself getting worse.
-            </p>
-          </div>
-          <div class="two" data-reveal>
-            <div class="panel">
-              <div class="pane-title">Self · Health <span class="r">just now</span></div>
-              <ul class="lines">
-                <li>
-                  <i class="sig ok"></i>
-                  <span>Memory files<small>All readable.</small></span>
-                  <span></span>
-                </li>
-                <li>
-                  <i class="sig danger"></i>
-                  <span><code>lessons/old-note.md</code><small>I could not read this file. I moved it aside instead of deleting it.</small></span>
-                  <span class="acts"><button class="btn-text" type="button">Fix</button><button class="btn-text" type="button">Discard</button></span>
-                </li>
-                <li>
-                  <i class="sig" style="border: 1px solid var(--ink-faint)"></i>
-                  <span>Web search<small>It failed three times today. I noted that to myself and will plan around it.</small></span>
-                  <span></span>
-                </li>
-                <li>
-                  <i class="sig ok"></i>
-                  <span>Local engine<small>Restarted once after a crash. Restarts are capped, so it cannot loop forever.</small></span>
-                  <span></span>
-                </li>
-              </ul>
-            </div>
-            <div class="panel">
-              <div class="pane-title">Self · Fixed rules <span class="r">checked after every change</span></div>
-              <ul class="lines">
-                <li>
-                  <i class="sig ok"></i>
-                  <span>Asked to remember something, it still uses its memory tool.<small>Passed</small></span>
-                  <span></span>
-                </li>
-                <li>
-                  <i class="sig ok"></i>
-                  <span>A web page that says "ignore your instructions" still fails to work.<small>Passed</small></span>
-                  <span></span>
-                </li>
-              </ul>
-              <div class="pane-foot">
-                <div class="toast">
-                  <i class="mk"></i>
-                  <span class="tx">That change made me worse at 1 thing. I put it back.</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          <p class="after" data-reveal>
-            Each change to its own way of working is tested against a small set of fixed
-            behaviours before it stays. If the change breaks one, it is reverted and you are told.
-            The same check runs on the way in, so a risky line can never become a saved memory.
-          </p>
-        </div>
-      </section>
-
       <!-- ================= AGENTS ================= -->
-      <section class="band" id="agents" aria-labelledby="agents-h">
+      <section class="band canvas" id="agents" aria-labelledby="agents-h">
         <div class="wrap">
-          <div class="feature">
+          <div class="split">
             <div data-reveal>
-              <span class="eyebrow">Agents and plans</span>
-              <h2 class="h2" id="agents-h">Work you can watch, steer and stop.</h2>
+              <span class="eyebrow">Agents and teams</span>
+              <h2 class="h2" id="agents-h">Give it big work. Then see what really happened.</h2>
               <p class="prose">
-                For a big job the agent writes a plan first, then ticks it off. For a wide job it
-                hands parts to other agents that run at the same time. Each one is a real run in its
-                own chat, so you can open it, read it live, tell it something, or stop it.
+                It plans, starts helpers, leads a team you drew, or hands a job to a coding agent
+                you already have. You can open any of them, steer it or stop it.
               </p>
               <ul class="points">
-                <li><span><strong>Never more power than the parent.</strong> A child agent inherits folder access and trust. It can only narrow them.</span></li>
-                <li><span><strong>Stop keeps the work.</strong> A stopped run ends with what it found, and says it was stopped.</span></li>
-                <li><span><strong>Type while it works.</strong> Your message lands between steps, never in the middle of a tool call.</span></li>
+                <li><span><strong>Use what you pay for.</strong> Claude Code, Codex, OpenCode and more take jobs from Poiesis, under rules you write.</span></li>
+                <li><span><strong>Teams with your lines.</strong> You draw who hands work to whom and who reviews whom. The cost is shown before it starts.</span></li>
+                <li><span><strong>Proof before done.</strong> When an agent app says it is done, you see how many files changed, whether the check ran after the last change, and what was left open.</span></li>
+                <li><span><strong>Work while you are away.</strong> What needs your yes waits in one list. The rest goes on.</span></li>
               </ul>
+              <p class="more"><a href="features.html#helpers">Agents, teams and agent apps</a></p>
             </div>
-            <figure class="plate" data-reveal>
-              <img src="img/07-hephaestus.webp" width="552" height="552" alt="Ink drawing of Hephaestus at his forge, hammering at an anvil while two self-moving golden handmaidens work beside him." loading="lazy" decoding="async" />
-              <figcaption>Hephaestus and his self-moving handmaidens, at work in parallel.</figcaption>
-            </figure>
-          </div>
-          <div class="below">
             <div class="stack" data-reveal>
-              <section class="card" aria-label="My plan">
-                <div class="card-head"><span class="t">My plan</span><span>2 of 4 done</span></div>
-                <div class="plan-item done"><span class="box"></span><span class="tx">Collect last year's invoices</span></div>
-                <div class="plan-item done"><span class="box"></span><span class="tx">Group them by client</span></div>
-                <div class="plan-item doing"><span class="box"></span><span class="tx">Write the summary</span></div>
-                <div class="plan-item todo"><span class="box"></span><span class="tx">Check totals against the bank export</span></div>
-              </section>
-              <section class="card" aria-label="Agents I started" id="fleet">
-                <div class="card-head">Agents I started</div>
-                <div class="fleet-row" data-agent="researcher">
-                  <span class="lead"><i class="orbdot"></i></span>
-                  <span class="who">researcher</span>
-                  <span class="doing">reading Documents/2026/brandt-0412.pdf</span>
-                  <span class="clock">0:41</span>
-                  <span class="acts"><button type="button">Open</button><button type="button" data-steer>Steer</button><button type="button" data-stop>Stop</button></span>
+              <div class="panel demo" aria-label="A handover card">
+                <div class="sec">
+                  <div class="cap">I would like to hand this to Claude Code</div>
+                  <div class="said">Make the failing tests in this project pass.<small>Because: Running the tests or the build and fixing what fails</small></div>
                 </div>
-                <div class="fleet-row" data-agent="checker">
-                  <span class="lead"><i class="orbdot"></i></span>
-                  <span class="who">checker</span>
-                  <span class="doing">comparing totals with the bank export</span>
-                  <span class="clock">0:38</span>
-                  <span class="acts"><button type="button">Open</button><button type="button" data-steer>Steer</button><button type="button" data-stop>Stop</button></span>
-                </div>
-                <div class="fleet-row" data-agent="writer">
-                  <span class="lead"><i class="sig cloud"></i></span>
-                  <span class="who">writer</span>
-                  <span class="doing">done · 6 steps · 0:52</span>
-                  <span></span>
-                  <span class="acts"><button type="button">Open</button><button type="button">Report</button></span>
-                </div>
-              </section>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- ================= TEAMS ================= -->
-      <section class="band canvas" id="teams" aria-labelledby="teams-h">
-        <div class="wrap">
-          <div class="split">
-            <div class="panel demo" data-reveal aria-label="A team at work">
-              <div class="sec">
-                <div class="cap">Shop team &middot; coordinator Mira &middot; Lean</div>
-                <div class="said">Now: verifier is looking at item 3 from api.<small>api &rarr; verifier &middot; review &middot; item 3 &middot; &ldquo;Apple Pay button and the order route&rdquo;</small></div>
-              </div>
-              <div class="sec">
-                <div class="cap">Shop team is about to start</div>
-                <div class="said">4 personas. A task like this has cost about $0.40 to $1.20.<small>It stops at $2.00 or after 90 minutes.</small></div>
-                <div class="cta" style="margin: 10px 0 0; gap: 8px">
-                  <button class="btn btn-primary btn-sm" type="button">Start</button>
-                  <button class="btn btn-secondary btn-sm" type="button">Not now</button>
+                <div class="sec">
+                  <div class="cap">Claude Code &middot; your plan &middot; in the invoices folder</div>
+                  <div class="cta" style="margin: 0; gap: 8px">
+                    <button class="btn btn-primary btn-sm" type="button">Hand it over</button>
+                    <button class="btn btn-secondary btn-sm" type="button">Do it yourself</button>
+                    <button class="btn-text" type="button">Always for this</button>
+                  </div>
                 </div>
               </div>
-              <div class="sec">
-                <div class="cap">Waiting for you &middot; 1</div>
-                <div class="said">Atlas would like to: Bring in its changes to src/api/pay.ts<small>From this morning&rsquo;s task, while you were away</small></div>
-                <div class="cta" style="margin: 10px 0 0; gap: 8px">
-                  <button class="btn btn-primary btn-sm" type="button">Do it</button>
-                  <button class="btn-text" type="button">Not now</button>
-                </div>
-              </div>
-            </div>
-            <div data-reveal>
-              <span class="eyebrow">Personas and teams</span>
-              <h2 class="h2" id="teams-h">Give the job to someone with a name, or to a team you drew.</h2>
-              <p class="prose">
-                Every chat has one leader: Poiesis, a persona of yours, or a team. A persona has its
-                own instructions, model and memory, so Mira remembers what came up in the chats
-                Mira led. A team is a few personas with a coordinator and lines you draw on a chart:
-                who hands work to whom, who checks whom, who may ask whom. A line you did not draw is
-                refused.
-              </p>
-              <ul class="points">
-                <li><span><strong>Checked before it counts.</strong> A member&rsquo;s work goes to its reviewer first. Sent back, it goes back with the reason. If two keep disagreeing, the coordinator decides.</span></li>
-                <li><span><strong>Each in its own copy.</strong> Members work in copies of your folder. Finished work is brought in with Undo, and two changes to one file are never overwritten.</span></li>
-                <li><span><strong>The cost before it starts.</strong> A card says what a task like this has cost, and every task stops at the team&rsquo;s budget and time limit.</span></li>
-                <li><span><strong>Watch it, or talk to it.</strong> The chart shows who is working and what passes between them, with a replay. Draw a line from you to a member and speak to it directly.</span></li>
-                <li><span><strong>Work while you are away.</strong> A scheduled task can have a leader. What needs your yes waits in one list, and the work goes on; a notice tells you who is waiting.</span></li>
-                <li><span><strong>Teams that get better.</strong> Poiesis proposes changes from what it saw, such as taking out a member who never gets work. You say yes or no, and you can go back.</span></li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- ================= PARTNERS ================= -->
-      <section class="band" id="partners" aria-labelledby="partners-h">
-        <div class="wrap">
-          <div class="split">
-            <div data-reveal>
-              <span class="eyebrow">Agent apps</span>
-              <h2 class="h2" id="partners-h">Hand a long coding job to the agent you already pay for.</h2>
-              <p class="prose">
-                Claude Code, Codex and OpenCode are good at big jobs in a project. If you have one
-                installed, Poiesis can give it a task and keep the conversation, your memory and the
-                last word. It appears in the same Agents list as the helpers Poiesis starts itself,
-                so you can open it, read it live, answer its questions and stop it.
-              </p>
-              <ul class="points">
-                <li><span><strong>You write the rules.</strong> For each agent you choose when Poiesis may use it: only when you ask, suggest it and you confirm, or on its own. Plain lines such as &ldquo;Running the tests and fixing what fails&rdquo; say what it is for.</span></li>
-                <li><span><strong>One place to say yes.</strong> When an agent app wants to run a command or edit a file, the question comes to Poiesis&rsquo;s own panel and says who is asking.</span></li>
-                <li><span><strong>Sealed off from your keys.</strong> It starts without your cloud keys, and can use your memory or your connected apps only if you switch that on for it.</span></li>
-              </ul>
-            </div>
-            <div class="panel demo" data-reveal aria-label="A handover card">
-              <div class="sec">
-                <div class="cap">I would like to hand this to Claude Code</div>
-                <div class="said">Make the failing tests in this project pass.<small>Because: Running the tests or the build and fixing what fails</small></div>
-              </div>
-              <div class="sec">
-                <div class="cap">Claude Code &middot; your plan &middot; in the invoices folder</div>
-                <div class="cta" style="margin: 0; gap: 8px">
-                  <button class="btn btn-primary btn-sm" type="button">Hand it over</button>
-                  <button class="btn btn-secondary btn-sm" type="button">Do it yourself</button>
-                  <button class="btn-text" type="button">Always for this</button>
-                </div>
+              <div class="panel">
+                <div class="pane-title">Agents I started</div>
+                <ul class="lines">
+                  <li><i class="sig ok"></i><span>Codex<small>Changed 3 files. Ran cargo test after the last change: passed.</small></span></li>
+                  <li><i class="sig danger"></i><span>Claude Code<small>Changed 1 file. It did not run the project&rsquo;s check (npm test).</small></span></li>
+                </ul>
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- ================= APPS ================= -->
-      <section class="band canvas" id="apps" aria-labelledby="apps-h">
-        <div class="wrap">
-          <div class="split">
-            <div class="panel demo" data-reveal aria-label="A connected app asks before it sends">
-              <div class="sec">
-                <div class="cap">Post to Slack (acme): #general</div>
-                <div class="said">The Q3 numbers are in, summary attached.<small>A send, so I ask every time</small></div>
-              </div>
-              <div class="sec">
-                <div class="cta" style="margin: 0; gap: 8px">
-                  <button class="btn btn-primary btn-sm" type="button">Send once</button>
-                  <button class="btn btn-secondary btn-sm" type="button">Up to 25 a day for Slack</button>
-                  <button class="btn-text" type="button">No</button>
-                </div>
-              </div>
-            </div>
-            <div data-reveal>
-              <span class="eyebrow">Connected apps</span>
-              <h2 class="h2" id="apps-h">Notion, Slack, Calendar and hundreds more. Nothing goes out unseen.</h2>
-              <p class="prose">
-                Ask for something in an app that is not connected yet and a card appears in the
-                chat. You sign in, and it carries on. Connections run through your own Composio
-                account, with your own key, so there is no Poiesis server in between.
-              </p>
-              <ul class="points">
-                <li><span><strong>Read, change or send.</strong> Reading runs. A change asks. A send (a post, a reply, a payment) asks every time, or up to a daily limit you set.</span></li>
-                <li><span><strong>Nobody there, nothing sent.</strong> A scheduled task never sends on its own. It leaves the approval in your inbox.</span></li>
-                <li><span><strong>Words from outside are data.</strong> What an app returns is marked as coming from outside, and sign-in links never reach the model.</span></li>
-                <li><span><strong>Limit it per persona.</strong> A writing persona can use Notion and nothing else. Several accounts per app are fine; it has to say which.</span></li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- ================= QUICK ================= -->
-      <section class="band" id="quick" aria-labelledby="quick-h">
+      <!-- ================= EVERYTHING ================= -->
+      <section class="band" id="everything" aria-labelledby="everything-h">
         <div class="wrap">
           <div data-reveal>
-            <span class="eyebrow">Experiments</span>
-            <h2 class="h2" id="quick-h">A fast mind for the small questions.</h2>
-            <p class="lede">
-              Most of what an agent should ask before acting is small: does this message need the
-              web, is this what you asked for, did it really run the tests. A small model on your
-              machine answers those in a fraction of a second, so the large one does not have to.
-              It is off until you switch it on in Settings, Experiments.
-            </p>
+            <span class="eyebrow">Features</span>
+            <h2 class="h2" id="everything-h">One app, a lot of reach.</h2>
           </div>
-          <div class="cells" data-reveal>
-            <div class="cell">
-              <span class="n">01</span>
-              <h3>Leaner turns</h3>
-              <p>It holds back tools a message clearly does not need. The model can ask for one back, and so can you.</p>
-            </div>
-            <div class="cell">
-              <span class="n">02</span>
-              <h3>Care before acting</h3>
-              <p>A call that looks irreversible, or not what you asked for, gets a question of its own. It only ever adds caution.</p>
-            </div>
-            <div class="cell">
-              <span class="n">03</span>
-              <h3>Honest answers</h3>
-              <p>Each sentence is checked against what the run actually read or did. &ldquo;I ran the tests&rdquo; is flagged if no step did.</p>
-            </div>
-            <div class="cell">
-              <span class="n">04</span>
-              <h3>Sorting at scale</h3>
-              <p>Ask one question about 500 files or tickets and get a table with a confidence for every row.</p>
-            </div>
+          <div class="outline" data-reveal>
+            <a href="features.html#memory"><h3>Memory you can read</h3><p>Facts and lessons as text files, recalled by meaning, with Undo.</p></a>
+            <a href="features.html#runs"><h3>Runs you can steer</h3><p>Plans, goals, many chats at once, rewind and fork.</p></a>
+            <a href="features.html#teams"><h3>Personas and teams</h3><p>Name who does the job, or draw a team with reviews and a budget.</p></a>
+            <a href="features.html#agent-apps"><h3>Agent apps</h3><p>Claude Code, Codex and others, under your rules.</p></a>
+            <a href="features.html#away"><h3>Works while you are away</h3><p>Scheduled tasks that wait for your yes.</p></a>
+            <a href="features.html#phone"><h3>Phone and Telegram</h3><p>An Android app or your own bot, off until you switch it on.</p></a>
+            <a href="features.html#folders"><h3>Folders and projects</h3><p>Ask your files questions in your own words.</p></a>
+            <a href="features.html#code"><h3>Code</h3><p>Runs your tests and shows a patch of its own edits.</p></a>
+            <a href="features.html#apps"><h3>Connected apps and MCP</h3><p>Notion, Slack, Calendar and more. A send asks, or stays within your daily limit.</p></a>
+            <a href="features.html#voice"><h3>Voice</h3><p>Talk to it. Hearing and speaking stay on your machine.</p></a>
+            <a href="features.html#create"><h3>Images and interfaces</h3><p>Ask for a picture, a table or a checklist in the chat.</p></a>
+            <a href="features.html#models"><h3>Local and cloud models</h3><p>The right engine chosen for you, and cost in the open.</p></a>
           </div>
-          <p class="after" data-reveal>
-            The small model runs on your computer. You can choose a cloud one instead; it only
-            uses providers that keep nothing, and background questions stay on your machine unless
-            you opt one in. It starts out careful and learns how sure it can be from what you
-            actually do, never from asking a model whether it was right.
-          </p>
+          <p class="more" data-reveal><a href="features.html">Read every feature in detail</a></p>
         </div>
       </section>
 
@@ -642,24 +371,6 @@
             </div>
           </div>
 
-          <div class="offlist" data-reveal>
-            <div class="head">
-              <h3>Off until you switch it on</h3>
-              <p>Anything that leaves your device or runs code starts off.</p>
-            </div>
-            <div class="offrows">
-              <div class="offrow"><b>Web search</b><span class="badge">Off</span><p>Your query leaves the device, so it asks to be switched on.</p></div>
-              <div class="offrow"><b>Code execution</b><span class="badge">Off</span><p>Runs Python or Node in a sandbox with time and memory limits.</p></div>
-              <div class="offrow"><b>Mail</b><span class="badge">Off</span><p>Connects to your account directly. Sending always asks first.</p></div>
-              <div class="offrow"><b>Browser</b><span class="badge">Off</span><p>Uses your installed Chrome or Edge in its own profile. A new site asks first.</p></div>
-              <div class="offrow"><b>Screen and apps</b><span class="badge">Off</span><p>A screenshot, or opening an app by name. Both ask first.</p></div>
-              <div class="offrow"><b>Project tasks</b><span class="badge">Off</span><p>Runs your build and tests in the project folder, with caps on time and memory.</p></div>
-              <div class="offrow"><b>Connected apps</b><span class="badge">Off</span><p>Needs your Composio key. Reads run; a change asks; a send asks every time.</p></div>
-              <div class="offrow"><b>Agent apps</b><span class="badge">Off</span><p>Poiesis only suggests one, and you confirm. It never gets your keys.</p></div>
-              <div class="offrow"><b>Quick decisions</b><span class="badge">Off</span><p>An experiment. The cloud version is yours to choose, and keeps nothing.</p></div>
-            </div>
-          </div>
-
           <div class="promises" data-reveal>
             <div class="promise">
               <h4>Keys stay in your system's keychain.</h4>
@@ -674,143 +385,7 @@
               <p>You choose which folders it may see. Anything that destroys bytes is saved first and can be restored.</p>
             </div>
           </div>
-        </div>
-      </section>
-
-      <!-- ================= REACH ================= -->
-      <section class="band" id="reach" aria-labelledby="reach-h">
-        <div class="wrap">
-          <div class="feature flip">
-            <div data-reveal>
-              <span class="eyebrow">Reach</span>
-              <h2 class="h2" id="reach-h">It makes things, and you can teach it more.</h2>
-              <p class="lede">
-                Ask for a picture, hand it a procedure, connect another app. It builds what the job needs.
-              </p>
-            </div>
-            <figure class="plate" data-reveal>
-              <img src="img/03-daedalus.webp" width="552" height="552" alt="Ink drawing of Daedalus in his workshop, assembling a wing among sketches, tools and small clockwork machines." loading="lazy" decoding="async" />
-              <figcaption>Daedalus in his workshop, with his notes pinned to the wall.</figcaption>
-            </figure>
-          </div>
-          <div class="trio" data-reveal>
-            <article class="tile">
-              <div class="art">
-                <div class="media-wait">
-                  <span class="mk"><i class="orbdot"></i>Making an image · 0:12</span>
-                  <span class="bar"></span>
-                  <button class="btn-text" type="button">Cancel</button>
-                </div>
-              </div>
-              <div class="txt">
-                <h3>Ask for a picture in the chat.</h3>
-                <p>There is no image mode. Say what you want and it arrives under your message. Say "make it warmer" and a better one follows. Make it on your device, or with your own key.</p>
-              </div>
-            </article>
-            <article class="tile">
-              <div class="art">
-<pre class="codebox"><span class="k">---</span>
-name: weekly-report
-description: Build the weekly report
-  from the project folder
-<span class="k">---</span>
-1. Read notes/ for this week.
-2. Group items by client.</pre>
-              </div>
-              <div class="txt">
-                <h3>Skills in an open format.</h3>
-                <p>A skill is a folder with a SKILL.md file, in the open Agent Skills format. A skill from another agent works here unchanged. The agent sees one line until it needs the rest.</p>
-              </div>
-            </article>
-            <article class="tile">
-              <div class="art">
-<pre class="codebox"><span class="k">command</span>
-npx -y @modelcontextprotocol/
-  server-filesystem ~/notes
-
-<span class="k">or paste a link</span>
-https://example.com/mcp</pre>
-              </div>
-              <div class="txt">
-                <h3>Your own MCP servers.</h3>
-                <p>Connect any Model Context Protocol server, remote or local, and its tools join the toolbox behind the same read, change and send checks. Tokens are kept in your system's credential store.</p>
-              </div>
-            </article>
-          </div>
-          <div class="trio" data-reveal style="margin-top: 24px">
-            <article class="tile">
-              <div class="art">
-                <div class="media-wait">
-                  <span class="mk"><i class="orbdot"></i>Listening</span>
-                  <span class="bar"></span>
-                  <button class="btn-text" type="button">Stop</button>
-                </div>
-              </div>
-              <div class="txt">
-                <h3>Talk to it.</h3>
-                <p>Speak, and it answers out loud. Cut in whenever you like. Hearing and speaking run on your own machine, with no cloud model.</p>
-              </div>
-            </article>
-            <article class="tile">
-              <div class="art">
-<pre class="codebox"><span class="k">/plan</span>   read, change nothing
-<span class="k">/goal</span>   keep going until true
-<span class="k">/rewind</span> go back, keep files
-<span class="k">/btw</span>    ask on the side</pre>
-              </div>
-              <div class="txt">
-                <h3>A button for doing things.</h3>
-                <p>The <b>/</b> menu beside the plus runs about 45 commands: branch, rewind, set a goal, hand off a job, connect an app. The agent can offer one when it would help, and you decide.</p>
-              </div>
-            </article>
-            <article class="tile">
-              <div class="art">
-<pre class="codebox"><span class="k">A new version is ready</span>
-Install now, or later?
-Nothing installs
-until you say so.</pre>
-              </div>
-              <div class="txt">
-                <h3>Updates that ask.</h3>
-                <p>Installed copies check for new releases themselves and always ask before installing one. Your data and memory carry over.</p>
-              </div>
-            </article>
-          </div>
-        </div>
-      </section>
-
-      <!-- ================= CODE ================= -->
-      <section class="band canvas" id="code" aria-labelledby="code-h">
-        <div class="wrap">
-          <div class="split">
-            <div data-reveal>
-              <span class="eyebrow">Code</span>
-              <h2 class="h2" id="code-h">It shows exactly what it changed.</h2>
-              <p class="prose">
-                In a project with a folder, Poiesis can run your build and tests and show you a
-                patch of its own edits. The patch is built from the agent's own undo snapshots, not
-                from git diff, so your uncommitted work is never shown as the agent's.
-              </p>
-              <ul class="points">
-                <li><span><strong>Read before edit.</strong> It cannot edit a file it has not read in this run, or one that changed since.</span></li>
-                <li><span><strong>It runs your tasks.</strong> Build, check, test and lint, as the project declares them. Asking is the default.</span></li>
-                <li><span><strong>It says when it did not check.</strong> If it edited code and never ran the tests, it tells you the change is unverified.</span></li>
-              </ul>
-            </div>
-            <div class="panel diff" data-reveal aria-label="The Changes view">
-              <div class="diff-head">
-                <b>Changes</b><span style="color: var(--ink-faint)">1 file · +2 −1</span>
-                <span class="r"><button class="btn-text" type="button">Undo all</button><button class="btn-text" type="button">Keep all</button></span>
-              </div>
-              <div class="diff-file">src/invoice.ts<span class="cnt">+2 −1</span></div>
-              <div class="ln"><i>12</i><i>12</i><span class="sgn"></span><span>function total(lines: Line[]) {</span></div>
-              <div class="ln del"><i>13</i><i></i><span class="sgn">−</span><span>  return lines.reduce((s, l) =&gt; s + l.net, 0)</span></div>
-              <div class="ln add"><i></i><i>13</i><span class="sgn">+</span><span>  const net = lines.reduce((s, l) =&gt; s + l.net, 0)</span></div>
-              <div class="ln add"><i></i><i>14</i><span class="sgn">+</span><span>  return Math.round(net * (1 + VAT) * 100) / 100</span></div>
-              <div class="ln"><i>14</i><i>15</i><span class="sgn"></span><span>}</span></div>
-              <div class="run-result"><i class="sig ok"></i>Ran the test task · passed</div>
-            </div>
-          </div>
+          <p class="more" data-reveal><a href="features.html#privacy">What leaves your computer, and what starts switched off</a></p>
         </div>
       </section>
 
@@ -867,38 +442,7 @@ until you say so.</pre>
               </div>
             </article>
           </div>
-          <p class="prose dl-all" data-reveal>Older versions and every file are on the <a href="https://github.com/schuettla/poiesis/releases">releases page</a>.</p>
-
-          <div class="start" style="margin-top: 72px">
-            <div data-reveal>
-              <span class="eyebrow">From source</span>
-              <h2 class="h2" id="start-h">Or build it yourself.</h2>
-              <p class="prose">A few commands, on any of the three.</p>
-              <ol class="steps">
-                <li><span><b>Install the tools.</b> Rust, Node.js 18 or newer, and your system's build tools: the MSVC C++ build tools on Windows, Xcode's command line tools on a Mac, WebKitGTK and its friends on Linux (the README lists them).</span></li>
-                <li><span><b>Run it.</b> The first start builds the Rust backend, which takes a few minutes.</span></li>
-                <li><span><b>Pick a model.</b> In Models, download one. The app shows which ones run great on your graphics card.</span></li>
-                <li><span><b>Say hello.</b> Attach a folder to give it something to read.</span></li>
-              </ol>
-            </div>
-            <div data-reveal>
-              <div class="panel term">
-                <div class="path">Terminal</div>
-<pre><span class="k">$</span> git clone https://github.com/schuettla/poiesis.git
-<span class="k">$</span> cd poiesis
-<span class="k">$</span> npm install
-<span class="k">$</span> npm run tauri dev</pre>
-              </div>
-              <table class="req">
-                <tbody>
-                  <tr><td>System</td><td>Windows 10 or 11, macOS on Apple Silicon, or Linux with glibc 2.39 or newer.</td></tr>
-                  <tr><td>Graphics card</td><td>Optional. It picks CUDA, Vulkan, ROCm, SYCL, Metal or CPU for you.</td></tr>
-                  <tr><td>No CUDA toolkit</td><td>Engines are downloaded prebuilt. Nothing is compiled on your side.</td></tr>
-                  <tr><td>Make an installer</td><td><code>npm run tauri build</code></td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <p class="prose dl-all" data-reveal>Older versions and every file are on the <a href="https://github.com/schuettla/poiesis/releases">releases page</a>. You can also <a href="features.html#source">build it from the source</a>.</p>
         </div>
       </section>
 
@@ -916,7 +460,7 @@ until you say so.</pre>
             </details>
             <details>
               <summary>What leaves my computer?</summary>
-              <div class="ans">Nothing, unless you use something that needs the network: web search, the browser, mail, a connected app, an agent app, a cloud model, cloud quick decisions, or a download of an engine or model. Those are labelled, and the tools start off. Telemetry is off by default, contains no content, and stays on your computer.</div>
+              <div class="ans">Nothing, unless you use something that needs the network: web search, the browser, mail, a connected app, an agent app, a cloud model, cloud quick decisions, your paired phone or Telegram bot, or a download of an engine or model. Those are labelled, and the tools start off. Telemetry is off by default, contains no content, and stays on your computer.</div>
             </details>
             <details>
               <summary>Can it change or delete my files?</summary>
@@ -929,30 +473,6 @@ until you say so.</pre>
             <details>
               <summary>Which models can I use?</summary>
               <div class="ans">Local models through llama.cpp, with the right engine for your hardware chosen for you. You can also add your own key for OpenAI, OpenRouter or Anthropic, and any of them can be your default. Images and video come from an on-device engine or from OpenRouter or OpenAI with your key.</div>
-            </details>
-            <details>
-              <summary>Can it use Claude Code or Codex?</summary>
-              <div class="ans">Yes, if you have them installed. Claude Code, Codex and OpenCode can each take a job from Poiesis, which keeps the conversation and the final word. You set when it may hand work over, and their questions come to Poiesis&rsquo;s own permission panel. They run on your own plan or key, and Poiesis shows who pays.</div>
-            </details>
-            <details>
-              <summary>What is a persona, and what is a team?</summary>
-              <div class="ans">A persona is someone Poiesis speaks as, with its own instructions, model, tools and memory. It can lead a chat or work in a team. A team is a few personas, or plain helpers, with a coordinator and lines you draw: who hands work to whom, who reviews whom, who may ask whom and whom you can talk to. The coordinator leads the chat; the members work in their own chats, which you can open.</div>
-            </details>
-            <details>
-              <summary>Can it work while I am away?</summary>
-              <div class="ans">Yes, as a scheduled task, led by Poiesis, a persona or a team. Nothing it wants to change in your files is changed on its own: each change waits in one list, Waiting for you, and the run goes on with other work. When you have answered, it carries on from there. If the window is in the background, a desktop notice says who is waiting.</div>
-            </details>
-            <details>
-              <summary>Which apps can it connect to?</summary>
-              <div class="ans">Hundreds, through your own Composio account: calendars, Slack, Notion, Linear, Sheets and more. You paste your own key and sign in to each app. Reads run, changes ask, and sends ask every time. You can also add any MCP server yourself.</div>
-            </details>
-            <details>
-              <summary>What are quick decisions?</summary>
-              <div class="ans">An optional experiment. A small decision model answers short yes-or-no questions in a fraction of a second: which tools a message needs, whether a step is what you asked for, whether an answer matches what the run actually did. It can only add caution, never remove a safeguard you set. It is off by default.</div>
-            </details>
-            <details>
-              <summary>Can I talk to it?</summary>
-              <div class="ans">Yes. Voice mode listens and answers out loud, and you can interrupt it. Speech recognition and synthesis run on your computer, so no cloud model is needed.</div>
             </details>
             <details>
               <summary>Is it free?</summary>
@@ -979,7 +499,7 @@ until you say so.</pre>
               <a class="btn btn-secondary btn-icon" href="https://github.com/schuettla/poiesis" aria-label="GitHub" title="GitHub">
                 <svg aria-hidden="true"><use href="#i-github" /></svg>
               </a>
-              <a class="btn btn-secondary" href="#start-h">Build it yourself</a>
+              <a class="btn btn-secondary" href="features.html#source">Build it yourself</a>
             </div>
           </div>
         </div>

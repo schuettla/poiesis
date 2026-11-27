@@ -786,7 +786,8 @@ async fn run_custom_job(app: &AppHandle, job: &mut Job, cancel: CancelFlag) -> R
     // A scheduled run is unattended, so it gets a clock as well as a step
     // budget — and, like every run, an id nobody has to guess at to stop it.
     let fleet = app.state::<crate::agent::fleet::Fleet>();
-    let run = fleet.open(&conversation_id, cancel, None, 0);
+    // `PAR-4`: a scheduled job runs on the engine on this PC.
+    let run = fleet.open(&conversation_id, cancel, None, 0, true);
     let limits = crate::agent::fleet::RunLimits {
         deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(600)),
         // `TEAM-20`: a team's scheduled task has the allowance of its team, as a task the person

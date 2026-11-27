@@ -10,10 +10,11 @@
 //! own, or stopped together with everything it started.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use super::subagents::ClaimGuard;
 use crate::runtime::proxy::{CancelFlag, Usage};
 
 /// Who is talking to a running run.
@@ -325,6 +326,12 @@ impl RunLimits {
     }
 }
 
+/// `PAR-4`: does a turn on this provenance run on the engine on this PC? Anything that is
+/// neither a cloud provider nor the person's own server does (`resolve_turn`).
+pub fn on_this_pc(provenance: &str) -> bool {
+    !matches!(provenance, "cloud" | "endpoint")
+}
+
 /// A live run, addressable by id for as long as it is running.
 pub struct RunHandle {
     pub id: String,
@@ -337,6 +344,16 @@ pub struct RunHandle {
     pub parent: Option<String>,
     pub depth: usize,
     pub conversation_id: String,
+    /// `PAR-5`: the chat this work is for. A run's own conversation, or for a helper the chat
+    /// of the run that started it.
+    pub chat: String,
+    /// `PAR-4`: it runs on the engine on this PC, so that engine may not be swapped under it.
+    pub local: bool,
+    /// `SUB-10`: nobody waits for it, so the chat's Stop leaves it working.
+    detached: AtomicBool,
+    /// `PAR-5`: the working folder it holds against other chats, from its first change until
+    /// it ends.
+    folder_claim: Mutex<Option<ClaimGuard<'static>>>,
     pub started_at: Instant,
     steps: AtomicUsize,
     /// `OBS-1`: what this run has cost so far, summed over its turns. Atomics
@@ -398,6 +415,24 @@ impl RunHandle {
         }
     }
 
+    /// `SUB-10`: this run works on after the turn that started it stops waiting for it.
+    pub fn detach(&self) {
+        self.detached.store(true, Ordering::Relaxed);
+    }
+
+    /// `PAR-5`: keep a claim on a folder for as long as the run lives.
+    pub fn hold(&self, claim: ClaimGuard<'static>) {
+        if let Ok(mut held) = self.folder_claim.lock() {
+            *held = Some(claim);
+        }
+    }
+
+    /// `PAR-5`: let other chats at the folder. The next change claims it again.
+    pub fn release_folder(&self) {
+        let held = self.folder_claim.lock().ok().and_then(|mut h| h.take());
+        drop(held);
+    }
+
     /// Queue an instruction for the next iteration. Cheap and non-blocking, so
     /// it is safe to call from a Tauri command while the run holds the loop.
     pub fn steer(&self, steer: Steer) {
@@ -449,6 +484,22 @@ impl RunHandle {
 #[derive(Default)]
 pub struct Fleet {
     runs: Mutex<HashMap<String, Arc<RunHandle>>>,
+    /// `PAR-3`: chats with a turn in hand, and whether it came from outside (a phone or a chat).
+    chats: Arc<Mutex<HashMap<String, bool>>>,
+}
+
+/// `PAR-3`: held while a chat's turn runs; dropping it lets the chat take the next one.
+pub struct ChatGuard {
+    chats: Arc<Mutex<HashMap<String, bool>>>,
+    conversation: String,
+}
+
+impl Drop for ChatGuard {
+    fn drop(&mut self) {
+        if let Ok(mut chats) = self.chats.lock() {
+            chats.remove(&self.conversation);
+        }
+    }
 }
 
 impl Fleet {
@@ -464,7 +515,13 @@ impl Fleet {
         cancel: CancelFlag,
         parent: Option<String>,
         depth: usize,
+        local: bool,
     ) -> Arc<RunHandle> {
+        let chat = parent
+            .as_deref()
+            .and_then(|p| self.get(p))
+            .map(|p| p.chat.clone())
+            .unwrap_or_else(|| conversation_id.to_string());
         let handle = Arc::new(RunHandle {
             id: format!("run_{}", uuid::Uuid::new_v4().simple()),
             cancel,
@@ -472,6 +529,10 @@ impl Fleet {
             parent,
             depth,
             conversation_id: conversation_id.to_string(),
+            chat,
+            local,
+            detached: AtomicBool::new(false),
+            folder_claim: Mutex::new(None),
             started_at: Instant::now(),
             steps: AtomicUsize::new(0),
             prompt_tokens: AtomicU64::new(0),
@@ -499,8 +560,10 @@ impl Fleet {
     /// Deregister a finished run. Always call this, including on the error
     /// paths — a handle left behind is a run the UI thinks is still working.
     pub fn close(&self, id: &str) {
-        if let Ok(mut runs) = self.runs.lock() {
-            runs.remove(id);
+        let closed = self.runs.lock().ok().and_then(|mut runs| runs.remove(id));
+        // Someone may still hold the handle, so the folder is let go here and not on drop.
+        if let Some(run) = closed {
+            run.release_folder();
         }
     }
 
@@ -524,9 +587,53 @@ impl Fleet {
             .unwrap_or_default()
     }
 
+    /// The live top-level runs of one chat.
+    pub fn roots_of(&self, conversation_id: &str) -> Vec<Arc<RunHandle>> {
+        self.roots().into_iter().filter(|r| r.conversation_id == conversation_id).collect()
+    }
+
+    /// `PAR-4`: a live run on the engine on this PC, if there is one.
+    pub fn local_run(&self) -> Option<Arc<RunHandle>> {
+        self.runs.lock().ok()?.values().find(|r| r.local).cloned()
+    }
+
+    /// `PAR-3`: take the chat for one turn. `None` when it already has one. `remote` says the
+    /// turn came from a phone or a chat, so switching remote off can stop exactly those.
+    pub fn enter_chat(&self, conversation_id: &str, remote: bool) -> Option<ChatGuard> {
+        let mut chats = self.chats.lock().ok()?;
+        if chats.contains_key(conversation_id) {
+            return None;
+        }
+        chats.insert(conversation_id.to_string(), remote);
+        Some(ChatGuard { chats: self.chats.clone(), conversation: conversation_id.to_string() })
+    }
+
+    pub fn chat_busy(&self, conversation_id: &str) -> bool {
+        self.chats.lock().is_ok_and(|c| c.contains_key(conversation_id))
+    }
+
+    /// The chat has a turn in hand and it came from outside.
+    pub fn chat_started_remotely(&self, conversation_id: &str) -> bool {
+        self.chats.lock().is_ok_and(|c| c.get(conversation_id) == Some(&true))
+    }
+
+    /// `PAR-1`: the Stop of one chat. Its run and the helpers it waits for; helpers working in
+    /// the background (`SUB-10`) carry on, and so does every other chat.
+    pub fn stop_chat(&self, conversation_id: &str) {
+        for root in self.roots_of(conversation_id) {
+            self.cancel_where(&root.id, |run| !run.detached.load(Ordering::Relaxed));
+        }
+    }
+
     /// Stop a run and everything it started. Stopping a lead without its
     /// children would leave orphans burning tokens with no one to report to.
     pub fn cancel_tree(&self, id: &str) {
+        self.cancel_where(id, |_| true);
+    }
+
+    /// Walk down from `id`, stopping each run. A child `takes` refuses is left alone with
+    /// everything below it.
+    fn cancel_where(&self, id: &str, takes: impl Fn(&RunHandle) -> bool) {
         let mut stack = vec![id.to_string()];
         let mut seen = std::collections::HashSet::new();
         while let Some(current) = stack.pop() {
@@ -536,17 +643,7 @@ impl Fleet {
             if let Some(handle) = self.get(&current) {
                 handle.cancel.cancel();
             }
-            stack.extend(self.children_of(&current).into_iter().map(|c| c.id.clone()));
-        }
-    }
-
-    /// Stop every live run. What the composer's Stop control means now that a
-    /// turn can be a tree.
-    pub fn cancel_all(&self) {
-        if let Ok(runs) = self.runs.lock() {
-            for run in runs.values() {
-                run.cancel.cancel();
-            }
+            stack.extend(self.children_of(&current).into_iter().filter(|c| takes(c)).map(|c| c.id.clone()));
         }
     }
 }
@@ -557,9 +654,9 @@ mod tests {
 
     fn fleet_with_tree() -> (Fleet, Arc<RunHandle>, Arc<RunHandle>, Arc<RunHandle>) {
         let fleet = Fleet::new();
-        let root = fleet.open("conv_a", CancelFlag::new(), None, 0);
-        let child = fleet.open("conv_b", CancelFlag::new(), Some(root.id.clone()), 1);
-        let other = fleet.open("conv_c", CancelFlag::new(), None, 0);
+        let root = fleet.open("conv_a", CancelFlag::new(), None, 0, false);
+        let child = fleet.open("conv_b", CancelFlag::new(), Some(root.id.clone()), 1, false);
+        let other = fleet.open("conv_c", CancelFlag::new(), None, 0, false);
         (fleet, root, child, other)
     }
 
@@ -568,7 +665,7 @@ mod tests {
     #[tokio::test]
     async fn an_answer_reaches_the_waiting_question_once() {
         let fleet = Fleet::new();
-        let run = fleet.open("conv", CancelFlag::new(), None, 0);
+        let run = fleet.open("conv", CancelFlag::new(), None, 0, false);
         let rx = run.ask("q1");
         assert!(run.answer("q1", Answer { choices: vec!["A".into(), "C".into()], text: None }));
         assert!(!run.answer("q1", Answer::default()), "a question is answered once");
@@ -593,7 +690,7 @@ mod tests {
     #[test]
     fn steers_drain_in_order_and_only_once() {
         let fleet = Fleet::new();
-        let run = fleet.open("conv", CancelFlag::new(), None, 0);
+        let run = fleet.open("conv", CancelFlag::new(), None, 0, false);
         run.steer(Steer::user("first"));
         run.steer(Steer::user("second"));
         let drained: Vec<String> = run.drain_steers().into_iter().map(|s| s.text).collect();
@@ -616,6 +713,59 @@ mod tests {
         assert!(root.cancel.is_cancelled());
         assert!(child.cancel.is_cancelled());
         assert!(!other.cancel.is_cancelled());
+    }
+
+    /// `PAR-1`: Stop takes one chat's run and the helpers it waits for. A helper in the
+    /// background and every other chat carry on.
+    #[test]
+    fn stopping_a_chat_leaves_other_chats_and_background_helpers_working() {
+        let fleet = Fleet::new();
+        let a = fleet.open("conv_a", CancelFlag::new(), None, 0, false);
+        let waited = fleet.open("a_helper", CancelFlag::new(), Some(a.id.clone()), 1, false);
+        let below = fleet.open("a_helper_helper", CancelFlag::new(), Some(waited.id.clone()), 2, false);
+        let background = fleet.open("a_background", CancelFlag::new(), Some(a.id.clone()), 1, false);
+        background.detach();
+        let b = fleet.open("conv_b", CancelFlag::new(), None, 0, false);
+        let b_child = fleet.open("b_helper", CancelFlag::new(), Some(b.id.clone()), 1, false);
+
+        fleet.stop_chat("conv_a");
+        for run in [&a, &waited, &below] {
+            assert!(run.cancel.is_cancelled(), "{}", run.conversation_id);
+        }
+        for run in [&background, &b, &b_child] {
+            assert!(!run.cancel.is_cancelled(), "{}", run.conversation_id);
+        }
+        // Its own card still stops it.
+        fleet.cancel_tree(&background.id);
+        assert!(background.cancel.is_cancelled());
+    }
+
+    /// `PAR-5`: a helper works for the chat of whoever started it, however deep.
+    #[test]
+    fn a_helper_belongs_to_the_chat_that_started_it() {
+        let fleet = Fleet::new();
+        let top = fleet.open("conv_a", CancelFlag::new(), None, 0, true);
+        let mid = fleet.open("helper", CancelFlag::new(), Some(top.id.clone()), 1, false);
+        let low = fleet.open("helper_two", CancelFlag::new(), Some(mid.id.clone()), 2, false);
+        assert_eq!((top.chat.as_str(), mid.chat.as_str(), low.chat.as_str()), ("conv_a", "conv_a", "conv_a"));
+        assert_eq!(fleet.local_run().map(|r| r.id.clone()), Some(top.id.clone()));
+        fleet.close(&top.id);
+        assert!(fleet.local_run().is_none());
+    }
+
+    /// `PAR-3`: one turn per chat, whoever sends it.
+    #[test]
+    fn a_chat_takes_one_turn_at_a_time() {
+        let fleet = Fleet::new();
+        let guard = fleet.enter_chat("c1", false).expect("free");
+        assert!(fleet.enter_chat("c1", true).is_none(), "a second turn in the same chat is refused");
+        assert!(fleet.enter_chat("c2", true).is_some(), "another chat is not held up");
+        assert!(fleet.chat_busy("c1"));
+        assert!(!fleet.chat_started_remotely("c1"), "typed in the window");
+        drop(guard);
+        assert!(!fleet.chat_busy("c1"));
+        let _remote = fleet.enter_chat("c1", true).expect("free again once the turn ends");
+        assert!(fleet.chat_started_remotely("c1"));
     }
 
     #[test]
@@ -669,10 +819,10 @@ mod tests {
     fn the_cap_stops_every_member_of_the_task_and_not_the_coordinator() {
         let fleet = Fleet::new();
         let allowance = Arc::new(Allowance::new(1.0, 90));
-        let coordinator = fleet.open("session", CancelFlag::new(), None, 0);
-        let api = fleet.open("api-chat", CancelFlag::new(), Some(coordinator.id.clone()), 1);
-        let ui = fleet.open("ui-chat", CancelFlag::new(), Some(coordinator.id.clone()), 1);
-        let stranger = fleet.open("other", CancelFlag::new(), None, 0);
+        let coordinator = fleet.open("session", CancelFlag::new(), None, 0, false);
+        let api = fleet.open("api-chat", CancelFlag::new(), Some(coordinator.id.clone()), 1, false);
+        let ui = fleet.open("ui-chat", CancelFlag::new(), Some(coordinator.id.clone()), 1, false);
+        let stranger = fleet.open("other", CancelFlag::new(), None, 0, false);
         allowance.enroll(&api.cancel);
         allowance.enroll(&ui.cancel);
         let limits = RunLimits { allowance: Some(allowance.clone()), ..RunLimits::default() };
@@ -692,7 +842,7 @@ mod tests {
         assert!(!stranger.cancel.is_cancelled());
 
         // A member that was still queued stops the moment it is enrolled.
-        let late = fleet.open("docs-chat", CancelFlag::new(), Some(coordinator.id.clone()), 1);
+        let late = fleet.open("docs-chat", CancelFlag::new(), Some(coordinator.id.clone()), 1, false);
         allowance.enroll(&late.cancel);
         assert!(late.cancel.is_cancelled());
         assert_eq!(StopReason::Budget.as_str(), "budget");

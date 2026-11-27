@@ -82,6 +82,7 @@ fn build(f: &serde_json::Value) -> PromptInputs {
                 total: t["total"].as_i64().unwrap_or(0),
             })
             .collect(),
+        today_line: s("today_line"),
         spoken: false,
         context_refs: Default::default(),
         recalled_matches: Vec::new(),

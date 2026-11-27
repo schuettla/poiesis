@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { isInsideFolder, itemKey, useActiveConversation, useAppStore, useLiveItems } from "../../lib/store";
+import { isInsideFolder, itemKey, sayRefused, useActiveConversation, useAppStore, useLiveItems } from "../../lib/store";
 import { CloseIcon, DownloadIcon, FolderIcon } from "../Icons/Icons";
 import { RunView } from "./AgentsPanel";
 import DiffView, { changeLabel } from "./DiffView";
@@ -125,7 +125,7 @@ export default function ItemView() {
             </button>
           )}
           {item.kind === "diff" && change && convId && (
-            <button className="wb-link" onClick={() => void undoChanges(convId, change.path)}>
+            <button className="wb-link" onClick={() => void undoChanges(convId, change.path).catch(sayRefused)}>
               Undo this file
             </button>
           )}

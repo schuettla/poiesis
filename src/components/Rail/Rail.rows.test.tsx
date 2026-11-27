@@ -125,7 +125,7 @@ describe("chat rows", () => {
     expect(r.querySelector(".chat-digest")?.getAttribute("aria-label")).toMatch(/learned/);
     act(() => r.querySelector<HTMLButtonElement>(".chat-more")!.click());
     const labels = Array.from(r.querySelectorAll(".row-menu-item")).map((b) => b.textContent);
-    expect(labels).toEqual(["Schedule this…", "Delete chat"]);
+    expect(labels).toEqual(["Schedule this…", "Session details…", "Delete chat"]);
   });
 
   it("mark the current chat for assistive tech, not only by color", () => {

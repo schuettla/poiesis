@@ -115,6 +115,39 @@ select,
   }
 }
 
+/* Live words: a light that passes back and forth through the words that say what is
+   happening now. Ink only: the words rest pale and the pass brings them to full ink.
+   The words are painted by their own background, so this is off wherever that could
+   leave them unreadable or moving against a preference.
+   The gradient is three times the words wide, so the positions below take the middle
+   of the light from just before the first letter to just past the last: it is on the
+   words for the whole pass. */
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  .live-words {
+    --live-rest: color-mix(in srgb, var(--ink) 36%, transparent);
+    background-image: linear-gradient(
+      90deg,
+      var(--live-rest) 38%,
+      var(--ink) 46%,
+      var(--ink) 54%,
+      var(--live-rest) 62%
+    );
+    background-size: 300% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: live-words 1.2s var(--ease-in-out) infinite alternate;
+  }
+}
+@keyframes live-words {
+  from {
+    background-position: 80% 0;
+  }
+  to {
+    background-position: 20% 0;
+  }
+}
+
 /* Checkboxes and radios — the native controls ship a browser-blue fill that
    has nothing to do with the palette, so they are drawn from scratch as
    hairline-outlined boxes matching every other panel. Checked state uses ink,

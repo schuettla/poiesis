@@ -33,6 +33,7 @@ pub struct Signals {
     pub fixes: usize,
     /// What the user did to correct me (`agent::log::user_signals`).
     pub user_signals: Vec<String>,
+    /// The user went back and said nothing after it (`log::ends_on_rewind`).
     pub rewound: bool,
     /// The last tool call, or the last check of an answer, failed.
     pub ended_on_failure: bool,
@@ -87,7 +88,7 @@ pub fn gather(db: &Db, conversation_id: &str) -> Signals {
         tool_failures: db.tool_failures_in(conversation_id).unwrap_or_default(),
         fixes: db.tool_fixes_in(conversation_id).map(|f| f.len()).unwrap_or(0),
         user_signals: super::log::user_signals(db, conversation_id),
-        rewound: super::log::was_rewound(db, conversation_id),
+        rewound: super::log::ends_on_rewind(db, conversation_id),
         ended_on_failure: db.last_tool_ok(conversation_id).ok().flatten() == Some(false) || claims_refuted > 0,
         // A thanks is the end of a conversation, not a question left hanging.
         unanswered: messages.last().is_some_and(|m| m.role == "user") && !last_user_accepts,
@@ -277,6 +278,11 @@ mod tests {
             &serde_json::json!({ "preview": "Do it" }),
         );
         assert_eq!(outcome(&gather(&db, &rewound)), ABANDONED);
+        // Going on after it means the chat was not left there.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        say(&db, &rewound, "user", "Do it this way");
+        say(&db, &rewound, "assistant", "Done");
+        assert_ne!(outcome(&gather(&db, &rewound)), ABANDONED);
 
         let left = chat(&db);
         say(&db, &left, "user", "First");

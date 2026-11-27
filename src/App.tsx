@@ -21,6 +21,7 @@ import MediaConsentDialog from "./components/Confirm/MediaConsentDialog";
 import PresetDialog from "./components/Self/PresetDialog";
 import ImageLightbox from "./components/Conversation/ImageLightbox";
 import CommandPalette from "./components/CommandPalette/CommandPalette";
+import SessionDetails from "./components/SessionDetails/SessionDetails";
 import "./App.css";
 
 export default function App() {
@@ -182,6 +183,7 @@ export default function App() {
       <PresetDialog />
       <ImageLightbox />
       <CommandPalette />
+      <SessionDetails />
     </div>
   );
 }

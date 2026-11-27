@@ -28,6 +28,8 @@ pub mod verifications;
 /// What a finished conversation turned into, and how far a memory helped (`EPI-1`, `CRD-2`).
 pub mod episodes;
 mod episodes_tools;
+/// `DBG-2`: the reads behind the session report.
+pub mod inspect;
 
 const SCHEMA: &str = include_str!("schema.sql");
 pub const SCHEMA_VERSION: i64 = 55;
@@ -3050,39 +3052,11 @@ impl Db {
         })
     }
 
-    /// `CTX-5`/`HRN-UI-5`: branch a conversation just before one assistant turn.
-    ///
-    /// The new conversation keeps everything the old one had — persona, model,
-    /// overrides, working folder and its trust — because a fork the user has to
-    /// re-configure is not the same question asked again. Messages are copied up
-    /// to but not including the turn being redone, and the user turn that
-    /// prompted it is handed back rather than copied: the caller sends it, which
-    /// is the one path that also builds a fresh prompt and a fresh run.
-    ///
-    /// Returns `(new conversation, the user turn to resend)`. The turn is `None`
-    /// when the fork point has no user message before it, which leaves the caller
-    /// with an ordinary empty branch instead of a broken rerun.
-    pub fn fork_conversation(
-        &self,
-        conversation_id: &str,
-        message_id: &str,
-    ) -> Result<(Conversation, Option<String>), DbError> {
-        self.fork_conversation_at(conversation_id, message_id, false)
-    }
-
-    /// `UCM-2`: the same branch, with the choice of where the cut falls.
-    ///
-    /// `inclusive: false` is "Try again from here": copy everything before the
-    /// turn and hand back the user turn that prompted it. `inclusive: true` is
-    /// `/fork`: keep the boundary message and everything the run after it wrote
-    /// to the log, and hand back nothing to resend — the branch is the
-    /// conversation exactly as it stands.
-    pub fn fork_conversation_at(
-        &self,
-        conversation_id: &str,
-        message_id: &str,
-        inclusive: bool,
-    ) -> Result<(Conversation, Option<String>), DbError> {
+    /// `UCM-2`: `/fork`. A new conversation holding this one up to and including
+    /// `message_id`, with everything the run after it wrote to the log. It is the
+    /// one thing that makes a second chat: going back and asking again happen in
+    /// place (`cut_conversation`).
+    pub fn fork_conversation(&self, conversation_id: &str, message_id: &str) -> Result<Conversation, DbError> {
         let cutoff: i64 = {
             let conn = self.conn.lock().unwrap();
             conn.query_row(
@@ -3094,35 +3068,27 @@ impl Db {
         let source = self
             .get_conversation(conversation_id)?
             .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-        // An inclusive cut keeps the boundary turn *and* the log its run wrote,
-        // which is stamped after the message row. The log is therefore cut at the
-        // next message, or not at all when the boundary is the last one.
-        let upto_seq = if inclusive {
-            let next: Option<i64> = {
-                let conn = self.conn.lock().unwrap();
-                conn.query_row(
-                    "SELECT MIN(created_at) FROM messages WHERE conversation_id = ?1 AND created_at > ?2",
-                    params![conversation_id, cutoff],
-                    |r| r.get(0),
-                )
-                .unwrap_or(None)
-            };
-            match next {
-                Some(at) => self.seq_at_time(conversation_id, at - 1)?,
-                None => i64::MAX,
-            }
-        } else {
-            self.seq_at_time(conversation_id, cutoff)?
+        // The cut keeps the boundary turn *and* the log its run wrote, which is
+        // stamped after the message row. The log is therefore cut at the next
+        // message, or not at all when the boundary is the last one.
+        let next: Option<i64> = {
+            let conn = self.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT MIN(created_at) FROM messages WHERE conversation_id = ?1 AND created_at > ?2",
+                params![conversation_id, cutoff],
+                |r| r.get(0),
+            )
+            .unwrap_or(None)
+        };
+        let upto_seq = match next {
+            Some(at) => self.seq_at_time(conversation_id, at - 1)?,
+            None => i64::MAX,
         };
 
         let conn = self.conn.lock().unwrap();
         let new_conv_id = new_id();
         let ts = now_ms();
-        let title = if inclusive {
-            format!("{} (branch)", source.title)
-        } else {
-            format!("{} (again)", source.title)
-        };
+        let title = format!("{} (branch)", source.title);
         conn.execute(
             "INSERT INTO conversations(id, title, model_id, persona_id, overrides_json, workspace,
                                       folder_path, folder_trust, project_id, engines_off, style, leader, created_at, updated_at)
@@ -3149,30 +3115,23 @@ impl Db {
             ],
         )?;
 
-        // Everything before the turn being redone, oldest first.
+        // Everything up to the boundary, oldest first.
         let mut stmt = conn.prepare(
             "SELECT id, role, content, model_name, model_provenance, steps_json, stop_reason, created_at, plan_json, spoken, author
-             FROM messages WHERE conversation_id = ?1 AND (created_at < ?2 OR (?3 AND created_at = ?2))
+             FROM messages WHERE conversation_id = ?1 AND created_at <= ?2
              ORDER BY created_at",
         )?;
         // `PLN-T4`: `plan_json` travels with the turn, so a branch shows the
         // plan the run it copied was working to rather than a blank card.
         type Row = (String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, i64, Option<String>, i64, Option<String>);
-        let mut rows: Vec<Row> = stmt
-            .query_map(params![conversation_id, cutoff, inclusive], |r| {
+        let rows: Vec<Row> = stmt
+            .query_map(params![conversation_id, cutoff], |r| {
                 Ok((
                     r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         drop(stmt);
-
-        // The trailing user turn is the one to resend, so it is not copied —
-        // otherwise it would appear twice the moment the caller sends it.
-        let resend = match rows.last() {
-            Some(last) if last.1 == "user" && !inclusive => rows.pop().map(|r| r.2),
-            _ => None,
-        };
 
         // Where the source's summary boundary lands in the copy. The fork's
         // messages get fresh ids, so carrying the old boundary id across
@@ -3219,31 +3178,78 @@ impl Db {
         // fails, and the next run rebuilds the log from the messages anyway.
         let _ = self.fork_session_events(conversation_id, &new_conv_id, upto_seq);
 
-        Ok((
-            Conversation {
-                id: new_conv_id,
-                title,
-                model_id: source.model_id,
-                persona_id: source.persona_id,
-                overrides_json: source.overrides_json,
-                workspace: source.workspace,
-                summary: forked_summary,
-                summary_upto_message_id: new_boundary,
-                reflected_at: None,
-                folder_path: source.folder_path,
-                folder_trust: source.folder_trust,
-                parent_conversation_id: None,
-                project_id: source.project_id,
-                engines_off: source.engines_off,
-                style: source.style,
-                leader: source.leader,
-                remote_sender: None,
-                remote_transport: None,
-                created_at: ts,
-                updated_at: ts,
-            },
-            resend,
-        ))
+        Ok(Conversation {
+            id: new_conv_id,
+            title,
+            model_id: source.model_id,
+            persona_id: source.persona_id,
+            overrides_json: source.overrides_json,
+            workspace: source.workspace,
+            summary: forked_summary,
+            summary_upto_message_id: new_boundary,
+            reflected_at: None,
+            folder_path: source.folder_path,
+            folder_trust: source.folder_trust,
+            parent_conversation_id: None,
+            project_id: source.project_id,
+            engines_off: source.engines_off,
+            style: source.style,
+            leader: source.leader,
+            remote_sender: None,
+            remote_transport: None,
+            created_at: ts,
+            updated_at: ts,
+        })
+    }
+
+    /// `RWD-1`: is a helper or a picture asked for at or after `since` still being
+    /// made? Cutting the chat under it would leave its result nowhere to go.
+    pub fn work_running_since(&self, conversation_id: &str, since: i64) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM subagent_runs
+                            WHERE parent_conversation_id = ?1 AND started_at >= ?2 AND status IN ('queued', 'running'))
+                 OR EXISTS(SELECT 1 FROM media_jobs
+                            WHERE conversation_id = ?1 AND started_at >= ?2 AND status = 'running')",
+            params![conversation_id, since],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// `RWD-1`: remove, from this conversation, everything from `cutoff` on: the
+    /// messages (their attachments and checks go with them), what was logged
+    /// (which a resume would otherwise pick up again), the blocks, team posts and
+    /// helper records of those turns, and a summary that covered them. The
+    /// `rewound` rows stay: they say this happened. Files, artifacts and what was
+    /// saved to memory are not part of the chat and are not touched.
+    pub fn cut_conversation(&self, conversation_id: &str, cutoff: i64) -> Result<(), DbError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let at = params![conversation_id, cutoff];
+        tx.execute(
+            "DELETE FROM blocks WHERE conversation_id = ?1
+               AND (message_id IN (SELECT id FROM messages WHERE conversation_id = ?1 AND created_at >= ?2)
+                    OR (message_id IS NULL AND created_at >= ?2))",
+            at,
+        )?;
+        tx.execute("DELETE FROM messages WHERE conversation_id = ?1 AND created_at >= ?2", at)?;
+        tx.execute("DELETE FROM posts WHERE conversation_id = ?1 AND created_at >= ?2", at)?;
+        tx.execute("DELETE FROM subagent_runs WHERE parent_conversation_id = ?1 AND started_at >= ?2", at)?;
+        tx.execute(
+            "UPDATE conversations SET summary = NULL, summary_upto_message_id = NULL
+             WHERE id = ?1 AND summary_upto_message_id NOT IN (SELECT id FROM messages WHERE conversation_id = ?1)",
+            [conversation_id],
+        )?;
+        // A compaction made later but covering only turns that stay is still true of them.
+        tx.execute(
+            "DELETE FROM session_events WHERE conversation_id = ?1 AND created_at >= ?2 AND kind <> ?3
+               AND NOT (kind = ?4 AND COALESCE(json_extract(payload_json, '$.upto_message_id'), '')
+                        IN (SELECT id FROM messages WHERE conversation_id = ?1))",
+            params![conversation_id, cutoff, crate::agent::log::REWOUND_KIND, crate::agent::log::COMPACTION_KIND],
+        )?;
+        Self::touch_conversation(&tx, conversation_id)?;
+        tx.commit()?;
+        Ok(())
     }
 
     // ---- the session log (`CTX-2`) ----
@@ -5264,6 +5270,21 @@ impl Db {
         Ok(out)
     }
 
+    /// `PAR-11`: per chat, how its newest answer ended, for chats where it did not simply
+    /// finish. The Rail's Status filter reads it once at the start.
+    pub fn session_outcomes(&self) -> Result<std::collections::HashMap<String, String>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT conversation_id, stop_reason FROM (
+                 SELECT conversation_id, stop_reason,
+                        ROW_NUMBER() OVER (PARTITION BY conversation_id ORDER BY created_at DESC, rowid DESC) AS newest
+                   FROM messages WHERE role = 'assistant'
+             ) WHERE newest = 1 AND stop_reason IS NOT NULL AND stop_reason <> 'completed'",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     pub fn list_all_artifacts(&self) -> Result<Vec<Artifact>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -6721,13 +6742,10 @@ mod tests {
         assert_eq!(s.by_conversation[0].label.as_deref(), Some("silent provider"));
     }
 
-    /// `CTX-T3` at the conversation level: a fork is the same chat asked again
-    /// from a point, so it keeps the settings, keeps the history before the cut,
-    /// drops everything from the cut on, and hands back the question to re-ask
-    /// rather than copying it — copying it would show it twice the moment the
-    /// caller sends it.
+    /// `CTX-T3` at the conversation level: a fork keeps the settings and the
+    /// history up to the boundary, and nothing after it.
     #[test]
-    fn forking_branches_a_conversation_just_before_one_answer() {
+    fn forking_branches_a_conversation_up_to_one_answer() {
         let db = Db::open_in_memory().unwrap();
         let source = db.create_conversation("Planning", None, true).unwrap();
         db.set_conversation_folder(&source.id, Some("C:\\work")).unwrap();
@@ -6743,22 +6761,22 @@ mod tests {
         };
         db.append_message(&source.id, &msg("user", "first question")).unwrap();
         db.append_message(&source.id, &msg("assistant", "first answer")).unwrap();
-        db.append_message(&source.id, &msg("user", "the question to redo")).unwrap();
-        let redo = db.append_message(&source.id, &msg("assistant", "the answer to redo")).unwrap();
+        db.append_message(&source.id, &msg("user", "the second question")).unwrap();
+        let boundary = db.append_message(&source.id, &msg("assistant", "the second answer")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
         db.append_message(&source.id, &msg("user", "after the fork point")).unwrap();
 
-        let (fork, resend) = db.fork_conversation(&source.id, &redo.id).unwrap();
-        assert_eq!(resend.as_deref(), Some("the question to redo"));
-        assert_eq!(fork.title, "Planning (again)");
+        let fork = db.fork_conversation(&source.id, &boundary.id).unwrap();
+        assert_eq!(fork.title, "Planning (branch)");
         assert!(fork.workspace, "a fork of a workspace chat is a workspace chat");
         assert_eq!(fork.folder_path.as_deref(), Some("C:\\work"));
-        assert_eq!(fork.folder_trust, "full", "re-granting trust is not part of asking again");
+        assert_eq!(fork.folder_trust, "full", "re-granting trust is not part of branching");
 
         let copied = db.list_messages(&fork.id).unwrap();
         assert_eq!(
             copied.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(),
-            vec!["first question", "first answer"],
-            "everything before the cut, and neither the turn being redone nor what followed it"
+            vec!["first question", "first answer", "the second question", "the second answer"],
+            "everything up to the boundary, and nothing that followed it"
         );
         assert_eq!(
             db.list_messages(&source.id).unwrap().len(),
@@ -6832,7 +6850,7 @@ mod tests {
         assert_eq!(spoken[..2], [("typed", false), ("said", true)]);
         assert!(!rows.iter().find(|m| m.id == answer.id).unwrap().spoken);
 
-        let (fork, _) = db.fork_conversation(&source.id, &after.id).unwrap();
+        let fork = db.fork_conversation(&source.id, &after.id).unwrap();
         let copied = db.list_messages(&fork.id).unwrap();
         assert_eq!(copied.iter().find(|m| m.content == "said").map(|m| m.spoken), Some(true));
         assert_eq!(copied.iter().find(|m| m.content == "typed").map(|m| m.spoken), Some(false));
@@ -6857,7 +6875,7 @@ mod tests {
 
         db.set_conversation_summary(&source.id, "FACTS: the old beginning", &early.id).unwrap();
 
-        let (fork, _) = db.fork_conversation(&source.id, &redo.id).unwrap();
+        let fork = db.fork_conversation(&source.id, &redo.id).unwrap();
         assert_eq!(fork.summary.as_deref(), Some("FACTS: the old beginning"));
 
         // Re-pointed, not copied: the boundary names a message in *this*
@@ -6893,13 +6911,50 @@ mod tests {
         };
         db.append_message(&source.id, &msg("user", "the old beginning")).unwrap();
         let redo = db.append_message(&source.id, &msg("assistant", "the answer to redo")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
         let late = db.append_message(&source.id, &msg("user", "after the fork point")).unwrap();
 
         db.set_conversation_summary(&source.id, "FACTS: everything", &late.id).unwrap();
 
-        let (fork, _) = db.fork_conversation(&source.id, &redo.id).unwrap();
+        let fork = db.fork_conversation(&source.id, &redo.id).unwrap();
         assert!(fork.summary.is_none());
         assert!(fork.summary_upto_message_id.is_none());
+    }
+
+    /// `PAR-11`: only the newest answer of a chat says how the chat ended, and one that
+    /// simply finished says nothing.
+    #[test]
+    fn session_outcomes_are_the_newest_answers_reason_and_skip_finished_ones() {
+        let db = Db::open_in_memory().unwrap();
+        let answer = |chat: &str, reason: Option<&str>| {
+            let row = db
+                .append_message(chat, &NewMessage {
+                    role: "assistant".into(),
+                    content: String::new(),
+                    model_name: None,
+                    model_provenance: None,
+                    steps_json: None,
+                    attachments: vec![],
+                })
+                .unwrap();
+            db.finalize_message(&row.id, "words", None, None, reason, None).unwrap();
+        };
+        let chat = |title: &str| db.create_conversation(title, None, false).unwrap().id;
+        let stopped = chat("stopped");
+        answer(&stopped, Some("completed"));
+        answer(&stopped, Some("aborted"));
+        let continued = chat("continued");
+        answer(&continued, Some("error"));
+        answer(&continued, Some("completed"));
+        let started = chat("started");
+        answer(&started, Some("max_steps"));
+        answer(&started, None);
+        chat("empty");
+
+        let outcomes = db.session_outcomes().unwrap();
+
+        assert_eq!(outcomes.get(&stopped).map(String::as_str), Some("aborted"));
+        assert_eq!(outcomes.len(), 1, "{outcomes:?}");
     }
 
     /// `SUB-T8`: v23 applies on a fresh database, and children come back in the

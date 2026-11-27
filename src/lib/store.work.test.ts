@@ -64,7 +64,7 @@ beforeEach(() => {
     toolsEnabled: false,
     turnModifiers: {},
     runSummaries: {},
-    busy: false,
+    busyChats: {},
     presence: "idle",
   });
 });

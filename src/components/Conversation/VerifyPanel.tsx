@@ -21,6 +21,7 @@ import {
 import { ChevronIcon } from "../Icons/Icons";
 import Toggle from "../Toggle/Toggle";
 import RunText from "./RunText";
+import { busyIn } from "../../lib/runs";
 import "./Verify.css";
 
 /** The check or cross the trust line's words used to start with. The dot beside the words
@@ -118,7 +119,7 @@ function VerifyPanel({
   onShowSupported: (on: boolean) => void;
 }) {
   const entry = useAppStore((s) => s.verifications[messageId]);
-  const busy = useAppStore((s) => s.busy);
+  const busy = useAppStore((s) => busyIn(s, s.activeConversationId));
   const cancelVerify = useAppStore((s) => s.cancelVerify);
   const verifyMessage = useAppStore((s) => s.verifyMessage);
   const reviseFromVerification = useAppStore((s) => s.reviseFromVerification);

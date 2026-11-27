@@ -23,6 +23,28 @@
 .side-panel-inner {
   padding: 28px 26px;
 }
+/* `PAR-10`: which chat is asking, when it is not the one on screen. */
+.permission-chat {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 8px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-footnote);
+  color: var(--ink-muted);
+}
+.permission-chat-from {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.permission-chat > .btn-text {
+  flex: none;
+  padding: 0 2px;
+  font-size: var(--fs-footnote);
+  text-decoration: underline;
+}
 .permission-eyebrow {
   font-family: var(--font-sans);
   font-size: var(--fs-caption);

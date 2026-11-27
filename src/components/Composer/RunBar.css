@@ -1,18 +1,30 @@
-/* `RUN-4`: one line, 28px, muted. Segments are text buttons, not chips. A hairline
-   under it and no background of its own. Numbers change in place — the orb in
-   the turn already carries the motion, and one motion at a time is enough. */
+/* `RUN-4`: a tray tucked behind the composer, so the two read as one object.
+   Inset from the box's sides, rounded on top only, its bottom edge under the
+   composer's border. Segments are text buttons, not chips. Numbers change in
+   place — the orb in the turn already carries the motion, and one motion at a
+   time is enough.
+
+   The inset, border and padding add up to the box's own: the first word starts
+   where the typed text starts, and the × sits over the middle of Send. */
 .run-bar {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 28px;
-  margin-bottom: 6px;
-  border-bottom: 1px solid var(--hairline);
+  min-height: 30px;
+  margin: 0 8px -1px;
+  padding: 0 6px 0 10px;
+  background: color-mix(in srgb, var(--paper) 55%, var(--canvas));
+  border: 1px solid var(--hairline);
+  border-bottom: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   font-family: var(--font-sans);
   font-size: var(--fs-timeline);
   color: var(--ink-muted);
+}
+.member-row + .run-bar {
+  margin-top: 4px;
 }
 .run-bar-line {
   display: flex;
@@ -37,38 +49,54 @@
   cursor: pointer;
   font: inherit;
   color: inherit;
+  transition: color var(--dur-fast) var(--ease-out);
 }
 .run-bar-link:hover {
   color: var(--ink);
 }
+/* Undo and Keep decide something, so they stand in full ink. */
 .run-bar-act {
-  text-decoration: underline;
+  font-weight: 500;
+  color: var(--ink);
   text-underline-offset: 2px;
+}
+.run-bar-act:hover {
+  text-decoration: underline;
 }
 .run-bar-x {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
   background: none;
   border: none;
-  padding: 0 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--ink-faint);
-  font-size: var(--fs-callout);
-  line-height: 1;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 .run-bar-x:hover {
+  background: var(--fill-hover);
   color: var(--ink);
 }
 .run-bar-more {
-  position: relative;
   display: inline-flex;
 }
+/* Placed against the tray, not against `+N`: the line clips whatever is
+   positioned inside it, and this opens above the line. */
 .run-bar-popover {
   position: absolute;
   bottom: calc(100% + 4px);
-  left: 0;
+  left: 10px;
   z-index: 10;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 6px;
   padding: 8px 10px;
   background: var(--paper);

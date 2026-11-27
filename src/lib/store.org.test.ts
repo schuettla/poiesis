@@ -45,7 +45,7 @@ beforeEach(() => {
       { slug: "mission-command", name: "Mission Command", line: "You set the goal, I find the way", glyph: "mission-command", built_in: true, locked: false, version: 1, rules: [] },
       { slug: "command-and-control", name: "Command & Control", line: "You decide every step", glyph: "command-and-control", built_in: true, locked: false, version: 1, rules: [] },
     ],
-    busy: false,
+    busyChats: {},
     presence: "idle",
   });
 });
@@ -87,7 +87,7 @@ describe("switching in the middle of a run (WRK-13)", () => {
     script = async (emit) => {
       emit(started);
       emit({ type: "style_set", run_id: "r1", preset: "mission-command", name: "Mission Command", source: "chat" });
-      useAppStore.setState({ activeRun: { runId: "r1", convId: "c1" } as never });
+      useAppStore.setState({ liveRuns: { c1: { runId: "r1", convId: "c1" } } as never });
       await useAppStore.getState().setConversationStyle("c1", "command-and-control");
       during = useAppStore.getState().runSummaries.c1?.switching;
       emit({ type: "style_set", run_id: "r1", preset: "command-and-control", name: "Command & Control", source: "switch" });
@@ -106,7 +106,7 @@ describe("switching in the middle of a run (WRK-13)", () => {
     script = async (emit) => {
       emit(started);
       emit({ type: "style_set", run_id: "r1", preset: "mission-command", name: "Mission Command", source: "chat" });
-      useAppStore.setState({ activeRun: { runId: "r1", convId: "c1" } as never });
+      useAppStore.setState({ liveRuns: { c1: { runId: "r1", convId: "c1" } } as never });
       await useAppStore.getState().setConversationStyle("c1", "mission-command");
     };
     await useAppStore.getState().resumeLastRun();

@@ -46,7 +46,7 @@ function put(leader: string, messages: unknown[]) {
     toolsEnabled: false,
     turnModifiers: {},
     runSummaries: {},
-    busy: false,
+    busyChats: {},
     presence: "idle",
   } as never);
 }
@@ -71,7 +71,7 @@ describe("an unasked reply (TEAM-18)", () => {
     // One more reply on screen, and no user bubble for it.
     expect(messages().map((m) => m.role)).toEqual(["user", "assistant", "assistant"]);
     expect(messages()[2].text).toBe("Juno: the button is too small.");
-    expect(useAppStore.getState().busy).toBe(false);
+    expect(useAppStore.getState().busyChats).toEqual({});
     // After that reply the chain asks once more and the backend, by its rule, says nobody.
     expect(calls.asked).toBe(2);
   });
@@ -98,7 +98,7 @@ describe("an unasked reply (TEAM-18)", () => {
     put("team:open", [reply({ text: "  " })]);
     await chimeIn(useAppStore.getState, "c1");
     put("team:open", [reply()]);
-    useAppStore.setState({ busy: true } as never);
+    useAppStore.setState({ busyChats: { c1: "other" } } as never);
     await chimeIn(useAppStore.getState, "c1");
     expect(calls.asked).toBe(0);
     expect(calls.turns).toHaveLength(0);

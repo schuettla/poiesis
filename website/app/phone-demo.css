@@ -1,0 +1,56 @@
+/* The only rules that are not the phone app's own: which screen shows, and the
+   system's status bar above it. */
+.shot-screen {
+  display: none;
+  flex-direction: column;
+  height: 100%;
+  background: var(--paper);
+}
+.shot-screen.on {
+  display: flex;
+}
+.shot-screen > .app {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+.statusbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  padding: 0 28px;
+  font-size: var(--fs-footnote);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.battery {
+  width: 20px;
+  height: 10px;
+  border-radius: 3px;
+  background: linear-gradient(to right, var(--ink) 70%, var(--ink-faint) 70%);
+}
+/* A picture, not a form: nothing in it answers the pointer. */
+body {
+  user-select: none;
+  pointer-events: none;
+}
+/* The voice level the captured bar was drawn at, kept alive. */
+@media (prefers-reduced-motion: no-preference) {
+  #screen-voice .voice-mark {
+    animation: voice-level 1.6s ease-in-out infinite;
+  }
+}
+@keyframes voice-level {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.22);
+  }
+  65% {
+    transform: scale(1.08);
+  }
+}

@@ -23,7 +23,7 @@ beforeEach(() => {
     turnModifiers: {},
     planFirstDefault: false,
     planRevising: false,
-    busy: false,
+    busyChats: {},
     commandNotes: {},
   });
 });

@@ -81,7 +81,11 @@
     try { frame.contentWindow.postMessage(msg, "*"); } catch (e) {}
   }
   function sendMode() {
-    if (frame) post({ type: "mode", mode: root.getAttribute("data-mode") });
+    var msg = { type: "mode", mode: root.getAttribute("data-mode") };
+    if (frame) post(msg);
+    (phones || []).forEach(function (f) {
+      try { f.contentWindow.postMessage(msg, "*"); } catch (e) {}
+    });
   }
   function maybePlay() {
     if (ready && visible && !played) { played = true; post({ type: "play" }); }
@@ -124,6 +128,24 @@
       if (reduce) replay.hidden = true;
       else replay.addEventListener("click", function () { played = true; post({ type: "replay" }); });
     }
+  }
+
+  /* ---------- the phone screens ----------
+     Each frame holds one screen of the companion app (app/phone.html) at a
+     phone's size, scaled to its column and told the lighting. */
+  var phones = $$(".phone-screen iframe");
+  if (phones.length) {
+    var fitPhones = function () {
+      phones.forEach(function (f) { f.style.transform = "scale(" + f.parentNode.clientWidth / 390 + ")"; });
+    };
+    fitPhones();
+    if ("ResizeObserver" in window) new ResizeObserver(fitPhones).observe(phones[0].parentNode);
+    else window.addEventListener("resize", fitPhones);
+    window.addEventListener("message", function (e) {
+      if (e.data && e.data.type === "phone-ready") sendMode();
+    });
+    phones.forEach(function (f) { f.addEventListener("load", sendMode); });
+    sendMode();
   }
 
   /* ---------- the mark, up close ---------- */
@@ -320,6 +342,31 @@
         acts.innerHTML = '<button type="button">Open</button><button type="button">Report</button>';
       }
     });
+  }
+
+  /* ---------- features page: mark the section being read ---------- */
+  var toc = $(".toc");
+  if (toc) {
+    var links = $$("a", toc);
+    var sections = links.map(function (a) { return $(a.getAttribute("href")); });
+    var current = null;
+    var spy = function () {
+      var at = 0;
+      sections.forEach(function (s, i) { if (s.getBoundingClientRect().top <= 160) at = i; });
+      // The last sections may be too short to reach the top.
+      if (window.innerHeight + window.scrollY >= root.scrollHeight - 4) at = links.length - 1;
+      if (links[at] === current) return;
+      if (current) current.removeAttribute("aria-current");
+      current = links[at];
+      current.setAttribute("aria-current", "true");
+      // Keep it in sight in the contents, whichever way they run.
+      var a = current.getBoundingClientRect();
+      var box = toc.getBoundingClientRect();
+      if (a.top < box.top || a.bottom > box.bottom) toc.scrollTop += a.top - box.top - box.height / 2;
+      if (a.left < box.left || a.right > box.right) toc.scrollLeft += a.left - box.left - 18;
+    };
+    window.addEventListener("scroll", spy, { passive: true });
+    spy();
   }
 
   /* ---------- downloads ----------

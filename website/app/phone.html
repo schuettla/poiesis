@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en" data-mode="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Poiesis phone preview</title>
+  <meta name="robots" content="noindex" />
+  <link rel="stylesheet" href="app-fonts.css" />
+  <link rel="stylesheet" href="phone.css" />
+  <link rel="stylesheet" href="phone-demo.css" />
+</head>
+<body>
+  <!-- Three screens of the companion app: the markup it renders (captured from it), styled by its own CSS.
+       The address picks one: phone.html#home, #ask or #voice. -->
+  <div class="shot-screen" id="screen-home">
+    <div class="statusbar" aria-hidden="true"><span>10:44</span><span class="battery"></span></div>
+    <main class="app">
+      <section class="screen chats">
+        <header class="top-bar"><span class="bar-mark"><svg class="mark state-resting" width="28" height="28" viewBox="0 0 24 24" role="img" aria-label="Poiesis, resting"><circle class="mark-membrane" cx="12" cy="12" r="8" fill="none" stroke-width="1"></circle><circle class="mark-nucleus" cx="12" cy="12" r="3"></circle></svg></span>
+          <div class="top-bar-text" role="status">
+            <h1 class="top-bar-title is-serif">Poiesis</h1>
+            <p class="top-bar-line link-connected">Connected to Study PC</p>
+          </div>
+          <button class="bar-btn" aria-label="Your desktop"><svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="4.5" cy="10" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="10" cy="10" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="15.5" cy="10" r="1.2" fill="currentColor" stroke="none"></circle></svg></button>
+        </header>
+        <div class="scroll home">
+          <section class="list-group" aria-label="Waiting for you">
+            <h2 class="group-label">Waiting for you</h2>
+            <div class="card waiting-card">
+              <p>Move 12 receipts into Taxes/2026</p>
+              <div class="card-actions">
+                <button class="btn btn-primary">Yes</button>
+                <button class="btn btn-secondary">Not now</button>
+              </div>
+            </div>
+          </section>
+          <section class="list-group" aria-label="From your phone">
+            <h2 class="group-label">From your phone</h2>
+            <ul class="chat-list">
+              <li>
+                <button class="chat-row"><span class="chat-row-title">Plan the Friday demo</span><span class="chat-row-meta">Pixel · 2 h ago</span></button>
+              </li>
+            </ul>
+          </section>
+          <section class="list-group" aria-label="On your desktop">
+            <h2 class="group-label">On your desktop</h2>
+            <ul class="chat-list">
+              <li>
+                <button class="chat-row"><span class="chat-row-title">Brandt invoice</span><span class="chat-row-meta">4 min ago</span></button>
+              </li>
+              <li>
+                <button class="chat-row"><span class="chat-row-title">Rewrite the README intro</span><span class="chat-row-meta">5 h ago</span></button>
+              </li>
+              <li>
+                <button class="chat-row"><span class="chat-row-title">Tax folder cleanup</span><span class="chat-row-meta">2 days ago</span></button>
+              </li>
+              <li>
+                <button class="chat-row"><span class="chat-row-title">Trip to Lisbon</span><span class="chat-row-meta">3 days ago</span></button>
+              </li>
+            </ul>
+          </section>
+        </div>
+        <button class="fab"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M9 4H5.5A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16h9a1.5 1.5 0 0 0 1.5-1.5V11" stroke-linecap="round"></path><path d="m14.2 3.3 2.5 2.5L10 12.5l-3 .5.5-3z" stroke-linejoin="round"></path></svg>New chat</button>
+      </section>
+    </main>
+  </div>
+  <div class="shot-screen" id="screen-ask">
+    <div class="statusbar" aria-hidden="true"><span>10:44</span><span class="battery"></span></div>
+    <main class="app">
+      <section class="screen chat">
+        <header class="top-bar">
+          <button class="bar-btn" aria-label="Back to the chats"><svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12.5 4 6.5 10l6 6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+          <div class="top-bar-text" role="status">
+            <h1 class="top-bar-title">Brandt invoice</h1>
+          </div><span class="bar-mark"><svg class="mark state-resting" width="22" height="22" viewBox="0 0 24 24" role="img" aria-label="Poiesis, resting"><circle class="mark-membrane" cx="12" cy="12" r="8" fill="none" stroke-width="1"></circle><circle class="mark-nucleus" cx="12" cy="12" r="3"></circle></svg></span>
+        </header>
+        <div class="scroll chat-scroll">
+          <article class="message message-user">
+            <p class="message-text">Find the Brandt invoice and tell me what I owe.</p>
+          </article>
+          <article class="message message-assistant">
+            <div class="answer">
+              <p>You owe <strong>1,240.00 EUR</strong> to Brandt GmbH. The invoice is due on <strong>30 October</strong>.</p>
+            </div>
+          </article>
+          <article class="message message-user">
+            <p class="message-text">Put it in the tax folder.</p>
+          </article>
+          <section class="card approval" role="alertdialog" aria-label="Poiesis is asking">
+            <p class="card-label">Poiesis is asking</p>
+            <p class="approval-question">Move brandt-0412.pdf into Taxes/2026</p>
+            <p class="approval-path">Documents/Taxes/2026/brandt-0412.pdf</p>
+            <div class="card-actions">
+              <button class="btn btn-secondary">No</button>
+              <button class="btn btn-primary">Allow once</button>
+            </div>
+          </section>
+          <div class="scroll-end"></div></div>
+        <footer class="composer-dock">
+          <div class="composer">
+            <div class="composer-row"><input type="file" accept="image/*" multiple="" hidden="">
+              <button class="round-btn quiet" aria-label="Add a photo"><svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="2"></rect><circle cx="7.5" cy="8.2" r="1.3"></circle><path d="m3.5 14 4-3.6 3 2.6 2.5-2 3.5 3" stroke-linejoin="round"></path></svg></button><textarea rows="1" placeholder="Ask Poiesis" style="height: 44px;"></textarea>
+              <button class="round-btn solid" aria-label="Talk to Poiesis"><svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="7.5" y="2.5" width="5" height="9" rx="2.5"></rect><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5" stroke-linecap="round"></path></svg></button>
+            </div>
+          </div>
+        </footer>
+      </section>
+    </main>
+  </div>
+  <div class="shot-screen" id="screen-voice">
+    <div class="statusbar" aria-hidden="true"><span>10:44</span><span class="battery"></span></div>
+    <main class="app">
+      <section class="screen chat">
+        <header class="top-bar">
+          <button class="bar-btn" aria-label="Back to the chats"><svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12.5 4 6.5 10l6 6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+          <div class="top-bar-text" role="status">
+            <h1 class="top-bar-title">Brandt invoice</h1>
+          </div><span class="bar-mark"><svg class="mark state-resting" width="22" height="22" viewBox="0 0 24 24" role="img" aria-label="Poiesis, resting"><circle class="mark-membrane" cx="12" cy="12" r="8" fill="none" stroke-width="1"></circle><circle class="mark-nucleus" cx="12" cy="12" r="3"></circle></svg></span>
+        </header>
+        <div class="scroll chat-scroll">
+          <article class="message message-user">
+            <p class="message-text">Find the Brandt invoice and tell me what I owe.</p>
+          </article>
+          <article class="message message-assistant">
+            <div class="answer">
+              <p>You owe <strong>1,240.00 EUR</strong> to Brandt GmbH. The invoice is due on <strong>30 October</strong>.</p>
+            </div>
+          </article>
+          <div class="scroll-end"></div></div>
+        <footer class="composer-dock">
+          <div class="composer voice-bar" role="region" aria-label="Voice conversation"><span class="voice-mark" style="transform: scale(1.147);"><svg class="mark state-resting" width="30" height="30" viewBox="0 0 24 24" role="img" aria-label="Poiesis, resting"><circle class="mark-membrane" cx="12" cy="12" r="8" fill="none" stroke-width="1"></circle><circle class="mark-nucleus" cx="12" cy="12" r="3"></circle></svg></span>
+            <div class="voice-text">
+              <p class="voice-state" aria-live="polite"><span class="voice-live-dot" aria-hidden="true"></span>Listening</p>
+              <p class="voice-heard">Remind me two days before it is due.</p>
+            </div>
+            <div class="voice-controls">
+              <button class="round-btn quiet is-hidden" aria-label="Stop the answer" tabindex="-1"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="9" height="9" rx="1.5" fill="currentColor" stroke="none"></rect></svg></button>
+              <button class="round-btn quiet" aria-pressed="false" aria-label="Mute the microphone"><svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="7.5" y="2.5" width="5" height="9" rx="2.5"></rect><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5" stroke-linecap="round"></path></svg></button>
+              <button class="btn btn-primary btn-sm">End</button>
+            </div>
+          </div>
+        </footer>
+      </section>
+    </main>
+  </div>
+
+  <script src="phone-demo.js"></script>
+</body>
+</html>

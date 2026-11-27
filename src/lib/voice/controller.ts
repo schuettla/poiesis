@@ -8,6 +8,7 @@ import { VoiceAudio } from "./audio";
 import { setSpeechBridge } from "./bridge";
 import { VoiceSession, type VoiceApi } from "./session";
 import { setVoiceUi, useVoiceStore } from "./voiceStore";
+import { busyIn } from "../runs";
 
 const realApi: VoiceApi = {
   start: (onEvent) => api.voiceStart(onEvent),
@@ -30,7 +31,10 @@ export function voiceSession(): VoiceSession {
       host: {
         sendSpoken: (text) => useAppStore.getState().sendMessage(text, [], { spoken: true }),
         stopRun: () => useAppStore.getState().stopGenerating(),
-        busy: () => useAppStore.getState().busy,
+        busy: () => {
+          const s = useAppStore.getState();
+          return busyIn(s, s.activeConversationId);
+        },
       },
     });
     setSpeechBridge(session);

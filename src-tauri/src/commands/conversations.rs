@@ -202,10 +202,54 @@ pub fn session_card_cmd(db: State<'_, Db>, conversation_id: String) -> Cmd<crate
     db.session_card(&conversation_id).map_err(err)
 }
 
+/// `DBG-2`: everything recorded about one chat, for the session details dialog. `full`
+/// is the report that is saved to a file. Async so a long log never stalls the window.
+#[tauri::command]
+pub async fn session_report_cmd(
+    app: tauri::AppHandle,
+    mgr: State<'_, RuntimeManager>,
+    db: State<'_, Db>,
+    fleet: State<'_, crate::agent::fleet::Fleet>,
+    conversation_id: String,
+    full: bool,
+) -> Cmd<crate::agent::inspect::SessionReport> {
+    let os = sysinfo::System::long_os_version().unwrap_or_else(|| "unknown".into());
+    let env = crate::agent::inspect::Env {
+        app_version: crate::commands::updater::running_version(&app),
+        os,
+        data_dir: mgr.app_data_dir().display().to_string(),
+    };
+    let mut report = crate::agent::inspect::report(&db, &env, &conversation_id, full)
+        .map_err(err)?
+        .ok_or_else(|| PoiesisError::Message("I can't find that conversation.".into()))?;
+    mark_live(&mut report, &fleet);
+    Ok(report)
+}
+
+/// Which runs in a report are still working: only the live registry knows.
+fn mark_live(report: &mut crate::agent::inspect::SessionReport, fleet: &crate::agent::fleet::Fleet) {
+    for run in &mut report.runs {
+        run.live = run.stop_reason.is_none() && fleet.get(&run.run_id).is_some();
+    }
+    report.children.iter_mut().for_each(|c| mark_live(c, fleet));
+}
+
+/// `DBG-2`: one row of a chat's log, whole.
+#[tauri::command]
+pub fn session_event_cmd(db: State<'_, Db>, conversation_id: String, seq: i64) -> Cmd<Option<String>> {
+    crate::agent::inspect::event(&db, &conversation_id, seq).map_err(err)
+}
+
 /// Per chat, how many artifacts it made and files it changed: the Rail's "Has output" filter.
 #[tauri::command]
 pub fn session_outputs_cmd(db: State<'_, Db>) -> Cmd<std::collections::HashMap<String, (u32, u32)>> {
     db.session_outputs().map_err(err)
+}
+
+/// `PAR-11`: per chat, how its newest answer ended, when it did not finish.
+#[tauri::command]
+pub fn session_outcomes_cmd(db: State<'_, Db>) -> Cmd<std::collections::HashMap<String, String>> {
+    db.session_outcomes().map_err(err)
 }
 
 #[tauri::command]

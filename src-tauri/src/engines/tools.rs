@@ -619,7 +619,7 @@ mod tests {
             Ok(())
         });
         let fleet = Fleet::new();
-        let run = fleet.open(&child, CancelFlag::new(), None, 1);
+        let run = fleet.open(&child, CancelFlag::new(), None, 1, false);
         db.create_subagent_run(&run.id, &parent, None, &child, "Claude Code", "fix the voice tests").unwrap();
         Rig { db, sink: AgentEventSink::new(channel), events, run, child }
     }

@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 use futures_util::future::join_all;
 
 use crate::agent::decide::handover;
-use crate::agent::fleet::RunLimits;
-use crate::agent::run::{run_agent, RunContext};
+use crate::agent::fleet::{on_this_pc, Fleet, RunHandle, RunLimits};
+use crate::agent::run::{run_agent, AgentEventSink, RunContext};
 use crate::agent::team;
 use crate::agent::team_folder;
 use crate::agent::toolsets::{set_step_note, ToolContext, Toolset};
@@ -324,14 +324,45 @@ fn paths_of(v: Option<&serde_json::Value>) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// `PRF-5`: helpers that run at once never change the same place
+// `PRF-5`: helpers that run at once never change the same place. `PAR-5`: nor do two chats.
 // ---------------------------------------------------------------------------
 
-/// One helper's hold on a place in a folder.
+/// Who asks to hold a place.
+pub struct Claimer {
+    pub run_id: String,
+    /// What another helper reads: the agent's name as the Fleet card shows it.
+    pub name: String,
+    /// The chat the work is for (`RunHandle::chat`), and its title.
+    pub chat: String,
+    pub title: String,
+    /// The runs above this one (`leads_of`).
+    pub leads: Vec<String>,
+    /// `PAR-5`: taken by a run at its first change, not declared before it started.
+    pub on_write: bool,
+}
+
+impl Claimer {
+    /// A live run, as it asks for a place.
+    pub fn of(db: &Db, fleet: Option<&Fleet>, run: &RunHandle, name: &str) -> Self {
+        let title = db.get_conversation(&run.chat).ok().flatten().map(|c| c.title);
+        Claimer {
+            run_id: run.id.clone(),
+            name: name.to_string(),
+            chat: run.chat.clone(),
+            title: title.unwrap_or_else(|| "Another chat".to_string()),
+            leads: fleet.map(|f| leads_of(f, run)).unwrap_or_default(),
+            on_write: false,
+        }
+    }
+}
+
+/// One run's hold on a place in a folder.
 struct Claim {
     run_id: String,
-    /// What the other helpers read: the agent's name as the Fleet card shows it.
     name: String,
+    chat: String,
+    title: String,
+    on_write: bool,
     folder: PathBuf,
     /// Relative to the folder, split by components, and lower case on Windows. Empty is the whole folder.
     paths: Vec<PathBuf>,
@@ -385,12 +416,26 @@ fn relative(path: &str, folder: &Path) -> PathBuf {
     }
 }
 
-/// A folder as claims compare it: `/` for `\`, no closing `/`, and lower case on Windows, so
-/// one folder written two ways is still one place.
+/// A folder as claims compare it: resolved, `/` for `\`, no closing `/`, and lower case on
+/// Windows, so one folder written two ways is still one place. `PAR-5`: a helper's declared
+/// place comes from the saved folder, a chat's first change from the resolved one.
 fn folder_key(folder: &Path) -> PathBuf {
+    let folder = crate::permissions::canonicalize_lenient(folder);
     let f = folder.to_string_lossy().replace('\\', "/");
     let f = f.trim_end_matches('/');
     PathBuf::from(if cfg!(windows) { f.to_lowercase() } else { f.to_string() })
+}
+
+/// `PAR-5`: may files be put back in this chat's folder now? Not while another chat changes
+/// them: the older bytes would take its changes with them.
+pub fn may_undo(db: &Db, conversation_id: &str) -> Result<(), String> {
+    let Some(folder) = db.conversation_folder(conversation_id).ok().and_then(|(folder, _)| folder) else {
+        return Ok(());
+    };
+    match scopes().changing(&crate::permissions::canonicalize_lenient(Path::new(&folder)), conversation_id) {
+        Some(title) => Err(format!("\"{title}\" is changing files in this folder. Undo when it is done.")),
+        None => Ok(()),
+    }
 }
 
 /// The runs above `run`: its lead, that lead's lead, and so on (`Scopes::claim`).
@@ -417,18 +462,27 @@ impl Scopes {
         Scopes { held: std::sync::Mutex::new(Vec::new()), freed: tokio::sync::Notify::new() }
     }
 
-    /// Hold `paths` of `folder` for `run_id`, waiting while another helper holds a place that
-    /// overlaps. `leads` are the runs above this one (`leads_of`): a place one of them holds is
-    /// never waited for, since that lead is waiting for this run and both would wait forever.
-    /// `waiting` is told why (`Some`) the moment it has to wait, again if the reason changes,
-    /// and `None` once it holds its place. Stop ends the wait: the run then goes on to find
-    /// itself stopped, holding nothing.
-    #[allow(clippy::too_many_arguments)]
+    /// `PAR-5`: the title of another chat that is changing something in `folder` now.
+    pub fn changing(&self, folder: &Path, chat: &str) -> Option<String> {
+        let key = folder_key(folder);
+        self.held.lock().unwrap().iter().find(|c| c.folder == key && c.chat != chat).map(|c| c.title.clone())
+    }
+
+    /// Does this run hold a place already?
+    pub fn holds(&self, run_id: &str) -> bool {
+        self.held.lock().unwrap().iter().any(|c| c.run_id == run_id)
+    }
+
+    /// Hold `paths` of `folder` for `who`, waiting while someone else holds a place that
+    /// overlaps. A place one of its leads holds is never waited for, since that lead is waiting
+    /// for this run and both would wait forever. `PAR-5`: nor, within one chat, does a claim
+    /// taken at the first change hold anyone up: inside a chat only declared places do
+    /// (`PRF-5`), and across chats every claim does. `waiting` is told why (`Some`) the moment
+    /// it has to wait, again if the reason changes, and `None` once the wait is over. Stop ends
+    /// the wait: the run then goes on to find itself stopped, holding nothing.
     pub async fn claim<'a>(
         &'a self,
-        run_id: &str,
-        leads: &[String],
-        name: &str,
+        who: &Claimer,
         folder: &Path,
         paths: &[String],
         cancel: &CancelFlag,
@@ -440,14 +494,21 @@ impl Scopes {
         loop {
             {
                 let mut held = self.held.lock().unwrap();
-                let blocker = held
-                    .iter()
-                    .find(|c| c.folder == folder_key && !leads.contains(&c.run_id) && overlap(&wanted, &c.paths));
+                let blocker = held.iter().find(|c| {
+                    c.folder == folder_key
+                        && c.run_id != who.run_id
+                        && !who.leads.contains(&c.run_id)
+                        && !(c.chat == who.chat && (c.on_write || who.on_write))
+                        && overlap(&wanted, &c.paths)
+                });
                 match blocker {
                     None => {
                         held.push(Claim {
-                            run_id: run_id.to_string(),
-                            name: name.to_string(),
+                            run_id: who.run_id.clone(),
+                            name: who.name.clone(),
+                            chat: who.chat.clone(),
+                            title: who.title.clone(),
+                            on_write: who.on_write,
                             folder: folder_key.clone(),
                             paths: wanted,
                             shown: paths.to_vec(),
@@ -460,7 +521,11 @@ impl Scopes {
                             [one] => one.clone(),
                             [one, rest @ ..] => format!("{one} and {} more", rest.len()),
                         };
-                        let why = format!("Waiting: {} is changing {place}.", c.name);
+                        let why = if c.on_write || who.on_write {
+                            format!("Waiting: \"{}\" is changing files in this folder.", c.title)
+                        } else {
+                            format!("Waiting: {} is changing {place}.", c.name)
+                        };
                         if told.as_deref() != Some(why.as_str()) {
                             waiting(Some(&why));
                             told = Some(why);
@@ -469,6 +534,9 @@ impl Scopes {
                 }
             }
             if cancel.is_cancelled() {
+                if told.is_some() {
+                    waiting(None);
+                }
                 return ClaimGuard { scopes: self, run_id: None };
             }
             // A missed wake-up costs a quarter of a second, not the run.
@@ -477,7 +545,7 @@ impl Scopes {
         if told.is_some() {
             waiting(None);
         }
-        ClaimGuard { scopes: self, run_id: Some(run_id.to_string()) }
+        ClaimGuard { scopes: self, run_id: Some(who.run_id.clone()) }
     }
 }
 
@@ -485,6 +553,66 @@ impl Default for Scopes {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// `PAR-5`: before a run changes a file in its working folder, it holds that folder against
+/// every other chat, and keeps it until it ends (`Fleet::close`). While another chat has it,
+/// the run waits and says why, on a step and to the window. Reading never comes here. `false`
+/// when the run was stopped while it waited, and so holds nothing.
+pub async fn hold_folder(
+    db: &Db,
+    fleet: Option<&Fleet>,
+    run: &RunHandle,
+    folder: &Path,
+    cancel: &CancelFlag,
+    sink: &AgentEventSink,
+    call_id: &str,
+) -> bool {
+    // It holds a place already: declared before it started (`PRF-5`), or from an earlier change.
+    if scopes().holds(&run.id) {
+        return true;
+    }
+    let mut who = Claimer::of(db, fleet, run, GENERAL);
+    who.on_write = true;
+    let helper = run.parent.is_some();
+    let step = format!("held_{call_id}");
+    let mut waited = false;
+    let claim = scopes()
+        .claim(&who, folder, &[], cancel, |why| {
+            if let Some(why) = why.filter(|_| !waited) {
+                sink.step_start(&step, "Waiting:", why.trim_start_matches("Waiting: "));
+                waited = true;
+            }
+            if helper {
+                let _ = db.set_subagent_queued_because(&run.id, why);
+                let _ = db.set_subagent_status(&run.id, if why.is_some() { "queued" } else { "running" });
+            }
+            sink.emit(AgentEvent::Held { run_id: run.id.clone(), reason: why.map(String::from) });
+        })
+        .await;
+    let stopped = cancel.is_cancelled();
+    if waited {
+        if stopped {
+            sink.step_error(&step, "Stopped.");
+        } else {
+            sink.step_done(&step, None);
+        }
+    }
+    run.hold(claim);
+    !stopped
+}
+
+/// `PAR-5` for the loop's own writes into a team chat's folder (`team_folder::merge_done`).
+/// `false` when the run was stopped while it waited, so nothing is to be written.
+async fn hold_for_merge(ctx: &ToolContext<'_>, team: &crate::memory::ways::Team) -> bool {
+    // In a run nobody watches nothing is written: the changes wait for the person.
+    if ctx.headless {
+        return true;
+    }
+    let (Some(d), Some(folder)) = (ctx.delegation, team_folder::to_merge(ctx.db, ctx.data_dir, ctx.conversation_id, team)) else {
+        return true;
+    };
+    Box::pin(hold_folder(ctx.db, Some(d.fleet), d.parent_run, &folder, &d.parent_run.cancel, ctx.sink, ctx.call_id)).await
 }
 
 /// The places a child holds while it works, or `None` when it holds none (`PRF-5`): the
@@ -1001,7 +1129,9 @@ async fn delegate(ctx: &ToolContext<'_>, args: &serde_json::Value) -> Result<Str
 /// came of them. A member that did not finish is something the person may want to hear.
 async fn looked_at(ctx: &ToolContext<'_>, team: &crate::memory::ways::Team, children: &[Finished]) -> String {
     team::settle(ctx, team, false).await;
-    team_folder::merge_done(ctx.db, ctx.data_dir, ctx.conversation_id, ctx.ledger, team, ctx.headless);
+    if hold_for_merge(ctx, team).await {
+        team_folder::merge_done(ctx.db, ctx.data_dir, ctx.conversation_id, ctx.ledger, team, ctx.headless);
+    }
     let rows = ctx.db.list_subagent_runs(ctx.conversation_id).unwrap_or_default();
     let mut out = String::new();
     for child in children {
@@ -1365,6 +1495,8 @@ pub async fn run_delegation(
             CancelFlag::new(),
             Some(del.parent_run.id.clone()),
             del.parent_run.depth + 1,
+            // `PAR-4`: an agent app brings its own model.
+            pick.is_none() && on_this_pc(del.provenance),
         );
         let _ = db.create_subagent_run(
             &run.id,
@@ -1436,6 +1568,9 @@ pub async fn run_delegation(
             system.push_str("\n\n");
             system.push_str(&brief);
         }
+        // A child does not get the lead's prompt, so it is told the date here.
+        system.push_str("\n\n");
+        system.push_str(&crate::agent::context::today_line());
         let mut user = spec.task.clone();
         if let Some(output) = &spec.output {
             user.push_str("\n\nGive the answer in this shape: ");
@@ -1499,6 +1634,8 @@ pub async fn run_delegation(
         let spawns: Vec<crate::agent::background::Spawn> = children
             .into_iter()
             .map(|child| {
+                // `PAR-1`: nobody waits for it, so the chat's Stop leaves it working.
+                child.run.detach();
                 let _ = db.set_subagent_status(&child.run.id, "queued");
                 started.push_str(&format!("- {} · {}\n", child.run.id, child.agent));
                 crate::agent::background::Spawn {
@@ -1578,15 +1715,17 @@ pub async fn run_delegation(
             let _place = gate.acquire().await;
             // `PRF-5`: and never in a place another helper is changing.
             let _claim = match &child.claim {
-                Some((at, paths)) => Some(
-                    scopes()
-                        .claim(&child.run.id, &leads_of(del.fleet, &child.run), &child.agent, at, paths, &child.run.cancel, |because| {
+                Some((at, paths)) => {
+                    let who = Box::new(Claimer::of(db, Some(del.fleet), &child.run, &child.agent));
+                    Some(
+                        Box::pin(scopes().claim(&who, at, paths, &child.run.cancel, |because| {
                             let _ = db.set_subagent_queued_because(&child.run.id, because);
                             let _ = db.set_subagent_status(&child.run.id, if because.is_some() { "queued" } else { "running" });
                             ctx.sink.emit(AgentEvent::SubWaiting { run_id: child.run.id.clone(), because: because.map(String::from) });
-                        })
+                        }))
                         .await,
-                ),
+                    )
+                }
                 None => None,
             };
             // Its clock starts now, not when the lead handed the work out.
@@ -1895,7 +2034,9 @@ async fn collect_agents(
     // `TEAM-11`: a reviewed member's report is settled by the loop before the coordinator reads it.
     if let Some(t) = &team {
         team::settle(ctx, t, true).await;
-        team_folder::merge_done(ctx.db, ctx.data_dir, ctx.conversation_id, ctx.ledger, t, ctx.headless);
+        if hold_for_merge(ctx, t).await {
+            team_folder::merge_done(ctx.db, ctx.data_dir, ctx.conversation_id, ctx.ledger, t, ctx.headless);
+        }
     }
     let rows = mine(db.list_subagent_runs(ctx.conversation_id).unwrap_or_default());
     // `TEAM-15`: a post for the coordinator is something to read even when no report is waiting.
@@ -1934,10 +2075,26 @@ async fn collect_agents(
                 gave_up = "\nI stopped waiting after 10 minutes. The unfinished ones are still going — call collect_agents again later.".to_string();
                 break;
             }
+            // `PAR-5`: a helper still waiting for a free place in the pool may be behind helpers
+            // of another chat that wait for this folder. Let go of it, or both wait.
+            let in_line = |r: &crate::db::SubagentRun| {
+                r.ended_at.is_none() && r.status == "queued" && r.queued_because.is_none() && r.member.is_none()
+            };
+            if let Some(d) = ctx.delegation.filter(|_| rows.iter().any(in_line)) {
+                d.parent_run.release_folder();
+            }
             tokio::time::sleep(COLLECT_POLL).await;
             if let Some(t) = &team {
                 team::settle(ctx, t, true).await;
-                team_folder::merge_done(ctx.db, ctx.data_dir, ctx.conversation_id, ctx.ledger, t, ctx.headless);
+                // A folder the lead held already, from its own change, it keeps.
+                let had = ctx.delegation.is_some_and(|d| scopes().holds(&d.parent_run.id));
+                if hold_for_merge(ctx, t).await {
+                    team_folder::merge_done(ctx.db, ctx.data_dir, ctx.conversation_id, ctx.ledger, t, ctx.headless);
+                    // Only for as long as the write takes: the wait goes on.
+                    if let Some(d) = ctx.delegation.filter(|_| !had) {
+                        d.parent_run.release_folder();
+                    }
+                }
             }
             rows = mine(db.list_subagent_runs(ctx.conversation_id).unwrap_or_default());
         }
@@ -2018,10 +2175,15 @@ mod scope_tests {
         list.iter().map(|s| s.to_string()).collect()
     }
 
+    /// A helper of its own chat, named as its run.
+    fn who(id: &str, leads: &[&str]) -> Claimer {
+        Claimer { run_id: id.into(), name: id.into(), chat: id.into(), title: id.into(), leads: strings(leads), on_write: false }
+    }
+
     /// A claim that must be granted at once.
     async fn now<'a>(s: &'a Scopes, id: &str, folder: &Path, paths: &[&str]) -> ClaimGuard<'a> {
         let cancel = CancelFlag::new();
-        tokio::time::timeout(std::time::Duration::from_millis(500), s.claim(id, &[], id, folder, &strings(paths), &cancel, |_| {}))
+        tokio::time::timeout(std::time::Duration::from_millis(500), s.claim(&who(id, &[]), folder, &strings(paths), &cancel, |_| {}))
             .await
             .unwrap_or_else(|_| panic!("{id} had to wait for {paths:?}"))
     }
@@ -2029,9 +2191,34 @@ mod scope_tests {
     /// Does a claim have to wait while `held` is held?
     async fn waits(s: &Scopes, folder: &Path, paths: &[&str]) -> bool {
         let cancel = CancelFlag::new();
-        tokio::time::timeout(std::time::Duration::from_millis(400), s.claim("w", &[], "w", folder, &strings(paths), &cancel, |_| {}))
+        tokio::time::timeout(std::time::Duration::from_millis(400), s.claim(&who("w", &[]), folder, &strings(paths), &cancel, |_| {}))
             .await
             .is_err()
+    }
+
+    /// `PAR-5`: across chats a claim taken at the first change holds and is held; inside one
+    /// chat it holds nobody up, so a lead and its helpers work as before.
+    #[tokio::test]
+    async fn a_claim_taken_at_a_change_holds_other_chats_and_not_its_own() {
+        let s = Scopes::new();
+        let mine = |id: &str, chat: &str, on_write: bool| Claimer { chat: chat.into(), title: format!("Title of {chat}"), on_write, ..who(id, &[]) };
+        let place = folder();
+        let cancel = CancelFlag::new();
+        let _lead = s.claim(&mine("lead", "a", true), &place, &[], &cancel, |_| {}).await;
+        for same_chat in [mine("helper", "a", false), mine("late-helper", "a", true)] {
+            let claim = s.claim(&same_chat, &place, &[], &cancel, |_| {});
+            assert!(tokio::time::timeout(std::time::Duration::from_millis(400), claim).await.is_ok(), "{} waited", same_chat.run_id);
+        }
+        for other_chat in [mine("other", "b", true), mine("other-helper", "b", false)] {
+            let mut said = None;
+            let claim = s.claim(&other_chat, &place, &[], &cancel, |why| said = why.map(String::from));
+            assert!(tokio::time::timeout(std::time::Duration::from_millis(400), claim).await.is_err(), "{} did not wait", other_chat.run_id);
+            assert_eq!(said.as_deref(), Some("Waiting: \"Title of a\" is changing files in this folder."));
+        }
+        assert!(s.holds("lead") && !s.holds("other"));
+        // Undo asks the same list: another chat may not put files back now.
+        assert_eq!(s.changing(&place, "b").as_deref(), Some("Title of a"));
+        assert!(s.changing(&place, "a").is_none());
     }
 
     #[tokio::test]
@@ -2071,20 +2258,20 @@ mod scope_tests {
         let s = Scopes::new();
         let _lead = now(&s, "lead", &folder(), &["src"]).await;
         let cancel = CancelFlag::new();
-        let (place, leads, file) = (folder(), strings(&["lead"]), strings(&["src/a.rs"]));
-        let child = s.claim("child", &leads, "child", &place, &[], &cancel, |_| {});
+        let (place, file) = (folder(), strings(&["src/a.rs"]));
+        let (under_lead, stranger) = (who("child", &["lead"]), who("other", &["someone-else"]));
+        let child = s.claim(&under_lead, &place, &[], &cancel, |_| {});
         assert!(tokio::time::timeout(std::time::Duration::from_millis(500), child).await.is_ok(), "the child waited for its lead");
-        let stranger = strings(&["someone-else"]);
-        let other = s.claim("other", &stranger, "other", &place, &file, &cancel, |_| {});
+        let other = s.claim(&stranger, &place, &file, &cancel, |_| {});
         assert!(tokio::time::timeout(std::time::Duration::from_millis(400), other).await.is_err(), "not its lead: it waits");
     }
 
     #[test]
     fn the_leads_of_a_run_are_its_whole_line_up() {
         let fleet = crate::agent::fleet::Fleet::new();
-        let top = fleet.open("c0", CancelFlag::new(), None, 0);
-        let mid = fleet.open("c1", CancelFlag::new(), Some(top.id.clone()), 1);
-        let low = fleet.open("c2", CancelFlag::new(), Some(mid.id.clone()), 2);
+        let top = fleet.open("c0", CancelFlag::new(), None, 0, false);
+        let mid = fleet.open("c1", CancelFlag::new(), Some(top.id.clone()), 1, false);
+        let low = fleet.open("c2", CancelFlag::new(), Some(mid.id.clone()), 2, false);
         assert_eq!(leads_of(&fleet, &low), vec![mid.id.clone(), top.id.clone()]);
         assert!(leads_of(&fleet, &top).is_empty());
     }
@@ -2098,7 +2285,7 @@ mod scope_tests {
         let second = tokio::spawn(async move {
             let cancel = CancelFlag::new();
             let _held = s2
-                .claim("second", &[], "second", &folder(), &strings(&["src"]), &cancel, |why| told2.lock().unwrap().push(why.map(String::from)))
+                .claim(&who("second", &[]), &folder(), &strings(&["src"]), &cancel, |why| told2.lock().unwrap().push(why.map(String::from)))
                 .await;
         });
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -2114,7 +2301,12 @@ mod scope_tests {
         let cancel = CancelFlag::new();
         let _ = tokio::time::timeout(
             std::time::Duration::from_millis(300),
-            s.claim("x", &[], "x", &folder(), &strings(&["a"]), &cancel, |why| *said2.lock().unwrap() = why.map(String::from)),
+            s.claim(&who("x", &[]), &folder(), &strings(&["a"]), &cancel, |why| {
+                // The last word is `None`, said when the wait ends; what is checked is the reason.
+                if let Some(why) = why {
+                    *said2.lock().unwrap() = Some(why.to_string());
+                }
+            }),
         )
         .await;
         assert_eq!(said.lock().unwrap().as_deref(), Some("Waiting: w is changing this folder."));
@@ -2133,7 +2325,8 @@ mod scope_tests {
             stopped.store(true, Ordering::Relaxed);
         };
         let place = folder();
-        let claim = s.claim("late", &[], "late", &place, &[], &cancel, |_| {});
+        let late = who("late", &[]);
+        let claim = s.claim(&late, &place, &[], &cancel, |_| {});
         let (guard, _) = tokio::join!(tokio::time::timeout(std::time::Duration::from_secs(3), claim), stopper);
         let guard = guard.expect("Stop ends the wait");
         assert!(stopped.load(Ordering::Relaxed));
@@ -2600,7 +2793,7 @@ mod prematch_tests {
     async fn act(db: &Db, offered: &[Offered], verdict: &Verdict, answer: Option<Decision>) -> Seen {
         let (sink, events) = recording_sink();
         let perms = PermissionManager::new();
-        let run = Fleet::new().open("conv", CancelFlag::new(), None, 0);
+        let run = Fleet::new().open("conv", CancelFlag::new(), None, 0, false);
         let client = reqwest::Client::new();
         let cx = EarlyCtx {
             db,

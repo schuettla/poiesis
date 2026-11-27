@@ -16,7 +16,7 @@ describe("applyReflecting", () => {
   beforeEach(() => {
     useAppStore.setState({
       presence: "idle",
-      busy: false,
+      busyChats: {},
       reflectingIds: [],
       digestedIds: [],
       conversations: [conv("c1"), conv("c2")],
@@ -59,7 +59,7 @@ describe("applyReflecting", () => {
   });
 
   it("does not take the mark off a running generation", () => {
-    useAppStore.setState({ busy: true, presence: "active" });
+    useAppStore.setState({ busyChats: { c1: "other" }, presence: "active" });
     apply({ conversation_id: "c1", on: true, learned: 0 });
     expect(useAppStore.getState().presence).toBe("active");
     apply({ conversation_id: "c1", on: false, learned: 0 });

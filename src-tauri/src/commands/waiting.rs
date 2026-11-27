@@ -37,6 +37,12 @@ pub fn mark_seen_cmd(db: State<'_, Db>, conversation_id: String) -> Cmd<()> {
     db.mark_seen(&conversation_id).map_err(err)
 }
 
+/// `PAR-10`: a chat that is not on screen asks something. See `waiting::tell`.
+#[tauri::command]
+pub fn tell_waiting_cmd(db: State<'_, Db>, conversation_id: String, id: String, agent: Option<String>, line: String) {
+    crate::waiting::tell(&db, &conversation_id, &id, agent.as_deref(), &line);
+}
+
 /// A team's session finished a run while the person was looking somewhere else. A chat they
 /// started themselves never gets a dot, so only a session a team leads is marked.
 #[tauri::command]

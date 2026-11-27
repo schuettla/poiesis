@@ -13,12 +13,13 @@ function preview(text: string): string {
 /**
  * `RWD-UI-1`: go back to before one of your turns.
  *
- * Rewind never edits the conversation you are in. It opens a branch that holds
- * everything before the turn and leaves the original in your list, so there is
- * nothing here to be afraid of except the files, and the files are the one
- * question the dialog asks. The checkbox for them appears only when I actually
- * changed some since that turn, and starts on: you are going back, so the files
- * should usually go back with you.
+ * Rewind removes that turn and everything after it from this chat, for good, so
+ * the dialog says so. The files are the other question: the checkbox for them
+ * appears only when I actually changed some since that turn, and starts on: you
+ * are going back, so the files should usually go back with you.
+ *
+ * "Try again" and an edited message use the same dialog, and only when there is
+ * something to ask: files to take back, or later messages that would go.
  */
 export default function RewindDialog() {
   const messageId = useAppStore((s) => s.rewindRequest);
@@ -26,6 +27,16 @@ export default function RewindDialog() {
   const turn = useAppStore((s) => {
     const conv = s.conversations.find((c) => c.id === s.activeConversationId);
     return conv?.messages.find((m) => m.id === s.rewindRequest);
+  });
+  const retry = useAppStore((s) => s.rewindRetry);
+  const text = useAppStore((s) => s.rewindText);
+  const edited = retry && text !== null;
+  // More than the one answer goes when you wrote again after this message.
+  const later = useAppStore((s) => {
+    const conv = s.conversations.find((c) => c.id === s.activeConversationId);
+    const list = conv?.messages ?? [];
+    const at = list.findIndex((m) => m.id === s.rewindRequest);
+    return at >= 0 && list.slice(at + 1).some((m) => m.role === "user");
   });
   const close = useAppStore((s) => s.requestRewind);
   const rewind = useAppStore((s) => s.rewindTo);
@@ -53,13 +64,33 @@ export default function RewindDialog() {
 
   return (
     <ConfirmDialog
-      title={`Go back to before “${preview(turn.text)}”?`}
-      body="I'll open a branch from there. This chat stays exactly as it is, in your list."
-      confirmLabel="Rewind"
+      title={
+        edited
+          ? "Send your changed message?"
+          : retry
+            ? `Try “${preview(turn.text)}” again?`
+            : `Go back to before “${preview(turn.text)}”?`
+      }
+      body={
+        edited
+          ? "Everything after this message is removed from this chat, then I answer your new words. That can't be undone."
+          : !retry
+            ? "Everything from this message on is removed from this chat. That can't be undone."
+            : later
+              ? "Everything after this message is removed from this chat, then I answer it again. That can't be undone."
+              : "The answer you have is removed from this chat and I answer again."
+      }
+      confirmLabel={edited ? "Send" : retry ? "Try again" : "Rewind"}
       onCancel={() => close(null)}
       onConfirm={() => {
         close(null);
-        void rewind(messageId, { undoFiles: files > 0 && undoFiles, putBack });
+        const undo = files > 0 && undoFiles;
+        void rewind(
+          messageId,
+          retry
+            ? { undoFiles: undo, putBack: false, retry, ...(text === null ? {} : { text }) }
+            : { undoFiles: undo, putBack }
+        );
       }}
     >
       <div className="rewind-options">
@@ -71,10 +102,12 @@ export default function RewindDialog() {
             </span>
           </label>
         )}
-        <label className="rewind-option">
-          <input type="checkbox" checked={putBack} onChange={(e) => setPutBack(e.target.checked)} />
-          <span>Put your message back in the box</span>
-        </label>
+        {!retry && (
+          <label className="rewind-option">
+            <input type="checkbox" checked={putBack} onChange={(e) => setPutBack(e.target.checked)} />
+            <span>Put your message back in the box</span>
+          </label>
+        )}
       </div>
     </ConfirmDialog>
   );

@@ -108,8 +108,8 @@ beforeEach(() => {
     pendingQuestion: null,
     conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [] }],
     activeConversationId: "c1",
-    activeRun: null,
-    busy: false,
+    liveRuns: {},
+    busyChats: {},
     changeSets: {},
     workspaceMode: false,
     toolsEnabled: true,
@@ -224,8 +224,8 @@ describe("a message to a working run", () => {
   beforeEach(() => {
     act(() =>
       useAppStore.setState({
-        busy: true,
-        activeRun: { runId: "r1", convId: "c1" } as never,
+        busyChats: { c1: "other" },
+        liveRuns: { c1: { runId: "r1", convId: "c1" } } as never,
       })
     );
     act(() => {

@@ -156,7 +156,7 @@ impl Rig {
     /// A child run with its conversation and its row, like `delegate` makes.
     fn child(&self, task: &str) -> (Arc<RunHandle>, String) {
         let conv = self.db.create_conversation("child", None, false).unwrap().id;
-        let run = self.fleet.open(&conv, CancelFlag::new(), None, 1);
+        let run = self.fleet.open(&conv, CancelFlag::new(), None, 1, false);
         self.db.create_subagent_run(&run.id, &self.parent, None, &conv, self.name, task).unwrap();
         (run, conv)
     }

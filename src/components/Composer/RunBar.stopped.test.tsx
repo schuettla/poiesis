@@ -37,7 +37,7 @@ beforeEach(() => {
     subRuns: {},
     changeSets: {},
     pendingQuestion: null,
-    busy: false,
+    busyChats: {},
   });
 });
 

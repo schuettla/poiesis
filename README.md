@@ -364,8 +364,15 @@ with its own fresh context, and it writes the final answer itself.
 Every run is written to an append-only session log — the model's own view of the
 conversation, kept apart from what you read.
 
-- **Try again from here** branches the chat just before any answer, keeping the
-  persona, model, working folder, trust and summary, and re-asks the question.
+- **Try again** replaces the last answer: the same message, attachments included,
+  is asked again in the same chat.
+- **Rewind** removes a message and everything after it, can take back the file
+  changes made since, and puts your words back in the box.
+- **Fork** carries on from any answer in a new chat and leaves this one as it is.
+  These sit as icons under each answer, next to **Copy**.
+- **Your own messages** have **Copy**, **Try again** and **Edit** on hover. Edit
+  changes the words where they stand and starts again from there. Both remove what
+  came after that message from the chat.
 - **Continue where I stopped** resumes a run that was stopped, timed out or hit
   its step limit, with every tool result intact, so it does not repeat work you
   already paid for.
@@ -945,9 +952,10 @@ poiesis/
 │                             #   and its own Tauri crate (src-tauri/)
 ├── remote-proto/             # the phone link's wire format, shared by the
 │                             #   desktop and the phone app
-├── shared/                   # catalogs both sides read: commands.json (the `/` menu),
+├── shared/                   # files both sides read: commands.json (the `/` menu),
 │                             #   engines.json (agent apps), apps.json +
-│                             #   composio-catalog.json (connected apps)
+│                             #   composio-catalog.json (connected apps),
+│                             #   system-prompt.txt (the default system prompt)
 ├── fixtures/                 # prompt-assembly golden, recorded agent-app sessions
 │                             #   (engines/), Composio replies, decision replies, voice
 ├── docs/                     # technical documentation (agent harness architecture)

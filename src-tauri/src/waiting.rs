@@ -83,6 +83,17 @@ pub(crate) fn who_waits(db: &Db, mem: Option<&MemoryStore>, entry: &ChangePropos
             .and_then(|a| a.persona);
         return persona.map_or_else(|| role.to_string(), |p| p.name);
     }
+    leading(db, session)
+}
+
+/// `PAR-10`: who a live question in a session is from: the helper that asks, else the persona
+/// that leads the session, else Poiesis.
+pub(crate) fn who_asks(db: &Db, session: &str, agent: Option<&str>) -> String {
+    agent.map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| leading(db, Some(session)))
+}
+
+/// The persona that leads a session, else Poiesis.
+fn leading(db: &Db, session: Option<&str>) -> String {
     session
         .and_then(|s| db.get_conversation(s).ok().flatten())
         .and_then(|c| c.persona_id)
@@ -118,19 +129,39 @@ mod desktop {
 #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 fn notify(db: &Db, entry: &ChangeProposal) {
     use tauri::Manager;
+
+    let Some(app) = APP.get() else { return };
+    let mem = app.state::<MemoryStore>();
+    let who = who_waits(db, Some(&mem), entry);
+    show(db, &entry.id, entry.session_id.as_deref(), &who, &entry.rationale);
+}
+
+/// `PAR-10`: a question or a permission of a chat that works while you are somewhere else. The
+/// window says when the chat is not on screen; the same switch, focus rule, once-only rule and
+/// click as a parked question apply.
+pub fn tell(db: &Db, session: &str, id: &str, agent: Option<&str>, line: &str) {
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    show(db, id, Some(session), &who_asks(db, session, agent), line);
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+    let _ = (db, session, id, agent, line);
+}
+
+/// One desktop notification, once for each `key`, that opens `session` on a click.
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+fn show(db: &Db, key: &str, session: Option<&str>, who: &str, line: &str) {
+    use tauri::Manager;
     use tauri_plugin_notification::NotificationExt;
 
     let Some(app) = APP.get() else { return };
     let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
-    if !should_notify(switched_on(db), focused) || !first_time(&entry.id) {
+    if !should_notify(switched_on(db), focused) || !first_time(key) {
         return;
     }
-    let mem = app.state::<MemoryStore>();
-    let (title, body) = words(&who_waits(db, Some(&mem), entry), &entry.rationale);
+    let (title, body) = words(who, line);
     let id = desktop::next_id();
-    if let Some(session) = entry.session_id.clone() {
+    if let Some(session) = session {
         if let Ok(mut shown) = desktop::shown().lock() {
-            shown.insert(id, session);
+            shown.insert(id, session.to_string());
         }
     }
     let _ = app.notification().builder().id(id).title(title).body(body).show();
@@ -189,6 +220,15 @@ mod tests {
         assert!(first_time("entry-once"));
         assert!(!first_time("entry-once"));
         assert!(first_time("entry-other"));
+    }
+
+    #[test]
+    fn a_live_question_is_from_the_helper_else_the_leading_persona_else_poiesis() {
+        let db = Db::open_in_memory().unwrap();
+        let session = db.create_conversation("Plan the trip", None, false).unwrap().id;
+        assert_eq!(who_asks(&db, &session, None), "Poiesis");
+        assert_eq!(who_asks(&db, &session, Some("Claude Code")), "Claude Code");
+        assert_eq!(who_asks(&db, &session, Some("  ")), "Poiesis");
     }
 
     #[test]

@@ -40,7 +40,8 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   useAppStore.setState({
-    activeRun: {
+    activeConversationId: "c1",
+    liveRuns: { c1: {
       runId: "r1",
       convId: "c1",
       step: 1,
@@ -49,14 +50,14 @@ beforeEach(() => {
       contextTokens: 0,
       contextWindow: null,
       thinking: "",
-    },
+    } },
   } as never);
 });
 
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
-  useAppStore.setState({ activeRun: null } as never);
+  useAppStore.setState({ liveRuns: {} } as never);
 });
 
 function orbs(m: Message): string[] {

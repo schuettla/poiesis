@@ -244,8 +244,113 @@ export interface SessionCard {
 export const sessionCard = (conversationId: string) =>
   invoke<SessionCard>("session_card_cmd", { conversationId });
 
+/** `DBG-2`: everything recorded about one chat, as `agent::inspect` serialises it. */
+export interface SessionReport {
+  generated_at: number;
+  schema_version: number;
+  app_version: string;
+  os: string;
+  data_dir: string;
+  conversation: DbConversation;
+  /** The session id of the agent app this chat runs on, when it has one. */
+  engine_session: string | null;
+  project: DbProject | null;
+  folder: string | null;
+  folder_trust: string;
+  totals: {
+    user_messages: number;
+    assistant_messages: number;
+    runs: number;
+    events: number;
+    tool_calls: number;
+    tool_errors: number;
+    prompt_tokens: number;
+    output_tokens: number;
+    cost_usd: number | null;
+    /** Tokens of the chats below this one, not counted above. */
+    helper_tokens: number;
+    artifacts: number;
+    files_changed: number;
+    compactions: number;
+  };
+  runs: SessionRun[];
+  messages: SessionMessage[];
+  events: SessionLogRow[];
+  helpers: SubagentRun[];
+  posts: TeamPost[];
+  decisions: DecisionEntry[];
+  tool_counts: { tool_name: string; ok: number; total: number }[];
+  tool_fixes: { tool_name: string; failed_args: string; error: string; fixed_args: string }[];
+  skills: { skill_name: string; tool_failures: number; corrected: boolean; created_at: number }[];
+  activity: ActivityEntry[];
+}
+
+export interface SessionRun {
+  run_id: string;
+  started_at: number;
+  ended_at: number | null;
+  /** Null while it runs, or when it was cut off with the app. */
+  stop_reason: string | null;
+  live: boolean;
+  steps: number | null;
+  model: string | null;
+  provenance: string | null;
+  cost_usd: number | null;
+  usage: { prompt_tokens: number; output_tokens: number; turns: number; paid_by: string | null }[];
+  /** How the run was set up; null for a run made before this was recorded. */
+  setup: Record<string, unknown> | null;
+  prompt_seq: number | null;
+  prompt_messages: number;
+  prompt_chars: number;
+  tool_calls: {
+    id: string;
+    name: string;
+    args: string;
+    /** Null when no result was logged. */
+    ok: boolean | null;
+    result: string | null;
+    call_seq: number;
+    result_seq: number | null;
+  }[];
+  steers: string[];
+}
+
+export interface SessionMessage {
+  id: string;
+  role: string;
+  created_at: number;
+  model_name: string | null;
+  model_provenance: string | null;
+  stop_reason: string | null;
+  spoken: boolean;
+  author: string | null;
+  addressed: string | null;
+  attachments: number;
+  chars: number;
+  preview: string;
+  /** What of memory and instructions reached this answer. */
+  context: unknown;
+}
+
+export interface SessionLogRow {
+  seq: number;
+  at: number;
+  kind: string;
+  run_id: string | null;
+  bytes: number;
+  preview: string;
+}
+
+export const sessionReport = (conversationId: string, full = false) =>
+  invoke<SessionReport>("session_report_cmd", { conversationId, full });
+/** One row of a chat's log, whole, as readable JSON. */
+export const sessionEvent = (conversationId: string, seq: number) =>
+  invoke<string | null>("session_event_cmd", { conversationId, seq });
+
 /** Per chat: `[artifacts made, files changed]`. One read for the whole list. */
 export const sessionOutputs = () => invoke<Record<string, [number, number]>>("session_outputs_cmd");
+/** `PAR-11`: per chat, how its newest answer ended, for chats where it did not finish. */
+export const sessionOutcomes = () => invoke<Record<string, StopReason>>("session_outcomes_cmd");
 
 export const getSetting = (key: string) => invoke<string | null>("get_setting_cmd", { key });
 export const setSetting = (key: string, value: string) =>
@@ -526,7 +631,8 @@ export function chat(
   return invoke<void>("chat_cmd", { messages, temperature, onEvent: ch });
 }
 
-export const stopChat = () => invoke<void>("stop_chat_cmd");
+/** `PAR-1`: stops one chat's run. Other chats carry on. */
+export const stopChat = (conversationId: string) => invoke<void>("stop_chat_cmd", { conversationId });
 
 // ---- agent loop + permissions (Phase 4) ----
 
@@ -598,6 +704,9 @@ export type AgentEvent =
    * the message — it exists so a reasoning model's long silence reads as work
    * rather than as a hang. */
   | { type: "thinking"; run_id: string; text: string }
+  /** The model is writing a long tool call, such as a report into a document. `label` is its
+   * title or file name once written; `words` is about how much so far. */
+  | { type: "writing"; run_id: string; label: string | null; words: number }
   | {
       type: "run_started";
       run_id: string;
@@ -605,7 +714,12 @@ export type AgentEvent =
       context_window: number | null;
       /** `TIER-4`: what the turn really ran at. */
       tier?: ModelTier;
+      /** `PAR-8`: the run is on this PC's model. */
+      local?: boolean;
     }
+  /** `PAR-5`: a run waits for a folder another chat is changing (`reason` says which),
+   * or the wait is over (`null`). */
+  | { type: "held"; run_id: string; reason: string | null }
   | {
       type: "run_progress";
       run_id: string;
@@ -1120,30 +1234,13 @@ export const recordCommandTrace = (conversationId: string, trace: CommandTrace) 
 export const conversationCommands = (conversationId: string) =>
   invoke<CommandRecord[]>("conversation_commands_cmd", { conversationId });
 
-/** `HRN-UI-5`: the new branch, and the question to ask it again. */
-export interface ForkedConversation {
-  conversation: DbConversation;
-  /** `null` when the fork point had no user turn before it. */
-  resend: string | null;
-}
-
-/**
- * `HRN-UI-5`: branch a conversation just before one assistant turn. The branch
- * keeps the persona, model, working folder and trust of the original — a fork
- * the user has to set up again is not the same question asked again.
- */
-export const forkConversation = (
-  conversationId: string,
-  messageId: string,
-  /** `UCM-2`: keep the boundary message too — `/fork`, not "Try again". */
-  inclusive = false
-): Promise<ForkedConversation> =>
-  invoke<ForkedConversation>("fork_conversation_cmd", { conversationId, messageId, inclusive });
+/** `UCM-2`: `/fork`. A new conversation holding this one up to `messageId`, with
+ * the persona, model, working folder and trust of the original. */
+export const forkConversation = (conversationId: string, messageId: string) =>
+  invoke<DbConversation>("fork_conversation_cmd", { conversationId, messageId });
 
 /** `RWD-1`: what going back to before a turn did. */
 export interface Rewound {
-  /** The new branch, holding everything before the turn. */
-  conversation: DbConversation;
   /** What the turn said, to put back in the box. */
   prompt: string;
   files_undone: number;
@@ -1151,10 +1248,11 @@ export interface Rewound {
   files_failed: string[];
 }
 
-/** `RWD-1`: go back to before one of your turns. A branch, plus (when asked) the
- * files I changed since put back. The original is never edited. */
-export const rewindConversation = (conversationId: string, messageId: string, undoFiles: boolean) =>
-  invoke<Rewound>("rewind_cmd", { conversationId, messageId, undoFiles });
+/** `RWD-1`: go back to before one of your turns, in the same chat: it and what
+ * followed are removed, plus (when asked) the files I changed since are put back.
+ * `retry` says the same message is about to be sent again. */
+export const rewindConversation = (conversationId: string, messageId: string, undoFiles: boolean, retry: boolean) =>
+  invoke<Rewound>("rewind_cmd", { conversationId, messageId, undoFiles, retry });
 
 /** `RWD-2`: how many files a rewind to before this turn would put back. */
 export const changesSince = (conversationId: string, messageId: string) =>
@@ -1881,6 +1979,9 @@ export const resolveWaiting = (id: string, accept: boolean, text?: string) =>
 export const unreadSessions = () => invoke<string[]>("unread_sessions_cmd");
 export const markSeen = (conversationId: string) => invoke<void>("mark_seen_cmd", { conversationId });
 export const markAway = (conversationId: string) => invoke<void>("mark_away_cmd", { conversationId });
+/** `PAR-10`: a chat that is not on screen asks something: said by the desktop, once per `id`. */
+export const tellWaiting = (conversationId: string, id: string, line: string, agent?: string) =>
+  invoke<void>("tell_waiting_cmd", { conversationId, id, line, agent });
 
 /** `target` routes `GLD-2`'s before/after check the same way a chat turn is
  * routed, so a cloud-only setup is still guarded. */

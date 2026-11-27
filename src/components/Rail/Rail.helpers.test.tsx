@@ -64,7 +64,7 @@ function setup(conversations: Conversation[], over: Record<string, unknown> = {}
     runSummaries: {},
     subRuns: {},
     unreadIds: [],
-    activeRun: null,
+    liveRuns: {},
     openSession,
     ...over,
   } as never);
@@ -218,7 +218,7 @@ describe("helpers under their chat (UI-3)", () => {
     render();
     click(container.querySelector(".helper-row .chat-more"));
     const items = Array.from(container.querySelectorAll(".helper-row .row-menu-item")).map((b) => b.textContent);
-    expect(items).toEqual(["Open the chat it came from"]);
+    expect(items).toEqual(["Open the chat it came from", "Session details…"]);
   });
 
   it("keeps a chat under a leader filter when one of its helpers matches", () => {

@@ -10,7 +10,7 @@ beforeEach(() => {
     turnModifiers: {},
     conversations: [{ id: "c1", title: "t", updatedAt: 0, messages: [] }],
     activeConversationId: "c1",
-    busy: false,
+    busyChats: {},
     commandNotes: {},
   });
 });
@@ -53,7 +53,7 @@ describe("the chips in the store", () => {
   });
 
   it("survive a send that never happened", async () => {
-    useAppStore.setState({ busy: true });
+    useAppStore.setState({ busyChats: { c1: "other" } });
     useAppStore.getState().setTurnModifier({ effort: "high" });
     await useAppStore.getState().sendMessage("hello");
     expect(useAppStore.getState().turnModifiers).toEqual({ effort: "high" });
