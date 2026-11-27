@@ -58,7 +58,12 @@ fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) {
             continue;
         }
         let is_ts = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e == "ts" || e == "tsx");
-        if is_ts {
+        // Test files never ship, so nothing in them is user-facing copy.
+        let is_test = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".test.ts") || n.ends_with(".test.tsx"));
+        if is_ts && !is_test {
             out.push(path);
         }
     }
